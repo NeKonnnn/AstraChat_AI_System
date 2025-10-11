@@ -1,81 +1,10 @@
 {
-  "models": [
-    {
-      "name": "model.gguf",
-      "path": "F:\\memoai\\models\\model.gguf",
-      "description": "Модель model.gguf"
-    },
-    {
-      "name": "DeepSeek-R1-Distill-Qwen-7B-Q8_0.gguf",
-      "path": "F:/memoai/models/DeepSeek-R1-Distill-Qwen-7B-Q8_0.gguf"
-    },
-    {
-      "name": "phi-4-mini-reasoning-q8_0.gguf",
-      "path": "F:/memoai/models/phi-4-mini-reasoning-q8_0.gguf"
-    },
-    {
-      "name": "Mistral-7B-Instruct-v0.3.Q8_0.gguf",
-      "path": "F:/memoai/models/Mistral-7B-Instruct-v0.3.Q8_0.gguf"
-    },
-    {
-      "name": "qwen2.5-coder-7b-instruct-q8_0.gguf",
-      "path": "F:/memoai/models/qwen2.5-coder-7b-instruct-q8_0.gguf"
-    },
-    {
-      "name": "codellama-13b-instruct.Q8_0.gguf",
-      "path": "F:/memoai/models/codellama-13b-instruct.Q8_0.gguf"
-    },
-    {
-      "name": "openreasoning-nemotron-7b-q8_0.gguf",
-      "path": "F:/memoai/models/openreasoning-nemotron-7b-q8_0.gguf"
-    },
-    {
-      "name": "granite-20b-code-instruct-Q8_0.gguf",
-      "path": "F:/memoai/models/granite-20b-code-instruct-Q8_0.gguf"
-    },
-    {
-      "name": "starcoder2-15b-instruct-v0.1-Q8_0.gguf",
-      "path": "F:/memoai/models/starcoder2-15b-instruct-v0.1-Q8_0.gguf"
-    },
-    {
-      "name": "Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf",
-      "path": "F:/memoai/models/Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf"
-    },
-    {
-      "name": "deepseek-coder-6.7b-instruct.Q8_0.gguf",
-      "path": "F:/memoai/models/deepseek-coder-6.7b-instruct.Q8_0.gguf"
-    },
-    {
-      "name": "OpenReasoning-Nemotron-7B-bf16_q8_0.gguf",
-      "path": "F:/memoai/models/OpenReasoning-Nemotron-7B-bf16_q8_0.gguf"
-    },
-    {
-      "name": "codegemma-1.1-7b-it-Q8_0.gguf",
-      "path": "F:/memoai/models/codegemma-1.1-7b-it-Q8_0.gguf"
-    },
-    {
-      "name": "starcoder2-7b-instruct-Q8_0.gguf",
-      "path": "F:/memoai/models/starcoder2-7b-instruct-Q8_0.gguf"
-    },
-    {
-      "name": "Nemotron-Mini-4B-Instruct-Q8_0.gguf",
-      "path": "F:/memoai/models/Nemotron-Mini-4B-Instruct-Q8_0.gguf"
-    },
-    {
-      "name": "Mamba-Codestral-7B-v0.1-Q8_0.gguf",
-      "path": "F:/memoai/models/Mamba-Codestral-7B-v0.1-Q8_0.gguf"
-    },
-    {
-      "name": "codellama-7b-instruct.Q8_0.gguf",
-      "path": "F:/memoai/models/codellama-7b-instruct.Q8_0.gguf"
-    }
-  ],
-  "current_model": "F:/memoai/models/deepseek-coder-6.7b-instruct.Q8_0.gguf",
-  "voice_speaker": "baya",
-  "theme": "dark",
   "current_model_path": "models\\Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf",
   "current_model_name": "Unknown",
   "current_model_status": "loaded",
   "transcription_engine": "whisperx",
-  "transcription_language": "ru"
+  "transcription_language": "ru",
+  "memory_max_messages": 20,
+  "memory_include_system_prompts": true,
+  "memory_clear_on_restart": false
 }

@@ -1,7 +1,30 @@
 version: '3.8'
 
 services:
-  # Backend - FastAPI
+  # LLM Service - llm-svc
+  llm-svc:
+    build:
+      context: ./llm-svc
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8000"  # llm-svc на порту 8001
+    volumes:
+      - ./models:/app/models:ro  # Модели доступны для llm-svc
+      - ./llm-svc/config:/app/config:ro
+    environment:
+      - CONFIG_PATH=/app/config/config.yml
+      - PYTHONPATH=/app
+    restart: unless-stopped
+    networks:
+      - memoai-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Backend - FastAPI (теперь зависит от llm-svc)
   memoai-backend:
     build:
       context: ./backend
@@ -9,16 +32,17 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./models:/app/models:ro
       - ./model_small:/app/model_small:ro
       - ./silero_models:/app/silero_models:ro
       - ./memory:/app/memory
       - ./backend:/app
     environment:
       - PYTHONPATH=/app
-      - MODEL_PATH=/app/models/model.gguf
+      - LLM_SERVICE_URL=http://llm-svc:8000  # URL llm-svc сервиса
+      - USE_LLM_SVC=true  # Включаем использование llm-svc
     depends_on:
       - redis
+      - llm-svc
     restart: unless-stopped
     networks:
       - memoai-network

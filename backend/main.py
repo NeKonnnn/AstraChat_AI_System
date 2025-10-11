@@ -43,7 +43,6 @@ try:
         logger.info("ask_agent функция доступна")
     else:
         logger.warning("ask_agent функция не доступна")
-
 except ImportError as e:
     logger.error(f"Ошибка импорта agent: {e}")
     print(f"Ошибка импорта agent: {e}")
@@ -65,6 +64,35 @@ except Exception as e:
     reload_model_by_path = None
     get_model_info = None
     initialize_model = None
+
+# Попытка импорта llm-svc версии (если доступна)
+try:
+    logger.info("Попытка импорта agent_llm_svc...")
+    from backend.agent_llm_svc import ask_agent as ask_agent_llm_svc, model_settings as model_settings_llm_svc, update_model_settings as update_model_settings_llm_svc, reload_model_by_path as reload_model_by_path_llm_svc, get_model_info as get_model_info_llm_svc, initialize_model as initialize_model_llm_svc
+    logger.info("agent_llm_svc импортирован успешно")
+    
+    # Проверяем, нужно ли использовать llm-svc
+    use_llm_svc = os.getenv('USE_LLM_SVC', 'false').lower() == 'true'
+    
+    # Отладочный вывод режима работы
+    print(f"Текущий режим: {'llm-svc' if use_llm_svc else 'оригинальный agent.py'}")
+    logger.info(f"Режим работы: {'llm-svc' if use_llm_svc else 'оригинальный agent.py'}")
+    
+    if use_llm_svc:
+        logger.info("Переключение на llm-svc версию agent")
+        ask_agent = ask_agent_llm_svc
+        model_settings = model_settings_llm_svc
+        update_model_settings = update_model_settings_llm_svc
+        reload_model_by_path = reload_model_by_path_llm_svc
+        get_model_info = get_model_info_llm_svc
+        initialize_model = initialize_model_llm_svc
+        logger.info("Успешно переключено на llm-svc")
+    else:
+        logger.info("Используется оригинальная версия agent")
+except ImportError as e:
+    logger.warning(f"agent_llm_svc недоступен: {e}")
+except Exception as e:
+    logger.warning(f"Ошибка при импорте agent_llm_svc: {e}")
     
 try:
     logger.info("Попытка импорта memory...")
