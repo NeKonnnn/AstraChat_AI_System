@@ -1,0 +1,76 @@
+# Конфигурация сервера
+server:
+  host: "0.0.0.0"
+  port: 8000
+  log_level: "INFO"
+  docs_url: "/docs"
+  redoc_url: "/redoc"
+
+# Настройки CORS
+cors:
+  allowed_origins:
+    - "http://localhost:3080"
+    - "http://localhost:8000"
+  allow_credentials: true
+  allow_methods: ["*"]
+  allow_headers: ["*"]
+
+# Настройки модели LLM
+model:
+  path: "/app/models/llama-2-7b-chat.Q4_K_M.gguf"
+  name: "llama-2-7b-chat"
+  ctx_size: 4096
+  gpu_layers: 0
+  verbose: false
+
+# Настройки генерации
+generation:
+  default_temperature: 0.7
+  default_max_tokens: 256
+  stream: false
+
+# Настройки приложения
+app:
+  title: "Llama CPP API Service"
+  description: "API service for Llama-based models compatible with OpenAI API"
+  version: "1.0.0"
+
+# Настройки метрик и мониторинга
+monitoring:
+  enabled: false
+  prometheus_port: 9090
+  metrics_path: "/metrics"
+
+# Настройки логирования
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: null  # Если указано, логи будут записываться в файл
+  max_size: 10485760  # 10MB
+  backup_count: 5
+
+# Настройки кэширования
+caching:
+  enabled: true
+  ttl: 300  # Время жизни кэша в секундах
+  max_size: 1000  # Максимальное количество элементов в кэше
+
+# Настройки безопасности
+security:
+  enabled: true  # Включить/выключить аутентификацию по API ключу
+  api_key: null  # API ключ для аутентификации (если null, аутентификация отключена)
+  api_key_header: "X-API-Key"  # Название заголовка для API ключа
+
+# Настройки Nexus
+nexus:
+  enabled: false  # Включить/выключить загрузку моделей из Nexus
+  url: ""  # URL сервера Nexus
+  repo: ""  # Название репозитория
+  name: ""  # Название артефакта
+  id: ""  # ID артефакта
+  version: ""  # Версия артефакта
+  file_name: ""  # Имя файла артефакта
+  # Параметры аутентификации (могут быть заданы через переменные окружения: NEXUS_LOGIN, NEXUS_PASSWORD, NEXUS_CERT_PATH)
+  login: null  # Логин для аутентификации в Nexus (опционально)
+  password: null  # Пароль для аутентификации в Nexus (опционально)
+  cert_path: null  # Путь к сертификату для SSL аутентификации (опционально)
