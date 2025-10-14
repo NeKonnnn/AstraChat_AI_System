@@ -188,41 +188,41 @@ def validate_config() -> bool:
         # Проверяем порт
         port = SERVER_CONFIG["port"]
         if not (1 <= port <= 65535):
-            print(f"❌ Некорректный порт: {port}")
+            print(f"Некорректный порт: {port}")
             return False
         
         # Проверяем уровень логирования
         log_level = SERVER_CONFIG["log_level"]
         valid_levels = ["debug", "info", "warning", "error", "critical"]
         if log_level not in valid_levels:
-            print(f"❌ Некорректный уровень логирования: {log_level}")
+            print(f"Некорректный уровень логирования: {log_level}")
             return False
         
         # Проверяем CORS origins
         if not get_cors_origins():
-            print("❌ Не указаны разрешенные CORS origins")
+            print("Не указаны разрешенные CORS origins")
             return False
         
-        print("✅ Конфигурация сервера корректна")
+        print("Конфигурация сервера корректна")
         return True
         
     except Exception as e:
-        print(f"❌ Ошибка валидации конфигурации: {e}")
+        print(f"Ошибка валидации конфигурации: {e}")
         return False
 
 def print_config_summary():
     """Вывести краткую сводку конфигурации"""
     print("=" * 50)
-    print("🔧 КОНФИГУРАЦИЯ MEMOAI BACKEND")
+    print("КОНФИГУРАЦИЯ MEMOAI BACKEND")
     print("=" * 50)
-    print(f"🌐 Сервер: {get_server_url()}")
-    print(f"🔌 WebSocket: {get_websocket_url()}")
-    print(f"📝 Документация: {get_server_url()}/docs")
-    print(f"📊 ReDoc: {get_server_url()}/redoc")
-    print(f"🔒 CORS Origins: {len(get_cors_origins())} разрешенных")
-    print(f"📡 Socket.IO: {len(get_socketio_cors_origins())} разрешенных")
-    print(f"📁 Логирование: {get_logging_config()['level']}")
-    print(f"🔄 Автоперезагрузка: {'Включена' if SERVER_CONFIG['reload'] else 'Отключена'}")
+    print(f"Сервер: {get_server_url()}")
+    print(f"WebSocket: {get_websocket_url()}")
+    print(f"Документация: {get_server_url()}/docs")
+    print(f"ReDoc: {get_server_url()}/redoc")
+    print(f"CORS Origins: {len(get_cors_origins())} разрешенных")
+    print(f"Socket.IO: {len(get_socketio_cors_origins())} разрешенных")
+    print(f"Логирование: {get_logging_config()['level']}")
+    print(f"Автоперезагрузка: {'Включена' if SERVER_CONFIG['reload'] else 'Отключена'}")
     print("=" * 50)
 
 if __name__ == "__main__":
@@ -230,4 +230,4 @@ if __name__ == "__main__":
     if validate_config():
         print_config_summary()
     else:
-        print("❌ Конфигурация некорректна")
+        print("Конфигурация некорректна")

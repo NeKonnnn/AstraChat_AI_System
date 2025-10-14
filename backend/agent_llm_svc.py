@@ -3,7 +3,23 @@ MemoAI Agent с поддержкой llm-svc
 Модифицированная версия agent.py для работы через llm-svc API
 """
 
+# Настройка кодировки для Windows
+import sys
 import os
+
+# Импортируем утилиту для исправления кодировки
+try:
+    from utils.encoding_fix import fix_windows_encoding, safe_print
+    fix_windows_encoding()
+except ImportError:
+    # Если утилита недоступна, используем базовую настройку
+    if sys.platform == "win32":
+        os.system("chcp 65001 >nul 2>&1")
+        if hasattr(sys.stdout, 'reconfigure'):
+            sys.stdout.reconfigure(encoding='utf-8')
+        if hasattr(sys.stderr, 'reconfigure'):
+            sys.stderr.reconfigure(encoding='utf-8')
+
 import json
 import logging
 from typing import List, Dict, Any, Optional, Callable
@@ -11,7 +27,13 @@ from backend.config.config import MODEL_PATH
 from backend.context_prompts import context_prompt_manager
 from backend.llm_client import ask_agent_llm_svc, get_llm_service
 
+# Настройка логирования с поддержкой UTF-8
 logger = logging.getLogger(__name__)
+
+# Настройка кодировки для обработчиков логирования
+for handler in logging.root.handlers:
+    if hasattr(handler, 'stream') and hasattr(handler.stream, 'reconfigure'):
+        handler.stream.reconfigure(encoding='utf-8')
 
 # Класс для хранения настроек модели (совместимость)
 class ModelSettings:

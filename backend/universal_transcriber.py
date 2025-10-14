@@ -312,7 +312,7 @@ class UniversalTranscriber:
     def set_hf_token(self, token: str):
         """Устанавливает токен Hugging Face для WhisperX"""
         self.hf_token = token
-        self.logger.info("✅ Токен Hugging Face обновлен")
+        self.logger.info("Токен Hugging Face обновлен")
         
         # Обновляем токен в WhisperX транскрайбере если он инициализирован
         if self.whisperx_transcriber:

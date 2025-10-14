@@ -1,9 +1,12 @@
-FROM python:3.12-slim
+FROM ubuntu:22.04
 
 WORKDIR /app
 
-# Установка системных зависимостей
+# Установка Python и системных зависимостей
 RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    python3-dev \
     build-essential \
     cmake \
     gcc \
@@ -13,6 +16,9 @@ RUN apt-get update && apt-get install -y \
     git \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
+
+# Создание символической ссылки для python
+RUN ln -s /usr/bin/python3 /usr/bin/python
 
 # Флаги для сборки llama.cpp (без Metal!)
 ENV CMAKE_ARGS="-DGGML_METAL=OFF -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS" \
@@ -46,6 +52,10 @@ RUN mkdir -p /app/models
 
 # Создание непривилегированного пользователя
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+
+# Установка прав доступа к папке моделей
+RUN chmod -R 755 /app/models
+
 USER appuser
 
 EXPOSE 8000

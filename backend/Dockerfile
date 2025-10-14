@@ -1,8 +1,11 @@
 # Dockerfile для MemoAI Backend
-FROM python:3.11-slim
+FROM ubuntu:22.04
 
-# Установка системных зависимостей
+# Установка Python и системных зависимостей
 RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    python3-dev \
     build-essential \
     cmake \
     git \
@@ -12,6 +15,9 @@ RUN apt-get update && apt-get install -y \
     portaudio19-dev \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
+
+# Создание символической ссылки для python
+RUN ln -s /usr/bin/python3 /usr/bin/python
 
 # Установка рабочей директории
 WORKDIR /app

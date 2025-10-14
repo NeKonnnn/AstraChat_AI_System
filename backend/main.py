@@ -3,6 +3,23 @@ MemoAI Web Backend - FastAPI приложение
 Современный веб-интерфейс для MemoAI с поддержкой всех функций
 """
 
+# Настройка кодировки для Windows
+import sys
+import os
+
+# Импортируем утилиту для исправления кодировки
+try:
+    from utils.encoding_fix import fix_windows_encoding, safe_print
+    fix_windows_encoding()
+except ImportError:
+    # Если утилита недоступна, используем базовую настройку
+    if sys.platform == "win32":
+        os.system("chcp 65001 >nul 2>&1")
+        if hasattr(sys.stdout, 'reconfigure'):
+            sys.stdout.reconfigure(encoding='utf-8')
+        if hasattr(sys.stderr, 'reconfigure'):
+            sys.stderr.reconfigure(encoding='utf-8')
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -25,11 +42,21 @@ root_dir = os.path.dirname(current_dir)
 sys.path.insert(0, root_dir)
 
 # Настройка логирования в самом начале
+# Настройка логирования с поддержкой UTF-8
+import logging
 logging.basicConfig(
     level=logging.DEBUG,
     format='[%(asctime)s] %(levelname)s [Backend] %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
 )
+
+# Настройка кодировки для обработчиков логирования
+for handler in logging.root.handlers:
+    if hasattr(handler, 'stream') and hasattr(handler.stream, 'reconfigure'):
+        handler.stream.reconfigure(encoding='utf-8')
 logger = logging.getLogger(__name__)
 logger.info("Логирование настроено")
 
@@ -190,6 +217,22 @@ except Exception as e:
     logger.error(f"Traceback: {traceback.format_exc()}")
     OnlineTranscriber = None
 
+# Импорт агентной архитектуры
+try:
+    logger.info("Попытка импорта агентной архитектуры...")
+    from backend.orchestrator import initialize_agent_orchestrator, get_agent_orchestrator
+    logger.info("Агентная архитектура импортирована успешно")
+except ImportError as e:
+    logger.error(f"Ошибка импорта агентной архитектуры: {e}")
+    print("Предупреждение: модуль агентной архитектуры не найден")
+    initialize_agent_orchestrator = None
+    get_agent_orchestrator = None
+except Exception as e:
+    logger.error(f"Неожиданная ошибка при импорте агентной архитектуры: {e}")
+    logger.error(f"Traceback: {traceback.format_exc()}")
+    initialize_agent_orchestrator = None
+    get_agent_orchestrator = None
+
 # Глобальный словарь для хранения флагов остановки генерации
 stop_generation_flags = {}
 
@@ -228,6 +271,25 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Startup событие для инициализации агентной архитектуры
+@app.on_event("startup")
+async def startup_event():
+    """Инициализация при запуске приложения"""
+    logger.info("Запуск приложения...")
+    
+    # Инициализируем агентную архитектуру
+    if initialize_agent_orchestrator:
+        try:
+            success = await initialize_agent_orchestrator()
+            if success:
+                logger.info("Агентная архитектура успешно инициализирована")
+            else:
+                logger.warning("Не удалось инициализировать агентную архитектуру")
+        except Exception as e:
+            logger.error(f"Ошибка инициализации агентной архитектуры: {e}")
+    
+    logger.info("Приложение запущено")
 
 # Создание Starlette приложения для Socket.IO
 starlette_app = Starlette()
@@ -491,6 +553,15 @@ async def chat_message(sid, data):
         # Сохраняем сообщение пользователя
         save_dialog_entry("user", user_message)
         
+        # Проверяем, доступна ли агентная архитектура
+        orchestrator = get_agent_orchestrator()
+        use_agent_mode = orchestrator and orchestrator.get_mode() == "agent"
+        
+        logger.info(f"Socket.IO DEBUG: orchestrator = {orchestrator is not None}")
+        if orchestrator:
+            logger.info(f"Socket.IO DEBUG: orchestrator.get_mode() = '{orchestrator.get_mode()}'")
+        logger.info(f"Socket.IO DEBUG: use_agent_mode = {use_agent_mode}")
+        
         # Функция для отправки частей ответа
         async def async_stream_callback(chunk: str, accumulated_text: str):
             try:
@@ -527,6 +598,36 @@ async def chat_message(sid, data):
                 return True
         
         try:
+            # Если включен агентный режим, используем агентную архитектуру
+            if use_agent_mode:
+                logger.info("Socket.IO: АГЕНТНАЯ АРХИТЕКТУРА: Переключение на агентный режим обработки")
+                logger.info(f"Socket.IO: Запрос пользователя: '{user_message[:100]}{'...' if len(user_message) > 100 else ''}'")
+                
+                # Используем агентную архитектуру
+                context = {
+                    "history": history,
+                    "user_message": user_message,
+                    "doc_processor": doc_processor  # Передаем doc_processor для DocumentAgent
+                }
+                logger.info(f"[Socket.IO] doc_processor ID в контексте: {id(doc_processor)}")
+                logger.info(f"[Socket.IO] doc_processor doc_names: {doc_processor.doc_names if doc_processor else 'None'}")
+                response = await orchestrator.process_message(user_message, context)
+                logger.info(f"Socket.IO: АГЕНТНАЯ АРХИТЕКТУРА: Получен ответ, длина: {len(response)} символов")
+                
+                # Отправляем ответ через Socket.IO
+                await sio.emit('chat_complete', {
+                    'response': response,
+                    'timestamp': datetime.now().isoformat()
+                }, room=sid)
+                
+                # Сохраняем ответ в память
+                save_dialog_entry("assistant", response)
+                return
+            
+            # Иначе используем прямой режим
+            logger.info("Socket.IO: ПРЯМОЙ РЕЖИМ: Переключение на прямое общение с LLM")
+            logger.info(f"Socket.IO: Запрос пользователя: '{user_message[:100]}{'...' if len(user_message) > 100 else ''}'")
+            
             # =============================================
             # ЛОГИКА ОБРАБОТКИ С ДОКУМЕНТАМИ (как в WebSocket)
             # =============================================
@@ -742,21 +843,55 @@ async def chat_with_ai(message: ChatMessage):
         # Получаем историю диалога
         history = get_recent_dialog_history(max_entries=memory_max_messages) if get_recent_dialog_history else []
         
-        # Проверяем, есть ли загруженные документы
-        logger.info(f"doc_processor доступен: {doc_processor is not None}")
-        if doc_processor:
-            doc_list = doc_processor.get_document_list()
-            logger.info(f"Список документов: {doc_list}")
-            logger.info(f"Количество документов: {len(doc_list) if doc_list else 0}")
-            
-            if doc_list and len(doc_list) > 0:
-                logger.info(f"Найдены документы: {doc_list}")
-                # Используем document processor для ответа с контекстом документов
-                logger.info("Используем document processor для ответа с контекстом документов")
-                response = doc_processor.process_query(message.message, ask_agent)
-                logger.info(f"Получен ответ от document processor, длина: {len(response)} символов")
+        # Проверяем, доступна ли агентная архитектура
+        orchestrator = get_agent_orchestrator()
+        use_agent_mode = orchestrator and orchestrator.get_mode() == "agent"
+        
+        logger.info(f"DEBUG: orchestrator = {orchestrator is not None}")
+        if orchestrator:
+            logger.info(f"DEBUG: orchestrator.get_mode() = '{orchestrator.get_mode()}'")
+        logger.info(f"DEBUG: use_agent_mode = {use_agent_mode}")
+        
+        if use_agent_mode:
+            logger.info("АГЕНТНАЯ АРХИТЕКТУРА: Переключение на агентный режим обработки")
+            logger.info(f"Запрос пользователя: '{message.message[:100]}{'...' if len(message.message) > 100 else ''}'")
+            # Используем агентную архитектуру
+            context = {
+                "history": history,
+                "user_message": message.message,
+                "doc_processor": doc_processor  # Передаем doc_processor для DocumentAgent
+            }
+            response = await orchestrator.process_message(message.message, context)
+            logger.info(f"АГЕНТНАЯ АРХИТЕКТУРА: Получен ответ, длина: {len(response)} символов")
+        else:
+            logger.info("ПРЯМОЙ РЕЖИМ: Переключение на прямое общение с LLM")
+            logger.info(f"Запрос пользователя: '{message.message[:100]}{'...' if len(message.message) > 100 else ''}'")
+            # Проверяем, есть ли загруженные документы
+            logger.info(f"doc_processor доступен: {doc_processor is not None}")
+            if doc_processor:
+                doc_list = doc_processor.get_document_list()
+                logger.info(f"Список документов: {doc_list}")
+                logger.info(f"Количество документов: {len(doc_list) if doc_list else 0}")
+                
+                if doc_list and len(doc_list) > 0:
+                    logger.info(f"ПРЯМОЙ РЕЖИМ: Найдены документы: {doc_list}")
+                    # Используем document processor для ответа с контекстом документов
+                    logger.info("ПРЯМОЙ РЕЖИМ: Используем document processor для ответа с контекстом документов")
+                    response = doc_processor.process_query(message.message, ask_agent)
+                    logger.info(f"ПРЯМОЙ РЕЖИМ: Получен ответ от document processor, длина: {len(response)} символов")
+                else:
+                    logger.info("ПРЯМОЙ РЕЖИМ: Список документов пуст, используем обычный AI agent")
+                    # Отправляем запрос к модели без контекста документов
+                    current_model_path = get_current_model_path()
+                    response = ask_agent(
+                        message.message,
+                        history=history,
+                        streaming=False,  # Для REST API используем обычный режим
+                        model_path=current_model_path
+                    )
+                    logger.info(f"ПРЯМОЙ РЕЖИМ: Получен ответ от AI agent, длина: {len(response)} символов")
             else:
-                logger.info("Список документов пуст, используем обычный AI agent")
+                logger.info("ПРЯМОЙ РЕЖИМ: doc_processor не доступен, используем обычный AI agent")
                 # Отправляем запрос к модели без контекста документов
                 current_model_path = get_current_model_path()
                 response = ask_agent(
@@ -765,18 +900,16 @@ async def chat_with_ai(message: ChatMessage):
                     streaming=False,  # Для REST API используем обычный режим
                     model_path=current_model_path
                 )
-                logger.info(f"Получен ответ от AI agent, длина: {len(response)} символов")
-        else:
-            logger.info("doc_processor не доступен, используем обычный AI agent")
-            # Отправляем запрос к модели без контекста документов
-            current_model_path = get_current_model_path()
-            response = ask_agent(
-                message.message,
-                history=history,
-                streaming=False,  # Для REST API используем обычный режим
-                model_path=current_model_path
-            )
-            logger.info(f"Получен ответ от AI agent, длина: {len(response)} символов")
+                logger.info(f"ПРЯМОЙ РЕЖИМ: Получен ответ от AI agent, длина: {len(response)} символов")
+        
+        # Добавляем отладочную информацию в ответ для прямого режима
+        if not use_agent_mode:
+            debug_info = f"\n\n--- ОТЛАДОЧНАЯ ИНФОРМАЦИЯ ---\n"
+            debug_info += f"Режим: Прямое общение с LLM\n"
+            debug_info += f"Модель: {get_current_model_path()}\n"
+            debug_info += f"История диалога: {len(history)} сообщений\n"
+            debug_info += f"--- КОНЕЦ ОТЛАДОЧНОЙ ИНФОРМАЦИИ ---"
+            response = response + debug_info
         
         # Сохраняем в память
         save_dialog_entry("user", message.message)
@@ -818,6 +951,15 @@ async def websocket_chat(websocket: WebSocket):
             # Сохраняем сообщение пользователя
             save_dialog_entry("user", user_message)
             
+            # Проверяем, доступна ли агентная архитектура
+            orchestrator = get_agent_orchestrator()
+            use_agent_mode = orchestrator and orchestrator.get_mode() == "agent"
+            
+            logger.info(f"WebSocket DEBUG: orchestrator = {orchestrator is not None}")
+            if orchestrator:
+                logger.info(f"WebSocket DEBUG: orchestrator.get_mode() = '{orchestrator.get_mode()}'")
+            logger.info(f"WebSocket DEBUG: use_agent_mode = {use_agent_mode}")
+            
             # Функция для отправки частей ответа
             def stream_callback(chunk: str, accumulated_text: str):
                 try:
@@ -834,6 +976,33 @@ async def websocket_chat(websocket: WebSocket):
                     return False
             
             try:
+                # Если включен агентный режим, используем агентную архитектуру
+                if use_agent_mode:
+                    logger.info("WebSocket: АГЕНТНАЯ АРХИТЕКТУРА: Переключение на агентный режим обработки")
+                    logger.info(f"WebSocket: Запрос пользователя: '{user_message[:100]}{'...' if len(user_message) > 100 else ''}'")
+                    
+                    # Используем агентную архитектуру
+                    context = {
+                        "history": history,
+                        "user_message": user_message,
+                        "doc_processor": doc_processor  # Передаем doc_processor для DocumentAgent
+                    }
+                    response = await orchestrator.process_message(user_message, context)
+                    logger.info(f"WebSocket: АГЕНТНАЯ АРХИТЕКТУРА: Получен ответ, длина: {len(response)} символов")
+                    
+                    # Отправляем ответ через WebSocket
+                    await websocket.send_text(json.dumps({
+                        "type": "complete",
+                        "response": response
+                    }))
+                    
+                    # Сохраняем ответ в память
+                    save_dialog_entry("assistant", response)
+                    continue
+                
+                # Иначе используем прямой режим
+                logger.info("WebSocket: ПРЯМОЙ РЕЖИМ: Переключение на прямое общение с LLM")
+                logger.info(f"WebSocket: Запрос пользователя: '{user_message[:100]}{'...' if len(user_message) > 100 else ''}'")
                 # Проверяем, есть ли загруженные документы
                 logger.info(f"WebSocket: doc_processor доступен: {doc_processor is not None}")
                 if doc_processor:
@@ -2398,6 +2567,184 @@ async def get_effective_prompt(model_path: str, custom_prompt_id: Optional[str] 
         }
     except Exception as e:
         logger.error(f"Ошибка при получении эффективного промпта: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ================================
+# АГЕНТНАЯ АРХИТЕКТУРА API
+# ================================
+
+class AgentModeRequest(BaseModel):
+    mode: str  # "agent" или "direct"
+
+class AgentStatusResponse(BaseModel):
+    is_initialized: bool
+    mode: str
+    available_agents: int
+    orchestrator_active: bool
+
+@app.get("/api/agent/status")
+async def get_agent_status():
+    """Получить статус агентной архитектуры"""
+    try:
+        orchestrator = get_agent_orchestrator()
+        if orchestrator:
+            status = orchestrator.get_status()
+            return AgentStatusResponse(**status)
+        else:
+            return AgentStatusResponse(
+                is_initialized=False,
+                mode="unknown",
+                available_agents=0,
+                orchestrator_active=False
+            )
+    except Exception as e:
+        logger.error(f"Ошибка получения статуса агентной архитектуры: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/agent/mode")
+async def set_agent_mode(request: AgentModeRequest):
+    """Установить режим работы агентной архитектуры"""
+    try:
+        orchestrator = get_agent_orchestrator()
+        if orchestrator:
+            orchestrator.set_mode(request.mode)
+            return {
+                "message": f"Режим работы изменен на: {request.mode}",
+                "success": True,
+                "timestamp": datetime.now().isoformat()
+            }
+        else:
+            raise HTTPException(status_code=503, detail="Агентная архитектура не инициализирована")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Ошибка установки режима агентной архитектуры: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/agent/agents")
+async def get_available_agents():
+    """Получить список доступных агентов"""
+    try:
+        orchestrator = get_agent_orchestrator()
+        if orchestrator:
+            agents = orchestrator.get_available_agents()
+            return {
+                "agents": agents,
+                "count": len(agents),
+                "success": True,
+                "timestamp": datetime.now().isoformat()
+            }
+        else:
+            raise HTTPException(status_code=503, detail="Агентная архитектура не инициализирована")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Ошибка получения списка агентов: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/agent/mcp/status")
+async def get_mcp_status():
+    """Получить статус MCP серверов"""
+    try:
+        orchestrator = get_agent_orchestrator()
+        if orchestrator:
+            # MCP пока не интегрирован в новую архитектуру
+            # Возвращаем статус "не инициализирован"
+            return {
+                "mcp_status": {
+                    "initialized": False, 
+                    "servers": 0, 
+                    "tools": 0,
+                    "message": "MCP интеграция в разработке"
+                },
+                "success": True,
+                "timestamp": datetime.now().isoformat()
+            }
+        else:
+            raise HTTPException(status_code=503, detail="Агентная архитектура не инициализирована")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Ошибка получения статуса MCP: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/agent/agents/{agent_id}/status")
+async def set_agent_status(agent_id: str, status: Dict[str, bool]):
+    """Установить статус активности агента (теперь инструмента)"""
+    try:
+        orchestrator = get_agent_orchestrator()
+        if not orchestrator:
+            raise HTTPException(status_code=503, detail="Агентная архитектура не инициализирована")
+        
+        is_active = status.get("is_active", True)
+        # Используем новый метод для установки статуса инструмента
+        orchestrator.set_agent_status(agent_id, is_active)
+        success = True
+        
+        if success:
+            return {
+                "agent_id": agent_id,
+                "is_active": is_active,
+                "success": True,
+                "message": f"Агент '{agent_id}' {'активирован' if is_active else 'деактивирован'}",
+                "timestamp": datetime.now().isoformat()
+            }
+        else:
+            raise HTTPException(status_code=404, detail=f"Агент '{agent_id}' не найден")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Ошибка изменения статуса агента: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/agent/agents/statuses")
+async def get_all_agent_statuses():
+    """Получить статусы всех агентов (теперь инструментов)"""
+    try:
+        orchestrator = get_agent_orchestrator()
+        if not orchestrator:
+            raise HTTPException(status_code=503, detail="Агентная архитектура не инициализирована")
+        
+        # Используем новый метод для получения статусов инструментов
+        statuses = orchestrator.get_all_agent_statuses()
+        return {
+            "statuses": statuses,
+            "success": True,
+            "timestamp": datetime.now().isoformat()
+        }
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Ошибка получения статусов агентов: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/agent/langgraph/status")
+async def get_langgraph_status():
+    """Получить статус LangGraph оркестратора"""
+    try:
+        orchestrator = get_agent_orchestrator()
+        if orchestrator:
+            # LangGraph теперь = сам оркестратор
+            # Возвращаем статус оркестратора
+            tools = orchestrator.get_available_tools()
+            return {
+                "langgraph_status": {
+                    "initialized": orchestrator.is_initialized,
+                    "tools_available": len(tools),
+                    "memory_enabled": True,
+                    "orchestrator_type": "LangGraph"
+                },
+                "success": True,
+                "timestamp": datetime.now().isoformat()
+            }
+        else:
+            raise HTTPException(status_code=503, detail="Агентная архитектура не инициализирована")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Ошибка получения статуса LangGraph: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ================================

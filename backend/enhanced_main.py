@@ -3,6 +3,23 @@
 Демонстрирует интеграцию новой архитектуры агента
 """
 
+# Настройка кодировки для Windows
+import sys
+import os
+
+# Импортируем утилиту для исправления кодировки
+try:
+    from utils.encoding_fix import fix_windows_encoding, safe_print
+    fix_windows_encoding()
+except ImportError:
+    # Если утилита недоступна, используем базовую настройку
+    if sys.platform == "win32":
+        os.system("chcp 65001 >nul 2>&1")
+        if hasattr(sys.stdout, 'reconfigure'):
+            sys.stdout.reconfigure(encoding='utf-8')
+        if hasattr(sys.stderr, 'reconfigure'):
+            sys.stderr.reconfigure(encoding='utf-8')
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -24,12 +41,20 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 root_dir = os.path.dirname(current_dir)
 sys.path.insert(0, root_dir)
 
-# Настройка логирования
+# Настройка логирования с поддержкой UTF-8
 logging.basicConfig(
     level=logging.DEBUG,
     format='[%(asctime)s] %(levelname)s [Enhanced Backend] %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
 )
+
+# Настройка кодировки для обработчиков логирования
+for handler in logging.root.handlers:
+    if hasattr(handler, 'stream') and hasattr(handler.stream, 'reconfigure'):
+        handler.stream.reconfigure(encoding='utf-8')
 logger = logging.getLogger(__name__)
 
 # Импорты оригинального MemoAI

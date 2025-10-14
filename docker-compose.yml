@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # LLM Service - llm-svc
   llm-svc:
@@ -17,12 +15,12 @@ services:
     restart: unless-stopped
     networks:
       - memoai-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+    #   start_period: 40s
 
   # Backend - FastAPI (теперь зависит от llm-svc)
   memoai-backend:
@@ -41,8 +39,8 @@ services:
       - LLM_SERVICE_URL=http://llm-svc:8000  # URL llm-svc сервиса
       - USE_LLM_SVC=true  # Включаем использование llm-svc
     depends_on:
-      - redis
-      - llm-svc
+      llm-svc:
+        condition: service_started
     restart: unless-stopped
     networks:
       - memoai-network
@@ -58,21 +56,19 @@ services:
       - REACT_APP_API_URL=http://localhost:8000
       - REACT_APP_WS_URL=ws://localhost:8000
     depends_on:
-      - memoai-backend
+      memoai-backend:
+        condition: service_started
     restart: unless-stopped
     networks:
       - memoai-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
-  # Redis для кэширования и сессий
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    restart: unless-stopped
-    networks:
-      - memoai-network
+  # Redis удален - не используется в проекте
 
   # Nginx для продакшена (опционально)
   nginx:
@@ -92,9 +88,9 @@ services:
     profiles:
       - production
 
-volumes:
-  redis_data:
-    driver: local
+# volumes:
+  # redis_data:
+  #   driver: local
 
 networks:
   memoai-network:

@@ -27,10 +27,12 @@ class DocumentProcessor:
         try:
             # Загружаем модель для русского языка
             print("Загружаем модель: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+            # ВАЖНО: Используем CPU, так как CUDA может не поддерживать новые GPU
             self.embeddings = HuggingFaceEmbeddings(
-                model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+                model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+                model_kwargs={'device': 'cpu'}  # Принудительно используем CPU
             )
-            print("Модель эмбеддингов успешно загружена")
+            print("Модель эмбеддингов успешно загружена (CPU)")
         except Exception as e:
             print(f"Ошибка при загрузке модели эмбеддингов: {str(e)}")
             import traceback
@@ -234,30 +236,43 @@ class DocumentProcessor:
     
     def update_vectorstore(self):
         """Обновление или создание векторного хранилища"""
-        print(f"Обновляем векторное хранилище...")
+        print(f"\n{'='*60}")
+        print(f"ОБНОВЛЕНИЕ ВЕКТОРНОГО ХРАНИЛИЩА")
+        print(f"{'='*60}")
         print(f"Документов для индексации: {len(self.documents)}")
-        print(f"Модель эмбеддингов: {self.embeddings is not None}")
-        print(f"Текущий vectorstore: {self.vectorstore is not None}")
+        print(f"Модель эмбеддингов инициализирована: {self.embeddings is not None}")
+        print(f"Текущий vectorstore существует: {self.vectorstore is not None}")
         
         if not self.documents:
-            print("Нет документов для индексации")
+            print("ОШИБКА: Нет документов для индексации")
             return
         
         if not self.embeddings:
-            print("Модель эмбеддингов не инициализирована")
+            print("Модель эмбеддингов не инициализирована, пытаемся инициализировать...")
             self.init_embeddings()
             if not self.embeddings:
-                print("Не удалось инициализировать модель эмбеддингов")
+                print("ОШИБКА: Не удалось инициализировать модель эмбеддингов")
                 return
+            else:
+                print("Модель эмбеддингов успешно инициализирована")
         
         try:
             # Создаем новое векторное хранилище
-            print("Создаем векторное хранилище FAISS...")
+            print("\nСоздаем векторное хранилище FAISS...")
+            print(f"Количество документов: {len(self.documents)}")
+            print(f"Первый документ (preview): {self.documents[0].page_content[:100]}..." if self.documents else "   Нет документов")
+            
             self.vectorstore = FAISS.from_documents(self.documents, self.embeddings)
-            print(f"Векторное хранилище успешно обновлено, добавлено {len(self.documents)} чанков")
-            print(f"Новый vectorstore доступен: {self.vectorstore is not None}")
+            
+            print(f"\nУСПЕХ: Векторное хранилище обновлено!")
+            print(f"Добавлено чанков: {len(self.documents)}")
+            print(f"Vectorstore доступен: {self.vectorstore is not None}")
+            print(f"Тип vectorstore: {type(self.vectorstore)}")
+            print(f"{'='*60}\n")
         except Exception as e:
-            print(f"Ошибка при обновлении векторного хранилища: {str(e)}")
+            print(f"\nОШИБКА при обновлении векторного хранилища:")
+            print(f"{str(e)}")
+            print(f"{'='*60}\n")
             import traceback
             traceback.print_exc()
     

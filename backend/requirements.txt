@@ -5,7 +5,6 @@ python-multipart==0.0.6
 aiofiles==23.2.1
 pydantic==2.5.0
 python-socketio==5.10.0
-starlette>=0.40.0,<0.48.0
 # Зависимости для document_processor
 python-docx==1.1.2
 PyPDF2==3.0.1
@@ -18,3 +17,6 @@ sentence-transformers==2.2.2
 
 # Зависимости для изменения темпа аудио
 librosa==0.10.1
+
+# Зависимости для llm-svc интеграции
+httpx==0.28.1
