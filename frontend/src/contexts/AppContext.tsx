@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useReducer, ReactNode } from 'react';
+import React, { createContext, useContext, useReducer, useEffect, ReactNode } from 'react';
 
 // Типы данных
 export interface Message {
@@ -7,6 +7,14 @@ export interface Message {
   content: string;
   timestamp: string;
   isStreaming?: boolean;
+}
+
+export interface Chat {
+  id: string;
+  title: string;
+  messages: Message[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ModelInfo {
@@ -32,10 +40,20 @@ export interface ModelSettings {
   streaming_speed: number; // Скорость потоковой генерации в миллисекундах
 }
 
+export interface Folder {
+  id: string;
+  name: string;
+  chatIds: string[];
+  expanded: boolean;
+}
+
 export interface AppState {
-  // Сообщения
-  messages: Message[];
+  // Чаты
+  chats: Chat[];
+  currentChatId: string | null;
+  folders: Folder[];
   isLoading: boolean;
+  isInitialized: boolean;
   
   // Модель
   currentModel: ModelInfo | null;
@@ -78,9 +96,14 @@ export interface AppState {
 
 // Действия
 type AppAction =
-  | { type: 'ADD_MESSAGE'; payload: Message }
-  | { type: 'UPDATE_MESSAGE'; payload: { id: string; content?: string; isStreaming?: boolean } }
-  | { type: 'APPEND_CHUNK'; payload: { id: string; chunk: string; isStreaming?: boolean } }
+  | { type: 'CREATE_CHAT'; payload: Chat }
+  | { type: 'RESTORE_CHATS'; payload: { chats: Chat[]; currentChatId: string | null; folders: Folder[] } }
+  | { type: 'SET_CURRENT_CHAT'; payload: string | null }
+  | { type: 'UPDATE_CHAT_TITLE'; payload: { chatId: string; title: string } }
+  | { type: 'DELETE_CHAT'; payload: string }
+  | { type: 'ADD_MESSAGE'; payload: { chatId: string; message: Message } }
+  | { type: 'UPDATE_MESSAGE'; payload: { chatId: string; messageId: string; content?: string; isStreaming?: boolean } }
+  | { type: 'APPEND_CHUNK'; payload: { chatId: string; messageId: string; chunk: string; isStreaming?: boolean } }
   | { type: 'SET_LOADING'; payload: boolean }
   | { type: 'SET_CURRENT_MODEL'; payload: ModelInfo }
   | { type: 'SET_MODEL_SETTINGS'; payload: ModelSettings }
@@ -92,8 +115,14 @@ type AppAction =
   | { type: 'SET_LOADED_DOCUMENT'; payload: string | null }
   | { type: 'ADD_NOTIFICATION'; payload: { type: string; message: string } }
   | { type: 'REMOVE_NOTIFICATION'; payload: string }
-  | { type: 'CLEAR_MESSAGES' }
-  | { type: 'UPDATE_STATS'; payload: Partial<AppState['stats']> };
+  | { type: 'CLEAR_MESSAGES'; payload: string }
+  | { type: 'CREATE_FOLDER'; payload: Folder }
+  | { type: 'UPDATE_FOLDER'; payload: { folderId: string; name: string } }
+  | { type: 'DELETE_FOLDER'; payload: string }
+  | { type: 'MOVE_CHAT_TO_FOLDER'; payload: { chatId: string; folderId: string | null } }
+  | { type: 'TOGGLE_FOLDER'; payload: string }
+  | { type: 'UPDATE_STATS'; payload: Partial<AppState['stats']> }
+  | { type: 'SET_INITIALIZED'; payload: boolean };
 
 // Функция для оценки количества токенов в тексте
 function estimateTokens(text: string): number {
@@ -137,8 +166,11 @@ function smartConcatenateChunk(existingContent: string, newChunk: string): strin
 
 // Начальное состояние
 const initialState: AppState = {
-  messages: [],
+  chats: [],
+  currentChatId: null,
+  folders: [],
   isLoading: false,
+  isInitialized: false,
   currentModel: null,
   modelSettings: {
     context_size: 2048,
@@ -174,70 +206,139 @@ const initialState: AppState = {
 // Reducer
 function appReducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
-    case 'ADD_MESSAGE':
+    case 'CREATE_CHAT':
       return {
         ...state,
-        messages: [...state.messages, action.payload],
+        chats: [...state.chats, action.payload],
+        currentChatId: action.payload.id,
+      };
+      
+    case 'RESTORE_CHATS':
+      return {
+        ...state,
+        chats: action.payload.chats,
+        currentChatId: action.payload.currentChatId,
+        folders: action.payload.folders || [],
+        isInitialized: true,
+      };
+      
+    case 'SET_CURRENT_CHAT':
+      return {
+        ...state,
+        currentChatId: action.payload,
+      };
+      
+    case 'UPDATE_CHAT_TITLE':
+      return {
+        ...state,
+        chats: state.chats.map(chat =>
+          chat.id === action.payload.chatId
+            ? { ...chat, title: action.payload.title, updatedAt: new Date().toISOString() }
+            : chat
+        ),
+      };
+      
+    case 'DELETE_CHAT':
+      return {
+        ...state,
+        chats: state.chats.filter(chat => chat.id !== action.payload),
+        currentChatId: state.currentChatId === action.payload ? null : state.currentChatId,
+      };
+      
+    case 'ADD_MESSAGE': {
+      const { chatId, message } = action.payload;
+      return {
+        ...state,
+        chats: state.chats.map(chat =>
+          chat.id === chatId
+            ? {
+                ...chat,
+                messages: [...chat.messages, message],
+                updatedAt: new Date().toISOString(),
+              }
+            : chat
+        ),
         stats: {
           ...state.stats,
           totalMessages: state.stats.totalMessages + 1,
-          totalTokens: state.stats.totalTokens + estimateTokens(action.payload.content),
+          totalTokens: state.stats.totalTokens + estimateTokens(message.content),
         },
       };
+    }
       
     case 'UPDATE_MESSAGE': {
-      console.log('🔧 UPDATE_MESSAGE вызван для ID:', action.payload.id);
-      console.log('🔧 Новый контент:', action.payload.content);
-      console.log('🔧 Новый isStreaming:', action.payload.isStreaming);
+      const { chatId, messageId, content, isStreaming } = action.payload;
+      console.log('UPDATE_MESSAGE вызван для чата:', chatId, 'сообщения:', messageId);
+      console.log('Новый контент:', content);
+      console.log('Новый isStreaming:', isStreaming);
       
-      const updatedMessage = state.messages.find(msg => msg.id === action.payload.id);
-      console.log('🔧 Найдено сообщение для обновления:', updatedMessage ? 'да' : 'нет');
+      const currentChat = state.chats.find(chat => chat.id === chatId);
+      const updatedMessage = currentChat?.messages.find(msg => msg.id === messageId);
+      console.log('Найдено сообщение для обновления:', updatedMessage ? 'да' : 'нет');
       
       return {
         ...state,
-        messages: state.messages.map(msg =>
-          msg.id === action.payload.id
-            ? { 
-                ...msg, 
-                ...(action.payload.content !== undefined && { content: action.payload.content }),
-                ...(action.payload.isStreaming !== undefined && { isStreaming: action.payload.isStreaming })
+        chats: state.chats.map(chat =>
+          chat.id === chatId
+            ? {
+                ...chat,
+                messages: chat.messages.map(msg =>
+                  msg.id === messageId
+                    ? { 
+                        ...msg, 
+                        ...(content !== undefined && { content }),
+                        ...(isStreaming !== undefined && { isStreaming })
+                      }
+                    : msg
+                ),
+                updatedAt: new Date().toISOString(),
               }
-            : msg
+            : chat
         ),
         stats: {
           ...state.stats,
           // Обновляем токены при изменении содержимого сообщения
-          totalTokens: state.stats.totalTokens - estimateTokens(updatedMessage?.content || '') + estimateTokens(action.payload.content || ''),
+          totalTokens: state.stats.totalTokens - estimateTokens(updatedMessage?.content || '') + estimateTokens(content || ''),
         },
       };
     }
       
     case 'APPEND_CHUNK': {
-      console.log('🔧 APPEND_CHUNK вызван для ID:', action.payload.id);
-      console.log('🔧 Текст чанка:', action.payload.chunk);
-      console.log('🔧 isStreaming:', action.payload.isStreaming);
+      const { chatId, messageId, chunk, isStreaming } = action.payload;
+      console.log('APPEND_CHUNK вызван для чата:', chatId, 'сообщения:', messageId);
+      console.log('Текст чанка:', chunk);
+      console.log('isStreaming:', isStreaming);
       
-      const chunkMessage = state.messages.find(msg => msg.id === action.payload.id);
-      console.log('🔧 Найдено сообщение:', chunkMessage ? 'да' : 'нет');
+      const currentChat = state.chats.find(chat => chat.id === chatId);
+      const chunkMessage = currentChat?.messages.find(msg => msg.id === messageId);
+      console.log('Найдено сообщение:', chunkMessage ? 'да' : 'нет');
       
-      const newContent = chunkMessage ? smartConcatenateChunk(chunkMessage.content, action.payload.chunk) : action.payload.chunk;
-      console.log('🔧 Новое содержимое:', newContent.substring(0, 100) + '...');
+      const newContent = chunkMessage ? smartConcatenateChunk(chunkMessage.content, chunk) : chunk;
+      console.log('Новое содержимое:', newContent.substring(0, 100) + '...');
       
       return {
         ...state,
-        messages: state.messages.map(msg =>
-          msg.id === action.payload.id
+        chats: state.chats.map(chat =>
+          chat.id === chatId
             ? {
-                ...msg,
-                content: newContent,
-                ...(action.payload.isStreaming !== undefined && { isStreaming: action.payload.isStreaming })
+                ...chat,
+                messages: chat.messages.map(msg =>
+                  msg.id === messageId
+                    ? {
+                        ...msg,
+                        content: newContent,
+                        ...(isStreaming !== undefined && { isStreaming })
+                      }
+                    : msg
+                ),
+                updatedAt: new Date().toISOString(),
               }
-            : msg
+            : chat
         ),
         stats: {
           ...state.stats,
           // Добавляем токены для нового чанка
-          totalTokens: state.stats.totalTokens + estimateTokens(action.payload.chunk),
+          totalTokens: state.stats.totalTokens + estimateTokens(chunk),
         },
       };
     }
@@ -315,16 +416,22 @@ function appReducer(state: AppState, action: AppAction): AppState {
         notifications: state.notifications.filter(n => n.id !== action.payload),
       };
       
-    case 'CLEAR_MESSAGES':
+    case 'CLEAR_MESSAGES': {
+      const chatId = action.payload;
       return {
         ...state,
-        messages: [],
+        chats: state.chats.map(chat =>
+          chat.id === chatId
+            ? { ...chat, messages: [], updatedAt: new Date().toISOString() }
+            : chat
+        ),
         stats: {
           ...state.stats,
           totalMessages: 0,
           totalTokens: 0,
         },
       };
+    }
       
     case 'UPDATE_STATS':
       return {
@@ -333,6 +440,55 @@ function appReducer(state: AppState, action: AppAction): AppState {
           ...state.stats,
           ...action.payload,
         },
+      };
+      
+    case 'CREATE_FOLDER':
+      return {
+        ...state,
+        folders: [...state.folders, action.payload],
+      };
+      
+    case 'UPDATE_FOLDER':
+      return {
+        ...state,
+        folders: state.folders.map(folder =>
+          folder.id === action.payload.folderId
+            ? { ...folder, name: action.payload.name }
+            : folder
+        ),
+      };
+      
+    case 'DELETE_FOLDER':
+      return {
+        ...state,
+        folders: state.folders.filter(folder => folder.id !== action.payload),
+      };
+      
+    case 'MOVE_CHAT_TO_FOLDER':
+      return {
+        ...state,
+        folders: state.folders.map(folder => ({
+          ...folder,
+          chatIds: folder.id === action.payload.folderId
+            ? [...folder.chatIds, action.payload.chatId]
+            : folder.chatIds.filter(id => id !== action.payload.chatId)
+        })),
+      };
+      
+    case 'TOGGLE_FOLDER':
+      return {
+        ...state,
+        folders: state.folders.map(folder =>
+          folder.id === action.payload
+            ? { ...folder, expanded: !folder.expanded }
+            : folder
+        ),
+      };
+      
+    case 'SET_INITIALIZED':
+      return {
+        ...state,
+        isInitialized: action.payload,
       };
       
     default:
@@ -348,7 +504,53 @@ const AppContext = createContext<{
 
 // Провайдер
 export function AppProvider({ children }: { children: ReactNode }) {
+  // Загружаем состояние из localStorage при инициализации
   const [state, dispatch] = useReducer(appReducer, initialState);
+
+  // Инициализация из localStorage
+  useEffect(() => {
+    try {
+      const savedState = localStorage.getItem('memo-chats');
+      if (savedState) {
+        const parsed = JSON.parse(savedState);
+        if (parsed.chats && parsed.chats.length > 0) {
+          // Восстанавливаем чаты и папки напрямую в состояние
+          dispatch({ 
+            type: 'RESTORE_CHATS', 
+            payload: {
+              chats: parsed.chats || [],
+              currentChatId: parsed.currentChatId || null,
+              folders: parsed.folders || []
+            }
+          });
+        } else {
+          // Если нет сохраненных чатов, помечаем как инициализированное
+          dispatch({ type: 'SET_INITIALIZED', payload: true });
+        }
+      } else {
+        // Если нет сохраненного состояния, помечаем как инициализированное
+        dispatch({ type: 'SET_INITIALIZED', payload: true });
+      }
+    } catch (error) {
+      console.error('Ошибка загрузки состояния из localStorage:', error);
+      // В случае ошибки тоже помечаем как инициализированное
+      dispatch({ type: 'SET_INITIALIZED', payload: true });
+    }
+  }, []);
+
+  // Сохраняем состояние в localStorage при изменении
+  useEffect(() => {
+    try {
+      const stateToSave = {
+        chats: state.chats,
+        currentChatId: state.currentChatId,
+        folders: state.folders,
+      };
+      localStorage.setItem('memo-chats', JSON.stringify(stateToSave));
+    } catch (error) {
+      console.error('Ошибка сохранения состояния в localStorage:', error);
+    }
+  }, [state.chats, state.currentChatId, state.folders]);
 
   return (
     <AppContext.Provider value={{ state, dispatch }}>
@@ -368,36 +570,80 @@ export function useAppContext() {
 
 // Хелперы для часто используемых действий
 export function useAppActions() {
-  const { dispatch } = useAppContext();
+  const { dispatch, state } = useAppContext();
 
   return {
-    addMessage: (message: Omit<Message, 'id'>) => {
+    createChat: (title: string = 'Новый чат') => {
+      const chatId = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+      const now = new Date().toISOString();
+      
+      const newChat: Chat = {
+        id: chatId,
+        title,
+        messages: [],
+        createdAt: now,
+        updatedAt: now,
+      };
+      
+      dispatch({
+        type: 'CREATE_CHAT',
+        payload: newChat,
+      });
+      
+      return chatId;
+    },
+    
+    setCurrentChat: (chatId: string | null) => {
+      dispatch({
+        type: 'SET_CURRENT_CHAT',
+        payload: chatId,
+      });
+    },
+    
+    updateChatTitle: (chatId: string, title: string) => {
+      dispatch({
+        type: 'UPDATE_CHAT_TITLE',
+        payload: { chatId, title },
+      });
+    },
+    
+    deleteChat: (chatId: string) => {
+      dispatch({
+        type: 'DELETE_CHAT',
+        payload: chatId,
+      });
+    },
+    
+    addMessage: (chatId: string, message: Omit<Message, 'id'>) => {
       const messageId = Date.now().toString() + Math.random().toString(36).substr(2, 9);
-      console.log('🔧 ADD_MESSAGE вызван для роли:', message.role);
-      console.log('🔧 Содержимое:', message.content.substring(0, 100) + '...');
-      console.log('🔧 isStreaming:', message.isStreaming);
-      console.log('🔧 Сгенерированный ID:', messageId);
+      console.log('ADD_MESSAGE вызван для чата:', chatId, 'роли:', message.role);
+      console.log('Содержимое:', message.content.substring(0, 100) + '...');
+      console.log('isStreaming:', message.isStreaming);
+      console.log('Сгенерированный ID:', messageId);
       
       dispatch({
         type: 'ADD_MESSAGE',
         payload: {
-          ...message,
-          id: messageId,
+          chatId,
+          message: {
+            ...message,
+            id: messageId,
+          },
         },
       });
       return messageId;
     },
     
-    updateMessage: (id: string, content?: string, isStreaming?: boolean) => {
-      dispatch({ type: 'UPDATE_MESSAGE', payload: { id, content, isStreaming } });
+    updateMessage: (chatId: string, messageId: string, content?: string, isStreaming?: boolean) => {
+      dispatch({ type: 'UPDATE_MESSAGE', payload: { chatId, messageId, content, isStreaming } });
     },
     
-    appendChunk: (id: string, chunk: string, isStreaming?: boolean) => {
-      dispatch({ type: 'APPEND_CHUNK', payload: { id, chunk, isStreaming } });
+    appendChunk: (chatId: string, messageId: string, chunk: string, isStreaming?: boolean) => {
+      dispatch({ type: 'APPEND_CHUNK', payload: { chatId, messageId, chunk, isStreaming } });
     },
     
     setLoading: (loading: boolean) => {
-      console.log('🔧 SET_LOADING вызван:', loading);
+      console.log('SET_LOADING вызван:', loading);
       dispatch({ type: 'SET_LOADING', payload: loading });
     },
     
@@ -409,8 +655,8 @@ export function useAppActions() {
       dispatch({ type: 'REMOVE_NOTIFICATION', payload: id });
     },
     
-    clearMessages: () => {
-      dispatch({ type: 'CLEAR_MESSAGES' });
+    clearMessages: (chatId: string) => {
+      dispatch({ type: 'CLEAR_MESSAGES', payload: chatId });
     },
     
     setCurrentModel: (model: ModelInfo) => {
@@ -431,6 +677,53 @@ export function useAppActions() {
     
     setTranscriptionSettings: (settings: { engine: 'whisperx' | 'vosk'; language: string; auto_detect: boolean }) => {
       dispatch({ type: 'SET_TRANSCRIPTION_SETTINGS', payload: settings });
+    },
+    
+    // Хелперы для получения данных
+    getCurrentChat: () => {
+      return state.chats.find(chat => chat.id === state.currentChatId) || null;
+    },
+    
+    getCurrentMessages: () => {
+      const currentChat = state.chats.find(chat => chat.id === state.currentChatId);
+      return currentChat?.messages || [];
+    },
+    
+    getChatById: (chatId: string) => {
+      return state.chats.find(chat => chat.id === chatId) || null;
+    },
+    
+    // Функции для работы с папками
+    createFolder: (name: string) => {
+      const folderId = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+      const newFolder: Folder = {
+        id: folderId,
+        name,
+        chatIds: [],
+        expanded: true,
+      };
+      dispatch({ type: 'CREATE_FOLDER', payload: newFolder });
+      return folderId;
+    },
+    
+    updateFolder: (folderId: string, name: string) => {
+      dispatch({ type: 'UPDATE_FOLDER', payload: { folderId, name } });
+    },
+    
+    deleteFolder: (folderId: string) => {
+      dispatch({ type: 'DELETE_FOLDER', payload: folderId });
+    },
+    
+    moveChatToFolder: (chatId: string, folderId: string | null) => {
+      dispatch({ type: 'MOVE_CHAT_TO_FOLDER', payload: { chatId, folderId } });
+    },
+    
+    toggleFolder: (folderId: string) => {
+      dispatch({ type: 'TOGGLE_FOLDER', payload: folderId });
+    },
+    
+    getFolders: () => {
+      return state.folders;
     },
   };
 }

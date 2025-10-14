@@ -132,7 +132,6 @@ function App() {
                 
                 <Routes>
                   <Route path="/" element={<UnifiedChatPage isDarkMode={isDarkMode} />} />
-                  <Route path="/chat" element={<UnifiedChatPage isDarkMode={isDarkMode} />} />
                   <Route path="/voice" element={<VoicePage />} />
                   <Route path="/documents" element={<DocumentsPage />} />
                   <Route path="/transcription" element={<TranscriptionPage />} />

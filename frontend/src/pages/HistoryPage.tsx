@@ -51,7 +51,7 @@ export default function HistoryPage() {
   const [showDetailDialog, setShowDetailDialog] = useState(false);
   
   const { state } = useAppContext();
-  const { showNotification, clearMessages } = useAppActions();
+  const { showNotification, clearMessages, getCurrentMessages, getCurrentChat } = useAppActions();
 
   useEffect(() => {
     loadHistory();
@@ -84,8 +84,10 @@ export default function HistoryPage() {
     } catch (error) {
       console.error('Ошибка загрузки истории:', error);
       showNotification('error', 'Не удалось загрузить историю');
-      // Используем локальную историю из состояния
-      setHistory(state.messages);
+      // Используем локальную историю из текущего чата
+      const currentChat = getCurrentChat();
+      const messages = getCurrentMessages();
+      setHistory(messages);
     } finally {
       setIsLoading(false);
     }
@@ -101,7 +103,11 @@ export default function HistoryPage() {
       
       if (result.success) {
         setHistory([]);
-        clearMessages(); // Очищаем также локальное состояние
+        // Очищаем текущий чат
+        const currentChat = getCurrentChat();
+        if (currentChat) {
+          clearMessages(currentChat.id);
+        }
         showNotification('success', 'История очищена');
         setShowClearDialog(false);
       } else {

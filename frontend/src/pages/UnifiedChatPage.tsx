@@ -158,8 +158,43 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
   
   // Context и Socket
   const { state } = useAppContext();
-  const { clearMessages, showNotification, setSpeaking, setRecording } = useAppActions();
+  const { 
+    clearMessages, 
+    showNotification, 
+    setSpeaking, 
+    setRecording, 
+    addMessage, 
+    updateMessage, 
+    appendChunk, 
+    getCurrentMessages, 
+    getCurrentChat,
+    createChat,
+    setCurrentChat,
+    updateChatTitle
+  } = useAppActions();
   const { sendMessage, isConnected, reconnect, stopGeneration } = useSocket();
+
+  // Получаем текущий чат и сообщения
+  const currentChat = getCurrentChat();
+  const messages = getCurrentMessages();
+
+  // Убираем автоматическое создание чатов - чаты создаются только по кнопке
+
+  // Автоматически обновляем название чата на основе первого сообщения пользователя
+  useEffect(() => {
+    if (currentChat && messages.length === 1) {
+      const firstMessage = messages[0];
+      if (firstMessage.role === 'user' && currentChat.title === 'Новый чат') {
+        const title = firstMessage.content.length > 50 
+          ? firstMessage.content.substring(0, 50) + '...'
+          : firstMessage.content;
+        updateChatTitle(currentChat.id, title);
+      }
+    }
+  }, [currentChat, messages, updateChatTitle]);
+
+  // Убираем автоматическую остановку генерации при смене чата
+  // Генерация должна происходить в том чате, где был задан вопрос
 
   // Добавляем состояние для текущего индекса голоса
   const [currentVoiceIndex, setCurrentVoiceIndex] = useState(0);
@@ -173,7 +208,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
   // Автоскролл к последнему сообщению
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [state.messages]);
+  }, [messages]);
 
   // Фокус на поле ввода при загрузке
   useEffect(() => {
@@ -247,11 +282,11 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
   // ================================
 
   const handleSendMessage = (): void => {
-    if (!inputMessage.trim() || !isConnected || state.isLoading) {
+    if (!inputMessage.trim() || !isConnected || state.isLoading || !currentChat) {
       return;
     }
 
-    sendMessage(inputMessage.trim());
+    sendMessage(inputMessage.trim(), currentChat.id);
     setInputMessage('');
   };
 
@@ -276,6 +311,23 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
       hour: '2-digit',
       minute: '2-digit',
     });
+  };
+
+  // Функция для определения приветствия по времени суток (Московское время)
+  const getGreeting = (): string => {
+    const now = new Date();
+    const moscowTime = new Date(now.toLocaleString("en-US", {timeZone: "Europe/Moscow"}));
+    const hour = moscowTime.getHours();
+    
+    if (hour >= 5 && hour < 12) {
+      return "Доброе утро";
+    } else if (hour >= 12 && hour < 18) {
+      return "Добрый день";
+    } else if (hour >= 18 && hour < 22) {
+      return "Добрый вечер";
+    } else {
+      return "Доброй ночи";
+    }
   };
 
   // ================================
@@ -1327,7 +1379,9 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
   };
 
   const handleClearChat = (): void => {
-    clearMessages();
+    if (currentChat) {
+      clearMessages(currentChat.id);
+    }
     handleMenuClose();
   };
 
@@ -1878,7 +1932,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
             <IconButton
               size="large"
               onClick={startRecording}
-              disabled={state.isLoading && !state.messages.some(msg => msg.isStreaming)}
+              disabled={state.isLoading && !messages.some(msg => msg.isStreaming)}
               sx={{
                 width: 80,
                 height: 80,
@@ -2211,7 +2265,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
            minHeight: '60vh',
            display: 'flex',
            flexDirection: 'column',
-           justifyContent: state.messages.length === 0 ? 'center' : 'flex-start',
+           justifyContent: messages.length === 0 ? 'center' : 'flex-start',
            alignItems: 'center',
            py: 4,
          }}
@@ -2219,30 +2273,8 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
-          {state.messages.length === 0 ? (
-                         <Box
-               sx={{
-                 display: 'flex',
-                 flexDirection: 'column',
-                 alignItems: 'center',
-                 justifyContent: 'center',
-                 textAlign: 'center',
-                 color: isDarkMode ? 'rgba(255, 255, 255, 0.8)' : 'rgba(0, 0, 0, 0.8)',
-                 maxWidth: '600px',
-                 mx: 'auto',
-               }}
-             >
-               <BotIcon sx={{ fontSize: 64, mb: 2, opacity: 0.7, color: '#2196f3' }} />
-                               <Typography variant="h6" sx={{ mb: 1, color: isDarkMode ? 'white' : '#333' }}>
-                  Добро пожаловать в Газик ИИ!
-                </Typography>
-               <Typography variant="body1" sx={{ color: isDarkMode ? 'rgba(255, 255, 255, 0.9)' : 'rgba(0, 0, 0, 0.9)' }}>
-                 Задайте вопрос, загрузите документ или используйте голосовой ввод
-               </Typography>
-               <Typography variant="body2" sx={{ mt: 2, opacity: 0.7, color: isDarkMode ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.7)' }}>
-                 Перетащите файл сюда для загрузки
-               </Typography>
-             </Box>
+          {messages.length === 0 ? (
+            null
           ) : (
             <Box sx={{ 
               width: '100%', 
@@ -2250,7 +2282,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
               mx: 'auto',
               px: 2,
             }}>
-              {state.messages.map((message, index) => (
+              {messages.map((message, index) => (
                 <MessageCard key={index} message={message} />
               ))}
             </Box>
@@ -2285,13 +2317,21 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
         </Box>
 
                  {/* Индикатор размышления - показывается только до начала потоковой генерации */}
-         {state.isLoading && !state.messages.some(msg => msg.isStreaming) && (
+         {state.isLoading && !messages.some(msg => msg.isStreaming) && (
            <Box sx={{ 
              width: '100%', 
              maxWidth: '800px', 
              mx: 'auto',
              px: 2,
              mb: 3,
+             // Для новых чатов позиционируем в центре
+             ...(messages.length === 0 && {
+               position: 'absolute',
+               top: '50%',
+               left: '50%',
+               transform: 'translate(-50%, 20%)',
+               mb: 0,
+             }),
            }}>
              <Box
                sx={{
@@ -2433,6 +2473,32 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
            onDrop={handleDrop}
          >
           
+                     {/* Приветствие НАД контейнером ввода при пустом чате */}
+                     {messages.length === 0 && (
+                       <Box sx={{ 
+                         textAlign: 'center', 
+                         mb: 3,
+                         maxWidth: '800px',
+                         mx: 'auto',
+                         px: 2,
+                         position: 'absolute',
+                         top: '45%',
+                         left: '50%',
+                         transform: 'translate(-50%, -120%)',
+                       }}>
+                         <Typography 
+                           variant="h4" 
+                           sx={{ 
+                             color: isDarkMode ? 'white' : '#333', 
+                             fontWeight: 600,
+                             mb: 1,
+                           }}
+                         >
+                           {getGreeting()}
+                         </Typography>
+                       </Box>
+                     )}
+
                      {/* Объединенное поле ввода с кнопками */}
            <Box
              sx={{
@@ -2444,8 +2510,17 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                maxWidth: '800px', // Расширяем до ширины карточек сообщений
                width: '100%', // Занимает всю доступную ширину до maxWidth
                mx: 'auto', // Центрируем по горизонтали
+               // Центрируем по вертикали при пустом чате
+               ...(messages.length === 0 && {
+                 position: 'absolute',
+                 top: '50%',
+                 left: '50%',
+                 transform: 'translate(-50%, -50%)',
+                 mt: 0,
+               }),
              }}
            >
+
                            {/* Скрытый input для выбора файла */}
               <input
                 ref={fileInputRef}
@@ -2554,20 +2629,21 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                 placeholder={
                   !isConnected 
                     ? "Нет соединения с сервером. Запустите backend на порту 8000" 
-                    : state.isLoading && !state.messages.some(msg => msg.isStreaming)
+                    : state.isLoading && !messages.some(msg => msg.isStreaming)
                       ? "ГазикИИ думает..." 
-                      : state.isLoading && state.messages.some(msg => msg.isStreaming)
+                      : state.isLoading && messages.some(msg => msg.isStreaming)
                         ? "ГазикИИ генерирует ответ... Нажмите ⏹️ чтобы остановить"
                         : "Чем я могу помочь вам сегодня?"
                 }
                 variant="outlined"
                 size="small"
-                disabled={!isConnected || (state.isLoading && !state.messages.some(msg => msg.isStreaming))}
+                disabled={!isConnected || (state.isLoading && !messages.some(msg => msg.isStreaming))}
                 sx={{
-                  mb: 2,
+                  mb: 1.5,
                   '& .MuiOutlinedInput-root': {
                     bgcolor: 'transparent',
                     border: 'none',
+                    fontSize: '0.875rem',
                     '&:hover': {
                       bgcolor: 'transparent',
                     },
@@ -2583,12 +2659,12 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                 sx={{
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 1,
+                  gap: 0.5,
                   justifyContent: 'space-between',
                 }}
               >
                                  {/* Левая группа кнопок */}
-                 <Box sx={{ display: 'flex', gap: 1 }}>
+                 <Box sx={{ display: 'flex', gap: 0.5 }}>
                    {/* Кнопка загрузки документов */}
                    <Tooltip title="Загрузить документ">
                      <IconButton
@@ -2604,9 +2680,9 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                          }
                        }}
                        disableRipple
-                       disabled={isUploading || (state.isLoading && !state.messages.some(msg => msg.isStreaming))}
+                       disabled={isUploading || (state.isLoading && !messages.some(msg => msg.isStreaming))}
                      >
-                       {isUploading ? <CircularProgress size={20} /> : <AttachFileIcon sx={{ color: '#2196f3' }} />}
+                       {isUploading ? <CircularProgress size={16} /> : <AttachFileIcon sx={{ color: '#2196f3', fontSize: '1.2rem' }} />}
                      </IconButton>
                    </Tooltip>
 
@@ -2614,7 +2690,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                     <Tooltip title="Дополнительные действия">
                       <IconButton
                         onClick={handleMenuOpen}
-                        disabled={state.isLoading && !state.messages.some(msg => msg.isStreaming)}
+                        disabled={state.isLoading && !messages.some(msg => msg.isStreaming)}
                         sx={{ 
                           color: isDarkMode ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.7)',
                           bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
@@ -2627,15 +2703,15 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                           }
                         }}
                       >
-                        <SettingsIcon />
+                        <SettingsIcon sx={{ fontSize: '1.2rem' }} />
                       </IconButton>
                     </Tooltip>
                  </Box>
 
                                  {/* Правая группа кнопок */}
-                 <Box sx={{ display: 'flex', gap: 1 }}>
+                 <Box sx={{ display: 'flex', gap: 0.5 }}>
                    {/* Кнопка отправки/остановки генерации */}
-                   {state.messages.some(msg => msg.isStreaming) ? (
+                   {messages.some(msg => msg.isStreaming) ? (
                      <Tooltip title="Прервать генерацию">
                        <IconButton
                          onClick={handleStopGeneration}
@@ -2654,14 +2730,14 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                            },
                          }}
                        >
-                         <SquareIcon />
+                         <SquareIcon sx={{ fontSize: '1.2rem' }} />
                        </IconButton>
                      </Tooltip>
                    ) : (
                      <Tooltip title="Отправить">
                        <IconButton
                          onClick={handleSendMessage}
-                         disabled={!inputMessage.trim() || !isConnected || (state.isLoading && !state.messages.some(msg => msg.isStreaming))}
+                         disabled={!inputMessage.trim() || !isConnected || (state.isLoading && !messages.some(msg => msg.isStreaming))}
                          color="primary"
                          sx={{
                            bgcolor: 'primary.main',
@@ -2676,7 +2752,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                            }
                          }}
                        >
-                         <SendIcon />
+                         <SendIcon sx={{ fontSize: '1.2rem' }} />
                        </IconButton>
                      </Tooltip>
                    )}
@@ -2685,7 +2761,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                   <Tooltip title="Голосовой ввод">
                     <IconButton
                       onClick={() => setShowVoiceDialog(true)}
-                      disabled={state.isLoading && !state.messages.some(msg => msg.isStreaming)}
+                      disabled={state.isLoading && !messages.some(msg => msg.isStreaming)}
                       sx={{
                         bgcolor: 'secondary.main',
                         color: 'white',
@@ -2698,7 +2774,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                         }
                       }}
                     >
-                      <MicIcon />
+                      <MicIcon sx={{ fontSize: '1.2rem' }} />
                     </IconButton>
                   </Tooltip>
                 </Box>

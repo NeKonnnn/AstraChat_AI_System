@@ -26,7 +26,6 @@ import {
   DialogContent,
   DialogActions,
   Chip,
-  CircularProgress,
 } from '@mui/material';
 import {
   Save as SaveIcon,
@@ -38,6 +37,7 @@ import {
   Memory as MemoryIcon,
 } from '@mui/icons-material';
 import { useAppActions } from '../contexts/AppContext';
+import AgentArchitectureSettings from '../components/AgentArchitectureSettings';
 
 // Backend URL
 const API_BASE_URL = 'http://localhost:8000';
@@ -220,34 +220,6 @@ export default function SettingsPage() {
     } catch (error) {
       console.error('Ошибка сохранения промпта модели:', error);
       showNotification('error', 'Ошибка сохранения промпта модели');
-      return false;
-    }
-  };
-
-  const saveCustomPrompt = async (id: string, prompt: string, description: string) => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/context-prompts/custom`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, prompt, description })
-      });
-      
-      if (response.ok) {
-        setContextPrompts(prev => ({
-          ...prev,
-          customPrompts: {
-            ...prev.customPrompts,
-            [id]: { prompt, description, created_at: new Date().toISOString() }
-          }
-        }));
-        showNotification('success', 'Пользовательский промпт сохранен');
-        return true;
-      } else {
-        throw new Error('Ошибка сохранения пользовательского промпта');
-      }
-    } catch (error) {
-      console.error('Ошибка сохранения пользовательского промпта:', error);
-      showNotification('error', 'Ошибка сохранения пользовательского промпта');
       return false;
     }
   };
@@ -1216,6 +1188,24 @@ export default function SettingsPage() {
                  Сбросить к умолчаниям
                </Button>
              </Box>
+           </CardContent>
+         </Card>
+
+         {/* Настройки агентной архитектуры */}
+         <Card sx={{ mb: 3 }}>
+           <CardContent>
+             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+               <ComputerIcon color="primary" />
+               <Typography variant="h6" gutterBottom sx={{ mb: 0 }}>
+                 Агентная архитектура
+               </Typography>
+             </Box>
+             
+             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+               Выберите режим работы ассистента: прямой режим (общение с моделью напрямую) или агентный режим (использование специализированных агентов)
+             </Typography>
+             
+             <AgentArchitectureSettings />
            </CardContent>
          </Card>
 

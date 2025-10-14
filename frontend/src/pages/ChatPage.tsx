@@ -33,15 +33,19 @@ export default function ChatPage() {
   const [inputMessage, setInputMessage] = useState('');
   const [showCopyAlert, setShowCopyAlert] = useState(false);
   const { state } = useAppContext();
-  const { clearMessages, showNotification } = useAppActions();
+  const { clearMessages, showNotification, getCurrentMessages, getCurrentChat } = useAppActions();
   const { sendMessage, isConnected, reconnect, stopGeneration } = useSocket();
+  
+  // Получаем текущий чат и сообщения
+  const currentChat = getCurrentChat();
+  const messages = getCurrentMessages();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Автоскролл к последнему сообщению
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [state.messages]);
+  }, [messages]);
 
   // Фокус на поле ввода при загрузке
   useEffect(() => {
@@ -49,11 +53,11 @@ export default function ChatPage() {
   }, []);
 
   const handleSendMessage = () => {
-    if (!inputMessage.trim() || !isConnected || state.isLoading) {
+    if (!inputMessage.trim() || !isConnected || state.isLoading || !currentChat) {
       return;
     }
 
-    sendMessage(inputMessage.trim());
+    sendMessage(inputMessage.trim(), currentChat.id);
     setInputMessage('');
   };
 
@@ -228,11 +232,11 @@ export default function ChatPage() {
             {/* Статус соединения и управление */}
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
               
-              {state.messages.length > 0 && (
+              {messages.length > 0 && (
                 <Tooltip title="Очистить историю">
                   <IconButton
                     size="small"
-                    onClick={clearMessages}
+                    onClick={() => currentChat && clearMessages(currentChat.id)}
                     color="secondary"
                     sx={{ 
                       backgroundColor: 'action.hover',
@@ -320,7 +324,7 @@ export default function ChatPage() {
             scrollBehavior: 'smooth',
           }}
         >
-          {state.messages.length === 0 ? (
+          {messages.length === 0 ? (
             /* Приветственное сообщение */
             <Box
               sx={{
@@ -358,7 +362,7 @@ export default function ChatPage() {
           ) : (
             /* Список сообщений */
             <Box>
-              {state.messages.map((message) => (
+              {messages.map((message) => (
                 <MessageCard key={message.id} message={message} />
               ))}
               <div ref={messagesEndRef} />
