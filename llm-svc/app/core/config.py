@@ -23,8 +23,8 @@ class CorsConfig(BaseModel):
 
 
 class ModelConfig(BaseModel):
-    path: str = "/app/models/llama-2-7b-chat.Q4_K_M.gguf"
-    name: str = "llama-2-7b-chat"
+    path: str = os.environ.get("LLM_MODEL_PATH", "/app/models/llama-2-7b-chat.Q4_K_M.gguf")
+    name: str = os.environ.get("LLM_MODEL_NAME", "llama-2-7b-chat")
     ctx_size: int = 4096
     gpu_layers: int = 0
     verbose: bool = False
@@ -37,8 +37,8 @@ class GenerationConfig(BaseModel):
 
 
 class AppConfig(BaseModel):
-    title: str = "Llama CPP API Service"
-    description: str = "API service for Llama-based models compatible with OpenAI API"
+    title: str = "AI Models API Service"
+    description: str = "Unified API service for LLM, Speech Recognition (Vosk) and Text-to-Speech (Silero) models"
     version: str = "1.0.0"
 
 
@@ -66,6 +66,48 @@ class SecurityConfig(BaseModel):
     enabled: bool = True
     api_key: Optional[str] = None
     api_key_header: str = "X-API-Key"
+
+
+class VoskConfig(BaseModel):
+    enabled: bool = True
+    model_path: str = os.environ.get("VOSK_MODEL_PATH", "/app/models/vosk-model-small-ru-0.22")
+    sample_rate: int = 16000
+    max_file_size: int = 50 * 1024 * 1024  # 50MB
+    supported_languages: List[str] = ["ru", "en"]
+
+
+class SileroConfig(BaseModel):
+    enabled: bool = True
+    models_dir: str = os.environ.get("SILERO_MODELS_DIR", "/app/models/silero")
+    sample_rate: int = 48000
+    max_text_length: int = 5000
+    supported_languages: List[str] = ["ru", "en"]
+    supported_speakers: dict = {
+        "ru": ["baya", "kseniya", "xenia", "eugene", "aidar"],
+        "en": ["v3_en"]
+    }
+
+
+class WhisperXConfig(BaseModel):
+    enabled: bool = True
+    models_dir: str = os.environ.get("WHISPERX_MODELS_DIR", "/app/models/whisperx")
+    device: str = "cpu"  # cpu, cuda, auto
+    compute_type: str = "float16"  # float16, int8, int8_float16
+    language: str = "ru"
+    batch_size: int = 16
+    max_file_size: int = 100 * 1024 * 1024  # 100MB
+    supported_languages: List[str] = ["ru", "en", "auto"]
+
+
+class DiarizationConfig(BaseModel):
+    enabled: bool = True
+    models_dir: str = os.environ.get("DIARIZATION_MODELS_DIR", "/app/models/diarization")
+    config_path: str = os.environ.get("DIARIZATION_CONFIG_PATH", "/app/models/diarization/pyannote_diarization_config.yaml")
+    device: str = "cpu"  # cpu, cuda, auto
+    min_speakers: int = 1
+    max_speakers: int = 10
+    min_duration: float = 1.0  # секунды
+    max_file_size: int = 100 * 1024 * 1024  # 100MB
 
 
 class NexusConfig(BaseModel):
@@ -101,6 +143,10 @@ class Settings(BaseModel):
     logging: LoggingConfig = LoggingConfig()
     caching: CachingConfig = CachingConfig()
     security: SecurityConfig = SecurityConfig()
+    vosk: VoskConfig = VoskConfig()
+    silero: SileroConfig = SileroConfig()
+    whisperx: WhisperXConfig = WhisperXConfig()
+    diarization: DiarizationConfig = DiarizationConfig()
     nexus: NexusConfig = NexusConfig()
 
     @classmethod

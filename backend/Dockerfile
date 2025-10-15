@@ -31,8 +31,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Копирование исходного кода
 COPY . .
 
-# Создание необходимых директорий
-RUN mkdir -p /app/models /app/model_small /app/silero_models /app/memory
+# Создание только необходимых директорий для backend
+RUN mkdir -p /app/memory /app/logs /app/uploads /tmp/memoai
 
 # Установка переменных окружения
 ENV PYTHONPATH=/app

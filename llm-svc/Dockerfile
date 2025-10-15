@@ -15,6 +15,13 @@ RUN apt-get update && apt-get install -y \
     libopenblas-dev \
     git \
     pkg-config \
+    ffmpeg \
+    wget \
+    unzip \
+    libsndfile1 \
+    libsndfile1-dev \
+    libsox-dev \
+    sox \
     && rm -rf /var/lib/apt/lists/*
 
 # Создание символической ссылки для python
@@ -47,8 +54,16 @@ ENV NUMEXPR_NUM_THREADS=8
 COPY app/ ./app/
 COPY config/ ./config/
 
-# Создание директории для моделей
-RUN mkdir -p /app/models
+# Создание только базовой директории для моделей (если нужно)
+# RUN mkdir -p /app/models
+
+# Скачивание модели Vosk (русская, маленькая)
+RUN wget -O /tmp/vosk-model.zip https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip && \
+    unzip /tmp/vosk-model.zip -d /app/models/ && \
+    rm /tmp/vosk-model.zip
+
+# Копирование конфигурации диаризации
+COPY diarize_models/pyannote_diarization_config.yaml /app/models/diarization/
 
 # Создание непривилегированного пользователя
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app

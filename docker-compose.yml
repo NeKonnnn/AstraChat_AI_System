@@ -1,5 +1,5 @@
 services:
-  # LLM Service - llm-svc
+  # AI Models Service - llm-svc (расширенный с Vosk и Silero)
   llm-svc:
     build:
       context: ./llm-svc
@@ -7,20 +7,34 @@ services:
     ports:
       - "8001:8000"  # llm-svc на порту 8001
     volumes:
-      - ./models:/app/models:ro  # Модели доступны для llm-svc
+      # Модели загружаются из облакаb или серверы через переменные .env
       - ./llm-svc/config:/app/config:ro
+      # Создаем только базовую директорию для кэширования моделей
+      - llm_models_cache:/app/models
     environment:
       - CONFIG_PATH=/app/config/config.yml
       - PYTHONPATH=/app
+      # Пути к моделям (переопределяются через .env файл)
+      - LLM_MODEL_PATH=${LLM_MODEL_PATH:-/app/models/Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf}
+      - LLM_MODEL_NAME=${LLM_MODEL_NAME:-qwen-coder-30b}
+      - VOSK_MODEL_PATH=${VOSK_MODEL_PATH:-/app/models/vosk-model-small-ru-0.22}
+      - SILERO_MODELS_DIR=${SILERO_MODELS_DIR:-/app/models/silero}
+      - WHISPERX_MODELS_DIR=${WHISPERX_MODELS_DIR:-/app/models/whisperx}
+      - DIARIZATION_MODELS_DIR=${DIARIZATION_MODELS_DIR:-/app/models/diarization}
+      - DIARIZATION_CONFIG_PATH=${DIARIZATION_CONFIG_PATH:-/app/models/diarization/pyannote_diarization_config.yaml}
+      # Дополнительные настройки
+      - DEVICE=${DEVICE:-auto}
+      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     restart: unless-stopped
     networks:
       - memoai-network
-    # healthcheck:
-    #   test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health"]
-    #   interval: 30s
-    #   timeout: 10s
-    #   retries: 3
-    #   start_period: 40s
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s  # Увеличиваем время запуска для загрузки моделей
 
   # Backend - FastAPI (теперь зависит от llm-svc)
   memoai-backend:
@@ -30,14 +44,17 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./model_small:/app/model_small:ro
-      - ./silero_models:/app/silero_models:ro
       - ./memory:/app/memory
       - ./backend:/app
+      - ./backend/config:/app/config:ro  # Монтируем конфигурацию
     environment:
       - PYTHONPATH=/app
-      - LLM_SERVICE_URL=http://llm-svc:8000  # URL llm-svc сервиса
-      - USE_LLM_SVC=true  # Включаем использование llm-svc
+      - LLM_SERVICE_URL=${LLM_SVC_INTERNAL_URL:-http://llm-svc:8000}
+      - USE_LLM_SVC=${USE_LLM_SVC:-true}
+      - DOCKER_ENV=${DOCKER_ENV:-true}
+      - CONFIG_PATH=${CONFIG_PATH:-/app/config/config.yml}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - DEBUG=${DEBUG:-false}
     depends_on:
       llm-svc:
         condition: service_started
@@ -53,8 +70,9 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - REACT_APP_API_URL=http://localhost:8000
-      - REACT_APP_WS_URL=ws://localhost:8000
+      - REACT_APP_API_URL=${REACT_APP_API_URL:-http://localhost:8000}
+      - REACT_APP_WS_URL=${REACT_APP_WS_URL:-ws://localhost:8000}
+      - NODE_ENV=${NODE_ENV:-development}
     depends_on:
       memoai-backend:
         condition: service_started
@@ -89,8 +107,9 @@ services:
       - production
 
 # volumes:
-  # redis_data:
-  #   driver: local
+#   # Кэш для моделей (загружаемых из облака)
+#   llm_models_cache:
+#     driver: local
 
 networks:
   memoai-network:

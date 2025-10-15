@@ -10,6 +10,10 @@ import logging.config
 from app.core.config import settings
 from app.api import router as api_router
 from app.dependencies import get_llama_handler, cleanup_llama_handler
+from app.dependencies.vosk_handler import get_vosk_handler, cleanup_vosk_handler
+from app.dependencies.silero_handler import get_silero_handler, cleanup_silero_handler
+from app.dependencies.whisperx_handler import get_whisperx_handler, cleanup_whisperx_handler
+from app.dependencies.diarization_handler import get_diarization_handler, cleanup_diarization_handler
 from app.services.nexus_client import download_model_from_nexus_if_needed
 
 from fastapi import Request
@@ -49,6 +53,28 @@ async def lifespan(app: FastAPI):
         
         # Инициализируем обработчик LLM
         await get_llama_handler()
+        logger.info("LLM handler initialized")
+        
+        # Инициализируем обработчик Vosk (если включен)
+        if settings.vosk.enabled:
+            await get_vosk_handler()
+            logger.info("Vosk handler initialized")
+        
+        # Инициализируем обработчик Silero (если включен)
+        if settings.silero.enabled:
+            await get_silero_handler()
+            logger.info("Silero handler initialized")
+        
+        # Инициализируем обработчик WhisperX (если включен)
+        if settings.whisperx.enabled:
+            await get_whisperx_handler()
+            logger.info("WhisperX handler initialized")
+        
+        # Инициализируем обработчик диаризации (если включен)
+        if settings.diarization.enabled:
+            await get_diarization_handler()
+            logger.info("Diarization handler initialized")
+        
         logger.info("Application started successfully")
     except Exception as e:
         logger.error(f"Failed to initialize application: {str(e)}")
@@ -58,6 +84,10 @@ async def lifespan(app: FastAPI):
 
     # Очистка при завершении
     await cleanup_llama_handler()
+    await cleanup_vosk_handler()
+    await cleanup_silero_handler()
+    await cleanup_whisperx_handler()
+    await cleanup_diarization_handler()
     logger.info("Application shut down gracefully")
 
 

@@ -41,6 +41,9 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 root_dir = os.path.dirname(current_dir)
 sys.path.insert(0, root_dir)
 
+# Импортируем конфигурацию
+from config import get_config, config
+
 # Настройка логирования в самом начале
 # Настройка логирования с поддержкой UTF-8
 import logging
@@ -249,27 +252,30 @@ sio = AsyncServer(
     engineio_logger=True  # Включаем логирование engine.io
 )
 
-# Создание FastAPI приложения
+# Создание FastAPI приложения с конфигурацией
+app_config = config.get("app", {})
 app = FastAPI(
-    title="MemoAI Web API",
-    description="Веб-интерфейс для персонального AI-ассистента MemoAI",
-    version="1.0.0"
+    title=app_config.get("name", "MemoAI Web API"),
+    description=app_config.get("description", "Веб-интерфейс для персонального AI-ассистента MemoAI"),
+    version=app_config.get("version", "1.0.0"),
+    debug=app_config.get("debug", False)
 )
 
-# Настройка CORS
+# Настройка CORS из конфигурации
+cors_config = config.get("cors", {})
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
+    allow_origins=cors_config.get("allowed_origins", [
         "http://localhost:3000", 
         "http://127.0.0.1:3000",
         "http://localhost:3001",
         "http://127.0.0.1:3001",
         "http://localhost:5173",  # Vite dev server
         "http://127.0.0.1:5173"
-    ],  # React dev server
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    ]),
+    allow_credentials=cors_config.get("allow_credentials", True),
+    allow_methods=cors_config.get("allow_methods", ["*"]),
+    allow_headers=cors_config.get("allow_headers", ["*"]),
 )
 
 # Startup событие для инициализации агентной архитектуры

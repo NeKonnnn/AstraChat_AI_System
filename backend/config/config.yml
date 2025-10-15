@@ -1,0 +1,173 @@
+# Конфигурация MemoAI Backend
+# Теперь все модели работают через llm-svc микросервис
+
+# Основные настройки приложения
+app:
+  name: "MemoAI Backend"
+  version: "1.0.0"
+  description: "Backend service for MemoAI with microservice architecture"
+  debug: false
+
+# Настройки сервера
+server:
+  host: "0.0.0.0"
+  port: 8000
+  log_level: "INFO"
+  workers: 1
+
+# Настройки CORS
+cors:
+  allowed_origins:
+    - "http://localhost:3000"    # React dev server
+    - "http://localhost:8000"    # Backend
+    - "http://127.0.0.1:3000"
+    - "http://127.0.0.1:8000"
+  allow_credentials: true
+  allow_methods: ["*"]
+  allow_headers: ["*"]
+
+# Настройки микросервисов
+microservices:
+  # LLM Service (включает LLM, Vosk, Silero, WhisperX, Diarization)
+  llm_svc:
+    enabled: true
+    base_url: "http://llm-svc:8000"  # Внутренний URL в Docker
+    external_url: "http://localhost:8001"  # Внешний URL для разработки
+    timeout: 300  # 5 минут таймаут
+    retry_attempts: 3
+    retry_delay: 1  # секунды между попытками
+    
+    # Настройки моделей LLM
+    models:
+      default: "qwen-coder-30b"
+      fallback: "deepseek-coder-6.7b"
+      auto_select: true  # Автоматический выбор модели
+      
+    # Настройки транскрипции (Vosk)
+    transcription:
+      enabled: true
+      default_language: "ru"
+      supported_languages: ["ru", "en"]
+      max_file_size: 52428800  # 50MB
+      
+    # Настройки синтеза речи (Silero)
+    tts:
+      enabled: true
+      default_language: "ru"
+      default_speaker: "baya"
+      supported_languages: ["ru", "en"]
+      supported_speakers:
+        ru: ["baya", "kseniya", "xenia", "eugene", "aidar"]
+        en: ["v3_en"]
+      max_text_length: 5000
+      default_sample_rate: 48000
+      
+    # Настройки продвинутой транскрипции (WhisperX)
+    whisperx:
+      enabled: true
+      default_language: "ru"
+      supported_languages: ["ru", "en", "auto"]
+      device: "auto"  # auto, cpu, cuda
+      compute_type: "float16"  # float16, int8, int8_float16
+      batch_size: 16
+      max_file_size: 104857600  # 100MB
+      
+    # Настройки диаризации (разделение по спикерам)
+    diarization:
+      enabled: true
+      min_speakers: 1
+      max_speakers: 10
+      min_duration: 1.0  # секунды
+      max_file_size: 104857600  # 100MB
+      device: "auto"  # auto, cpu, cuda
+
+# Настройки памяти и истории
+memory:
+  enabled: true
+  storage_type: "file"  # file, redis, database
+  file_path: "/app/memory"
+  max_history_length: 100
+  auto_save: true
+  save_interval: 30  # секунды
+
+# Настройки агентов
+agents:
+  enabled: true
+  default_agent: "general"
+  available_agents:
+    - "general"
+    - "calculation"
+    - "document"
+    - "web_search"
+    - "memory"
+    - "mcp"
+  
+  # Настройки LangGraph оркестратора
+  orchestrator:
+    enabled: true
+    max_iterations: 10
+    timeout: 60  # секунды
+    parallel_execution: false
+
+# Настройки инструментов
+tools:
+  enabled: true
+  available_tools:
+    - "calculator"
+    - "web_search"
+    - "file_operations"
+    - "memory_operations"
+    - "mcp_tools"
+
+# Настройки логирования
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "/app/logs/backend.log"
+  max_size: 10485760  # 10MB
+  backup_count: 5
+  console: true
+
+# Настройки безопасности
+security:
+  enabled: false  # Отключено для локальной разработки
+  api_key: null
+  api_key_header: "X-API-Key"
+  rate_limiting:
+    enabled: false
+    requests_per_minute: 60
+
+# Настройки мониторинга
+monitoring:
+  enabled: false
+  health_check_interval: 30  # секунды
+  metrics_enabled: false
+  prometheus_port: 9091
+
+# Настройки кэширования
+caching:
+  enabled: true
+  type: "memory"  # memory, redis
+  ttl: 300  # секунды
+  max_size: 1000
+
+# Настройки WebSocket
+websocket:
+  enabled: true
+  ping_interval: 30  # секунды
+  ping_timeout: 10  # секунды
+  max_connections: 100
+
+# Настройки файлов
+files:
+  upload_dir: "/app/uploads"
+  max_file_size: 104857600  # 100MB
+  allowed_extensions: [".txt", ".md", ".pdf", ".docx", ".wav", ".mp3", ".mp4", ".m4a", ".flac", ".ogg"]
+  temp_dir: "/tmp/memoai"
+
+# Настройки для разработки
+development:
+  hot_reload: true
+  debug_toolbar: false
+  profiling: false
+  mock_llm: false  # Использовать заглушку вместо реального LLM
