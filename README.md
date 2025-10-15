@@ -1070,58 +1070,6 @@ docker system df
 docker system prune -a
 ```
 
-## Устранение неполадок
-
-### Частые проблемы
-
-#### 1. Модели не загружаются
-
-```bash
-# Проверьте переменные окружения
-docker exec -it llm-svc env | grep MODEL
-
-# Проверьте доступность облачного хранилища
-docker exec -it llm-svc aws s3 ls s3://your-bucket/
-
-# Проверьте логи
-docker-compose logs llm-svc | grep -i "model\|error"
-```
-
-#### 2. CORS ошибки
-
-```bash
-# Проверьте настройки CORS в .env
-CORS_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:8000
-
-# Или добавьте ваш домен
-CORS_ALLOWED_ORIGINS=https://yourdomain.com,http://localhost:3000
-```
-
-#### 3. Проблемы с памятью
-
-```bash
-# Увеличьте лимиты Docker
-# В docker-compose.yml добавьте:
-deploy:
-  resources:
-    limits:
-      memory: 8G
-    reservations:
-      memory: 4G
-```
-
-#### 4. Медленная работа
-
-```bash
-# Используйте GPU (если доступен)
-# В .env добавьте:
-DEVICE=cuda
-CUDA_VISIBLE_DEVICES=0
-
-# Или оптимизируйте модели
-LLM_MODEL_GPU_LAYERS=-1  # Использовать все слои на GPU
-```
-
 ## Производительность
 
 ### Рекомендуемые настройки
@@ -1201,37 +1149,6 @@ services:
           memory: 16G
           cpus: '8'
 ```
-
-## Обновление системы
-
-### Обновление зависимостей
-
-```bash
-# Python зависимости
-docker-compose exec llm-svc pip install --upgrade -r requirements.txt
-docker-compose exec memoai-backend pip install --upgrade -r requirements.txt
-
-# Node.js зависимости
-docker-compose exec memoai-frontend npm update
-```
-
-### Обновление моделей
-
-```bash
-# Обновление через API
-curl -X POST http://localhost:8001/v1/models/reload
-
-# Или перезапуск сервиса
-docker-compose restart llm-svc
-```
-
-
-## Вклад в проект
-
-1. Fork репозитория
-2. Создайте feature branch
-3. Внесите изменения
-4. Создайте Pull Request
 
 ## Лицензия
 
