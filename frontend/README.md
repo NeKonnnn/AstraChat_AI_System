@@ -2,6 +2,55 @@
 
 Frontend приложение для MemoAI - персонального AI ассистента.
 
+## Системные требования
+
+- **Node.js**: версия 18.0.0 или выше (рекомендуется 18.x или 20.x)
+- **npm**: версия 8.0.0 или выше (обычно поставляется с Node.js)
+
+## Установка зависимостей
+
+### Автоматическая установка (рекомендуется)
+
+```bash
+# Перейти в корневую директорию проекта
+cd F:\memo_new_api
+
+# Установить все зависимости (включая фронтенд)
+npm run install:all
+```
+
+### Ручная установка
+
+```bash
+# 1. Установить зависимости корневого проекта
+npm install
+
+# 2. Перейти в папку фронтенда
+cd frontend
+
+# 3. Установить зависимости фронтенда
+npm install
+```
+
+## Запуск проекта
+
+### Разработка
+```bash
+# Запустить и бэкенд, и фронтенд одновременно
+npm run dev
+```
+
+### Только фронтенд
+```bash
+cd frontend
+npm start
+```
+
+### Сборка для продакшена
+```bash
+npm run build
+```
+
 ## Настройка API
 
 Приложение использует централизованную конфигурацию API в файле `src/config/api.ts`.
@@ -31,49 +80,39 @@ REACT_APP_LOG_LEVEL=info
 - **Модели**: `/api/models/*`
 - **История**: `/api/history`
 
-## Getting Started with Create React App
+## Основные зависимости
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+- **React 19.1.1** - Основная библиотека React
+- **Material-UI 7.3.1** - UI компоненты
+- **TypeScript 4.9.5** - TypeScript компилятор
+- **React Router 7.8.1** - Маршрутизация
+- **Axios 1.11.0** - HTTP клиент
+- **Socket.IO 4.8.1** - WebSocket клиент
+- **React Markdown 10.1.0** - Рендеринг Markdown
+- **Recharts 3.1.2** - Графики и визуализация
 
-## Available Scripts
+## Возможные проблемы и решения
 
-In the project directory, you can run:
+### Ошибка версии Node.js
+Если возникает ошибка с версией Node.js, обновите до версии 18.x или 20.x:
+```bash
+# Проверить текущую версию
+node --version
 
-### `npm start`
+# Обновить через nvm (если установлен)
+nvm install 20
+nvm use 20
+```
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
+### Ошибки с зависимостями
+Если возникают проблемы с установкой зависимостей:
+```bash
+# Очистить кэш npm
+npm cache clean --force
 
-The page will reload if you make edits.\
-You will also see any lint errors in the console.
+# Удалить node_modules и переустановить
+rm -rf node_modules package-lock.json
+npm install
+```
 
-### `npm test`
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
-
-### `npm run build`
-
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
-
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
-
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
-
-### `npm run eject`
-
-**Note: this is a one-way operation. Once you `eject`, you can’t go back!**
-
-If you aren’t satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
-
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you’re on your own.
-
-You don’t have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn’t feel obligated to use this feature. However we understand that this tool wouldn’t be useful if you couldn’t customize it when you are ready for it.
-
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
