@@ -158,6 +158,11 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
 
   const currentChat = getCurrentChat();
 
+  // Функция для определения папки, в которой находится чат
+  const getChatFolder = (chatId: string) => {
+    return folders.find(folder => folder.chatIds.includes(chatId));
+  };
+
   const handleMenuClick = (event: React.MouseEvent<HTMLElement>) => {
     setAnchorEl(event.currentTarget);
   };
@@ -197,9 +202,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
   };
 
   const handleChatMenuAction = (action: string) => {
-    console.log('handleChatMenuAction вызван, action:', action, 'selectedChatId:', selectedChatId);
     if (!selectedChatId) {
-      console.log('selectedChatId пустой в handleChatMenuAction!');
       return;
     }
     
@@ -208,13 +211,13 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
     
     switch (action) {
       case 'edit':
+        const chatToEdit = state.chats.find(chat => chat.id === chatIdToAction);
         handleChatMenuClose();
         setEditingChatId(chatIdToAction);
-        setEditingTitle(state.chats.find(chat => chat.id === chatIdToAction)?.title || '');
+        setEditingTitle(chatToEdit?.title || '');
         break;
       case 'delete':
         handleChatMenuClose();
-        console.log('Показываем диалог удаления для чата:', chatIdToAction);
         setSelectedChatId(chatIdToAction); // Восстанавливаем selectedChatId для диалога
         setShowDeleteDialog(true);
         break;
@@ -225,9 +228,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
   };
 
   const handleConfirmDelete = () => {
-    console.log('handleConfirmDelete вызван, selectedChatId:', selectedChatId);
     if (selectedChatId) {
-      console.log('Удаляем чат:', selectedChatId);
       deleteChat(selectedChatId);
       if (state.currentChatId === selectedChatId) {
         // Если удаляем текущий чат, переключаемся на первый доступный
@@ -240,8 +241,6 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
       }
       setShowDeleteDialog(false);
       setSelectedChatId(null);
-    } else {
-      console.log('selectedChatId пустой!');
     }
   };
 
@@ -334,10 +333,15 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
   };
 
   const handleFolderMenuAction = (action: string) => {
-    if (!selectedFolderId) return;
+    if (!selectedFolderId) {
+      return;
+    }
+    
+    // Сохраняем selectedFolderId перед закрытием меню
+    const folderIdToAction = selectedFolderId;
     
     if (action === 'rename') {
-      const folder = folders.find(f => f.id === selectedFolderId);
+      const folder = folders.find(f => f.id === folderIdToAction);
       if (folder) {
         setRenamingFolderName(folder.name);
         setShowRenameFolderDialog(true);
@@ -345,8 +349,6 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
     } else if (action === 'delete') {
       setShowDeleteFolderDialog(true);
     }
-    
-    handleFolderMenuClose();
   };
 
   const handleRenameFolder = () => {
@@ -354,14 +356,19 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
       updateFolder(selectedFolderId, renamingFolderName.trim());
       setRenamingFolderName('');
       setShowRenameFolderDialog(false);
+      handleFolderMenuClose(); // Закрываем меню после переименования
     }
   };
 
   const handleDeleteFolder = () => {
-    if (!selectedFolderId) return;
+    if (!selectedFolderId) {
+      return;
+    }
     
     const folder = folders.find(f => f.id === selectedFolderId);
-    if (!folder) return;
+    if (!folder) {
+      return;
+    }
     
     if (deleteWithContent) {
       // Удаляем папку со всем содержимым
@@ -379,6 +386,8 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
     deleteFolder(selectedFolderId);
     setShowDeleteFolderDialog(false);
     setDeleteWithContent(false);
+    setSelectedFolderId(null);
+    handleFolderMenuClose(); // Закрываем меню после удаления
   };
 
   return (
@@ -440,7 +449,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
       </Box>
 
       {/* Кнопка создания нового чата */}
-      <Box sx={{ p: 2 }}>
+      <Box sx={{ p: 1.5 }}>
         <Button
           fullWidth
           variant="contained"
@@ -527,7 +536,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
             }}
           >
             <Typography variant="subtitle2" sx={{ opacity: 0.8, fontSize: '0.75rem' }}>
-              ВСЕ ЧАТЫ
+              Все чаты
             </Typography>
             <ExpandMoreIcon
               sx={{
@@ -670,10 +679,29 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
               </Box>
               {folder.expanded && (
                 <List sx={{ py: 0 }}>
-                  {folder.chatIds.map((chatId) => {
-                    const chat = state.chats.find(c => c.id === chatId);
-                    if (!chat) return null;
-                    return (
+                  {(() => {
+                    const filteredFolderChats = folder.chatIds
+                      .map(chatId => ({ chatId, chat: state.chats.find(c => c.id === chatId) }))
+                      .filter(({ chat }) => {
+                        if (!chat) return false;
+                        if (!searchQuery.trim()) return true;
+                        return chat.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                               chat.messages.some(msg => 
+                                 msg.content.toLowerCase().includes(searchQuery.toLowerCase())
+                               );
+                      });
+                    
+                    if (filteredFolderChats.length === 0 && searchQuery.trim()) {
+                      return (
+                        <Typography variant="body2" sx={{ px: 2, py: 2, opacity: 0.6, textAlign: 'center', fontSize: '0.8rem' }}>
+                          Ничего не найдено
+                        </Typography>
+                      );
+                    }
+                    
+                    return filteredFolderChats.map(({ chatId, chat }) => {
+                      if (!chat) return null;
+                      return (
                       <ListItem key={chatId} disablePadding sx={{ mb: 0.5 }}>
                         <ListItemButton
                           onClick={() => handleSelectChat(chatId)}
@@ -693,32 +721,62 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
                           </ListItemIcon>
                           <ListItemText
                             primary={
-                              <Typography
-                                variant="body2"
-                                sx={{
-                                  color: 'white',
-                                  fontWeight: state.currentChatId === chatId ? 600 : 400,
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
-                                  whiteSpace: 'nowrap',
-                                  fontSize: '0.8rem',
-                                }}
-                              >
-                                {chat.title}
-                              </Typography>
+                              editingChatId === chatId ? (
+                                <TextField
+                                  value={editingTitle}
+                                  onChange={(e) => setEditingTitle(e.target.value)}
+                                  onBlur={handleSaveEdit}
+                                  onKeyDown={handleKeyPress}
+                                  autoFocus
+                                  size="small"
+                                  sx={{
+                                    '& .MuiInputBase-input': {
+                                      color: 'white',
+                                      fontSize: '0.8rem',
+                                      py: 0.5,
+                                    },
+                                    '& .MuiOutlinedInput-notchedOutline': {
+                                      borderColor: 'rgba(255,255,255,0.3)',
+                                    },
+                                    '&:hover .MuiOutlinedInput-notchedOutline': {
+                                      borderColor: 'rgba(255,255,255,0.5)',
+                                    },
+                                    '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+                                      borderColor: 'white',
+                                    },
+                                  }}
+                                />
+                              ) : (
+                                <Typography
+                                  variant="body2"
+                                  sx={{
+                                    color: 'white',
+                                    fontWeight: state.currentChatId === chatId ? 600 : 400,
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap',
+                                    fontSize: '0.8rem',
+                                  }}
+                                >
+                                  {chat.title}
+                                </Typography>
+                              )
                             }
                           />
-                          <IconButton
-                            size="small"
-                            onClick={(e) => handleChatMenuClick(e, chatId)}
-                            sx={{ color: 'rgba(255,255,255,0.7)', p: 0.5 }}
-                          >
-                            <MoreVertIcon fontSize="small" />
-                          </IconButton>
+                          {!editingChatId && (
+                            <IconButton
+                              size="small"
+                              onClick={(e) => handleChatMenuClick(e, chatId)}
+                              sx={{ color: 'rgba(255,255,255,0.7)', p: 0.5 }}
+                            >
+                              <MoreVertIcon fontSize="small" />
+                            </IconButton>
+                          )}
                         </ListItemButton>
                       </ListItem>
-                    );
-                  })}
+                      );
+                    });
+                  })()}
                 </List>
               )}
             </Box>
@@ -1207,34 +1265,44 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
         <MenuItem
           onClick={() => selectedChatId && handleRemoveFromFolder(selectedChatId)}
           sx={{
-            color: 'white',
+            color: selectedChatId && !getChatFolder(selectedChatId) ? 'rgba(255,255,255,0.5)' : 'white',
             '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
           }}
+          disabled={selectedChatId ? !getChatFolder(selectedChatId) : false}
         >
-          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+          <ListItemIcon sx={{ color: selectedChatId && !getChatFolder(selectedChatId) ? 'rgba(255,255,255,0.5)' : 'white', minWidth: 36 }}>
             <ChatIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Все чаты" />
         </MenuItem>
         
-        {folders.map((folder) => (
-          <MenuItem
-            key={folder.id}
-            onClick={() => selectedChatId && handleMoveToFolder(selectedChatId, folder.id)}
-            sx={{
-              color: 'white',
-              '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
-            }}
-          >
-            <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
-              <FolderIcon fontSize="small" />
-            </ListItemIcon>
-            <ListItemText primary={folder.name} />
-          </MenuItem>
-        ))}
-        {folders.length === 0 && (
+        {folders
+          .filter(folder => {
+            // Исключаем папку, в которой уже находится чат
+            const currentFolder = selectedChatId ? getChatFolder(selectedChatId) : null;
+            return !currentFolder || folder.id !== currentFolder.id;
+          })
+          .map((folder) => (
+            <MenuItem
+              key={folder.id}
+              onClick={() => selectedChatId && handleMoveToFolder(selectedChatId, folder.id)}
+              sx={{
+                color: 'white',
+                '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+              }}
+            >
+              <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+                <FolderIcon fontSize="small" />
+              </ListItemIcon>
+              <ListItemText primary={folder.name} />
+            </MenuItem>
+          ))}
+        {folders.filter(folder => {
+          const currentFolder = selectedChatId ? getChatFolder(selectedChatId) : null;
+          return !currentFolder || folder.id !== currentFolder.id;
+        }).length === 0 && (
           <MenuItem disabled sx={{ color: 'rgba(255,255,255,0.5)' }}>
-            <ListItemText primary="Нет папок" />
+            <ListItemText primary="Нет доступных папок" />
           </MenuItem>
         )}
       </Menu>
@@ -1292,7 +1360,10 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
       {/* Диалог переименования папки */}
       <Dialog
         open={showRenameFolderDialog}
-        onClose={() => setShowRenameFolderDialog(false)}
+        onClose={() => {
+          setShowRenameFolderDialog(false);
+          handleFolderMenuClose();
+        }}
         maxWidth="sm"
         fullWidth
         PaperProps={{
@@ -1337,7 +1408,10 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
         </DialogContent>
         <DialogActions sx={{ p: 2, gap: 1 }}>
           <Button
-            onClick={() => setShowRenameFolderDialog(false)}
+            onClick={() => {
+              setShowRenameFolderDialog(false);
+              handleFolderMenuClose();
+            }}
             sx={{
               backgroundColor: 'black',
               color: 'white',
@@ -1368,7 +1442,10 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
       {/* Диалог удаления папки */}
       <Dialog
         open={showDeleteFolderDialog}
-        onClose={() => setShowDeleteFolderDialog(false)}
+        onClose={() => {
+          setShowDeleteFolderDialog(false);
+          handleFolderMenuClose();
+        }}
         maxWidth="sm"
         fullWidth
         PaperProps={{
@@ -1427,7 +1504,10 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
         </DialogContent>
         <DialogActions sx={{ p: 2, gap: 1 }}>
           <Button
-            onClick={() => setShowDeleteFolderDialog(false)}
+            onClick={() => {
+              setShowDeleteFolderDialog(false);
+              handleFolderMenuClose();
+            }}
             sx={{
               backgroundColor: 'black',
               color: 'white',
