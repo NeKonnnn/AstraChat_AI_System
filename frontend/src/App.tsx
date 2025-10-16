@@ -1,14 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
-import { CssBaseline, Box, IconButton, AppBar, Toolbar } from '@mui/material';
+import { CssBaseline, Box, IconButton } from '@mui/material';
 import { Menu as MenuIcon } from '@mui/icons-material';
 import Sidebar from './components/Sidebar';
 import UnifiedChatPage from './pages/UnifiedChatPage';
 import VoicePage from './pages/VoicePage';
 import DocumentsPage from './pages/DocumentsPage';
 import TranscriptionPage from './pages/TranscriptionPage';
-import SettingsPage from './pages/SettingsPage';
+// import SettingsPage from './pages/SettingsPage'; // Удалено - теперь используется модальное окно
 import HistoryPage from './pages/HistoryPage';
 import { SocketProvider } from './contexts/SocketContext';
 import { AppProvider } from './contexts/AppContext';
@@ -135,7 +135,7 @@ function App() {
                   <Route path="/voice" element={<VoicePage />} />
                   <Route path="/documents" element={<DocumentsPage />} />
                   <Route path="/transcription" element={<TranscriptionPage />} />
-                  <Route path="/settings" element={<SettingsPage />} />
+                  {/* <Route path="/settings" element={<SettingsPage />} /> */} {/* Удалено - теперь используется модальное окно */}
                   <Route path="/history" element={<HistoryPage />} />
                 </Routes>
               </Box>

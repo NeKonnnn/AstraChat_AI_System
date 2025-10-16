@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Drawer,
@@ -11,9 +11,6 @@ import {
   IconButton,
   Box,
   Typography,
-  Tooltip,
-  Switch,
-  FormControlLabel,
   Avatar,
   Chip,
   Button,
@@ -27,14 +24,8 @@ import {
 } from '@mui/material';
 import {
   Chat as ChatIcon,
-  Mic as MicIcon,
-  Description as DocumentIcon,
   Transcribe as TranscribeIcon,
   Settings as SettingsIcon,
-  History as HistoryIcon,
-  Menu as MenuIcon,
-  Brightness4 as DarkModeIcon,
-  Brightness7 as LightModeIcon,
   Computer as ComputerIcon,
   Info as InfoIcon,
   Add as AddIcon,
@@ -49,6 +40,7 @@ import {
 } from '@mui/icons-material';
 import { useAppContext, useAppActions } from '../contexts/AppContext';
 import { useSocket } from '../contexts/SocketContext';
+import SettingsModal from './SettingsModal';
 
 // Функция для оценки количества токенов в тексте (дублируем из AppContext)
 function estimateTokens(text: string): number {
@@ -98,8 +90,8 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
   const [selectedChatId, setSelectedChatId] = React.useState<string | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = React.useState(false);
   const [chatsExpanded, setChatsExpanded] = React.useState(true);
+  const [showSettingsModal, setShowSettingsModal] = React.useState(false);
   const [searchQuery, setSearchQuery] = React.useState('');
-  const [showSearchMenu, setShowSearchMenu] = React.useState(false);
   const [showCreateFolderDialog, setShowCreateFolderDialog] = React.useState(false);
   const [newFolderName, setNewFolderName] = React.useState('');
   const [showMoveToFolderMenu, setShowMoveToFolderMenu] = React.useState(false);
@@ -129,11 +121,6 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
   };
 
 
-  const handleStartEdit = (chatId: string, currentTitle: string, event: React.MouseEvent) => {
-    event.stopPropagation();
-    setEditingChatId(chatId);
-    setEditingTitle(currentTitle);
-  };
 
   const handleSaveEdit = () => {
     if (editingChatId && editingTitle.trim()) {
@@ -175,7 +162,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
     handleMenuClose();
     switch (action) {
       case 'settings':
-        navigate('/settings');
+        setShowSettingsModal(true);
         break;
       case 'transcription':
         navigate('/transcription');
@@ -183,9 +170,6 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
       case 'statistics':
         // Показываем статистику в диалоге
         setShowStatsDialog(true);
-        break;
-      case 'theme':
-        onToggleTheme();
         break;
     }
   };
@@ -293,10 +277,6 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
     );
   }, [state.chats, searchQuery, folders]);
 
-  // Группируем отфильтрованные чаты
-  const groupedChats = React.useMemo(() => {
-    return groupChatsByTime(filteredChats);
-  }, [filteredChats]);
 
   // Функции для работы с папками
   const handleCreateFolder = () => {
@@ -481,8 +461,6 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
           placeholder="Поиск в чатах"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          onFocus={() => setShowSearchMenu(true)}
-          onBlur={() => setTimeout(() => setShowSearchMenu(false), 200)}
           size="small"
           InputProps={{
             startAdornment: <SearchIcon sx={{ color: 'rgba(255,255,255,0.7)', mr: 1, fontSize: '1rem' }} />,
@@ -910,19 +888,6 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
             </ListItemIcon>
             <ListItemText primary="Статистика" />
           </MenuItem>
-          
-          <MenuItem 
-            onClick={() => handleMenuAction('theme')}
-            sx={{ 
-              color: 'white',
-              '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
-            }}
-          >
-            <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
-              {isDarkMode ? <DarkModeIcon fontSize="small" /> : <LightModeIcon fontSize="small" />}
-            </ListItemIcon>
-            <ListItemText primary={isDarkMode ? 'Светлая тема' : 'Темная тема'} />
-          </MenuItem>
         </Menu>
       </Box>
 
@@ -934,8 +899,8 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
         fullWidth
         PaperProps={{
           sx: {
-            backgroundColor: isDarkMode ? '#1e1e1e' : '#ffffff',
-            color: isDarkMode ? 'white' : 'black',
+            backgroundColor: 'background.paper',
+            color: 'text.primary',
           }
         }}
       >
@@ -1532,6 +1497,14 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Модальное окно настроек */}
+      <SettingsModal
+        open={showSettingsModal}
+        onClose={() => setShowSettingsModal(false)}
+        isDarkMode={isDarkMode}
+        onToggleTheme={onToggleTheme}
+      />
     </Drawer>
   );
 }

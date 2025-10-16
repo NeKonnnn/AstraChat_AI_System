@@ -103,3 +103,5 @@ if __name__ == "__main__":
     print("Миграция завершена!")
     print("Теперь backend будет использовать config.yml вместо settings.json")
     print("Старые настройки сохранены в settings.json.backup")
+
+

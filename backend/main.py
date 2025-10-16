@@ -2737,10 +2737,12 @@ async def get_langgraph_status():
             tools = orchestrator.get_available_tools()
             return {
                 "langgraph_status": {
+                    "is_active": orchestrator.is_initialized,
                     "initialized": orchestrator.is_initialized,
                     "tools_available": len(tools),
                     "memory_enabled": True,
-                    "orchestrator_type": "LangGraph"
+                    "orchestrator_type": "LangGraph",
+                    "orchestrator_active": orchestrator.is_orchestrator_active()
                 },
                 "success": True,
                 "timestamp": datetime.now().isoformat()
@@ -2751,6 +2753,31 @@ async def get_langgraph_status():
         raise
     except Exception as e:
         logger.error(f"Ошибка получения статуса LangGraph: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/agent/orchestrator/toggle")
+async def toggle_orchestrator(status: Dict[str, bool]):
+    """Включить/выключить оркестратор"""
+    try:
+        orchestrator = get_agent_orchestrator()
+        if not orchestrator:
+            raise HTTPException(status_code=503, detail="Агентная архитектура не инициализирована")
+        
+        is_active = status.get("is_active", True)
+        
+        # Устанавливаем статус оркестратора
+        orchestrator.set_orchestrator_status(is_active)
+        
+        return {
+            "success": True,
+            "orchestrator_active": is_active,
+            "message": f"Оркестратор {'включен' if is_active else 'отключен'}",
+            "timestamp": datetime.now().isoformat()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Ошибка переключения оркестратора: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ================================

@@ -12,6 +12,8 @@ openpyxl==3.1.2
 pdfplumber==0.10.3
 langchain==0.1.0
 langchain-community==0.0.13
+langchain-core==0.1.0
+langgraph==0.0.62
 faiss-cpu==1.7.4
 sentence-transformers==2.2.2
 
