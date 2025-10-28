@@ -356,3 +356,17 @@ async def get_diarization_info():
         "max_speakers": settings.diarization.max_speakers,
         "min_duration": settings.diarization.min_duration
     })
+
+
+
+
+
+
+
+
+
+
+
+
+
+

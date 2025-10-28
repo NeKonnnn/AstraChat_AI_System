@@ -284,3 +284,17 @@ async def get_available_voices():
             lang: voices[0] for lang, voices in settings.silero.supported_speakers.items()
         }
     })
+
+
+
+
+
+
+
+
+
+
+
+
+
+

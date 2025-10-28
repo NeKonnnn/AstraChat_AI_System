@@ -1,4 +1,5 @@
 import json
+import os
 import time
 import uuid
 import uvicorn
@@ -9,7 +10,7 @@ import logging.config
 
 from app.core.config import settings
 from app.api import router as api_router
-from app.dependencies import get_llama_handler, cleanup_llama_handler
+from app.llm_dependencies import get_llama_handler, cleanup_llama_handler
 from app.dependencies.vosk_handler import get_vosk_handler, cleanup_vosk_handler
 from app.dependencies.silero_handler import get_silero_handler, cleanup_silero_handler
 from app.dependencies.whisperx_handler import get_whisperx_handler, cleanup_whisperx_handler
@@ -46,10 +47,17 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     # Инициализация при запуске
     try:
-        # Загружаем модель из Nexus при необходимости
-        if not download_model_from_nexus_if_needed():
-            logger.error("Failed to download model from Nexus")
-            raise RuntimeError("Failed to download model from Nexus")
+        # Проверяем, нужно ли загружать модель из Nexus
+        if settings.nexus.enabled:
+            # Если Nexus включен, пытаемся загрузить модель
+            if not download_model_from_nexus_if_needed():
+                logger.error("Failed to download model from Nexus")
+                raise RuntimeError("Failed to download model from Nexus")
+        
+        # Проверяем существование модели перед инициализацией
+        model_path = settings.model.path
+        if not os.path.exists(model_path):
+            logger.warning(f"Model file not found at {model_path}. Application will continue, but LLM features may not work.")
         
         # Инициализируем обработчик LLM
         await get_llama_handler()

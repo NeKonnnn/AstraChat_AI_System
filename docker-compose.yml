@@ -6,26 +6,27 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8001:8000"  # llm-svc на порту 8001
+    
     volumes:
-      # Модели загружаются из облакаb или серверы через переменные .env
+      # Монтируем конфигурацию
       - ./llm-svc/config:/app/config:ro
-      # Создаем только базовую директорию для кэширования моделей
-      - llm_models_cache:/app/models
+      # Модели монтируются в корень /app/models/
+      - ./models:/app/models:ro
+      # - ./model_small:/app/models/vosk-ru:ro
+      # - ./silero_models:/app/models/silero:ro
+      # - ./whisperx_models:/app/models/whisperx:ro
+      # - ./diarize_models:/app/models/diarization:ro
     environment:
-      - CONFIG_PATH=/app/config/config.yml
+      - CONFIG_PATH=${CONFIG_PATH}
       - PYTHONPATH=/app
-      # Пути к моделям (переопределяются через .env файл)
-      - LLM_MODEL_PATH=${LLM_MODEL_PATH:-/app/models/Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf}
-      - LLM_MODEL_NAME=${LLM_MODEL_NAME:-qwen-coder-30b}
-      - VOSK_MODEL_PATH=${VOSK_MODEL_PATH:-/app/models/vosk-model-small-ru-0.22}
-      - SILERO_MODELS_DIR=${SILERO_MODELS_DIR:-/app/models/silero}
-      - WHISPERX_MODELS_DIR=${WHISPERX_MODELS_DIR:-/app/models/whisperx}
-      - DIARIZATION_MODELS_DIR=${DIARIZATION_MODELS_DIR:-/app/models/diarization}
-      - DIARIZATION_CONFIG_PATH=${DIARIZATION_CONFIG_PATH:-/app/models/diarization/pyannote_diarization_config.yaml}
-      # Дополнительные настройки
-      - DEVICE=${DEVICE:-auto}
-      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Пути к моделям (все значения из .env файла, если он есть)
+      - LLM_MODEL_PATH=${LLM_MODEL_PATH}
+      - LLM_MODEL_NAME=${LLM_MODEL_NAME}
+      - VOSK_MODEL_PATH=${VOSK_MODEL_PATH}
+      - SILERO_MODELS_DIR=${SILERO_MODELS_DIR}
+      - WHISPERX_MODELS_DIR=${WHISPERX_MODELS_DIR}
+      - DIARIZATION_MODELS_DIR=${DIARIZATION_MODELS_DIR}
+      - DIARIZATION_CONFIG_PATH=${DIARIZATION_CONFIG_PATH}
     restart: unless-stopped
     networks:
       - memoai-network
@@ -45,14 +46,14 @@ services:
       - "8000:8000"
     volumes:
       - ./memory:/app/memory
-      - ./backend:/app
-      - ./backend/config:/app/config:ro  # Монтируем конфигурацию
+      - ./uploads:/app/uploads  # Директория для загруженных документов
+      - ./backend:/app  # Полное монтирование для работы импортов
     environment:
       - PYTHONPATH=/app
       - LLM_SERVICE_URL=${LLM_SVC_INTERNAL_URL:-http://llm-svc:8000}
       - USE_LLM_SVC=${USE_LLM_SVC:-true}
       - DOCKER_ENV=${DOCKER_ENV:-true}
-      - CONFIG_PATH=${CONFIG_PATH:-/app/config/config.yml}
+      - CONFIG_PATH=${CONFIG_PATH}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - DEBUG=${DEBUG:-false}
     depends_on:
@@ -67,12 +68,11 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        - REACT_APP_API_URL=http://localhost:8000
+        - REACT_APP_WS_URL=ws://localhost:8000
     ports:
       - "3000:3000"
-    environment:
-      - REACT_APP_API_URL=${REACT_APP_API_URL:-http://localhost:8000}
-      - REACT_APP_WS_URL=${REACT_APP_WS_URL:-ws://localhost:8000}
-      - NODE_ENV=${NODE_ENV:-development}
     depends_on:
       memoai-backend:
         condition: service_started
@@ -80,7 +80,7 @@ services:
     networks:
       - memoai-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -110,6 +110,11 @@ services:
 #   # Кэш для моделей (загружаемых из облака)
 #   llm_models_cache:
 #     driver: local
+
+volumes:
+  # Кэш для моделей (загружаемых из облака)
+  llm_models_cache:
+    driver: local
 
 networks:
   memoai-network:

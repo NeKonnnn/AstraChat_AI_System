@@ -1,6 +1,6 @@
 from fastapi import Depends, HTTPException, status
 from app.services.llama_handler import LlamaHandler
-from app.dependencies import get_llama_handler
+from app.llm_dependencies import get_llama_handler
 from app.core.security import verify_api_key
 
 async def get_llama_service(

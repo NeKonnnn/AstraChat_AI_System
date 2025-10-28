@@ -96,3 +96,17 @@ async def cleanup_diarization_handler():
         # Очищаем кэш CUDA если используется
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,4 +1,11 @@
-from llama_cpp import Llama
+try:
+    from llama_cpp import Llama
+    LLAMA_CPP_AVAILABLE = True
+except ImportError:
+    LLAMA_CPP_AVAILABLE = False
+    Llama = None
+    print("Предупреждение: llama_cpp недоступен. Используйте llm-svc для работы с моделями.")
+
 from backend.config.config import MODEL_PATH
 from backend.context_prompts import context_prompt_manager
 import os
@@ -116,6 +123,11 @@ llm = None
 def initialize_model():
     """Инициализация модели с текущими настройками"""
     global llm
+    
+    # Проверяем доступность llama_cpp
+    if not LLAMA_CPP_AVAILABLE:
+        print("ПРЕДУПРЕЖДЕНИЕ: llama_cpp недоступен. Используйте llm-svc для работы с моделями.")
+        return False
     
     # Освобождаем ресурсы, если модель уже была загружена
     if llm is not None:
@@ -286,10 +298,13 @@ def initialize_model():
         print(f"ОШИБКА при загрузке модели: {str(e)}")
         raise
 
-try:
-    initialize_model()
-except Exception as e:
-    print(f"ОШИБКА при инициализации модели: {str(e)}")
+if LLAMA_CPP_AVAILABLE:
+    try:
+        initialize_model()
+    except Exception as e:
+        print(f"ОШИБКА при инициализации модели: {str(e)}")
+else:
+    print("llama_cpp недоступен, пропуск инициализации локальной модели")
 
 def update_model_settings(new_settings):
     """Обновление настроек модели и перезагрузка"""
@@ -310,6 +325,11 @@ def update_model_settings(new_settings):
 def reload_model_by_path(model_path):
     """Перезагрузка модели с новым файлом модели"""
     global MODEL_PATH, llm
+    
+    # Проверяем доступность llama_cpp
+    if not LLAMA_CPP_AVAILABLE:
+        print("ПРЕДУПРЕЖДЕНИЕ: llama_cpp недоступен. Используйте llm-svc для работы с моделями.")
+        return False
     
     # Проверяем существование файла модели
     if not os.path.exists(model_path):
@@ -471,6 +491,9 @@ def prepare_prompt(text, system_prompt=None, history=None, model_path=None, cust
     return "".join(prompt_parts)
 
 def ask_agent(prompt, history=None, max_tokens=None, streaming=False, stream_callback=None, model_path=None, custom_prompt_id=None):
+    if not LLAMA_CPP_AVAILABLE:
+        raise ValueError("llama_cpp недоступен. Используйте llm-svc для работы с моделями.")
+    
     if llm is None:
         raise ValueError("Модель не загружена. Пожалуйста, убедитесь, что модель инициализирована.")
     

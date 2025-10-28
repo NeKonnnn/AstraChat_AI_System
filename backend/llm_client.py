@@ -38,6 +38,22 @@ class LLMClient:
         self.api_key = api_key
         self.timeout = llm_svc_config.get("timeout", 300.0)
         
+        # Создаем постоянный httpx клиент для потоковых запросов
+        self.client = httpx.AsyncClient(timeout=self.timeout)
+    
+    async def __aenter__(self):
+        """Асинхронный контекстный менеджер - вход"""
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Асинхронный контекстный менеджер - выход"""
+        await self.close()
+    
+    async def close(self):
+        """Закрытие HTTP клиента"""
+        if self.client:
+            await self.client.aclose()
+        
     def _get_headers(self) -> Dict[str, str]:
         """Получение заголовков для запросов"""
         headers = {

@@ -215,3 +215,17 @@ async def get_whisperx_info():
         "max_file_size": settings.whisperx.max_file_size,
         "batch_size": settings.whisperx.batch_size
     })
+
+
+
+
+
+
+
+
+
+
+
+
+
+

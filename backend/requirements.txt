@@ -1,24 +1,35 @@
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-websockets==12.0
-python-multipart==0.0.6
-aiofiles==23.2.1
-pydantic==2.5.0
-python-socketio==5.10.0
+fastapi==0.116.1
+uvicorn==0.35.0
+websockets==15.0.1
+python-multipart==0.0.20
+aiofiles==24.1.0
+pydantic==2.11.7
+python-socketio==5.13.0
+python-engineio==4.12.3
+aiohttp==3.9.1
+starlette==0.47.2
 # Зависимости для document_processor
-python-docx==1.1.2
+python-docx==1.2.0
 PyPDF2==3.0.1
-openpyxl==3.1.2
-pdfplumber==0.10.3
-langchain==0.1.0
-langchain-community==0.0.13
-langchain-core==0.1.0
-langgraph==0.0.62
-faiss-cpu==1.7.4
-sentence-transformers==2.2.2
+openpyxl==3.1.5
+pdfplumber==0.11.7
+langchain==0.3.27
+langchain-community==0.3.27
+langchain-core>=0.3.72
+langgraph==0.6.10
+faiss-cpu==1.12.0
+sentence-transformers==5.1.0
 
 # Зависимости для изменения темпа аудио
-librosa==0.10.1
+librosa==0.11.0
 
 # Зависимости для llm-svc интеграции
 httpx==0.28.1
+
+# Дополнительные зависимости
+psutil==7.0.0
+
+# Зависимости для TTS и распознавания речи
+sounddevice==0.5.2
+vosk==0.3.45
+pyttsx3==2.90

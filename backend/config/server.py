@@ -40,6 +40,10 @@ CORS_CONFIG = {
         "http://127.0.0.1:5173",     # Vite dev server (IPv4)
         "http://localhost:8080",      # Альтернативный порт
         "http://127.0.0.1:8080",     # Альтернативный порт
+        "http://localhost:8000",      # Backend
+        "http://127.0.0.1:8000",     # Backend (IPv4)
+        "http://memoai-frontend:3000",  # Docker internal
+        "http://memoai-backend:8000",   # Docker internal backend
     ],
     "allow_credentials": True,
     "allow_methods": ["*"],
@@ -57,6 +61,10 @@ SOCKETIO_CONFIG = {
         "http://127.0.0.1:3001",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://memoai-frontend:3000",  # Docker internal
+        "http://memoai-backend:8000",   # Docker internal backend
     ],
     "ping_timeout": 120,      # ping timeout до 2 минут
     "ping_interval": 25,      # Отправляем ping каждые 25 секунд

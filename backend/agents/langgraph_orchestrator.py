@@ -26,6 +26,36 @@ except ModuleNotFoundError:
 logger = logging.getLogger(__name__)
 
 # ============================================================================
+# Утилита для получения правильной версии ask_agent
+# ============================================================================
+
+def _get_ask_agent():
+    """
+    Получить правильную версию ask_agent в зависимости от конфигурации.
+    Использует agent_llm_svc если USE_LLM_SVC=true, иначе agent.
+    """
+    import os
+    use_llm_svc = os.getenv('USE_LLM_SVC', 'false').lower() == 'true'
+    
+    if use_llm_svc:
+        try:
+            from backend.agent_llm_svc import ask_agent
+            logger.debug("[LangGraph] Используется ask_agent из agent_llm_svc")
+            return ask_agent
+        except (ImportError, ModuleNotFoundError) as e:
+            logger.warning(f"[LangGraph] Не удалось импортировать agent_llm_svc: {e}, используем agent.py")
+    
+    # Fallback на оригинальный agent
+    try:
+        from backend.agent import ask_agent
+        logger.debug("[LangGraph] Используется ask_agent из agent")
+        return ask_agent
+    except ModuleNotFoundError:
+        from agent import ask_agent
+        logger.debug("[LangGraph] Используется ask_agent (относительный импорт)")
+        return ask_agent
+
+# ============================================================================
 # Определение состояния оркестратора
 # ============================================================================
 
@@ -71,6 +101,9 @@ class LangGraphOrchestrator:
         
         # Статус активности инструментов (для управления через UI)
         self.tool_status = {tool.name: True for tool in self.tools}
+        
+        # Статус активности оркестратора (по умолчанию включен)
+        self.orchestrator_active = True
         
         # Создаем ToolNode для LangGraph
         self.tool_node = ToolNode(self.tools)
@@ -152,10 +185,7 @@ class LangGraphOrchestrator:
                     logger.warning(f"[PLANNER] Не удалось получить список документов: {e}")
             
             # Используем LLM для анализа и планирования
-            try:
-                from backend.agent import ask_agent
-            except ModuleNotFoundError:
-                from agent import ask_agent
+            ask_agent = _get_ask_agent()
             
             tools_description = self._get_active_tools_description()
             
@@ -428,10 +458,7 @@ class LangGraphOrchestrator:
             logger.info(f"[AGGREGATOR] Результатов инструментов: {len(tool_results)}")
             logger.info(f"{'='*70}")
             
-            try:
-                from backend.agent import ask_agent
-            except ModuleNotFoundError:
-                from agent import ask_agent
+            ask_agent = _get_ask_agent()
             
             # Если инструменты не использовались, даем прямой ответ
             if not tool_results:
@@ -568,99 +595,138 @@ class LangGraphOrchestrator:
         Получение списка всех доступных агентов с инструкциями по использованию инструментов
         Возвращает структуру совместимую с фронтендом
         """
-        # Группируем инструменты по категориям (агентам) с инструкциями
-        agents_map = {
-            "DocumentAgent": {
-                "name": "DocumentAgent",
-                "description": "Поиск и анализ информации в загруженных документах",
-                "capabilities": ["search_documents"],
-                "agent_id": "document_agent",
-                "instructions": {
-                    "search_documents": "Используй этот инструмент для поиска информации в загруженных документах. Передавай ключевые слова или фразы для поиска. Пример: 'Python программирование', 'машинное обучение', 'алгоритмы'"
-                },
-                "usage_examples": [
+        # Группируем инструменты по категориям (агентам) на основе их имен
+        agents_map = {}
+        
+        # Проходим по всем загруженным инструментам и группируем их
+        for tool in self.tools:
+            tool_name = tool.name
+            
+            # Определяем категорию агента на основе имени инструмента
+            if "search_documents" in tool_name or "document" in tool_name.lower():
+                agent_id = "document_agent"
+                agent_name = "DocumentAgent"
+                description = "Поиск и анализ информации в загруженных документах"
+                capabilities = ["search_documents"]
+                usage_examples = [
                     "Найди информацию о Python в документах",
                     "Поищи данные о машинном обучении",
                     "Найди все упоминания алгоритмов"
                 ]
-            },
-            "WebSearchAgent": {
-                "name": "WebSearchAgent", 
-                "description": "Поиск информации в интернете",
-                "capabilities": ["web_search"],
-                "agent_id": "web_search_agent",
-                "instructions": {
-                    "web_search": "Используй этот инструмент для поиска актуальной информации в интернете. Передавай конкретные поисковые запросы. Пример: 'погода в Москве', 'новости технологий', 'курс доллара'"
-                },
-                "usage_examples": [
+            elif "web_search" in tool_name or "search_web" in tool_name:
+                agent_id = "web_search_agent"
+                agent_name = "WebSearchAgent"
+                description = "Поиск информации в интернете"
+                capabilities = ["web_search"]
+                usage_examples = [
                     "Какая погода в Москве?",
                     "Найди последние новости о ИИ",
                     "Какой курс доллара сегодня?"
                 ]
-            },
-            "CalculationAgent": {
-                "name": "CalculationAgent",
-                "description": "Выполнение математических вычислений",
-                "capabilities": ["calculate"],
-                "agent_id": "calculation_agent",
-                "instructions": {
-                    "calculate": "Используй этот инструмент для выполнения математических вычислений. Передавай математические выражения в текстовом виде. Поддерживаются: +, -, *, /, **, sqrt(), sin(), cos(), log() и другие функции"
-                },
-                "usage_examples": [
+            elif "calculate" in tool_name or "calculation" in tool_name.lower():
+                agent_id = "calculation_agent"
+                agent_name = "CalculationAgent"
+                description = "Выполнение математических вычислений"
+                capabilities = ["calculate"]
+                usage_examples = [
                     "Посчитай 15 * 7 + 3",
                     "Вычисли квадратный корень из 144",
                     "Найди площадь круга с радиусом 5"
                 ]
-            },
-            "MemoryAgent": {
-                "name": "MemoryAgent",
-                "description": "Сохранение важной информации в долговременную память",
-                "capabilities": ["save_memory"],
-                "agent_id": "memory_agent",
-                "instructions": {
-                    "save_memory": "Используй этот инструмент для сохранения важной информации в долговременную память системы. Передавай содержание для сохранения и категорию (general, important, personal, work). Пример: 'Пользователь предпочитает Python для программирования'"
-                },
-                "usage_examples": [
+            elif "memory" in tool_name.lower() or "save_memory" in tool_name:
+                agent_id = "memory_agent"
+                agent_name = "MemoryAgent"
+                description = "Сохранение важной информации в долговременную память"
+                capabilities = ["save_memory"]
+                usage_examples = [
                     "Запомни, что я работаю программистом",
                     "Сохрани информацию о моих предпочтениях",
                     "Запиши важные факты о проекте"
                 ]
-            }
-        }
+            elif "file" in tool_name.lower() or "read_file" in tool_name:
+                agent_id = "file_agent"
+                agent_name = "FileAgent"
+                description = "Работа с файлами и файловой системой"
+                capabilities = ["file_operations"]
+                usage_examples = [
+                    "Прочитай содержимое файла",
+                    "Создай новый файл",
+                    "Найди файлы по имени"
+                ]
+            elif "system" in tool_name.lower() or "execute" in tool_name.lower():
+                agent_id = "system_agent"
+                agent_name = "SystemAgent"
+                description = "Работа с системой и выполнение команд"
+                capabilities = ["system_commands"]
+                usage_examples = [
+                    "Выполни системную команду",
+                    "Покажи информацию о системе",
+                    "Проверь статус процессов"
+                ]
+            else:
+                # Для неизвестных инструментов создаем общий агент
+                agent_id = "general_agent"
+                agent_name = "GeneralAgent"
+                description = "Общие инструменты и функции"
+                capabilities = ["general_tools"]
+                usage_examples = [
+                    "Использование различных инструментов",
+                    "Выполнение специальных задач"
+                ]
+            
+            # Создаем агента если его еще нет
+            if agent_id not in agents_map:
+                agents_map[agent_id] = {
+                    "name": agent_name,
+                    "description": description,
+                    "capabilities": capabilities,
+                    "agent_id": agent_id,
+                    "instructions": {},
+                    "usage_examples": usage_examples,
+                    "tools": []
+                }
+            
+            # Добавляем инструмент к агенту
+            agents_map[agent_id]["tools"].append({
+                "name": tool.name,
+                "description": tool.description,
+                "is_active": self.tool_status.get(tool.name, True),
+                "instruction": f"Используй этот инструмент: {tool.description}"
+            })
         
-        # Формируем список агентов с их инструментами и инструкциями
+        # Формируем список агентов
         result = []
         for agent_id, agent_info in agents_map.items():
-            # Проверяем какие инструменты из этого агента доступны
-            agent_tools = []
-            for capability in agent_info["capabilities"]:
-                if capability in self.tools_by_name:
-                    tool = self.tools_by_name[capability]
-                    agent_tools.append({
-                        "name": tool.name,
-                        "description": tool.description,
-                        "is_active": self.tool_status.get(tool.name, True),
-                        "instruction": agent_info["instructions"].get(capability, "Нет инструкции")
-                    })
+            # Агент активен если хотя бы один его инструмент активен
+            is_active = any(t["is_active"] for t in agent_info["tools"])
             
-            # Если у агента есть хотя бы один инструмент, добавляем его
-            if agent_tools:
-                # Агент активен если хотя бы один его инструмент активен
-                is_active = any(t["is_active"] for t in agent_tools)
-                
-                result.append({
-                    "name": agent_info["name"],
-                    "description": agent_info["description"],
-                    "capabilities": agent_info["capabilities"],
-                    "tools_count": len(agent_tools),
-                    "is_active": is_active,
-                    "agent_id": agent_info["agent_id"],
-                    "tools": agent_tools,
-                    "usage_examples": agent_info["usage_examples"]
-                })
+            result.append({
+                "name": agent_info["name"],
+                "description": agent_info["description"],
+                "capabilities": agent_info["capabilities"],
+                "tools_count": len(agent_info["tools"]),
+                "is_active": is_active,
+                "agent_id": agent_info["agent_id"],
+                "tools": agent_info["tools"],
+                "usage_examples": agent_info["usage_examples"]
+            })
         
-        logger.debug(f"[API] Возвращаем {len(result)} агентов с инструкциями для фронтенда")
+        logger.debug(f"[API] Возвращаем {len(result)} агентов с {sum(len(a['tools']) for a in result)} инструментами для фронтенда")
         return result
+    
+    def set_orchestrator_status(self, is_active: bool):
+        """
+        Установка статуса активности оркестратора
+        
+        Args:
+            is_active: True - оркестратор активен, False - отключен
+        """
+        self.orchestrator_active = is_active
+        logger.info(f"Оркестратор {'включен' if is_active else 'отключен'}")
+    
+    def is_orchestrator_active(self) -> bool:
+        """Проверка активности оркестратора"""
+        return getattr(self, 'orchestrator_active', True)
     
     def set_tool_status(self, tool_name: str, is_active: bool):
         """

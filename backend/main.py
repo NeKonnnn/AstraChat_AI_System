@@ -39,7 +39,16 @@ from starlette.applications import Starlette
 # Добавляем корневую директорию в путь для импорта модулей
 current_dir = os.path.dirname(os.path.abspath(__file__))
 root_dir = os.path.dirname(current_dir)
-sys.path.insert(0, root_dir)
+
+# В Docker: /app содержит main.py, agent.py и т.д.
+# Для импортов "from backend.xxx" нужно чтобы /app был доступен как /backend
+# Создаем временную структуру для импортов
+if current_dir == '/app' and not os.path.exists('/app/backend'):
+    # В Docker контейнере создаем symbolic link
+    os.system('ln -sf /app /app/backend')
+
+sys.path.insert(0, current_dir)  # Для доступа к /app/config
+sys.path.insert(0, root_dir)      # Для доступа к / для импортов "from backend.xxx"
 
 # Импортируем конфигурацию
 from config import get_config, config
@@ -245,7 +254,14 @@ voice_chat_stop_flag = False
 # Создание Socket.IO сервера
 sio = AsyncServer(
     async_mode='asgi',
-    cors_allowed_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    cors_allowed_origins=[
+        "http://localhost:3000", 
+        "http://127.0.0.1:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://memoai-frontend:3000",
+        "http://memoai-backend:8000",
+    ],
     ping_timeout=120,  # ping timeout до 2 минут
     ping_interval=25,  # Отправляем ping каждые 25 секунд
     logger=True,  # Включаем логирование для отладки
@@ -271,7 +287,11 @@ app.add_middleware(
         "http://localhost:3001",
         "http://127.0.0.1:3001",
         "http://localhost:5173",  # Vite dev server
-        "http://127.0.0.1:5173"
+        "http://127.0.0.1:5173",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://memoai-frontend:3000",
+        "http://memoai-backend:8000",
     ]),
     allow_credentials=cors_config.get("allow_credentials", True),
     allow_methods=cors_config.get("allow_methods", ["*"]),
@@ -1594,24 +1614,57 @@ async def get_models():
 async def get_available_models():
     """Получить список доступных моделей"""
     try:
-        models_dir = "models"
-        if not os.path.exists(models_dir):
-            return {"models": []}
+        # Проверяем, используется ли llm-svc
+        use_llm_svc = os.getenv('USE_LLM_SVC', 'false').lower() == 'true'
         
-        models = []
-        for file in os.listdir(models_dir):
-            if file.endswith('.gguf'):
-                file_path = os.path.join(models_dir, file)
-                size = os.path.getsize(file_path)
-                models.append({
-                    "name": file,
-                    "path": file_path,
-                    "size": size,
-                    "size_mb": round(size / (1024 * 1024), 2)
-                })
-        
-        return {"models": models}
+        if use_llm_svc:
+            # Получаем модели через llm-svc
+            logger.info("Запрос списка моделей через llm-svc")
+            try:
+                from backend.llm_client import get_llm_service
+                service = await get_llm_service()
+                models_data = await service.client.get_models()
+                
+                # Преобразуем формат ответа llm-svc в наш формат
+                models = []
+                for model_data in models_data:
+                    models.append({
+                        "name": model_data.get("id", "Unknown"),
+                        "path": f"llm-svc://{model_data.get('id', 'unknown')}",
+                        "size": 0,  # llm-svc не предоставляет размер
+                        "size_mb": 0,
+                        "object": model_data.get("object", "model"),
+                        "owned_by": model_data.get("owned_by", "llm-svc")
+                    })
+                
+                logger.info(f"Получено моделей через llm-svc: {len(models)}")
+                return {"models": models}
+            except Exception as e:
+                logger.error(f"Ошибка получения моделей через llm-svc: {e}")
+                # Fallback к пустому списку
+                return {"models": [], "error": str(e)}
+        else:
+            # Используем локальные .gguf модели
+            logger.info("Запрос списка локальных .gguf моделей")
+            models_dir = "models"
+            if not os.path.exists(models_dir):
+                return {"models": []}
+            
+            models = []
+            for file in os.listdir(models_dir):
+                if file.endswith('.gguf'):
+                    file_path = os.path.join(models_dir, file)
+                    size = os.path.getsize(file_path)
+                    models.append({
+                        "name": file,
+                        "path": file_path,
+                        "size": size,
+                        "size_mb": round(size / (1024 * 1024), 2)
+                    })
+            
+            return {"models": models}
     except Exception as e:
+        logger.error(f"Ошибка получения списка моделей: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/models/load")
@@ -2042,11 +2095,12 @@ async def upload_document(file: UploadFile = File(...)):
         raise HTTPException(status_code=503, detail="Document processor не доступен")
         
     try:
-        # Сохраняем файл
-        import tempfile
-        temp_dir = tempfile.gettempdir()
-        file_path = os.path.join(temp_dir, f"doc_{datetime.now().timestamp()}_{file.filename}")
-        logger.info(f"Временный путь файла: {file_path}")
+        # Сохраняем файл в постоянную директорию uploads
+        uploads_dir = "/app/uploads"
+        os.makedirs(uploads_dir, exist_ok=True)
+        
+        file_path = os.path.join(uploads_dir, f"doc_{datetime.now().timestamp()}_{file.filename}")
+        logger.info(f"Путь файла: {file_path}")
         
         with open(file_path, "wb") as f:
             content = await file.read()
@@ -2784,8 +2838,10 @@ async def toggle_orchestrator(status: Dict[str, bool]):
 # СТАТИЧЕСКИЕ ФАЙЛЫ И ФРОНТЕНД
 # ================================
 
-# Подключаем статические файлы React приложения
-if os.path.exists("../frontend/build"):
+# Подключаем статические файлы React приложения (только для локального запуска)
+# В Docker фронтенд работает в отдельном контейнере на порту 3000
+is_docker = os.getenv("DOCKER_ENV", "").lower() == "true"
+if not is_docker and os.path.exists("../frontend/build"):
     app.mount("/static", StaticFiles(directory="../frontend/build/static"), name="static")
     
     @app.get("/{path:path}")

@@ -1,29 +1,26 @@
+# Основные зависимости для llm-svc
 fastapi==0.116.0
 starlette==0.46.2
 httpx==0.28.1
 uvicorn[standard]==0.35.0
-llama-cpp-python==0.3.14
 pydantic==2.11.7
 python-dotenv==1.0.0
 requests==2.32.4
 tqdm==4.67.1
-pytest==8.4.1
-pytest-asyncio==1.1.0
 pyyaml==6.0.2
 anyio==4.10.0
-# Vosk dependencies
-vosk==0.3.45
-numpy==1.24.3
-# Silero dependencies
-torch==2.0.1
-scipy==1.10.1
-# WhisperX dependencies
-whisperx==3.1.1
-faster-whisper==0.10.0
-# Diarization dependencies
-pyannote.audio==3.1.1
-pyannote.core==5.0.1
-pyannote.database==5.0.1
-pyannote.metrics==3.2.1
-# Audio processing
+
+# LLM зависимости
+llama-cpp-python==0.3.14
+
+# Базовые зависимости для аудио
+numpy>=1.24.3,<2.0.0
 python-multipart==0.0.6
+vosk==0.3.45
+torch>=2.0.0
+torchaudio>=2.0.0
+scipy>=1.10.0
+
+# Тестирование
+pytest==8.4.1
+pytest-asyncio==1.1.0

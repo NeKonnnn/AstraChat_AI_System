@@ -2,11 +2,25 @@ FROM ubuntu:22.04
 
 WORKDIR /app
 
-# Установка Python и системных зависимостей
+# Установка переменных окружения для неинтерактивной установки
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+# Установка timezone без интерактивного промпта
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+# Установка Python 3.11 и системных зависимостей
+# Примечание: Python 3.12 недоступен в deadsnakes для Ubuntu 22.04,
+# используем Python 3.11 который поддерживается
 RUN apt-get update && apt-get install -y \
-    python3 \
+    software-properties-common \
+    tzdata \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y \
+    python3.11 \
+    python3.11-dev \
+    python3.11-distutils \
     python3-pip \
-    python3-dev \
     build-essential \
     cmake \
     gcc \
@@ -25,7 +39,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Создание символической ссылки для python
-RUN ln -s /usr/bin/python3 /usr/bin/python
+RUN ln -sf /usr/bin/python3.11 /usr/bin/python && \
+    ln -sf /usr/bin/python3.11 /usr/bin/python3
 
 # Флаги для сборки llama.cpp (без Metal!)
 ENV CMAKE_ARGS="-DGGML_METAL=OFF -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS" \
@@ -54,16 +69,8 @@ ENV NUMEXPR_NUM_THREADS=8
 COPY app/ ./app/
 COPY config/ ./config/
 
-# Создание только базовой директории для моделей (если нужно)
-# RUN mkdir -p /app/models
-
-# Скачивание модели Vosk (русская, маленькая)
-RUN wget -O /tmp/vosk-model.zip https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip && \
-    unzip /tmp/vosk-model.zip -d /app/models/ && \
-    rm /tmp/vosk-model.zip
-
-# Копирование конфигурации диаризации
-COPY diarize_models/pyannote_diarization_config.yaml /app/models/diarization/
+# Создание директории для моделей
+RUN mkdir -p /app/models
 
 # Создание непривилегированного пользователя
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
@@ -75,4 +82,5 @@ USER appuser
 
 EXPOSE 8000
 
+# Запускаем uvicorn с параметрами из конфига (app.main:app читает settings)
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

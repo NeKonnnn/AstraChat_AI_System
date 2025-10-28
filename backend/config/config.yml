@@ -22,6 +22,9 @@ cors:
     - "http://localhost:8000"    # Backend
     - "http://127.0.0.1:3000"
     - "http://127.0.0.1:8000"
+    - "http://memoai-frontend:3000"  # Docker internal
+    - "http://memoai-backend:8000"   # Docker internal backend
+    - "*"  # Разрешаем все источники для Docker
   allow_credentials: true
   allow_methods: ["*"]
   allow_headers: ["*"]

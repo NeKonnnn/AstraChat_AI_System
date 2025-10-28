@@ -192,8 +192,20 @@ class AgentOrchestrator:
             "available_agents": len(available_tools),  # Для совместимости
             "available_tools": len(available_tools),
             "orchestrator_type": "LangGraph",
-            "orchestrator_active": self.is_initialized
+            "orchestrator_active": self.is_orchestrator_active()
         }
+    
+    def set_orchestrator_status(self, is_active: bool):
+        """Установка статуса активности оркестратора"""
+        if self.langgraph_orchestrator:
+            self.langgraph_orchestrator.set_orchestrator_status(is_active)
+        logger.info(f"Оркестратор {'включен' if is_active else 'отключен'}")
+    
+    def is_orchestrator_active(self) -> bool:
+        """Проверка активности оркестратора"""
+        if self.langgraph_orchestrator:
+            return self.langgraph_orchestrator.is_orchestrator_active()
+        return self.is_initialized
 
 
 # Глобальный экземпляр оркестратора

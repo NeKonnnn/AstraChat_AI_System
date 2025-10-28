@@ -45,3 +45,4 @@ async def cleanup_vosk_handler():
     if vosk_model is not None:
         logger.info("Освобождение ресурсов модели Vosk")
         vosk_model = None
+

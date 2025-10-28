@@ -226,3 +226,8 @@ async def get_transcription_info():
         "max_file_size": settings.vosk.max_file_size,
         "supported_languages": settings.vosk.supported_languages
     })
+
+
+
+
+

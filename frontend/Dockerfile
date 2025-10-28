@@ -1,19 +1,26 @@
 # Multi-stage build для React приложения
-FROM node:18-alpine as build
+FROM node:20-alpine as build
 
 # Установка рабочей директории
 WORKDIR /app
 
+# Установка build arguments ДО копирования
+ARG REACT_APP_API_URL=http://localhost:8000
+ARG REACT_APP_WS_URL=ws://localhost:8000
+
+# Установка переменных окружения
+ENV REACT_APP_API_URL=$REACT_APP_API_URL
+ENV REACT_APP_WS_URL=$REACT_APP_WS_URL
+
 # Копирование package.json и package-lock.json
 COPY package*.json ./
 
-# Установка зависимостей
-RUN npm ci --only=production
-
+# Установка зависимостей (включая dev dependencies для сборки)
+RUN npm ci
 # Копирование исходного кода
 COPY . .
 
-# Сборка приложения
+# Сборка приложения (ENV переменные уже установлены выше)
 RUN npm run build
 
 # Production стадия
