@@ -7,7 +7,22 @@ import re
 import time
 import json
 from pathlib import Path
-from vosk import Model, KaldiRecognizer
+
+# Проверяем, нужно ли использовать llm-svc
+USE_LLM_SVC = os.getenv('USE_LLM_SVC', 'false').lower() == 'true'
+
+# Импортируем Vosk только если НЕ используем llm-svc
+if not USE_LLM_SVC:
+    try:
+        from vosk import Model, KaldiRecognizer
+        VOSK_AVAILABLE = True
+    except ImportError:
+        print("Vosk не доступен локально, требуется llm-svc")
+        VOSK_AVAILABLE = False
+else:
+    VOSK_AVAILABLE = False
+    print("Используется llm-svc для распознавания речи")
+
 from backend.agent import ask_agent
 from backend.memory import save_to_memory
 
@@ -323,6 +338,42 @@ def speak_text(text, speaker='baya', voice_id='ru', speech_rate=1.0, save_to_fil
     """Основная функция озвучивания текста"""
     print(f"🔧 speak_text вызвана с параметрами: speaker={speaker}, voice_id={voice_id}, speech_rate={speech_rate}")
     
+    # Если используем llm-svc, вызываем его API
+    if USE_LLM_SVC:
+        try:
+            print(f"[LLM-SVC] Синтез речи через llm-svc")
+            from backend.llm_client import synthesize_speech_llm_svc
+            
+            # Определяем язык
+            language = 'ru' if voice_id == 'ru' else 'en'
+            
+            # Вызываем llm-svc для синтеза
+            audio_data = synthesize_speech_llm_svc(text, language, speaker, 48000, speech_rate)
+            
+            if audio_data and len(audio_data) > 0:
+                if save_to_file:
+                    # Сохраняем в файл
+                    with open(save_to_file, 'wb') as f:
+                        f.write(audio_data)
+                    print(f"[LLM-SVC] Аудио сохранено в {save_to_file}")
+                else:
+                    # Воспроизводим
+                    import io
+                    import scipy.io.wavfile
+                    audio_array = scipy.io.wavfile.read(io.BytesIO(audio_data))[1]
+                    sd.play(audio_array, 48000)
+                    sd.wait()
+                    print(f"[LLM-SVC] Аудио воспроизведено")
+                return True
+            else:
+                print(f"[LLM-SVC] Получены пустые аудио данные")
+                return False
+        except Exception as e:
+            print(f"[LLM-SVC] Ошибка синтеза через llm-svc: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
     if not text:
         return False
     
@@ -376,6 +427,26 @@ def recognize_speech():
 
 def recognize_speech_from_file(file_path):
     """Распознавание речи из аудиофайла используя ту же логику что и recognize_speech"""
+    
+    # Если используем llm-svc, вызываем его API
+    if USE_LLM_SVC:
+        try:
+            print(f"[LLM-SVC] Распознавание речи через llm-svc: {file_path}")
+            from backend.llm_client import transcribe_audio_llm_svc
+            
+            # Читаем файл
+            with open(file_path, 'rb') as f:
+                audio_data = f.read()
+            
+            # Вызываем llm-svc
+            result = transcribe_audio_llm_svc(audio_data, os.path.basename(file_path), "ru")
+            print(f"[LLM-SVC] Распознанный текст: '{result}'")
+            return result
+        except Exception as e:
+            print(f"[LLM-SVC] Ошибка распознавания через llm-svc: {e}")
+            return ""
+    
+    # Локальное распознавание через Vosk
     if not check_vosk_model():
         raise Exception("Модель распознавания речи не найдена")
     

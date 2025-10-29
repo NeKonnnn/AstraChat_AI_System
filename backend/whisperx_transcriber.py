@@ -22,16 +22,27 @@ import re
 import sys
 import torch
 from typing import Optional, Callable, Tuple, List, Dict
-try:
-    import whisperx
-    WHISPERX_AVAILABLE = True
-except ImportError:
-    whisperx = None
-    WHISPERX_AVAILABLE = False
 import gc
 import logging
 import traceback
 import warnings
+
+# Проверяем, нужно ли использовать llm-svc
+USE_LLM_SVC = os.getenv('USE_LLM_SVC', 'false').lower() == 'true'
+
+# Импортируем WhisperX только если НЕ используем llm-svc
+if not USE_LLM_SVC:
+    try:
+        import whisperx
+        WHISPERX_AVAILABLE = True
+    except ImportError:
+        print("WhisperX не доступен локально, требуется llm-svc")
+        whisperx = None
+        WHISPERX_AVAILABLE = False
+else:
+    whisperx = None
+    WHISPERX_AVAILABLE = False
+    print("Используется llm-svc для WhisperX транскрипции")
 
 # Настройка предупреждений и совместимости
 warnings.filterwarnings("ignore", category=UserWarning, module="pytorch_lightning")
@@ -79,10 +90,19 @@ class WhisperXTranscriber:
         
         self.logger.info("=== Инициализация WhisperXTranscriber ===")
         
+        # Если используем llm-svc, не инициализируем локальную модель
+        if USE_LLM_SVC:
+            self.logger.info("[LLM-SVC] Используется llm-svc, локальная модель WhisperX не загружается")
+            self.model = None
+            self.diarize_model = None
+            self.temp_dir = tempfile.mkdtemp()
+            self.language = "ru"
+            return
+        
         # Проверяем доступность WhisperX
         if not WHISPERX_AVAILABLE:
             self.logger.error("WhisperX не установлен или недоступен")
-            raise ImportError("WhisperX не установлен. Используйте: pip install whisperx")
+            raise ImportError("WhisperX не установлен. Используйте: pip install whisperx или установите USE_LLM_SVC=true")
         
         # Получаем абсолютный путь к корневой директории проекта (на уровень выше backend)
         self.project_dir = os.path.abspath(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

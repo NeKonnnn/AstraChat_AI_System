@@ -2,8 +2,26 @@ import os
 from typing import Optional, Callable, Tuple
 import logging
 import traceback
-from backend.transcriber import Transcriber
-from backend.whisperx_transcriber import WhisperXTranscriber
+
+# Проверяем, нужно ли использовать llm-svc
+USE_LLM_SVC = os.getenv('USE_LLM_SVC', 'false').lower() == 'true'
+
+# Импортируем локальные транскрайберы только если НЕ используем llm-svc
+if not USE_LLM_SVC:
+    try:
+        from backend.transcriber import Transcriber
+        from backend.whisperx_transcriber import WhisperXTranscriber
+        LOCAL_TRANSCRIBERS_AVAILABLE = True
+    except ImportError as e:
+        print(f"Локальные транскрайберы не доступны: {e}")
+        LOCAL_TRANSCRIBERS_AVAILABLE = False
+        Transcriber = None
+        WhisperXTranscriber = None
+else:
+    LOCAL_TRANSCRIBERS_AVAILABLE = False
+    Transcriber = None
+    WhisperXTranscriber = None
+    print("Используется llm-svc для транскрипции")
 
 class UniversalTranscriber:
     """
@@ -52,6 +70,17 @@ class UniversalTranscriber:
     
     def _initialize_engine(self):
         """Инициализирует выбранный движок транскрипции"""
+        
+        # Если используем llm-svc, не инициализируем локальные транскрайберы
+        if USE_LLM_SVC:
+            self.logger.info(f"[LLM-SVC] Используем llm-svc для транскрипции (engine={self.engine})")
+            self.current_transcriber = "llm-svc"
+            return
+        
+        # Проверяем доступность локальных транскрайберов
+        if not LOCAL_TRANSCRIBERS_AVAILABLE:
+            raise Exception("Локальные транскрайберы недоступны. Установите USE_LLM_SVC=true для использования llm-svc")
+        
         try:
             if self.engine == "whisperx":
                 self.logger.info("Инициализация WhisperX...")
@@ -145,7 +174,10 @@ class UniversalTranscriber:
     
     def set_progress_callback(self, callback: Optional[Callable[[int], None]]):
         """Устанавливает callback для обновления прогресса"""
-        if self.current_transcriber:
+        if USE_LLM_SVC:
+            # llm-svc не поддерживает callbacks
+            return
+        if self.current_transcriber and hasattr(self.current_transcriber, 'set_progress_callback'):
             self.current_transcriber.set_progress_callback(callback)
     
     def set_model_size(self, size: str):
@@ -158,7 +190,10 @@ class UniversalTranscriber:
     
     def set_language(self, lang: str):
         """Устанавливает язык для транскрипции"""
-        if self.current_transcriber:
+        if USE_LLM_SVC:
+            # llm-svc использует язык при вызове
+            return
+        if self.current_transcriber and hasattr(self.current_transcriber, 'set_language'):
             self.current_transcriber.set_language(lang)
     
     def set_compute_type(self, compute_type: str):
@@ -173,6 +208,52 @@ class UniversalTranscriber:
         self.logger.info(f"Начало транскрибации аудио файла: {audio_path}")
         self.logger.debug(f"Используется движок: {self.engine}")
         
+        # Если используем llm-svc, вызываем его API
+        if USE_LLM_SVC:
+            try:
+                self.logger.info("[LLM-SVC] Транскрипция через llm-svc")
+                from backend.llm_client import LLMClient
+                import asyncio
+                
+                # Читаем файл
+                with open(audio_path, 'rb') as f:
+                    audio_data = f.read()
+                
+                # Создаем клиент и вызываем API
+                async def _transcribe():
+                    async with LLMClient() as client:
+                        if self.engine == "whisperx":
+                            # WhisperX транскрипция
+                            result = await client.transcribe_audio_whisperx(
+                                audio_data, 
+                                os.path.basename(audio_path),
+                                language="auto"
+                            )
+                        else:
+                            # Vosk транскрипция
+                            result = await client.transcribe_audio(
+                                audio_data, 
+                                os.path.basename(audio_path),
+                                language="ru"
+                            )
+                        return result
+                
+                result = asyncio.run(_transcribe())
+                
+                if result:
+                    self.logger.info(f"[LLM-SVC] Транскрипция успешна: {len(result)} символов")
+                    return True, result
+                else:
+                    self.logger.error("[LLM-SVC] Получен пустой результат")
+                    return False, "Ошибка транскрипции: пустой результат"
+                    
+            except Exception as e:
+                self.logger.error(f"[LLM-SVC] Ошибка транскрипции: {e}")
+                import traceback
+                self.logger.error(f"Traceback: {traceback.format_exc()}")
+                return False, f"Ошибка транскрипции через llm-svc: {e}"
+        
+        # Локальная транскрипция
         # Приоритет диаризации: всегда используем WhisperX если он доступен
         if self.whisperx_transcriber:
             self.logger.info("Используем WhisperX для диаризации по ролям...")
@@ -262,6 +343,56 @@ class UniversalTranscriber:
         """
         self.logger.info(f"Принудительная транскрибация с диаризацией: {audio_path}")
         
+        # Если используем llm-svc, вызываем его API для диаризации
+        if USE_LLM_SVC:
+            try:
+                self.logger.info("[LLM-SVC] Диаризация через llm-svc")
+                from backend.llm_client import LLMClient
+                import asyncio
+                
+                # Читаем файл
+                with open(audio_path, 'rb') as f:
+                    audio_data = f.read()
+                
+                # Асинхронная функция для вызова API
+                async def _diarize_async():
+                    async with LLMClient() as client:
+                        # Сначала делаем диаризацию
+                        diarization_result = await client.diarize_audio(
+                            audio_data, 
+                            os.path.basename(audio_path),
+                            min_speakers=1,
+                            max_speakers=10
+                        )
+                        
+                        if not diarization_result.get("success"):
+                            raise Exception(f"Ошибка диаризации: {diarization_result.get('error', 'Unknown')}")
+                        
+                        # Затем делаем транскрипцию с диаризацией
+                        result = await client.transcribe_with_diarization(
+                            audio_data, 
+                            os.path.basename(audio_path),
+                            language="auto"
+                        )
+                        return result
+                
+                # Запускаем асинхронную функцию
+                result = asyncio.run(_diarize_async())
+                
+                if result:
+                    self.logger.info(f"[LLM-SVC] Диаризация успешна: {len(result)} символов")
+                    return True, result
+                else:
+                    self.logger.error("[LLM-SVC] Получен пустой результат диаризации")
+                    return False, "Ошибка диаризации: пустой результат"
+                    
+            except Exception as e:
+                self.logger.error(f"[LLM-SVC] Ошибка диаризации: {e}")
+                import traceback
+                self.logger.error(f"Traceback: {traceback.format_exc()}")
+                return False, f"Ошибка диаризации через llm-svc: {e}"
+        
+        # Локальная диаризация через WhisperX
         if not self.whisperx_transcriber:
             self.logger.error("WhisperX недоступен для диаризации")
             return False, "WhisperX недоступен для диаризации по ролям"

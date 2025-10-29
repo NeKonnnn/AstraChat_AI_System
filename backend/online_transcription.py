@@ -7,8 +7,26 @@ import threading
 import tempfile
 import numpy as np
 import sounddevice as sd
-from vosk import Model, KaldiRecognizer
 from datetime import datetime
+
+# Проверяем, нужно ли использовать llm-svc
+USE_LLM_SVC = os.getenv('USE_LLM_SVC', 'false').lower() == 'true'
+
+# Импортируем Vosk только если НЕ используем llm-svc
+if not USE_LLM_SVC:
+    try:
+        from vosk import Model, KaldiRecognizer
+        VOSK_AVAILABLE = True
+    except ImportError:
+        print("Vosk не доступен локально, требуется llm-svc")
+        VOSK_AVAILABLE = False
+        Model = None
+        KaldiRecognizer = None
+else:
+    VOSK_AVAILABLE = False
+    Model = None
+    KaldiRecognizer = None
+    print("Используется llm-svc для онлайн транскрипции")
 
 # Импортируем наш класс для записи системного звука
 from .system_audio import SystemAudioRecorder
@@ -49,6 +67,18 @@ class OnlineTranscriber:
         
     def load_model(self):
         """Загрузка модели Vosk"""
+        
+        # Если используем llm-svc, модель не загружается локально
+        if USE_LLM_SVC:
+            print("[LLM-SVC] Используется llm-svc, локальная модель Vosk не загружается")
+            print("[LLM-SVC] Онлайн транскрипция через llm-svc пока не поддерживается")
+            return False
+        
+        # Проверяем доступность Vosk
+        if not VOSK_AVAILABLE:
+            print("Vosk недоступен. Установите USE_LLM_SVC=true для использования llm-svc")
+            return False
+        
         try:
             if not os.path.exists(self.vosk_model_path):
                 raise ValueError(f"Путь к модели Vosk не существует: {self.vosk_model_path}")

@@ -1,10 +1,28 @@
 import os
 import tempfile
 import subprocess
-from vosk import Model, KaldiRecognizer
 import wave
 import json
 import pytubefix
+
+# Проверяем, нужно ли использовать llm-svc
+USE_LLM_SVC = os.getenv('USE_LLM_SVC', 'false').lower() == 'true'
+
+# Импортируем Vosk только если НЕ используем llm-svc
+if not USE_LLM_SVC:
+    try:
+        from vosk import Model, KaldiRecognizer
+        VOSK_AVAILABLE = True
+    except ImportError:
+        print("Vosk не доступен локально, требуется llm-svc")
+        VOSK_AVAILABLE = False
+        Model = None
+        KaldiRecognizer = None
+else:
+    VOSK_AVAILABLE = False
+    Model = None
+    KaldiRecognizer = None
+    print("Используется llm-svc для Vosk транскрипции")
 try:
     from moviepy.editor import VideoFileClip
     MOVIEPY_AVAILABLE = True
@@ -45,6 +63,18 @@ class Transcriber:
             self.logger.setLevel(logging.DEBUG)
         
         self.logger.info("=== Инициализация Vosk Transcriber ===")
+        
+        # Если используем llm-svc, не инициализируем локальную модель
+        if USE_LLM_SVC:
+            self.logger.info("[LLM-SVC] Используется llm-svc, локальная модель Vosk не загружается")
+            self.model = None
+            self.temp_dir = tempfile.mkdtemp()
+            self.language = "ru"
+            return
+        
+        # Проверяем доступность Vosk
+        if not VOSK_AVAILABLE:
+            raise Exception("Vosk недоступен. Установите USE_LLM_SVC=true для использования llm-svc")
         
         # Получаем абсолютный путь к корневой директории проекта (на уровень выше backend)
         self.project_dir = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))

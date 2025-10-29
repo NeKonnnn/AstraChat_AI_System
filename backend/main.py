@@ -2102,6 +2102,7 @@ async def upload_document(file: UploadFile = File(...)):
         file_path = os.path.join(uploads_dir, f"doc_{datetime.now().timestamp()}_{file.filename}")
         logger.info(f"Путь файла: {file_path}")
         
+        
         with open(file_path, "wb") as f:
             content = await file.read()
             f.write(content)
@@ -2285,7 +2286,7 @@ async def transcribe_file(file: UploadFile = File(...)):
         # Проверяем, поддерживает ли транскрайбер диаризацию
         if hasattr(transcriber, 'transcribe_with_diarization'):
             logger.info("Используем принудительную диаризацию...")
-            success, result = transcriber.transcribe_with_diarization(file_path)
+            success, result = await transcriber.transcribe_with_diarization(file_path)
         else:
             logger.info("Используем стандартную транскрибацию...")
             success, result = transcriber.transcribe_audio_file(file_path)

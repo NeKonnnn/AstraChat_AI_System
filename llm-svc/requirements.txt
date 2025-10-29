@@ -20,6 +20,12 @@ vosk==0.3.45
 torch>=2.0.0
 torchaudio>=2.0.0
 scipy>=1.10.0
+pydub>=0.25.1
+ffmpeg-python>=0.2.0
+
+# WhisperX и диаризация
+whisperx>=3.1.1
+pyannote.audio>=3.1.1
 
 # Тестирование
 pytest==8.4.1
