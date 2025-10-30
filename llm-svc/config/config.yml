@@ -1,0 +1,144 @@
+# Конфигурация llm-svc для интеграции с MemoAI
+# ВАЖНО: Обновите путь к модели в разделе model.path
+
+# Конфигурация сервера
+server:
+  host: "0.0.0.0"
+  port: 8000  # Внутри контейнера используем порт 8000, пробрасывается как 8001:8000
+  log_level: "INFO"
+  docs_url: "/docs"
+  redoc_url: "/redoc"
+
+# Настройки CORS для интеграции с MemoAI
+cors:
+  allowed_origins:
+    - "http://localhost:3000"    # React dev server
+    - "http://localhost:8000"    # MemoAI backend
+    - "http://127.0.0.1:3000"
+    - "http://127.0.0.1:8000"
+  allow_credentials: true
+  allow_methods: ["*"]
+  allow_headers: ["*"]
+
+# Настройки модели LLM
+model:
+  # Локальная модель. Тут нужно будет поменять на путь до реального расположения в контуре банка
+  # path: "/app/models/llm/Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf"
+  # Альтернативная модель:
+  path: "/app/models/llm/QVikhr-2.5-1.5B-Instruct-SMPO-Q8_0.gguf"
+  
+  # Облачная модель (раскомментируйте и настройте при необходимости)
+  # path: "s3://your-bucket/models/Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf"
+  # path: "gs://your-bucket/models/Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf"
+  # path: "https://your-server.com/models/Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf"
+  
+  # name: "qwen-coder-30b"
+  name: "qvikhr-1.5b"
+  ctx_size: 4096
+  gpu_layers: 0  # поменять на -1 для использования всех слоев на GPU
+  verbose: false
+
+# Настройки генерации
+generation:
+  default_temperature: 0.7
+  default_max_tokens: 1024
+  stream: true
+
+# Настройки приложения
+app:
+  title: "MemoAI AI Models Service"
+  description: "Unified AI service for LLM, Speech Recognition and Text-to-Speech"
+  version: "1.0.0"
+
+# Настройки мониторинга
+monitoring:
+  enabled: false
+  prometheus_port: 9090
+  metrics_path: "/metrics"
+
+# Настройки логирования
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: null
+  max_size: 10485760  # 10MB
+  backup_count: 5
+
+# Настройки кэширования
+caching:
+  enabled: true
+  ttl: 300  # Время жизни кэша в секундах
+  max_size: 1000  # Максимальное количество элементов в кэше
+
+# Настройки безопасности
+security:
+  enabled: false  # Отключено для локальной разработки
+  api_key: null
+  api_key_header: "X-API-Key"
+
+# Настройки Vosk (распознавание речи)
+vosk:
+  enabled: true
+  model_path: "/app/models/vosk-model-small-ru-0.22"  # Монтируется из ./model_small
+  sample_rate: 16000
+  max_file_size: 52428800  # 50MB
+  supported_languages:
+    - "ru"
+    - "en"
+
+# Настройки Silero (синтез речи)
+silero:
+  enabled: true
+  models_dir: "/app/models/silero"
+  sample_rate: 48000
+  max_text_length: 5000
+  supported_languages:
+    - "ru"
+    - "en"
+  supported_speakers:
+    ru:
+      - "baya"
+      - "kseniya"
+      - "xenia"
+      - "eugene"
+      - "aidar"
+    en:
+      - "v3_en"
+
+# Настройки WhisperX (продвинутая транскрипция)
+whisperx:
+  enabled: true
+  models_dir: "/app/models/whisperx" 
+  device: "auto"  # auto, cpu, cuda
+  compute_type: "float16"  # float16, int8, int8_float16
+  language: "ru"
+  batch_size: 16
+  max_file_size: 104857600  # 100MB
+  supported_languages:
+    - "ru"
+    - "en"
+    - "auto"
+
+# Настройки диаризации (разделение по спикерам)
+diarization:
+  enabled: true
+  models_dir: "/app/models/diarization"
+  config_path: "/app/models/diarization/pyannote_diarization_config.yaml"
+  device: "auto"  # auto, cpu, cuda
+  min_speakers: 1
+  max_speakers: 10
+  min_duration: 1.0  # секунды
+  max_file_size: 104857600  # 100MB
+
+# Настройки Nexus (для загрузки моделей из репозитория)
+nexus:
+  enabled: false
+  url: ""
+  repo: ""
+  name: ""
+  id: ""
+  version: ""
+  file_name: ""
+  login: null
+  password: null
+  cert_path: null

@@ -213,7 +213,7 @@ __marimo__/
 models/*.gguf
 
 # Игнорировать локальный конфиг
-config/config.yml
+# config/config.yml
 
 # Прочие файлы
 .DS_Store
