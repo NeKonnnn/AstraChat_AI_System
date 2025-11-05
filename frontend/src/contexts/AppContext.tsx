@@ -7,6 +7,13 @@ export interface Message {
   content: string;
   timestamp: string;
   isStreaming?: boolean;
+  // Для режима multi-llm: несколько ответов от разных моделей
+  multiLLMResponses?: Array<{
+    model: string;
+    content: string;
+    isStreaming?: boolean;
+    error?: boolean;
+  }>;
 }
 
 export interface Chat {
@@ -102,7 +109,7 @@ type AppAction =
   | { type: 'UPDATE_CHAT_TITLE'; payload: { chatId: string; title: string } }
   | { type: 'DELETE_CHAT'; payload: string }
   | { type: 'ADD_MESSAGE'; payload: { chatId: string; message: Message } }
-  | { type: 'UPDATE_MESSAGE'; payload: { chatId: string; messageId: string; content?: string; isStreaming?: boolean } }
+  | { type: 'UPDATE_MESSAGE'; payload: { chatId: string; messageId: string; content?: string; isStreaming?: boolean; multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }> } }
   | { type: 'APPEND_CHUNK'; payload: { chatId: string; messageId: string; chunk: string; isStreaming?: boolean } }
   | { type: 'SET_LOADING'; payload: boolean }
   | { type: 'SET_CURRENT_MODEL'; payload: ModelInfo }
@@ -267,7 +274,7 @@ function appReducer(state: AppState, action: AppAction): AppState {
     }
       
     case 'UPDATE_MESSAGE': {
-      const { chatId, messageId, content, isStreaming } = action.payload;
+      const { chatId, messageId, content, isStreaming, multiLLMResponses } = action.payload;
       console.log('UPDATE_MESSAGE вызван для чата:', chatId, 'сообщения:', messageId);
       console.log('Новый контент:', content);
       console.log('Новый isStreaming:', isStreaming);
@@ -287,7 +294,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
                     ? { 
                         ...msg, 
                         ...(content !== undefined && { content }),
-                        ...(isStreaming !== undefined && { isStreaming })
+                        ...(isStreaming !== undefined && { isStreaming }),
+                        ...(multiLLMResponses !== undefined && { multiLLMResponses })
                       }
                     : msg
                 ),
@@ -634,8 +642,8 @@ export function useAppActions() {
       return messageId;
     },
     
-    updateMessage: (chatId: string, messageId: string, content?: string, isStreaming?: boolean) => {
-      dispatch({ type: 'UPDATE_MESSAGE', payload: { chatId, messageId, content, isStreaming } });
+    updateMessage: (chatId: string, messageId: string, content?: string, isStreaming?: boolean, multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>) => {
+      dispatch({ type: 'UPDATE_MESSAGE', payload: { chatId, messageId, content, isStreaming, multiLLMResponses } });
     },
     
     appendChunk: (chatId: string, messageId: string, chunk: string, isStreaming?: boolean) => {

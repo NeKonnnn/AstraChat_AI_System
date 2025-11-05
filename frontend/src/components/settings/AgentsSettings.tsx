@@ -24,6 +24,8 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
+  Checkbox,
+  FormGroup,
 } from '@mui/material';
 import {
   SmartToy as AgentIcon,
@@ -33,6 +35,7 @@ import {
   Error as ErrorIcon,
   ExpandMore as ExpandMoreIcon,
   ExpandLess as ExpandLessIcon,
+  ViewModule as MultiLLMIcon,
 } from '@mui/icons-material';
 
 const API_BASE_URL = 'http://localhost:8000';
@@ -74,6 +77,13 @@ interface LangGraphStatus {
   orchestrator_active?: boolean;
 }
 
+interface Model {
+  name: string;
+  path: string;
+  size?: number;
+  size_mb?: number;
+}
+
 export default function AgentsSettings() {
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
   const [availableAgents, setAvailableAgents] = useState<Agent[]>([]);
@@ -85,6 +95,8 @@ export default function AgentsSettings() {
   const [agentsExpanded, setAgentsExpanded] = useState(true);
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
   const [pendingOrchestratorAction, setPendingOrchestratorAction] = useState<boolean | null>(null);
+  const [availableModels, setAvailableModels] = useState<Model[]>([]);
+  const [selectedMultiLLMModels, setSelectedMultiLLMModels] = useState<string[]>([]);
 
   useEffect(() => {
     loadAgentStatus();
@@ -96,6 +108,9 @@ export default function AgentsSettings() {
   useEffect(() => {
     if (agentStatus?.mode === 'agent') {
       loadAgents();
+    } else if (agentStatus?.mode === 'multi-llm') {
+      loadAvailableModels();
+      loadMultiLLMModels();
     }
   }, [agentStatus?.mode]);
 
@@ -328,7 +343,51 @@ export default function AgentsSettings() {
     }
   };
 
-  const switchMode = async (mode: 'direct' | 'agent') => {
+  const loadAvailableModels = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/models/available`);
+      if (response.ok) {
+        const data = await response.json();
+        setAvailableModels(data.models || []);
+      } else {
+        setError('Не удалось загрузить список моделей');
+      }
+    } catch (err) {
+      setError(`Ошибка загрузки моделей: ${err}`);
+    }
+  };
+
+  const loadMultiLLMModels = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/agent/multi-llm/models`);
+      if (response.ok) {
+        const data = await response.json();
+        setSelectedMultiLLMModels(data.models || []);
+      }
+    } catch (err) {
+      console.error('Ошибка загрузки выбранных моделей:', err);
+    }
+  };
+
+  const saveMultiLLMModels = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/agent/multi-llm/models`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ models: selectedMultiLLMModels }),
+      });
+
+      if (response.ok) {
+        setSuccess(`Выбрано моделей: ${selectedMultiLLMModels.length}`);
+      } else {
+        throw new Error('Не удалось сохранить выбранные модели');
+      }
+    } catch (err) {
+      setError(`Ошибка сохранения моделей: ${err}`);
+    }
+  };
+
+  const switchMode = async (mode: 'direct' | 'agent' | 'multi-llm') => {
     try {
       const response = await fetch(`${API_BASE_URL}/api/agent/mode`, {
         method: 'POST',
@@ -338,7 +397,12 @@ export default function AgentsSettings() {
 
       if (response.ok) {
         setAgentStatus(prev => prev ? { ...prev, mode } : null);
-        setSuccess(`Режим переключен на ${mode === 'direct' ? 'прямой' : 'агентный'}`);
+        const modeNames = {
+          'direct': 'прямой',
+          'agent': 'агентный',
+          'multi-llm': 'прямой с несколькими LLM'
+        };
+        setSuccess(`Режим переключен на ${modeNames[mode]}`);
         
         // Если переключаемся на агентный режим, загружаем агентов
         if (mode === 'agent') {
@@ -349,6 +413,10 @@ export default function AgentsSettings() {
           await loadLanggraphStatus();
           
           setSuccess('Агентный режим активирован');
+        } else if (mode === 'multi-llm') {
+          // Загружаем список моделей
+          await loadAvailableModels();
+          await loadMultiLLMModels();
         }
         
         // Перезагружаем статус для обновления данных
@@ -472,7 +540,7 @@ export default function AgentsSettings() {
                 <FormControl component="fieldset">
                   <RadioGroup
                     value={agentStatus.mode}
-                    onChange={(e) => switchMode(e.target.value as 'direct' | 'agent')}
+                    onChange={(e) => switchMode(e.target.value as 'direct' | 'agent' | 'multi-llm')}
                   >
                     <FormControlLabel
                       value="direct"
@@ -503,6 +571,23 @@ export default function AgentsSettings() {
                             </Typography>
                             <Typography variant="caption" color="text.secondary">
                               Использование специализированных агентов для решения задач
+                            </Typography>
+                          </Box>
+                        </Box>
+                      }
+                    />
+                    <FormControlLabel
+                      value="multi-llm"
+                      control={<Radio />}
+                      label={
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <MultiLLMIcon fontSize="small" />
+                          <Box>
+                            <Typography variant="body2" fontWeight="500">
+                              Прямой режим с несколькими LLM
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              Параллельная генерация ответов от нескольких моделей одновременно
                             </Typography>
                           </Box>
                         </Box>

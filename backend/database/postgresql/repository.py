@@ -1,0 +1,348 @@
+"""
+Репозиторий для работы с документами и векторами в PostgreSQL
+"""
+
+import logging
+from typing import Optional, List, Dict, Any, Tuple
+from datetime import datetime
+import numpy as np
+
+from .models import Document, DocumentVector
+from .connection import PostgreSQLConnection
+
+logger = logging.getLogger(__name__)
+
+
+class DocumentRepository:
+    """Репозиторий для работы с документами"""
+    
+    def __init__(self, db_connection: PostgreSQLConnection):
+        """
+        Инициализация репозитория
+        
+        Args:
+            db_connection: Подключение к PostgreSQL
+        """
+        self.db_connection = db_connection
+    
+    async def create_tables(self):
+        """Создание таблиц для документов и векторов"""
+        try:
+            async with self.db_connection.acquire() as conn:
+                # Таблица документов
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS documents (
+                        id SERIAL PRIMARY KEY,
+                        filename VARCHAR(255) NOT NULL,
+                        content TEXT NOT NULL,
+                        metadata JSONB DEFAULT '{}'::jsonb,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+                
+                # Индекс для поиска по имени файла
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_documents_filename 
+                    ON documents(filename)
+                """)
+                
+                # Индекс для метаданных (GIN индекс для JSONB)
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_documents_metadata 
+                    ON documents USING GIN(metadata)
+                """)
+                
+                logger.info("Таблицы для документов созданы")
+                
+        except Exception as e:
+            logger.error(f"Ошибка при создании таблиц документов: {e}")
+    
+    async def create_document(self, document: Document) -> Optional[int]:
+        """
+        Создание нового документа
+        
+        Args:
+            document: Объект документа
+            
+        Returns:
+            ID созданного документа или None в случае ошибки
+        """
+        try:
+            async with self.db_connection.acquire() as conn:
+                result = await conn.fetchrow("""
+                    INSERT INTO documents (filename, content, metadata, created_at, updated_at)
+                    VALUES ($1, $2, $3, $4, $5)
+                    RETURNING id
+                """, 
+                    document.filename,
+                    document.content,
+                    document.metadata,
+                    document.created_at,
+                    document.updated_at
+                )
+                
+                doc_id = result['id']
+                logger.info(f"Создан документ: {document.filename} (ID: {doc_id})")
+                return doc_id
+                
+        except Exception as e:
+            logger.error(f"Ошибка при создании документа: {e}")
+            return None
+    
+    async def get_document(self, document_id: int) -> Optional[Document]:
+        """
+        Получение документа по ID
+        
+        Args:
+            document_id: ID документа
+            
+        Returns:
+            Объект документа или None
+        """
+        try:
+            async with self.db_connection.acquire() as conn:
+                result = await conn.fetchrow("""
+                    SELECT id, filename, content, metadata, created_at, updated_at
+                    FROM documents
+                    WHERE id = $1
+                """, document_id)
+                
+                if result:
+                    return Document(
+                        id=result['id'],
+                        filename=result['filename'],
+                        content=result['content'],
+                        metadata=result['metadata'],
+                        created_at=result['created_at'],
+                        updated_at=result['updated_at']
+                    )
+                return None
+                
+        except Exception as e:
+            logger.error(f"Ошибка при получении документа: {e}")
+            return None
+    
+    async def get_all_documents(self, limit: int = 100) -> List[Document]:
+        """
+        Получение всех документов
+        
+        Args:
+            limit: Максимальное количество документов
+            
+        Returns:
+            Список документов
+        """
+        try:
+            async with self.db_connection.acquire() as conn:
+                results = await conn.fetch("""
+                    SELECT id, filename, content, metadata, created_at, updated_at
+                    FROM documents
+                    ORDER BY created_at DESC
+                    LIMIT $1
+                """, limit)
+                
+                documents = []
+                for result in results:
+                    documents.append(Document(
+                        id=result['id'],
+                        filename=result['filename'],
+                        content=result['content'],
+                        metadata=result['metadata'],
+                        created_at=result['created_at'],
+                        updated_at=result['updated_at']
+                    ))
+                
+                return documents
+                
+        except Exception as e:
+            logger.error(f"Ошибка при получении документов: {e}")
+            return []
+    
+    async def delete_document(self, document_id: int) -> bool:
+        """
+        Удаление документа
+        
+        Args:
+            document_id: ID документа
+            
+        Returns:
+            True если успешно, False в случае ошибки
+        """
+        try:
+            async with self.db_connection.acquire() as conn:
+                await conn.execute("DELETE FROM documents WHERE id = $1", document_id)
+                logger.info(f"Удален документ: {document_id}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Ошибка при удалении документа: {e}")
+            return False
+
+
+class VectorRepository:
+    """Репозиторий для работы с векторами"""
+    
+    def __init__(self, db_connection: PostgreSQLConnection, embedding_dim: int = 384):
+        """
+        Инициализация репозитория
+        
+        Args:
+            db_connection: Подключение к PostgreSQL
+            embedding_dim: Размерность векторов
+        """
+        self.db_connection = db_connection
+        self.embedding_dim = embedding_dim
+    
+    async def create_tables(self):
+        """Создание таблицы для векторов с pgvector"""
+        try:
+            async with self.db_connection.acquire() as conn:
+                # Таблица векторов
+                await conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS document_vectors (
+                        id SERIAL PRIMARY KEY,
+                        document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                        chunk_index INTEGER NOT NULL,
+                        embedding vector({self.embedding_dim}) NOT NULL,
+                        content TEXT NOT NULL,
+                        metadata JSONB DEFAULT '{{}}'::jsonb,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        UNIQUE(document_id, chunk_index)
+                    )
+                """)
+                
+                # HNSW индекс для векторного поиска (используем cosine distance)
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_document_vectors_embedding_hnsw 
+                    ON document_vectors 
+                    USING hnsw (embedding vector_cosine_ops)
+                """)
+                
+                # Индекс для поиска по document_id
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_document_vectors_document_id 
+                    ON document_vectors(document_id)
+                """)
+                
+                logger.info(f"Таблицы для векторов созданы (размерность: {self.embedding_dim})")
+                
+        except Exception as e:
+            logger.error(f"Ошибка при создании таблиц векторов: {e}")
+    
+    async def create_vector(self, vector: DocumentVector) -> Optional[int]:
+        """
+        Создание нового вектора
+        
+        Args:
+            vector: Объект вектора
+            
+        Returns:
+            ID созданного вектора или None в случае ошибки
+        """
+        try:
+            async with self.db_connection.acquire() as conn:
+                result = await conn.fetchrow("""
+                    INSERT INTO document_vectors (document_id, chunk_index, embedding, content, metadata)
+                    VALUES ($1, $2, $3, $4, $5)
+                    RETURNING id
+                """,
+                    vector.document_id,
+                    vector.chunk_index,
+                    str(vector.embedding),  # pgvector требует строку формата '[0.1, 0.2, ...]'
+                    vector.content,
+                    vector.metadata
+                )
+                
+                vector_id = result['id']
+                logger.debug(f"Создан вектор: document_id={vector.document_id}, chunk_index={vector.chunk_index}")
+                return vector_id
+                
+        except Exception as e:
+            logger.error(f"Ошибка при создании вектора: {e}")
+            return None
+    
+    async def similarity_search(
+        self, 
+        query_embedding: List[float], 
+        limit: int = 10,
+        document_id: Optional[int] = None
+    ) -> List[Tuple[DocumentVector, float]]:
+        """
+        Поиск похожих документов по вектору (cosine similarity)
+        
+        Args:
+            query_embedding: Вектор запроса
+            limit: Максимальное количество результатов
+            document_id: Опциональный фильтр по документу
+            
+        Returns:
+            Список кортежей (вектор, similarity_score)
+        """
+        try:
+            async with self.db_connection.acquire() as conn:
+                embedding_str = str(query_embedding)
+                
+                if document_id:
+                    query = """
+                        SELECT id, document_id, chunk_index, embedding::text, content, metadata,
+                               1 - (embedding <=> $1::vector) as similarity
+                        FROM document_vectors
+                        WHERE document_id = $2
+                        ORDER BY embedding <=> $1::vector
+                        LIMIT $3
+                    """
+                    results = await conn.fetch(query, embedding_str, document_id, limit)
+                else:
+                    query = """
+                        SELECT id, document_id, chunk_index, embedding::text, content, metadata,
+                               1 - (embedding <=> $1::vector) as similarity
+                        FROM document_vectors
+                        ORDER BY embedding <=> $1::vector
+                        LIMIT $2
+                    """
+                    results = await conn.fetch(query, embedding_str, limit)
+                
+                vectors = []
+                for result in results:
+                    # Парсим embedding из строки (формат: '[0.1, 0.2, ...]')
+                    embedding_str = result['embedding'].strip('[]')
+                    embedding = [float(x.strip()) for x in embedding_str.split(',')]
+                    
+                    vector = DocumentVector(
+                        id=result['id'],
+                        document_id=result['document_id'],
+                        chunk_index=result['chunk_index'],
+                        embedding=embedding,
+                        content=result['content'],
+                        metadata=result['metadata']
+                    )
+                    similarity = float(result['similarity'])
+                    vectors.append((vector, similarity))
+                
+                return vectors
+                
+        except Exception as e:
+            logger.error(f"Ошибка при векторном поиске: {e}")
+            return []
+    
+    async def delete_vectors_by_document(self, document_id: int) -> bool:
+        """
+        Удаление всех векторов документа
+        
+        Args:
+            document_id: ID документа
+            
+        Returns:
+            True если успешно, False в случае ошибки
+        """
+        try:
+            async with self.db_connection.acquire() as conn:
+                await conn.execute("DELETE FROM document_vectors WHERE document_id = $1", document_id)
+                logger.info(f"Удалены векторы документа: {document_id}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Ошибка при удалении векторов: {e}")
+            return False
+

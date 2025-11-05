@@ -36,3 +36,15 @@ psutil==7.0.0
 sounddevice==0.5.2
 vosk==0.3.45
 pyttsx3==2.90
+
+# Зависимости для баз данных
+# MongoDB
+motor==3.3.2  # Асинхронный драйвер для MongoDB
+pymongo==4.6.1  # Синхронный драйвер для MongoDB
+
+# PostgreSQL + pgvector
+asyncpg==0.29.0  # Асинхронный драйвер для PostgreSQL
+psycopg2-binary==2.9.9  # Синхронный драйвер для PostgreSQL
+
+# Для работы с векторами
+numpy==1.26.3

@@ -57,6 +57,7 @@ import {
   Square as SquareIcon,
   ChevronLeft as ChevronLeftIcon,
   ChevronRight as ChevronRightIcon,
+  Add as AddIcon,
 } from '@mui/icons-material';
 import { useAppContext, useAppActions, Message } from '../contexts/AppContext';
 import { useSocket } from '../contexts/SocketContext';
@@ -65,6 +66,21 @@ import MessageRenderer from '../components/MessageRenderer';
 
 interface UnifiedChatPageProps {
   isDarkMode: boolean;
+}
+
+interface ModelWindow {
+  id: string;
+  selectedModel: string;
+  response: string;
+  isStreaming: boolean;
+  error?: boolean;
+}
+
+interface AgentStatus {
+  is_initialized: boolean;
+  mode: string;
+  available_agents: number;
+  orchestrator_active: boolean;
 }
 
 export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
@@ -172,11 +188,24 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
     setCurrentChat,
     updateChatTitle
   } = useAppActions();
-  const { sendMessage, isConnected, reconnect, stopGeneration } = useSocket();
+  const { sendMessage, isConnected, reconnect, stopGeneration, socket, onMultiLLMEvent, offMultiLLMEvent } = useSocket();
 
   // Получаем текущий чат и сообщения
   const currentChat = getCurrentChat();
   const messages = getCurrentMessages();
+  
+  // Состояние для режима multi-llm
+  const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
+  const [availableModels, setAvailableModels] = useState<Array<{name: string; path: string; size_mb?: number}>>([]);
+  const [modelWindows, setModelWindows] = useState<ModelWindow[]>([
+    { id: '1', selectedModel: '', response: '', isStreaming: false }
+  ]);
+  const [conversationHistory, setConversationHistory] = useState<Array<{
+    userMessage: string;
+    responses: Array<{model: string; content: string; error?: boolean}>;
+    timestamp: string;
+  }>>([]);
+  const currentMultiLLMRequestRef = useRef<string | null>(null);
 
   // Убираем автоматическое создание чатов - чаты создаются только по кнопке
 
@@ -214,6 +243,176 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  // Загружаем статус агента и модели при инициализации
+  useEffect(() => {
+    const loadAgentStatus = async () => {
+      try {
+        const response = await fetch(`${getApiUrl('/api/agent/status')}`);
+        if (response.ok) {
+          const data = await response.json();
+          setAgentStatus(data);
+        }
+      } catch (error) {
+        console.error('Ошибка загрузки статуса агента:', error);
+      }
+    };
+
+    const loadAvailableModels = async () => {
+      try {
+        const response = await fetch(`${getApiUrl('/api/models/available')}`);
+        if (response.ok) {
+          const data = await response.json();
+          setAvailableModels(data.models || []);
+        }
+      } catch (error) {
+        console.error('Ошибка загрузки моделей:', error);
+      }
+    };
+
+    loadAgentStatus();
+    loadAvailableModels();
+    
+    // Периодически обновляем статус и модели
+    const interval = setInterval(() => {
+      loadAgentStatus();
+      // Обновляем модели только в режиме multi-llm
+      if (agentStatus?.mode === 'multi-llm') {
+        loadAvailableModels();
+      }
+    }, 5000);
+    
+    return () => clearInterval(interval);
+  }, [agentStatus?.mode]);
+
+  // Загружаем модели отдельно при переключении на режим multi-llm
+  useEffect(() => {
+    if (agentStatus?.mode === 'multi-llm') {
+      const loadAvailableModels = async () => {
+        try {
+          const response = await fetch(`${getApiUrl('/api/models/available')}`);
+          if (response.ok) {
+            const data = await response.json();
+            console.log('Загружены модели:', data.models);
+            setAvailableModels(data.models || []);
+          } else {
+            console.error('Ошибка загрузки моделей: статус', response.status);
+          }
+        } catch (error) {
+          console.error('Ошибка загрузки моделей:', error);
+        }
+      };
+      
+      loadAvailableModels();
+    }
+  }, [agentStatus?.mode]);
+
+  // Подписка на события Socket.IO для режима multi-llm
+  useEffect(() => {
+    if (agentStatus?.mode !== 'multi-llm' || !socket || !onMultiLLMEvent || !offMultiLLMEvent) return;
+    
+    const handleMultiLLMStart = (data: any) => {
+      console.log('multi_llm_start получен:', data);
+      currentMultiLLMRequestRef.current = new Date().toISOString();
+      
+      // Устанавливаем isStreaming: true для соответствующей модели
+      const modelName = data.model || '';
+      if (modelName) {
+        setModelWindows(prev => prev.map(w => 
+          w.selectedModel === modelName 
+            ? { ...w, isStreaming: true, error: false }
+            : w
+        ));
+      }
+    };
+
+    const handleMultiLLMChunk = (data: any) => {
+      console.log('multi_llm_chunk получен:', data);
+      const modelName = data.model || 'unknown';
+      const accumulated = data.accumulated || '';
+      
+      // Обновляем ответ в истории для текущего запроса
+      setConversationHistory(prev => {
+        if (prev.length === 0) return prev;
+        const lastIndex = prev.length - 1;
+        const updated = [...prev];
+        const existingResponseIndex = updated[lastIndex].responses.findIndex(r => r.model === modelName);
+        
+        if (existingResponseIndex >= 0) {
+          updated[lastIndex].responses[existingResponseIndex] = {
+            ...updated[lastIndex].responses[existingResponseIndex],
+            content: accumulated
+          };
+        } else {
+          updated[lastIndex].responses.push({
+            model: modelName,
+            content: accumulated
+          });
+        }
+        
+        return updated;
+      });
+      
+      // Обновляем состояние окна для потоковой генерации
+      setModelWindows(prev => prev.map(w => 
+        w.selectedModel === modelName 
+          ? { ...w, response: accumulated, isStreaming: true }
+          : w
+      ));
+    };
+
+    const handleMultiLLMComplete = (data: any) => {
+      console.log('multi_llm_complete получен:', data);
+      const modelName = data.model || 'unknown';
+      const response = data.response || '';
+      const hasError = data.error || false;
+      
+      // Обновляем ответ в истории
+      setConversationHistory(prev => {
+        if (prev.length === 0) return prev;
+        const lastIndex = prev.length - 1;
+        const updated = [...prev];
+        const existingResponseIndex = updated[lastIndex].responses.findIndex(r => r.model === modelName);
+        
+        if (existingResponseIndex >= 0) {
+          updated[lastIndex].responses[existingResponseIndex] = {
+            model: modelName,
+            content: response,
+            error: hasError
+          };
+        } else {
+          updated[lastIndex].responses.push({
+            model: modelName,
+            content: response,
+            error: hasError
+          });
+        }
+        
+        return updated;
+      });
+      
+      // Обновляем состояние окна - завершаем стриминг
+      setModelWindows(prev => prev.map(w => 
+        w.selectedModel === modelName 
+          ? { ...w, response, isStreaming: false, error: hasError }
+          : w
+      ));
+    };
+
+    // Подписываемся на события
+    onMultiLLMEvent('multi_llm_start', handleMultiLLMStart);
+    onMultiLLMEvent('multi_llm_chunk', handleMultiLLMChunk);
+    onMultiLLMEvent('multi_llm_complete', handleMultiLLMComplete);
+
+    return () => {
+      // Отписываемся от событий
+      if (offMultiLLMEvent) {
+        offMultiLLMEvent('multi_llm_start', handleMultiLLMStart);
+        offMultiLLMEvent('multi_llm_chunk', handleMultiLLMChunk);
+        offMultiLLMEvent('multi_llm_complete', handleMultiLLMComplete);
+      }
+    };
+  }, [agentStatus?.mode, socket, onMultiLLMEvent, offMultiLLMEvent]);
 
   // Загружаем список документов при инициализации
   useEffect(() => {
@@ -281,7 +480,112 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
   // ФУНКЦИИ ТЕКСТОВОГО ЧАТА
   // ================================
 
+  // ================================
+  // ФУНКЦИИ ДЛЯ РЕЖИМА MULTI-LLM
+  // ================================
+  
+  const addModelWindow = (): void => {
+    if (modelWindows.length >= 4) {
+      showNotification('warning', 'Можно добавить максимум 4 модели');
+      return;
+    }
+    const newId = String(modelWindows.length + 1);
+    setModelWindows([...modelWindows, { id: newId, selectedModel: '', response: '', isStreaming: false }]);
+  };
+
+  const removeModelWindow = (id: string): void => {
+    if (modelWindows.length <= 1) {
+      showNotification('warning', 'Должна остаться хотя бы одна модель');
+      return;
+    }
+    setModelWindows(modelWindows.filter(w => w.id !== id));
+  };
+
+  const updateModelWindow = (id: string, updates: Partial<ModelWindow>): void => {
+    setModelWindows(modelWindows.map(w => w.id === id ? { ...w, ...updates } : w));
+  };
+
+  const getSelectedModels = (): string[] => {
+    return modelWindows.map(w => w.selectedModel).filter(m => m !== '');
+  };
+
+  const handleModelSelect = (windowId: string, modelName: string): void => {
+    const selectedModels = getSelectedModels();
+    
+    // Проверяем, не выбрана ли эта модель в другом окне
+    if (selectedModels.includes(modelName) && modelWindows.find(w => w.id === windowId)?.selectedModel !== modelName) {
+      showNotification('error', 'Эта модель уже выбрана в другом окне');
+      return;
+    }
+    
+    updateModelWindow(windowId, { selectedModel: modelName });
+  };
+
+  const handleSendMessageMultiLLM = async (): Promise<void> => {
+    if (!inputMessage.trim() || !isConnected) {
+      return;
+    }
+
+    const selectedModels = getSelectedModels();
+    if (selectedModels.length === 0) {
+      showNotification('error', 'Выберите хотя бы одну модель');
+      return;
+    }
+
+    // Сохраняем сообщение пользователя в историю
+    setConversationHistory([
+      ...conversationHistory,
+      {
+        userMessage: inputMessage.trim(),
+        responses: [],
+        timestamp: new Date().toISOString()
+      }
+    ]);
+
+    // Устанавливаем состояние генерации для всех выбранных окон
+    modelWindows.forEach(window => {
+      if (window.selectedModel) {
+        updateModelWindow(window.id, { response: '', isStreaming: true, error: false });
+      }
+    });
+
+    // Отправляем запрос на сервер с выбранными моделями
+    try {
+      // Устанавливаем модели в оркестраторе
+      const response = await fetch(`${getApiUrl('/api/agent/multi-llm/models')}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ models: selectedModels }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Не удалось установить модели');
+      }
+
+      // Отправляем сообщение через Socket.IO
+      // Сообщение будет обработано через SocketContext, который отследит режим multi-llm
+      // и разошлет запросы ко всем выбранным моделям
+      
+      // Временно используем обычный sendMessage, но нужно будет модифицировать SocketContext
+      // для работы с выбранными моделями напрямую в чате
+      if (currentChat) {
+        sendMessage(inputMessage.trim(), currentChat.id);
+      }
+      
+      setInputMessage('');
+    } catch (error) {
+      console.error('Ошибка отправки сообщения:', error);
+      showNotification('error', 'Ошибка отправки сообщения');
+    }
+  };
+
   const handleSendMessage = (): void => {
+    // Если режим multi-llm, используем специальную функцию
+    if (agentStatus?.mode === 'multi-llm') {
+      handleSendMessageMultiLLM();
+      return;
+    }
+
     if (!inputMessage.trim() || !isConnected || state.isLoading || !currentChat) {
       return;
     }
@@ -1262,15 +1566,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
         const result: any = await response.json();
         showNotification('success', `Документ "${file.name}" успешно загружен. Теперь вы можете задать вопрос по нему в чате.`);
         
-        // Добавляем файл в список
-        setUploadedFiles(prev => [...prev, {
-          name: file.name,
-          size: file.size,
-          type: file.type,
-          uploadDate: new Date().toISOString(),
-        }]);
-        
-        // Обновляем список документов с бэкенда
+        // Обновляем список документов с бэкенда (это основной источник истины)
         try {
           const docsResponse = await fetch(getApiUrl('/api/documents'));
           if (docsResponse.ok) {
@@ -1283,11 +1579,56 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                 uploadDate: new Date().toISOString(),
               }));
               setUploadedFiles(files);
+              console.log('Список документов обновлен:', files);
+            } else {
+              // Если список пустой, добавляем загруженный файл
+              setUploadedFiles(prev => {
+                const exists = prev.some(f => f.name === file.name);
+                if (!exists) {
+                  return [...prev, {
+                    name: file.name,
+                    size: file.size,
+                    type: file.type,
+                    uploadDate: new Date().toISOString(),
+                  }];
+                }
+                return prev;
+              });
             }
+          } else {
+            // Fallback: добавляем файл в список, если не удалось получить список с бэкенда
+            setUploadedFiles(prev => {
+              const exists = prev.some(f => f.name === file.name);
+              if (!exists) {
+                return [...prev, {
+                  name: file.name,
+                  size: file.size,
+                  type: file.type,
+                  uploadDate: new Date().toISOString(),
+                }];
+              }
+              return prev;
+            });
           }
         } catch (error) {
           console.error('Ошибка при обновлении списка документов:', error);
+          // Fallback: добавляем файл в список, если произошла ошибка
+          setUploadedFiles(prev => {
+            const exists = prev.some(f => f.name === file.name);
+            if (!exists) {
+              return [...prev, {
+                name: file.name,
+                size: file.size,
+                type: file.type,
+                uploadDate: new Date().toISOString(),
+              }];
+            }
+            return prev;
+          });
         }
+        
+        // Закрываем диалог загрузки документов после успешной загрузки
+        setShowDocumentDialog(false);
         
         // Очищаем input файла, чтобы можно было повторно загрузить тот же файл
         if (fileInputRef.current) {
@@ -1367,6 +1708,10 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
     const files = e.target.files;
     if (files && files.length > 0) {
       handleFileUpload(files[0]);
+    }
+    // Очищаем input файла, чтобы можно было повторно загрузить тот же файл
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
     }
   };
 
@@ -1452,7 +1797,45 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
             </Box>
             
             <Box sx={{ mb: 0.3 }}>
-              <MessageRenderer content={message.content} />
+              {message.multiLLMResponses && message.multiLLMResponses.length > 0 ? (
+                // Отображение нескольких ответов от разных моделей
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  {message.multiLLMResponses.map((response, index) => (
+                    <Card
+                      key={index}
+                      sx={{
+                        border: '1px solid',
+                        borderColor: response.error ? 'error.main' : 'divider',
+                        bgcolor: response.error ? 'error.light' : 'background.paper',
+                      }}
+                    >
+                      <CardContent>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                          <Typography variant="caption" fontWeight="bold" color={response.error ? 'error' : 'primary'}>
+                            {response.model}
+                          </Typography>
+                          {response.isStreaming && (
+                            <Chip label="Генерируется..." size="small" color="info" />
+                          )}
+                          {response.error && (
+                            <Chip label="Ошибка" size="small" color="error" />
+                          )}
+                        </Box>
+                        {response.error ? (
+                          <Alert severity="error" sx={{ mt: 1 }}>
+                            <Typography variant="body2">{response.content}</Typography>
+                          </Alert>
+                        ) : (
+                          <MessageRenderer content={response.content} isStreaming={response.isStreaming} />
+                        )}
+                      </CardContent>
+                    </Card>
+                  ))}
+                </Box>
+              ) : (
+                // Обычное отображение одного ответа
+                <MessageRenderer content={message.content} isStreaming={message.isStreaming} />
+              )}
             </Box>
           </CardContent>
         </Card>
@@ -1469,7 +1852,17 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
           <Tooltip title="Копировать">
             <IconButton
               size="small"
-              onClick={() => handleCopyMessage(message.content)}
+              onClick={() => {
+                if (message.multiLLMResponses && message.multiLLMResponses.length > 0) {
+                  // Для multi-llm копируем все ответы
+                  const allResponses = message.multiLLMResponses
+                    .map(r => `[${r.model}]\n${r.content}`)
+                    .join('\n\n---\n\n');
+                  handleCopyMessage(allResponses);
+                } else {
+                  handleCopyMessage(message.content);
+                }
+              }}
               className="message-copy-button"
               data-theme={isDarkMode ? 'dark' : 'light'}
                              sx={{ 
@@ -2242,6 +2635,503 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
   // ================================
   // ОСНОВНОЙ РЕНДЕР
   // ================================
+
+  // Если режим multi-llm, показываем специальный UI
+  if (agentStatus?.mode === 'multi-llm') {
+    return (
+      <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', bgcolor: 'background.default' }}>
+        {/* Основная область с окнами моделей */}
+        <Box sx={{ flex: 1, display: 'grid', gridTemplateColumns: `repeat(${modelWindows.length}, 1fr)`, gap: 2, p: 2, overflow: 'hidden' }}>
+          {modelWindows.map((window) => {
+            // Находим текущий ответ для этой модели (последний запрос)
+            const currentResponse = conversationHistory.length > 0 
+              ? conversationHistory[conversationHistory.length - 1].responses.find(r => r.model === window.selectedModel)
+              : null;
+            const isStreaming = modelWindows.find(w => w.id === window.id)?.isStreaming || false;
+            
+            return (
+              <Box 
+                key={window.id} 
+                sx={{ 
+                  display: 'flex', 
+                  flexDirection: 'column', 
+                  border: '1px solid', 
+                  borderColor: 'divider',
+                  borderRadius: 2,
+                  bgcolor: 'background.paper',
+                  overflow: 'hidden'
+                }}
+              >
+                {/* Выбор модели над окном */}
+                <Box sx={{ p: 1.5, borderBottom: '1px solid', borderColor: 'divider', bgcolor: 'background.default', display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <FormControl fullWidth size="small">
+                    <InputLabel>Модель</InputLabel>
+                    <Select
+                      value={window.selectedModel}
+                      label="Модель"
+                      onChange={(e) => handleModelSelect(window.id, e.target.value)}
+                      disabled={availableModels.length === 0}
+                    >
+                      <MenuItem value="">
+                        <em>Не выбрано</em>
+                      </MenuItem>
+                      {availableModels.length === 0 ? (
+                        <MenuItem disabled>
+                          Загрузка моделей...
+                        </MenuItem>
+                      ) : (
+                        availableModels
+                          .filter(m => {
+                            const isSelectedElsewhere = modelWindows.some(w => 
+                              w.id !== window.id && w.selectedModel === m.name
+                            );
+                            return !isSelectedElsewhere || window.selectedModel === m.name;
+                          })
+                          .map((model) => (
+                            <MenuItem key={model.name} value={model.name}>
+                              {model.name}
+                            </MenuItem>
+                          ))
+                      )}
+                    </Select>
+                  </FormControl>
+                  {modelWindows.length > 1 && (
+                    <IconButton
+                      size="small"
+                      onClick={() => removeModelWindow(window.id)}
+                      color="error"
+                      sx={{ flexShrink: 0 }}
+                    >
+                      <CloseIcon fontSize="small" />
+                    </IconButton>
+                  )}
+                </Box>
+                
+                {/* Область истории и ответов */}
+                <Box sx={{ flex: 1, overflow: 'auto', p: 2 }}>
+                  {conversationHistory.length === 0 ? (
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+                      <Typography variant="body2" color="text.secondary" align="center">
+                        Выберите модель и отправьте сообщение для начала диалога
+                      </Typography>
+                    </Box>
+                  ) : (
+                    conversationHistory.map((conv, idx) => {
+                      const response = conv.responses.find(r => r.model === window.selectedModel);
+                      return (
+                        <Box key={idx} sx={{ mb: 2 }}>
+                          {/* Сообщение пользователя */}
+                          <Card sx={{ mb: 1, bgcolor: 'primary.main', color: 'primary.contrastText' }}>
+                            <CardContent sx={{ p: 1.5, pb: 1.5 }}>
+                              <Typography variant="body2">{conv.userMessage}</Typography>
+                            </CardContent>
+                          </Card>
+                          
+                          {/* Ответ модели */}
+                          <Card sx={{ bgcolor: response?.error ? 'error.light' : 'background.paper' }}>
+                            <CardContent sx={{ p: 1.5 }}>
+                              {response ? (
+                                response.error ? (
+                                  <Alert severity="error" sx={{ mb: 0 }}>
+                                    <Typography variant="body2">{response.content}</Typography>
+                                  </Alert>
+                                ) : (
+                                  <MessageRenderer content={response.content} />
+                                )
+                              ) : (
+                                idx === conversationHistory.length - 1 && isStreaming ? (
+                                  // Анимация "думает..." для текущей генерации
+                                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                    <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
+                                      <Box
+                                        sx={{
+                                          width: 6,
+                                          height: 6,
+                                          borderRadius: '50%',
+                                          bgcolor: 'primary.main',
+                                          animation: 'thinkingDot 1.4s ease-in-out infinite both',
+                                          '@keyframes thinkingDot': {
+                                            '0%, 80%, 100%': { transform: 'scale(0)' },
+                                            '40%': { transform: 'scale(1)' },
+                                          },
+                                        }}
+                                      />
+                                      <Box
+                                        sx={{
+                                          width: 6,
+                                          height: 6,
+                                          borderRadius: '50%',
+                                          bgcolor: 'primary.main',
+                                          animation: 'thinkingDot 1.4s ease-in-out infinite both',
+                                          animationDelay: '0.2s',
+                                          '@keyframes thinkingDot': {
+                                            '0%, 80%, 100%': { transform: 'scale(0)' },
+                                            '40%': { transform: 'scale(1)' },
+                                          },
+                                        }}
+                                      />
+                                      <Box
+                                        sx={{
+                                          width: 6,
+                                          height: 6,
+                                          borderRadius: '50%',
+                                          bgcolor: 'primary.main',
+                                          animation: 'thinkingDot 1.4s ease-in-out infinite both',
+                                          animationDelay: '0.4s',
+                                          '@keyframes thinkingDot': {
+                                            '0%, 80%, 100%': { transform: 'scale(0)' },
+                                            '40%': { transform: 'scale(1)' },
+                                          },
+                                        }}
+                                      />
+                                    </Box>
+                                    <Typography variant="body2" sx={{ 
+                                      color: isDarkMode ? 'rgba(255, 255, 255, 0.8)' : 'rgba(0, 0, 0, 0.8)',
+                                      fontSize: '0.875rem',
+                                    }}>
+                                      думает...
+                                    </Typography>
+                                  </Box>
+                                ) : (
+                                  <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+                                    Модель не отвечала
+                                  </Typography>
+                                )
+                              )}
+                            </CardContent>
+                          </Card>
+                        </Box>
+                      );
+                    })
+                  )}
+                  
+                  {/* Индикатор потоковой генерации - показываем только если нет ответа в истории */}
+                  {isStreaming && conversationHistory.length === 0 && (
+                    <Box sx={{ mt: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
+                        <Box
+                          sx={{
+                            width: 6,
+                            height: 6,
+                            borderRadius: '50%',
+                            bgcolor: 'primary.main',
+                            animation: 'thinkingDot 1.4s ease-in-out infinite both',
+                            '@keyframes thinkingDot': {
+                              '0%, 80%, 100%': { transform: 'scale(0)' },
+                              '40%': { transform: 'scale(1)' },
+                            },
+                          }}
+                        />
+                        <Box
+                          sx={{
+                            width: 6,
+                            height: 6,
+                            borderRadius: '50%',
+                            bgcolor: 'primary.main',
+                            animation: 'thinkingDot 1.4s ease-in-out infinite both',
+                            animationDelay: '0.2s',
+                            '@keyframes thinkingDot': {
+                              '0%, 80%, 100%': { transform: 'scale(0)' },
+                              '40%': { transform: 'scale(1)' },
+                            },
+                          }}
+                        />
+                        <Box
+                          sx={{
+                            width: 6,
+                            height: 6,
+                            borderRadius: '50%',
+                            bgcolor: 'primary.main',
+                            animation: 'thinkingDot 1.4s ease-in-out infinite both',
+                            animationDelay: '0.4s',
+                            '@keyframes thinkingDot': {
+                              '0%, 80%, 100%': { transform: 'scale(0)' },
+                              '40%': { transform: 'scale(1)' },
+                            },
+                          }}
+                        />
+                      </Box>
+                      <Typography variant="body2" sx={{ 
+                        color: isDarkMode ? 'rgba(255, 255, 255, 0.8)' : 'rgba(0, 0, 0, 0.8)',
+                        fontSize: '0.875rem',
+                      }}>
+                        думает...
+                      </Typography>
+                    </Box>
+                  )}
+                </Box>
+              </Box>
+            );
+          })}
+        </Box>
+
+        {/* Панель управления моделями и ввода */}
+        <Box sx={{ p: 2, display: 'flex', justifyContent: 'center' }}>
+          {/* Объединенное поле ввода с кнопками */}
+          <Box
+            sx={{
+              p: 2,
+              borderRadius: 2,
+              bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)',
+              border: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'}`,
+              maxWidth: '800px',
+              width: '100%',
+            }}
+          >
+            {/* Скрытый input для выбора файла */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.docx,.xlsx,.txt"
+              onChange={handleFileSelect}
+              style={{ display: 'none' }}
+            />
+
+            {/* Прикрепленные файлы - выше поля ввода */}
+            {uploadedFiles.length > 0 && (
+              <Box sx={{ mb: 2 }}>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                  {uploadedFiles.map((file, index) => (
+                    <Box
+                      key={index}
+                      className="file-attachment"
+                      sx={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 1,
+                        p: 1,
+                        borderRadius: 2,
+                        maxWidth: '300px',
+                        bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+                        border: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)'}`,
+                      }}
+                    >
+                      <Box
+                        sx={{
+                          width: 32,
+                          height: 32,
+                          borderRadius: 1,
+                          bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          color: isDarkMode ? 'white' : '#333',
+                          flexShrink: 0,
+                          border: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.3)' : 'rgba(0, 0, 0, 0.3)'}`,
+                        }}
+                      >
+                        {file.type.includes('pdf') ? <PdfIcon fontSize="small" /> : 
+                         file.type.includes('word') ? <DocumentIcon fontSize="small" /> : 
+                         file.type.includes('excel') ? <ExcelIcon fontSize="small" /> : <DocumentIcon fontSize="small" />}
+                      </Box>
+                      <Box sx={{ minWidth: 0, flex: 1 }}>
+                        <Typography 
+                          variant="caption" 
+                          sx={{ 
+                            fontWeight: 'medium', 
+                            display: 'block', 
+                            color: isDarkMode ? 'white' : '#333',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap'
+                          }}
+                          title={file.name}
+                        >
+                          {file.name}
+                        </Typography>
+                      </Box>
+                      <IconButton
+                        size="small"
+                        onClick={() => handleFileDelete(file.name)}
+                        sx={{ 
+                          color: isDarkMode ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.7)',
+                          '&:hover': { 
+                            color: '#ff6b6b',
+                            bgcolor: isDarkMode ? 'rgba(255, 107, 107, 0.2)' : 'rgba(255, 107, 107, 0.1)',
+                          },
+                          p: 0.5,
+                          borderRadius: 1,
+                          flexShrink: 0,
+                        }}
+                      >
+                        <CloseIcon fontSize="small" />
+                      </IconButton>
+                    </Box>
+                  ))}
+                </Box>
+              </Box>
+            )}
+
+            {/* Индикатор загрузки файла */}
+            {isUploading && (
+              <Box sx={{ mb: 2, p: 1 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <CircularProgress size={16} sx={{ color: isDarkMode ? 'white' : '#333' }} />
+                  <Typography variant="caption" sx={{ color: isDarkMode ? 'white' : '#333' }}>
+                    Загрузка документа...
+                  </Typography>
+                </Box>
+              </Box>
+            )}
+
+            {/* Поле ввода текста */}
+            <TextField
+              ref={inputRef}
+              fullWidth
+              multiline
+              maxRows={4}
+              value={inputMessage}
+              onChange={(e) => setInputMessage(e.target.value)}
+              onKeyPress={handleKeyPress}
+              placeholder={
+                !isConnected 
+                  ? "Нет соединения с сервером. Запустите backend на порту 8000" 
+                  : modelWindows.some(w => w.isStreaming)
+                    ? "Модели генерируют ответ... Нажмите ⏹️ чтобы остановить"
+                    : !modelWindows.some(w => w.selectedModel)
+                      ? "Выберите модель для начала диалога"
+                      : "Чем я могу помочь вам сегодня?"
+              }
+              variant="outlined"
+              size="small"
+              disabled={!isConnected || !modelWindows.some(w => w.selectedModel) || modelWindows.some(w => w.isStreaming)}
+              sx={{
+                mb: 1.5,
+                '& .MuiOutlinedInput-root': {
+                  bgcolor: 'transparent',
+                  border: 'none',
+                  fontSize: '0.875rem',
+                  '&:hover': {
+                    bgcolor: 'transparent',
+                  },
+                  '&.Mui-focused': {
+                    bgcolor: 'transparent',
+                  }
+                }
+              }}
+            />
+
+            {/* Кнопки снизу */}
+            <Box
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 0.5,
+                justifyContent: 'space-between',
+              }}
+            >
+              {/* Левая группа кнопок */}
+              <Box sx={{ display: 'flex', gap: 0.5 }}>
+                {/* Кнопка загрузки документов */}
+                <Tooltip title="Загрузить документ">
+                  <IconButton
+                    onClick={() => {
+                      // Используем setTimeout для гарантии, что input уже отрендерился
+                      setTimeout(() => {
+                        if (fileInputRef.current) {
+                          fileInputRef.current.click();
+                        } else {
+                          console.error('fileInputRef.current is null');
+                        }
+                      }, 0);
+                    }}
+                    sx={{ 
+                      color: '#2196f3',
+                      bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+                      '&:hover': {
+                        bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)',
+                      },
+                      '&:active': {
+                        transform: 'none',
+                      }
+                    }}
+                    disableRipple
+                    disabled={isUploading || modelWindows.some(w => w.isStreaming)}
+                  >
+                    {isUploading ? <CircularProgress size={16} /> : <AttachFileIcon sx={{ color: '#2196f3', fontSize: '1.2rem' }} />}
+                  </IconButton>
+                </Tooltip>
+
+                {/* Кнопка добавления модели */}
+                {modelWindows.length < 4 && (
+                  <Tooltip title="Добавить модель">
+                    <IconButton
+                      onClick={addModelWindow}
+                      sx={{ 
+                        color: 'primary.main',
+                        bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+                        border: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)'}`,
+                        '&:hover': {
+                          bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)',
+                        },
+                        '&:active': {
+                          transform: 'none',
+                        }
+                      }}
+                      disableRipple
+                      disabled={modelWindows.some(w => w.isStreaming)}
+                    >
+                      <AddIcon sx={{ fontSize: '1.2rem' }} />
+                    </IconButton>
+                  </Tooltip>
+                )}
+              </Box>
+
+              {/* Правая группа кнопок */}
+              <Box sx={{ display: 'flex', gap: 0.5 }}>
+                {/* Кнопка отправки/остановки генерации */}
+                {modelWindows.some(w => w.isStreaming) ? (
+                  <Tooltip title="Прервать генерацию">
+                    <IconButton
+                      onClick={handleStopGeneration}
+                      color="error"
+                      sx={{
+                        bgcolor: 'error.main',
+                        color: 'white',
+                        '&:hover': {
+                          bgcolor: 'error.dark',
+                        },
+                        animation: 'pulse 2s ease-in-out infinite',
+                        '@keyframes pulse': {
+                          '0%': { opacity: 1 },
+                          '50%': { opacity: 0.7 },
+                          '100%': { opacity: 1 },
+                        },
+                      }}
+                    >
+                      <StopIcon sx={{ fontSize: '1.2rem' }} />
+                    </IconButton>
+                  </Tooltip>
+                ) : (
+                  <Tooltip title="Отправить">
+                    <IconButton
+                      onClick={handleSendMessage}
+                      disabled={!inputMessage.trim() || !isConnected || !modelWindows.some(w => w.selectedModel)}
+                      color="primary"
+                      sx={{
+                        bgcolor: 'primary.main',
+                        color: 'white',
+                        '&:hover': {
+                          bgcolor: 'primary.dark',
+                        },
+                        '&:disabled': {
+                          bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.12)',
+                          color: isDarkMode ? 'rgba(255, 255, 255, 0.6)' : 'rgba(0, 0, 0, 0.26)',
+                          border: isDarkMode ? '1px solid rgba(255, 255, 255, 0.2)' : 'none',
+                        }
+                      }}
+                    >
+                      <SendIcon sx={{ fontSize: '1.2rem' }} />
+                    </IconButton>
+                  </Tooltip>
+                )}
+              </Box>
+            </Box>
+          </Box>
+        </Box>
+      </Box>
+    );
+  }
 
   return (
     <Box 

@@ -438,31 +438,6 @@ const MessageRenderer: React.FC<MessageRendererProps> = ({ content, isStreaming 
     <Box sx={{ position: 'relative' }}>
       {parseMarkdown(content)}
       
-      {/* Улучшенный курсор печати для потокового режима */}
-      {isStreaming && (
-        <Box
-          component="span"
-          sx={{
-            display: 'inline-block',
-            width: '2px',
-            height: '1.2em',
-            backgroundColor: 'primary.main',
-            animation: 'blink 1s infinite',
-            '@keyframes blink': {
-              '0%, 50%': { 
-                opacity: 1,
-                backgroundColor: 'primary.main'
-              },
-              '51%, 100%': { 
-                opacity: 0,
-                backgroundColor: 'transparent'
-              },
-            },
-            ml: 0.5,
-            verticalAlign: 'text-bottom',
-          }}
-        />
-      )}
     </Box>
   );
 };
