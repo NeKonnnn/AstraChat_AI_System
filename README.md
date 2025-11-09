@@ -1,6 +1,6 @@
 ![Astra Chat Logo](assets/Astra_logo.png)
 
-# MemoAI - Интеллектуальная AI-ассистент система
+# AstraChat - Интеллектуальная AI-ассистент система
 
 ## Описание проекта
 
