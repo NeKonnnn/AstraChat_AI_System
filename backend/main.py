@@ -40,6 +40,23 @@ from starlette.applications import Starlette
 current_dir = os.path.dirname(os.path.abspath(__file__))
 root_dir = os.path.dirname(current_dir)
 
+# Загружаем переменные окружения из .env файла (до инициализации логгера)
+try:
+    from dotenv import load_dotenv
+    env_path = os.path.join(root_dir, '.env')
+    if os.path.exists(env_path):
+        load_dotenv(env_path)
+        print(f"✅ .env файл загружен: {env_path}")
+        # Проверяем MongoDB настройки
+        mongodb_user = os.getenv("MONGODB_USER", "").strip()
+        mongodb_password = os.getenv("MONGODB_PASSWORD", "").strip()
+        if mongodb_user.startswith('#') or mongodb_password.startswith('#'):
+            print(f"⚠️ ВНИМАНИЕ: MONGODB_USER или MONGODB_PASSWORD начинаются с '#', будут игнорироваться")
+    else:
+        print(f"⚠️ .env файл не найден: {env_path}")
+except ImportError:
+    print("⚠️ python-dotenv не установлен, переменные окружения не будут загружены из .env")
+
 # В Docker: /app содержит main.py, agent.py и т.д.
 # Для импортов "from backend.xxx" нужно чтобы /app был доступен как /backend
 # Создаем временную структуру для импортов
@@ -71,6 +88,19 @@ for handler in logging.root.handlers:
         handler.stream.reconfigure(encoding='utf-8')
 logger = logging.getLogger(__name__)
 logger.info("Логирование настроено")
+
+# Проверяем, что .env файл был загружен и MongoDB настройки доступны
+logger.info("Проверка переменных окружения MongoDB...")
+mongodb_host = os.getenv("MONGODB_HOST", "localhost")
+mongodb_port = os.getenv("MONGODB_PORT", "27017")
+mongodb_user = os.getenv("MONGODB_USER", "").strip()
+mongodb_password = os.getenv("MONGODB_PASSWORD", "").strip()
+logger.info(f"  MONGODB_HOST: {mongodb_host}")
+logger.info(f"  MONGODB_PORT: {mongodb_port}")
+logger.info(f"  MONGODB_USER: '{mongodb_user}' (len={len(mongodb_user)})")
+logger.info(f"  MONGODB_PASSWORD: {'*' * len(mongodb_password) if mongodb_password else ''} (len={len(mongodb_password)})")
+if mongodb_user.startswith('#') or mongodb_password.startswith('#'):
+    logger.warning("⚠️ MONGODB_USER или MONGODB_PASSWORD начинаются с '#', будут игнорироваться")
 
 # Импорты из оригинального MemoAI
 try:
@@ -132,24 +162,46 @@ except ImportError as e:
     logger.warning(f"agent_llm_svc недоступен: {e}")
 except Exception as e:
     logger.warning(f"Ошибка при импорте agent_llm_svc: {e}")
+
+# Общая блокировка для загрузки моделей в режиме multi-llm
+# Используется для предотвращения конфликтов при параллельной загрузке
+import threading
+model_load_lock = threading.Lock()
     
 try:
-    logger.info("Попытка импорта memory...")
-    from backend.memory import save_dialog_entry, load_dialog_history, clear_dialog_history, get_recent_dialog_history
-    logger.info("memory импортирован успешно")
+    logger.info("Попытка импорта memory_service (MongoDB)...")
+    from backend.database.memory_service import (
+        save_dialog_entry, 
+        load_dialog_history, 
+        clear_dialog_history, 
+        get_recent_dialog_history,
+        reset_conversation,
+        get_or_create_conversation_id
+    )
+    logger.info("memory_service (MongoDB) импортирован успешно")
+    logger.info(f"save_dialog_entry импортирован: {save_dialog_entry is not None}, type: {type(save_dialog_entry)}")
     if save_dialog_entry:
-        logger.info("save_dialog_entry функция доступна")
+        logger.info("save_dialog_entry функция доступна (MongoDB)")
     else:
-        logger.warning("save_dialog_entry функция не доступна")
+        logger.error("save_dialog_entry функция не доступна (None или False)")
 
 except ImportError as e:
-    logger.error(f"Ошибка импорта memory: {e}")
-    print(f"Ошибка импорта memory: {e}")
-    save_dialog_entry = None
-    load_dialog_entry = None
-    load_dialog_history = None
-    clear_dialog_history = None
-    get_recent_dialog_history = None
+    logger.error(f"Ошибка импорта memory_service: {e}")
+    logger.error("Попытка использовать старый memory модуль (JSON)...")
+    try:
+        from backend.memory import save_dialog_entry, load_dialog_history, clear_dialog_history, get_recent_dialog_history
+        logger.warning("Используется старый memory модуль (JSON)")
+        reset_conversation = None
+        get_or_create_conversation_id = None
+    except:
+        logger.error("Ни один модуль памяти не доступен!")
+        save_dialog_entry = None
+        load_dialog_entry = None
+        load_dialog_history = None
+        clear_dialog_history = None
+        get_recent_dialog_history = None
+        reset_conversation = None
+        get_or_create_conversation_id = None
 except Exception as e:
     logger.error(f"Неожиданная ошибка при импорте memory: {e}")
     import traceback
@@ -159,6 +211,8 @@ except Exception as e:
     load_dialog_history = None
     clear_dialog_history = None
     get_recent_dialog_history = None
+    reset_conversation = None
+    get_or_create_conversation_id = None
     
 try:
     logger.info("Попытка импорта voice...")
@@ -245,6 +299,37 @@ except Exception as e:
     initialize_agent_orchestrator = None
     get_agent_orchestrator = None
 
+# Импорт модуля баз данных
+try:
+    logger.info("Попытка импорта database модуля...")
+    from backend.database.init_db import (
+        init_databases, 
+        close_databases,
+        get_conversation_repository,
+        get_document_repository,
+        get_vector_repository
+    )
+    logger.info("Database модуль импортирован успешно")
+    database_available = True
+except ImportError as e:
+    logger.warning(f"Database модуль недоступен: {e}")
+    logger.warning("Приложение будет работать без баз данных (файловый режим)")
+    init_databases = None
+    close_databases = None
+    get_conversation_repository = None
+    get_document_repository = None
+    get_vector_repository = None
+    database_available = False
+except Exception as e:
+    logger.error(f"Неожиданная ошибка при импорте database модуля: {e}")
+    logger.error(f"Traceback: {traceback.format_exc()}")
+    init_databases = None
+    close_databases = None
+    get_conversation_repository = None
+    get_document_repository = None
+    get_vector_repository = None
+    database_available = False
+
 # Глобальный словарь для хранения флагов остановки генерации
 stop_generation_flags = {}
 
@@ -298,11 +383,35 @@ app.add_middleware(
     allow_headers=cors_config.get("allow_headers", ["*"]),
 )
 
-# Startup событие для инициализации агентной архитектуры
+# Startup событие для инициализации агентной архитектуры и баз данных
 @app.on_event("startup")
 async def startup_event():
     """Инициализация при запуске приложения"""
     logger.info("Запуск приложения...")
+    
+    # Инициализируем базы данных
+    logger.info(f"Проверка доступности баз данных: init_databases={init_databases is not None}, database_available={database_available}")
+    if init_databases and database_available:
+        try:
+            logger.info("Инициализация баз данных...")
+            success = await init_databases()
+            if success:
+                logger.info("Базы данных успешно инициализированы")
+                logger.info("  - MongoDB: готов для хранения диалогов")
+                logger.info("  - PostgreSQL + pgvector: готов для RAG системы")
+            else:
+                logger.warning("Не удалось инициализировать некоторые базы данных")
+                logger.warning("Приложение продолжит работу в файловом режиме")
+        except Exception as e:
+            logger.error(f"Ошибка инициализации баз данных: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.warning("Приложение продолжит работу в файловом режиме")
+    else:
+        if not init_databases:
+            logger.warning("⚠️ init_databases не импортирован или недоступен")
+        if not database_available:
+            logger.warning("⚠️ database_available = False")
+        logger.warning("⚠️ Базы данных не настроены, используется файловый режим")
     
     # Инициализируем агентную архитектуру
     if initialize_agent_orchestrator:
@@ -316,6 +425,23 @@ async def startup_event():
             logger.error(f"Ошибка инициализации агентной архитектуры: {e}")
     
     logger.info("Приложение запущено")
+
+# Shutdown событие для корректного закрытия подключений
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Корректное закрытие при остановке приложения"""
+    logger.info("Остановка приложения...")
+    
+    # Закрываем подключения к базам данных
+    if close_databases and database_available:
+        try:
+            logger.info("Закрытие подключений к базам данных...")
+            await close_databases()
+            logger.info("Подключения к базам данных закрыты")
+        except Exception as e:
+            logger.error(f"Ошибка при закрытии баз данных: {e}")
+    
+    logger.info("Приложение остановлено")
 
 # Создание Starlette приложения для Socket.IO
 starlette_app = Starlette()
@@ -559,6 +685,11 @@ async def stop_generation(sid, data):
 async def chat_message(sid, data):
     """Обработка сообщений чата через Socket.IO"""
     if not ask_agent or not save_dialog_entry:
+        logger.error(f"AI services недоступны: ask_agent={ask_agent is not None}, save_dialog_entry={save_dialog_entry is not None}")
+        if not ask_agent:
+            logger.error("ask_agent функция не доступна - проверьте импорт agent модуля")
+        if not save_dialog_entry:
+            logger.error("save_dialog_entry функция не доступна - проверьте импорт memory_service модуля")
         await sio.emit('chat_error', {
             'error': 'AI services not available'
         }, room=sid)
@@ -574,19 +705,41 @@ async def chat_message(sid, data):
         stop_generation_flags[sid] = False
         
         # Получаем историю
-        history = get_recent_dialog_history(max_entries=memory_max_messages) if get_recent_dialog_history else []
+        logger.info(f"DEBUG: get_recent_dialog_history = {get_recent_dialog_history}")
+        logger.info(f"DEBUG: type = {type(get_recent_dialog_history)}")
+        if get_recent_dialog_history:
+            logger.info("DEBUG: Вызываем get_recent_dialog_history...")
+            history = await get_recent_dialog_history(max_entries=memory_max_messages)
+            logger.info(f"DEBUG: История получена, длина = {len(history)}")
+        else:
+            logger.info("DEBUG: get_recent_dialog_history недоступен, используем пустую историю")
+            history = []
         
         # Сохраняем сообщение пользователя
-        save_dialog_entry("user", user_message)
+        try:
+            await save_dialog_entry("user", user_message)
+        except RuntimeError as e:
+            # Ошибка MongoDB - продолжаем работу, но логируем
+            error_msg = str(e)
+            if "MongoDB" in error_msg:
+                logger.error(f"MongoDB недоступен. Сообщение не будет сохранено: {e}")
+                await sio.emit('chat_error', {
+                    'error': 'MongoDB недоступен. Невозможно сохранить сообщение.'
+                }, room=sid)
+                return
+            else:
+                # Другие ошибки - пробрасываем дальше
+                raise
         
         # Проверяем, доступна ли агентная архитектура
         orchestrator = get_agent_orchestrator()
         use_agent_mode = orchestrator and orchestrator.get_mode() == "agent"
+        use_multi_llm_mode = orchestrator and orchestrator.get_mode() == "multi-llm"
         
         logger.info(f"Socket.IO DEBUG: orchestrator = {orchestrator is not None}")
         if orchestrator:
             logger.info(f"Socket.IO DEBUG: orchestrator.get_mode() = '{orchestrator.get_mode()}'")
-        logger.info(f"Socket.IO DEBUG: use_agent_mode = {use_agent_mode}")
+        logger.info(f"Socket.IO DEBUG: use_agent_mode = {use_agent_mode}, use_multi_llm_mode = {use_multi_llm_mode}")
         
         # Функция для отправки частей ответа
         async def async_stream_callback(chunk: str, accumulated_text: str):
@@ -624,6 +777,195 @@ async def chat_message(sid, data):
                 return True
         
         try:
+            # Если включен режим multi-llm, генерируем ответы от нескольких моделей параллельно
+            if use_multi_llm_mode:
+                logger.info("Socket.IO: РЕЖИМ MULTI-LLM: Параллельная генерация от нескольких моделей")
+                logger.info(f"Socket.IO: Запрос пользователя: '{user_message[:100]}{'...' if len(user_message) > 100 else ''}'")
+                
+                multi_llm_models = orchestrator.get_multi_llm_models()
+                if not multi_llm_models:
+                    logger.warning("Socket.IO: Режим multi-llm активирован, но модели не выбраны")
+                    await sio.emit('chat_error', {
+                        'error': 'Режим multi-llm активирован, но модели не выбраны'
+                    }, room=sid)
+                    return
+                
+                logger.info(f"Socket.IO: Генерируем ответы от моделей: {multi_llm_models}")
+                
+                # Проверяем, есть ли загруженные документы
+                doc_context = None
+                if doc_processor:
+                    doc_list = doc_processor.get_document_list()
+                    if doc_list and len(doc_list) > 0:
+                        logger.info(f"Socket.IO: Найдены документы в режиме multi-llm: {doc_list}")
+                        try:
+                            doc_context = doc_processor.get_document_context(user_message)
+                            logger.info(f"Socket.IO: Получен контекст документов для multi-llm, длина: {len(doc_context) if doc_context else 0} символов")
+                        except Exception as e:
+                            logger.error(f"Socket.IO: Ошибка при получении контекста документов: {e}")
+                
+                # Формируем финальное сообщение с контекстом документов, если есть
+                final_user_message = user_message
+                if doc_context:
+                    final_user_message = f"""Контекст из загруженных документов:
+{doc_context}
+
+Вопрос пользователя: {user_message}
+
+Пожалуйста, ответьте на вопрос пользователя, используя информацию из предоставленных документов. Если в документах нет информации для ответа, честно скажите об этом."""
+                
+                # Получаем event loop для отправки чанков из текущего async контекста
+                loop = asyncio.get_running_loop()
+                
+                # Функция для генерации ответа от одной модели
+                async def generate_single_model_response(model_name: str):
+                    try:
+                        logger.info(f"Socket.IO: Начинаем генерацию от модели: {model_name}")
+                        
+                        # Отправляем событие начала генерации для этой модели
+                        await sio.emit('multi_llm_start', {
+                            'model': model_name,
+                            'total_models': len(multi_llm_models),
+                            'models': multi_llm_models
+                        }, room=sid)
+                        
+                        # Логируем сообщение с контекстом для отладки
+                        logger.info(f"Socket.IO: Модель {model_name} будет использовать сообщение длиной {len(final_user_message)} символов")
+                        if doc_context:
+                            logger.info(f"Socket.IO: Модель {model_name} получила контекст документов, длина: {len(doc_context)} символов")
+                        else:
+                            logger.info(f"Socket.IO: Модель {model_name} не получила контекст документов (документы отсутствуют)")
+                        
+                        # Определяем путь к модели
+                        if model_name.startswith("llm-svc://"):
+                            # Модель из llm-svc - не требует загрузки
+                            model_path = model_name
+                        else:
+                            # Локальная модель - нужно загрузить её перед генерацией
+                            model_path = os.path.join("models", model_name) if not os.path.isabs(model_name) else model_name
+                            
+                            # Загружаем модель для этого запроса
+                            # Используем общую блокировку для предотвращения конфликтов при параллельной загрузке
+                            with model_load_lock:
+                                logger.info(f"Socket.IO: Загрузка модели {model_name} для генерации...")
+                                if reload_model_by_path:
+                                    # Перезагружаем модель с блокировкой
+                                    success = reload_model_by_path(model_path)
+                                    if not success:
+                                        logger.error(f"Socket.IO: Не удалось загрузить модель {model_name}")
+                                        return {"model": model_name, "response": f"Ошибка: Не удалось загрузить модель {model_name}", "error": True}
+                                    logger.info(f"Socket.IO: Модель {model_name} успешно загружена")
+                                    # Небольшая задержка после загрузки для стабилизации
+                                    import time
+                                    time.sleep(0.5)
+                                else:
+                                    logger.warning(f"Socket.IO: Функция reload_model_by_path недоступна, используем текущую модель")
+                        
+                        # Функция для отправки чанков от конкретной модели
+                        def model_stream_callback(chunk: str, acc_text: str):
+                            try:
+                                # Планируем отправку чанка в event loop
+                                asyncio.run_coroutine_threadsafe(
+                                    sio.emit('multi_llm_chunk', {
+                                        'model': model_name,
+                                        'chunk': chunk,
+                                        'accumulated': acc_text
+                                    }, room=sid),
+                                    loop
+                                )
+                            except Exception as e:
+                                logger.error(f"Socket.IO: Ошибка отправки чанка от модели {model_name}: {e}")
+                            return True
+                        
+                        # Для режима multi-llm используем пустую историю, чтобы избежать смешивания контекстов
+                        # Это гарантирует, что каждая модель отвечает только на текущий вопрос
+                        multi_llm_history = []
+                        
+                        # Генерируем ответ
+                        response = None
+                        if streaming:
+                            # Потоковая генерация для каждой модели
+                            import concurrent.futures
+                            with concurrent.futures.ThreadPoolExecutor() as executor:
+                                response = await asyncio.get_event_loop().run_in_executor(
+                                    executor,
+                                    ask_agent,
+                                    final_user_message,  # Используем сообщение с контекстом документов
+                                    multi_llm_history,  # Используем пустую историю для режима multi-llm
+                                    None,  # max_tokens
+                                    True,  # streaming
+                                    model_stream_callback,
+                                    model_path,  # model_path
+                                    None   # custom_prompt_id
+                                )
+                        else:
+                            # Обычная генерация
+                            import concurrent.futures
+                            with concurrent.futures.ThreadPoolExecutor() as executor:
+                                response = await asyncio.get_event_loop().run_in_executor(
+                                    executor,
+                                    ask_agent,
+                                    final_user_message,  # Используем сообщение с контекстом документов
+                                    multi_llm_history,  # Используем пустую историю для режима multi-llm
+                                    None,  # max_tokens
+                                    False,  # streaming
+                                    None,   # stream_callback
+                                    model_path,  # model_path
+                                    None    # custom_prompt_id
+                                )
+                        
+                        # Проверяем, является ли ответ ошибкой
+                        # ask_agent возвращает строку с ошибкой, если что-то пошло не так
+                        has_error = False
+                        if response:
+                            error_indicators = [
+                                "Извините, произошла ошибка",
+                                "llama_decode returned -1",
+                                "Ошибка",
+                                "error",
+                                "Error"
+                            ]
+                            has_error = any(indicator.lower() in response.lower() for indicator in error_indicators)
+                        
+                        if has_error:
+                            logger.warning(f"Socket.IO: Модель {model_name} вернула ошибку: {response[:100]}")
+                            return {"model": model_name, "response": response, "error": True}
+                        else:
+                            return {"model": model_name, "response": response}
+                    except Exception as e:
+                        logger.error(f"Socket.IO: Исключение при генерации от модели {model_name}: {e}")
+                        import traceback
+                        logger.error(traceback.format_exc())
+                        return {"model": model_name, "response": f"Ошибка: {str(e)}", "error": True}
+                
+                # Запускаем параллельную генерацию от всех моделей
+                # Примечание: событие multi_llm_start теперь отправляется для каждой модели отдельно внутри generate_single_model_response
+                tasks = [generate_single_model_response(model) for model in multi_llm_models]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # Отправляем результаты для каждой модели
+                for i, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        logger.error(f"Socket.IO: Исключение при генерации: {result}")
+                        await sio.emit('multi_llm_complete', {
+                            'model': 'unknown',
+                            'response': f'Ошибка: {str(result)}',
+                            'error': True,
+                            'index': i,
+                            'total': len(multi_llm_models)
+                        }, room=sid)
+                    else:
+                        await sio.emit('multi_llm_complete', {
+                            'model': result.get('model', 'unknown'),
+                            'response': result.get('response', ''),
+                            'error': result.get('error', False),
+                            'index': i,
+                            'total': len(multi_llm_models)
+                        }, room=sid)
+                
+                logger.info("Socket.IO: Все ответы от моделей сгенерированы")
+                return
+            
             # Если включен агентный режим, используем агентную архитектуру
             if use_agent_mode:
                 logger.info("Socket.IO: АГЕНТНАЯ АРХИТЕКТУРА: Переключение на агентный режим обработки")
@@ -647,7 +989,15 @@ async def chat_message(sid, data):
                 }, room=sid)
                 
                 # Сохраняем ответ в память
-                save_dialog_entry("assistant", response)
+                try:
+                    await save_dialog_entry("assistant", response)
+                except RuntimeError as e:
+                    # Ошибка MongoDB - логируем, но продолжаем работу
+                    error_msg = str(e)
+                    if "MongoDB" in error_msg:
+                        logger.warning(f"MongoDB недоступен. Ответ не будет сохранен: {e}")
+                    else:
+                        logger.error(f"Ошибка при сохранении ответа: {e}")
                 return
             
             # Иначе используем прямой режим
@@ -662,10 +1012,17 @@ async def chat_message(sid, data):
 
             
             # Проверяем наличие документов и используем их контекст
+            images = None  # Пути к изображениям для мультимодальной модели
             if doc_processor:
                 logger.info("Socket.IO: doc_processor доступен")
                 doc_list = doc_processor.get_document_list()
                 logger.info(f"Socket.IO: список документов: {doc_list}")
+                
+                # Получаем пути к изображениям для мультимодальной модели
+                image_paths = doc_processor.get_image_paths()
+                if image_paths and len(image_paths) > 0:
+                    images = image_paths
+                    logger.info(f"Socket.IO: найдены изображения для мультимодальной модели: {images}")
                 
                 if doc_list and len(doc_list) > 0:
                     logger.info(f"Socket.IO: найдены документы: {doc_list}")
@@ -677,8 +1034,9 @@ async def chat_message(sid, data):
                         doc_context = doc_processor.get_document_context(user_message)
                         logger.info(f"Socket.IO: получен контекст документов, длина: {len(doc_context) if doc_context else 0} символов")
                         
-                        if doc_context:
-                            # Формируем промпт с контекстом документов (упрощенный)
+                        if doc_context and not images:
+                            # Формируем промпт с контекстом документов только если нет изображений
+                            # (для изображений используем мультимодальный формат)
                             final_message = f"""Документы: {doc_context}
 
 Вопрос: {user_message}
@@ -687,7 +1045,7 @@ async def chat_message(sid, data):
                             
                             logger.info("Socket.IO: отправляем промпт с контекстом в AI agent")
                         else:
-                            logger.warning("Socket.IO: контекст документов пуст, используем исходное сообщение")
+                            logger.warning("Socket.IO: контекст документов пуст или есть изображения, используем исходное сообщение")
                             
                     except Exception as e:
                         logger.error(f"Socket.IO: ошибка при получении контекста документов: {e}")
@@ -713,7 +1071,8 @@ async def chat_message(sid, data):
                         True,  # streaming
                         sync_stream_callback,
                         current_model_path,  # model_path
-                        None   # custom_prompt_id
+                        None,   # custom_prompt_id
+                        images  # images для мультимодальной модели
                     )
                 logger.info(f"Socket.IO: получен потоковый ответ, длина: {len(response)} символов")
                 
@@ -734,7 +1093,8 @@ async def chat_message(sid, data):
                         False,  # streaming
                         None,   # stream_callback
                         current_model_path,  # model_path
-                        None    # custom_prompt_id
+                        None,    # custom_prompt_id
+                        images   # images для мультимодальной модели
                     )
                 logger.info(f"Socket.IO: получен ответ, длина: {len(response)} символов")
             
@@ -746,7 +1106,15 @@ async def chat_message(sid, data):
                 return
             
             # Сохраняем ответ
-            save_dialog_entry("assistant", response)
+            try:
+                await save_dialog_entry("assistant", response)
+            except RuntimeError as e:
+                # Ошибка MongoDB - логируем, но продолжаем работу
+                error_msg = str(e)
+                if "MongoDB" in error_msg:
+                    logger.warning(f"MongoDB недоступен. Ответ не будет сохранен: {e}")
+                else:
+                    logger.error(f"Ошибка при сохранении ответа: {e}")
             
             # Очищаем флаг остановки после завершения генерации
             if sid in stop_generation_flags:
@@ -867,7 +1235,10 @@ async def chat_with_ai(message: ChatMessage):
         logger.info(f"Chat request: {message.message[:50]}...")
         
         # Получаем историю диалога
-        history = get_recent_dialog_history(max_entries=memory_max_messages) if get_recent_dialog_history else []
+        if get_recent_dialog_history:
+            history = await get_recent_dialog_history(max_entries=memory_max_messages)
+        else:
+            history = []
         
         # Проверяем, доступна ли агентная архитектура
         orchestrator = get_agent_orchestrator()
@@ -938,8 +1309,8 @@ async def chat_with_ai(message: ChatMessage):
             response = response + debug_info
         
         # Сохраняем в память
-        save_dialog_entry("user", message.message)
-        save_dialog_entry("assistant", response)
+        await save_dialog_entry("user", message.message)
+        await save_dialog_entry("assistant", response)
         
         return {
             "response": response,
@@ -972,19 +1343,23 @@ async def websocket_chat(websocket: WebSocket):
             logger.info(f"WebSocket chat: {user_message[:50]}...")
             
             # Получаем историю
-            history = get_recent_dialog_history(max_entries=memory_max_messages) if get_recent_dialog_history else []
+            if get_recent_dialog_history:
+                history = await get_recent_dialog_history(max_entries=memory_max_messages)
+            else:
+                history = []
             
             # Сохраняем сообщение пользователя
-            save_dialog_entry("user", user_message)
+            await save_dialog_entry("user", user_message)
             
             # Проверяем, доступна ли агентная архитектура
             orchestrator = get_agent_orchestrator()
             use_agent_mode = orchestrator and orchestrator.get_mode() == "agent"
+            use_multi_llm_mode = orchestrator and orchestrator.get_mode() == "multi-llm"
             
             logger.info(f"WebSocket DEBUG: orchestrator = {orchestrator is not None}")
             if orchestrator:
                 logger.info(f"WebSocket DEBUG: orchestrator.get_mode() = '{orchestrator.get_mode()}'")
-            logger.info(f"WebSocket DEBUG: use_agent_mode = {use_agent_mode}")
+            logger.info(f"WebSocket DEBUG: use_agent_mode = {use_agent_mode}, use_multi_llm_mode = {use_multi_llm_mode}")
             
             # Функция для отправки частей ответа
             def stream_callback(chunk: str, accumulated_text: str):
@@ -1002,6 +1377,147 @@ async def websocket_chat(websocket: WebSocket):
                     return False
             
             try:
+                # Если включен режим multi-llm, генерируем ответы от нескольких моделей параллельно
+                if use_multi_llm_mode:
+                    logger.info("WebSocket: РЕЖИМ MULTI-LLM: Параллельная генерация от нескольких моделей")
+                    logger.info(f"WebSocket: Запрос пользователя: '{user_message[:100]}{'...' if len(user_message) > 100 else ''}'")
+                    
+                    multi_llm_models = orchestrator.get_multi_llm_models()
+                    if not multi_llm_models:
+                        logger.warning("WebSocket: Режим multi-llm активирован, но модели не выбраны")
+                        await websocket.send_text(json.dumps({
+                            "type": "error",
+                            "error": "Режим multi-llm активирован, но модели не выбраны"
+                        }))
+                        continue
+                    
+                    logger.info(f"WebSocket: Генерируем ответы от моделей: {multi_llm_models}")
+                    
+                    # Проверяем, есть ли загруженные документы
+                    doc_context = None
+                    if doc_processor:
+                        doc_list = doc_processor.get_document_list()
+                        if doc_list and len(doc_list) > 0:
+                            logger.info(f"WebSocket: Найдены документы в режиме multi-llm: {doc_list}")
+                            try:
+                                doc_context = doc_processor.get_document_context(user_message)
+                                logger.info(f"WebSocket: Получен контекст документов для multi-llm, длина: {len(doc_context) if doc_context else 0} символов")
+                            except Exception as e:
+                                logger.error(f"WebSocket: Ошибка при получении контекста документов: {e}")
+                    
+                    # Формируем финальное сообщение с контекстом документов, если есть
+                    final_user_message = user_message
+                    if doc_context:
+                        final_user_message = f"""Контекст из загруженных документов:
+{doc_context}
+
+Вопрос пользователя: {user_message}
+
+Пожалуйста, ответьте на вопрос пользователя, используя информацию из предоставленных документов. Если в документах нет информации для ответа, честно скажите об этом."""
+                    
+                    # Функция для генерации ответа от одной модели
+                    async def generate_single_model_response(model_name: str):
+                        try:
+                            logger.info(f"WebSocket: Начинаем генерацию от модели: {model_name}")
+                            
+                            # Отправляем событие начала генерации для этой модели
+                            await websocket.send_text(json.dumps({
+                                "type": "multi_llm_start",
+                                "model": model_name,
+                                "total_models": len(multi_llm_models),
+                                "models": multi_llm_models
+                            }))
+                            
+                            # Логируем сообщение с контекстом для отладки
+                            logger.info(f"WebSocket: Модель {model_name} будет использовать сообщение длиной {len(final_user_message)} символов")
+                            if doc_context:
+                                logger.info(f"WebSocket: Модель {model_name} получила контекст документов, длина: {len(doc_context)} символов")
+                            else:
+                                logger.info(f"WebSocket: Модель {model_name} не получила контекст документов (документы отсутствуют)")
+                            
+                            # Определяем путь к модели
+                            if model_name.startswith("llm-svc://"):
+                                # Модель из llm-svc
+                                model_path = model_name
+                            else:
+                                # Локальная модель
+                                model_path = os.path.join("models", model_name) if not os.path.isabs(model_name) else model_name
+                            
+                            # Для режима multi-llm используем пустую историю, чтобы избежать смешивания контекстов
+                            multi_llm_history = []
+                            
+                            # Генерируем ответ
+                            if streaming:
+                                # Потоковая генерация для каждой модели
+                                accumulated_text = ""
+                                def model_stream_callback(chunk: str, acc_text: str):
+                                    nonlocal accumulated_text
+                                    accumulated_text = acc_text
+                                    try:
+                                        asyncio.create_task(websocket.send_text(json.dumps({
+                                            "type": "multi_llm_chunk",
+                                            "model": model_name,
+                                            "chunk": chunk,
+                                            "accumulated": acc_text
+                                        })))
+                                    except Exception as e:
+                                        logger.error(f"WebSocket: Ошибка отправки чанка от модели {model_name}: {e}")
+                                    return True
+                                
+                                response = ask_agent(
+                                    final_user_message,  # Используем сообщение с контекстом документов
+                                    history=multi_llm_history,  # Используем пустую историю для режима multi-llm
+                                    streaming=True,
+                                    stream_callback=model_stream_callback,
+                                    model_path=model_path
+                                )
+                                return {"model": model_name, "response": accumulated_text}
+                            else:
+                                # Обычная генерация
+                                response = ask_agent(
+                                    final_user_message,  # Используем сообщение с контекстом документов
+                                    history=multi_llm_history,  # Используем пустую историю для режима multi-llm
+                                    streaming=False,
+                                    model_path=model_path
+                                )
+                                return {"model": model_name, "response": response}
+                        except Exception as e:
+                            logger.error(f"WebSocket: Исключение при генерации от модели {model_name}: {e}")
+                            import traceback
+                            logger.error(traceback.format_exc())
+                            return {"model": model_name, "response": f"Ошибка: {str(e)}", "error": True}
+                    
+                    # Запускаем параллельную генерацию от всех моделей
+                    import concurrent.futures
+                    loop = asyncio.get_event_loop()
+                    
+                    # Создаем задачи для каждой модели
+                    tasks = [generate_single_model_response(model) for model in multi_llm_models]
+                    
+                    # Запускаем все задачи параллельно
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                    
+                    # Отправляем результаты для каждой модели
+                    for result in results:
+                        if isinstance(result, Exception):
+                            logger.error(f"WebSocket: Исключение при генерации: {result}")
+                            await websocket.send_text(json.dumps({
+                                "type": "multi_llm_complete",
+                                "model": "unknown",
+                                "response": f"Ошибка: {str(result)}",
+                                "error": True
+                            }))
+                        else:
+                            await websocket.send_text(json.dumps({
+                                "type": "multi_llm_complete",
+                                "model": result.get("model", "unknown"),
+                                "response": result.get("response", ""),
+                                "error": result.get("error", False)
+                            }))
+                    
+                    logger.info("WebSocket: Все ответы от моделей сгенерированы")
+                    continue
+                
                 # Если включен агентный режим, используем агентную архитектуру
                 if use_agent_mode:
                     logger.info("WebSocket: АГЕНТНАЯ АРХИТЕКТУРА: Переключение на агентный режим обработки")
@@ -1023,7 +1539,7 @@ async def websocket_chat(websocket: WebSocket):
                     }))
                     
                     # Сохраняем ответ в память
-                    save_dialog_entry("assistant", response)
+                    await save_dialog_entry("assistant", response)
                     continue
                 
                 # Иначе используем прямой режим
@@ -1144,7 +1660,7 @@ async def websocket_chat(websocket: WebSocket):
                         logger.info(f"WebSocket: получен ответ от AI agent, длина: {len(response)} символов")
                 
                 # Сохраняем ответ
-                save_dialog_entry("assistant", response)
+                await save_dialog_entry("assistant", response)
                 
                 # Отправляем финальное сообщение
                 await websocket.send_text(json.dumps({
@@ -1227,7 +1743,10 @@ async def process_audio_data(websocket: WebSocket, data: bytes):
                 }))
                 return
                 
-            history = get_recent_dialog_history(max_entries=memory_max_messages) if get_recent_dialog_history else []
+            if get_recent_dialog_history:
+                history = await get_recent_dialog_history(max_entries=memory_max_messages)
+            else:
+                history = []
             logger.info(f"ОТПРАВЛЯЮ В LLM: текст='{recognized_text}', история={len(history)} записей")
             
             try:
@@ -1243,8 +1762,8 @@ async def process_audio_data(websocket: WebSocket, data: bytes):
                 return
             
             # Сохраняем в память
-            save_dialog_entry("user", recognized_text)
-            save_dialog_entry("assistant", ai_response)
+            await save_dialog_entry("user", recognized_text)
+            await save_dialog_entry("assistant", ai_response)
             
             # Отправляем ответ AI клиенту
             await websocket.send_text(json.dumps({
@@ -1496,7 +2015,7 @@ async def get_chat_history(limit: int = None):
             }
     
     try:
-        history = get_recent_dialog_history(max_entries=limit)
+        history = await get_recent_dialog_history(max_entries=limit)
         logger.info(f"Загружено {len(history)} записей истории через модуль memory")
         return {
             "history": history,
@@ -1541,7 +2060,7 @@ async def clear_chat_history():
             raise HTTPException(status_code=500, detail=f"Ошибка очистки истории: {str(e)}")
     
     try:
-        result = clear_dialog_history()
+        result = await clear_dialog_history()
         logger.info(f"История очищена через модуль memory: {result}")
         return {
             "message": "История очищена", 
@@ -2047,7 +2566,7 @@ async def get_memory_status():
             raise HTTPException(status_code=503, detail="Memory module не доступен")
         
         # Получаем текущую историю
-        history = get_recent_dialog_history(max_entries=memory_max_messages)
+        history = await get_recent_dialog_history(max_entries=memory_max_messages)
         
         return {
             "message_count": len(history),
@@ -2068,7 +2587,7 @@ async def clear_memory():
         if not clear_dialog_history:
             raise HTTPException(status_code=503, detail="Memory module не доступен")
         
-        result = clear_dialog_history()
+        result = await clear_dialog_history()
         logger.info(f"Память очищена: {result}")
         
         return {
@@ -2129,16 +2648,25 @@ async def upload_document(file: UploadFile = File(...)):
                 if hasattr(doc_processor, 'documents'):
                     logger.info(f"Количество документов в коллекции: {len(doc_processor.documents) if doc_processor.documents else 0}")
             
-            # Очищаем временный файл
-            try:
-                os.remove(file_path)
-                logger.info(f"Временный файл удален: {file_path}")
-            except Exception as e:
-                logger.warning(f"Не удалось удалить временный файл: {e}")
+            # Проверяем, является ли файл изображением
+            file_extension = os.path.splitext(file.filename)[1].lower()
+            is_image = file_extension in ['.jpg', '.jpeg', '.png', '.webp']
+            
+            # Для изображений сохраняем файл для мультимодальной модели
+            # Для других документов удаляем временный файл
+            if not is_image:
+                try:
+                    os.remove(file_path)
+                    logger.info(f"Временный файл удален: {file_path}")
+                except Exception as e:
+                    logger.warning(f"Не удалось удалить временный файл: {e}")
+            else:
+                logger.info(f"Изображение сохранено для мультимодальной модели: {file_path}")
             
             return {
                 "message": "Документ успешно загружен и обработан",
                 "filename": file.filename,
+                "file_path": file_path if is_image else None,  # Возвращаем путь для изображений
                 "success": True
             }
         else:
@@ -2254,6 +2782,423 @@ async def delete_document(filename: str):
         logger.error(f"Ошибка при удалении документа: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/documents/report/generate")
+async def generate_confidence_report():
+    """Сгенерировать отчет об уверенности модели в распознанном тексте"""
+    logger.info("=== Генерация отчета об уверенности ===")
+    
+    if not doc_processor:
+        logger.error("Document processor не доступен")
+        raise HTTPException(status_code=503, detail="Document processor не доступен")
+    
+    try:
+        # Получаем данные для отчета
+        report_data = doc_processor.get_confidence_report_data()
+        logger.info(f"Получены данные отчета: {report_data['total_documents']} документов")
+        
+        # Формируем текстовый отчет
+        report_text = f"""
+ОТЧЕТ О СТЕПЕНИ УВЕРЕННОСТИ МОДЕЛИ В РАСПОЗНАННОМ ТЕКСТЕ
+{'=' * 80}
+Дата генерации: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+{'=' * 80}
+
+ОБЩАЯ ИНФОРМАЦИЯ:
+- Всего обработано документов: {report_data['total_documents']}
+- Средняя уверенность модели: {report_data['average_confidence']:.2f}%
+- Всего слов: {report_data.get('total_words', 0)}
+{'=' * 80}
+
+ДЕТАЛЬНАЯ ИНФОРМАЦИЯ ПО ДОКУМЕНТАМ:
+"""
+        
+        # Добавляем распознанный текст с процентами над словами
+        for i, doc in enumerate(report_data['documents'], 1):
+            report_text += f"""
+
+{i}. {doc['filename']}
+   Тип файла: {doc['file_type']}
+   Уверенность модели: {doc['confidence']:.2f}%
+   Длина распознанного текста: {doc['text_length']} символов
+   Количество слов: {doc.get('words_count', 0)}
+   {'-' * 80}
+   
+   РАСПОЗНАННЫЙ ТЕКСТ С УВЕРЕННОСТЬЮ:
+"""
+            
+            # Находим соответствующий отформатированный текст
+            formatted_text_info = next((ft for ft in report_data.get('formatted_texts', []) if ft['filename'] == doc['filename']), None)
+            
+            if formatted_text_info and formatted_text_info.get('words'):
+                # Форматируем текст с процентами над словами
+                words = formatted_text_info.get('words', [])
+                if words:
+                    # Группируем слова по строкам для лучшей читаемости
+                    line_words = []
+                    current_line = []
+                    
+                    for word_info in words:
+                        word = word_info.get('word', '')
+                        conf = word_info.get('confidence', 0.0)
+                        current_line.append((word, conf))
+                        
+                        # Каждые 8-10 слов или при достижении символов новой строки
+                        if len(current_line) >= 8:
+                            line_words.append(current_line)
+                            current_line = []
+                    
+                    if current_line:
+                        line_words.append(current_line)
+                    
+                    # Формируем текст с процентами над словами в красивом формате
+                    if line_words:
+                        for line in line_words:
+                            # Используем табличный формат с фиксированной шириной колонок
+                            import re
+                            tokens_data = []
+                            prev_is_punctuation = False
+                            
+                            for word, conf in line:
+                                is_punctuation = bool(re.match(r'^[^\w\s]+$', word))
+                                
+                                # Вычисляем ширину колонки на основе длины слова
+                                word_width = len(word)
+                                # Минимальная ширина колонки - 10 символов (для процента и пробелов)
+                                col_width = max(word_width + 2, 10)
+                                
+                                tokens_data.append({
+                                    'word': word,
+                                    'conf': conf,
+                                    'is_punctuation': is_punctuation,
+                                    'col_width': col_width,
+                                    'needs_space_before': not prev_is_punctuation and not is_punctuation and tokens_data
+                                })
+                                prev_is_punctuation = is_punctuation
+                            
+                            # Формируем строки с выравниванием в табличном формате
+                            percent_line = "│"
+                            word_line = "│"
+                            separator_line = "├"
+                            
+                            for i, token in enumerate(tokens_data):
+                                if token['needs_space_before']:
+                                    # Добавляем разделитель между словами
+                                    word_line += "│"
+                                    percent_line += "│"  # Вертикальный разделитель
+                                    separator_line += "┼"
+                                
+                                # Форматируем процент и слово в колонке
+                                percent_str = f"{token['conf']:.0f}%"
+                                word_str = token['word']
+                                
+                                # Выравниваем процент по центру колонки
+                                percent_padded = percent_str.center(token['col_width'])
+                                # Выравниваем слово по левому краю колонки
+                                word_padded = word_str.ljust(token['col_width'])
+                                
+                                percent_line += percent_padded + "│"
+                                word_line += word_padded + "│"
+                                separator_line += "─" * token['col_width'] + ("┤" if i == len(tokens_data) - 1 else "┼")
+                            
+                            # Добавляем в отчет с красивым форматированием
+                            report_text += f"   {percent_line}\n"
+                            report_text += f"   {separator_line}\n"
+                            report_text += f"   {word_line}\n\n"
+                    else:
+                        report_text += "   [Нет валидных слов для отображения]\n"
+                else:
+                    report_text += "   [Нет данных о словах]\n"
+            else:
+                report_text += "   [Нет отформатированного текста]\n"
+            
+            report_text += f"   {'-' * 80}\n"
+        
+        # Итоговый процент уверенности
+        overall_conf = report_data.get('overall_confidence', report_data.get('average_confidence', 0.0))
+        
+        report_text += f"""
+
+{'=' * 80}
+ИТОГО:
+- Итоговая уверенность по всему распознанному тексту: {overall_conf:.2f}%
+- Средняя уверенность по документам: {report_data['average_confidence']:.2f}%
+- Всего документов: {report_data['total_documents']}
+- Всего слов: {report_data.get('total_words', 0)}
+{'=' * 80}
+"""
+        
+        # Создаем JSON отчет
+        report_json = {
+            "generated_at": datetime.now().isoformat(),
+            "summary": {
+                "total_documents": report_data['total_documents'],
+                "average_confidence": round(report_data['average_confidence'], 2),
+                "overall_confidence": round(overall_conf, 2),
+                "total_words": report_data.get('total_words', 0)
+            },
+            "documents": report_data['documents']
+        }
+        
+        return {
+            "success": True,
+            "report_text": report_text,
+            "report_json": report_json,
+            "summary": {
+                "total_documents": report_data['total_documents'],
+                "average_confidence": round(report_data['average_confidence'], 2),
+                "overall_confidence": round(overall_conf, 2),
+                "total_words": report_data.get('total_words', 0)
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Ошибка при генерации отчета: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/documents/report/download")
+async def download_confidence_report():
+    """Скачать отчет об уверенности в виде Excel файла"""
+    logger.info("=== Скачивание отчета об уверенности (Excel) ===")
+    
+    if not doc_processor:
+        logger.error("Document processor не доступен")
+        raise HTTPException(status_code=503, detail="Document processor не доступен")
+    
+    try:
+        # Получаем данные для отчета
+        report_data = doc_processor.get_confidence_report_data()
+        logger.info(f"Получены данные отчета: {report_data['total_documents']} документов")
+        
+        # Создаем Excel файл
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+        
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Отчет об уверенности"
+        
+        # Стили для заголовков
+        header_font = Font(bold=True, size=14, color="FFFFFF")
+        header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+        header_alignment = Alignment(horizontal="center", vertical="center")
+        
+        # Стили для подзаголовков
+        subheader_font = Font(bold=True, size=12)
+        subheader_fill = PatternFill(start_color="DCE6F1", end_color="DCE6F1", fill_type="solid")
+        
+        # Стили для процентов уверенности
+        high_confidence_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")  # Зеленый для высокой уверенности
+        medium_confidence_fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")  # Желтый для средней
+        low_confidence_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")  # Красный для низкой
+        
+        # Стили для границ
+        thin_border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
+        
+        current_row = 1
+        
+        # Заголовок отчета
+        ws.merge_cells(f'A{current_row}:D{current_row}')
+        header_cell = ws[f'A{current_row}']
+        header_cell.value = "ОТЧЕТ О СТЕПЕНИ УВЕРЕННОСТИ МОДЕЛИ В РАСПОЗНАННОМ ТЕКСТЕ"
+        header_cell.font = header_font
+        header_cell.fill = header_fill
+        header_cell.alignment = header_alignment
+        header_cell.border = thin_border
+        current_row += 1
+        
+        # Дата генерации
+        ws.merge_cells(f'A{current_row}:D{current_row}')
+        date_cell = ws[f'A{current_row}']
+        date_cell.value = f"Дата генерации: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        date_cell.alignment = Alignment(horizontal="center")
+        current_row += 2
+        
+        # Общая информация
+        if report_data['total_documents'] == 0:
+            ws.merge_cells(f'A{current_row}:D{current_row}')
+            warning_cell = ws[f'A{current_row}']
+            warning_cell.value = "ВНИМАНИЕ: Нет обработанных документов для формирования отчета."
+            warning_cell.font = Font(bold=True, color="FF0000")
+            warning_cell.alignment = Alignment(horizontal="center")
+            current_row += 1
+        else:
+            # Общая информация
+            info_row = current_row
+            ws[f'A{info_row}'] = "ОБЩАЯ ИНФОРМАЦИЯ:"
+            ws[f'A{info_row}'].font = subheader_font
+            ws[f'A{info_row}'].fill = subheader_fill
+            current_row += 1
+            
+            ws[f'A{current_row}'] = "Всего обработано документов:"
+            ws[f'B{current_row}'] = report_data['total_documents']
+            current_row += 1
+            
+            ws[f'A{current_row}'] = "Средняя уверенность модели:"
+            ws[f'B{current_row}'] = f"{report_data['average_confidence']:.2f}%"
+            current_row += 1
+            
+            ws[f'A{current_row}'] = "Всего слов:"
+            ws[f'B{current_row}'] = report_data.get('total_words', 0)
+            current_row += 2
+            
+            # Детальная информация по документам
+            for doc_idx, doc in enumerate(report_data.get('documents', []), 1):
+                # Заголовок документа
+                doc_start_row = current_row
+                ws.merge_cells(f'A{current_row}:D{current_row}')
+                doc_header = ws[f'A{current_row}']
+                doc_header.value = f"{doc_idx}. {doc.get('filename', 'Неизвестный файл')}"
+                doc_header.font = subheader_font
+                doc_header.fill = subheader_fill
+                doc_header.border = thin_border
+                current_row += 1
+                
+                # Информация о документе
+                ws[f'A{current_row}'] = "Тип файла:"
+                ws[f'B{current_row}'] = doc.get('file_type', 'unknown')
+                current_row += 1
+                
+                ws[f'A{current_row}'] = "Уверенность модели:"
+                conf_value = doc.get('confidence', 0.0)
+                ws[f'B{current_row}'] = f"{conf_value:.2f}%"
+                # Цветовая индикация уверенности
+                if conf_value >= 80:
+                    ws[f'B{current_row}'].fill = high_confidence_fill
+                elif conf_value >= 50:
+                    ws[f'B{current_row}'].fill = medium_confidence_fill
+                else:
+                    ws[f'B{current_row}'].fill = low_confidence_fill
+                current_row += 1
+                
+                ws[f'A{current_row}'] = "Длина текста:"
+                ws[f'B{current_row}'] = f"{doc.get('text_length', 0)} символов"
+                current_row += 1
+                
+                ws[f'A{current_row}'] = "Количество слов:"
+                ws[f'B{current_row}'] = doc.get('words_count', 0)
+                current_row += 2
+                
+                # Распознанный текст с уверенностью
+                formatted_text_info = next((ft for ft in report_data.get('formatted_texts', []) if ft.get('filename') == doc.get('filename')), None)
+                
+                if formatted_text_info and formatted_text_info.get('words'):
+                    words = formatted_text_info.get('words', [])
+                    if words:
+                        # Заголовок для таблицы слов
+                        ws[f'A{current_row}'] = "Слово"
+                        ws[f'B{current_row}'] = "Уверенность"
+                        ws[f'A{current_row}'].font = Font(bold=True)
+                        ws[f'B{current_row}'].font = Font(bold=True)
+                        ws[f'A{current_row}'].fill = subheader_fill
+                        ws[f'B{current_row}'].fill = subheader_fill
+                        ws[f'A{current_row}'].border = thin_border
+                        ws[f'B{current_row}'].border = thin_border
+                        current_row += 1
+                        
+                        # Добавляем слова с уверенностью
+                        for word_info in words:
+                            word = word_info.get('word', '')
+                            conf = word_info.get('confidence', 0.0)
+                            
+                            if word:  # Пропускаем пустые слова
+                                ws[f'A{current_row}'] = word
+                                ws[f'B{current_row}'] = f"{conf:.1f}%"
+                                ws[f'A{current_row}'].border = thin_border
+                                ws[f'B{current_row}'].border = thin_border
+                                
+                                # Цветовая индикация уверенности
+                                if conf >= 80:
+                                    ws[f'B{current_row}'].fill = high_confidence_fill
+                                elif conf >= 50:
+                                    ws[f'B{current_row}'].fill = medium_confidence_fill
+                                else:
+                                    ws[f'B{current_row}'].fill = low_confidence_fill
+                                
+                                current_row += 1
+                
+                current_row += 1
+            
+            # Итоговая информация
+            overall_conf = report_data.get('overall_confidence', report_data.get('average_confidence', 0.0))
+            ws.merge_cells(f'A{current_row}:D{current_row}')
+            summary_header = ws[f'A{current_row}']
+            summary_header.value = "ИТОГО"
+            summary_header.font = subheader_font
+            summary_header.fill = subheader_fill
+            summary_header.border = thin_border
+            current_row += 1
+            
+            ws[f'A{current_row}'] = "Итоговая уверенность по всему тексту:"
+            ws[f'B{current_row}'] = f"{overall_conf:.2f}%"
+            if overall_conf >= 80:
+                ws[f'B{current_row}'].fill = high_confidence_fill
+            elif overall_conf >= 50:
+                ws[f'B{current_row}'].fill = medium_confidence_fill
+            else:
+                ws[f'B{current_row}'].fill = low_confidence_fill
+            current_row += 1
+            
+            ws[f'A{current_row}'] = "Средняя уверенность по документам:"
+            ws[f'B{current_row}'] = f"{report_data['average_confidence']:.2f}%"
+            current_row += 1
+            
+            ws[f'A{current_row}'] = "Всего документов:"
+            ws[f'B{current_row}'] = report_data['total_documents']
+            current_row += 1
+            
+            ws[f'A{current_row}'] = "Всего слов:"
+            ws[f'B{current_row}'] = report_data.get('total_words', 0)
+        
+        # Настройка ширины колонок
+        ws.column_dimensions['A'].width = 50
+        ws.column_dimensions['B'].width = 20
+        ws.column_dimensions['C'].width = 15
+        ws.column_dimensions['D'].width = 15
+        
+        # Сохраняем Excel файл во временный файл
+        import tempfile
+        temp_dir = tempfile.gettempdir()
+        report_filename = f"confidence_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        report_path = os.path.join(temp_dir, report_filename)
+        
+        try:
+            # Убеждаемся, что директория существует
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            # Сохраняем Excel файл
+            wb.save(report_path)
+            
+            logger.info(f"Excel отчет сохранен: {report_path}, размер: {os.path.getsize(report_path)} байт")
+            
+            # Проверяем, что файл существует
+            if not os.path.exists(report_path):
+                raise FileNotFoundError(f"Файл отчета не был создан: {report_path}")
+            
+            # Возвращаем файл для скачивания
+            return FileResponse(
+                report_path,
+                media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                filename=report_filename,
+                headers={
+                    "Content-Disposition": f"attachment; filename*=UTF-8''{report_filename}"
+                }
+            )
+        except Exception as file_err:
+            logger.error(f"Ошибка при сохранении Excel файла отчета: {file_err}")
+            raise HTTPException(status_code=500, detail=f"Ошибка при сохранении отчета: {str(file_err)}")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Ошибка при генерации Excel отчета: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Ошибка при генерации отчета: {str(e)}")
+
 # ================================
 # ТРАНСКРИБАЦИЯ
 # ================================
@@ -2286,7 +3231,7 @@ async def transcribe_file(file: UploadFile = File(...)):
         # Проверяем, поддерживает ли транскрайбер диаризацию
         if hasattr(transcriber, 'transcribe_with_diarization'):
             logger.info("Используем принудительную диаризацию...")
-            success, result = await transcriber.transcribe_with_diarization(file_path)
+            success, result = transcriber.transcribe_with_diarization(file_path)
         else:
             logger.info("Используем стандартную транскрибацию...")
             success, result = transcriber.transcribe_audio_file(file_path)
@@ -2635,7 +3580,10 @@ async def get_effective_prompt(model_path: str, custom_prompt_id: Optional[str] 
 # ================================
 
 class AgentModeRequest(BaseModel):
-    mode: str  # "agent" или "direct"
+    mode: str  # "agent", "direct" или "multi-llm"
+
+class MultiLLMModelsRequest(BaseModel):
+    models: List[str]  # Список имен моделей для режима multi-llm
 
 class AgentStatusResponse(BaseModel):
     is_initialized: bool
@@ -2680,6 +3628,46 @@ async def set_agent_mode(request: AgentModeRequest):
         raise
     except Exception as e:
         logger.error(f"Ошибка установки режима агентной архитектуры: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/agent/multi-llm/models")
+async def set_multi_llm_models(request: MultiLLMModelsRequest):
+    """Установить список моделей для режима multi-llm"""
+    try:
+        orchestrator = get_agent_orchestrator()
+        if orchestrator:
+            orchestrator.set_multi_llm_models(request.models)
+            return {
+                "message": f"Установлены модели для режима multi-llm: {', '.join(request.models)}",
+                "success": True,
+                "models": request.models,
+                "timestamp": datetime.now().isoformat()
+            }
+        else:
+            raise HTTPException(status_code=503, detail="Агентная архитектура не инициализирована")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Ошибка установки моделей для режима multi-llm: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/agent/multi-llm/models")
+async def get_multi_llm_models():
+    """Получить список моделей для режима multi-llm"""
+    try:
+        orchestrator = get_agent_orchestrator()
+        if orchestrator:
+            models = orchestrator.get_multi_llm_models()
+            return {
+                "models": models,
+                "success": True
+            }
+        else:
+            raise HTTPException(status_code=503, detail="Агентная архитектура не инициализирована")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Ошибка получения моделей для режима multi-llm: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/agent/agents")

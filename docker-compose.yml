@@ -44,51 +44,8 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health"]
       interval: 30s
       timeout: 10s
-      retries: 5
-      start_period: 60s  # 5 минут для загрузки большой модели Qwen (30GB)
-
-  # MongoDB - для хранения диалогов
-  mongodb:
-    image: mongo:7
-    container_name: memoai-mongodb
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_USER:-admin}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_PASSWORD:-password}
-      MONGO_INITDB_DATABASE: ${MONGODB_DATABASE:-memoai}
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongodb_data:/data/db
-      - mongodb_config:/data/configdb
-    restart: unless-stopped
-    networks:
-      - memoai-network
-    healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # PostgreSQL + pgvector - для RAG системы
-  postgresql:
-    image: pgvector/pgvector:pg16
-    container_name: memoai-postgresql
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-memoai}
-      POSTGRES_USER: ${POSTGRES_USER:-admin}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgresql_data:/var/lib/postgresql/data
-    restart: unless-stopped
-    networks:
-      - memoai-network
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U admin -d memoai"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      retries: 3
+      start_period: 60s  # Увеличиваем время запуска для загрузки моделей
 
   # Backend - FastAPI (теперь зависит от llm-svc, MongoDB и PostgreSQL)
   memoai-backend:
@@ -154,6 +111,50 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  # MongoDB - для хранения диалогов
+  mongodb:
+    image: mongo:7
+    container_name: memoai-mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_USER:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_PASSWORD:-password}
+      MONGO_INITDB_DATABASE: ${MONGODB_DATABASE:-memoai}
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - memoai-network
+
+  # PostgreSQL + pgvector - для RAG системы
+  postgresql:
+    image: pgvector/pgvector:pg17
+    container_name: memoai-postgresql
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-memoai}
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+    volumes:
+      - postgresql_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin} -d ${POSTGRES_DB:-memoai}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - memoai-network
 
   # Redis удален - не используется в проекте
 

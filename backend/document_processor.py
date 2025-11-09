@@ -17,6 +17,12 @@ class DocumentProcessor:
         self.doc_names = []
         self.embeddings = None
         self.vectorstore = None
+        # Хранилище информации об уверенности для каждого документа
+        # {filename: {"confidence": float, "text_length": int, "file_type": str, "words": [{"word": str, "confidence": float}]}}
+        self.confidence_data = {}
+        # Хранилище путей к изображениям для мультимодальной модели
+        # {filename: file_path}
+        self.image_paths = {}
 
         print("DocumentProcessor инициализирован")
         self.init_embeddings()
@@ -25,11 +31,25 @@ class DocumentProcessor:
         """Инициализация модели для эмбеддингов"""
         print("Инициализируем модель эмбеддингов...")
         try:
-            # Загружаем модель для русского языка
-            print("Загружаем модель: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+            # Путь к локальной модели
+            model_path = os.path.join(
+                os.path.dirname(os.path.dirname(__file__)),
+                "models",
+                "paraphrase-multilingual-MiniLM-L12-v2"
+            )
+            
+            # Проверяем, существует ли локальная модель
+            if os.path.exists(model_path):
+                print(f"Используем локальную модель: {model_path}")
+                model_name = model_path
+            else:
+                # Fallback на Hugging Face Hub
+                print("Локальная модель не найдена, загружаем из Hugging Face Hub...")
+                model_name = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+            
             # ВАЖНО: Используем CPU, так как CUDA может не поддерживать новые GPU
             self.embeddings = HuggingFaceEmbeddings(
-                model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+                model_name=model_name,
                 model_kwargs={'device': 'cpu'}  # Принудительно используем CPU
             )
             print("Модель эмбеддингов успешно загружена (CPU)")
@@ -43,33 +63,103 @@ class DocumentProcessor:
         """Обработка документа в зависимости от его типа"""
         file_extension = os.path.splitext(file_path)[1].lower()
         document_text = ""
+        confidence_info = None
+        filename = os.path.basename(file_path)
         
         try:
             print(f"Обрабатываем документ: {file_path} (тип: {file_extension})")
             
             if file_extension == '.docx':
-                document_text = self.extract_text_from_docx(file_path)
+                result = self.extract_text_from_docx(file_path)
+                if isinstance(result, dict):
+                    document_text = result.get("text", "")
+                    confidence_info = result.get("confidence_info", {"confidence": 100.0, "text_length": len(document_text), "file_type": "docx", "words": []})
+                else:
+                    document_text = result
+                    confidence_info = self._create_confidence_info_for_text(document_text, 100.0, "docx")
             elif file_extension == '.pdf':
-                document_text = self.extract_text_from_pdf(file_path)
+                result = self.extract_text_from_pdf(file_path)
+                if isinstance(result, dict):
+                    document_text = result.get("text", "")
+                    confidence_info = result.get("confidence_info", {"confidence": 100.0, "text_length": len(document_text), "file_type": "pdf", "words": []})
+                else:
+                    document_text = result
+                    confidence_info = self._create_confidence_info_for_text(document_text, 100.0, "pdf")
             elif file_extension in ['.xlsx', '.xls']:
-                document_text = self.extract_text_from_excel(file_path)
+                result = self.extract_text_from_excel(file_path)
+                if isinstance(result, dict):
+                    document_text = result.get("text", "")
+                    confidence_info = result.get("confidence_info", {"confidence": 100.0, "text_length": len(document_text), "file_type": "excel", "words": []})
+                else:
+                    document_text = result
+                    confidence_info = self._create_confidence_info_for_text(document_text, 100.0, "excel")
             elif file_extension == '.txt':
-                document_text = self.extract_text_from_txt(file_path)
+                result = self.extract_text_from_txt(file_path)
+                if isinstance(result, dict):
+                    document_text = result.get("text", "")
+                    confidence_info = result.get("confidence_info", {"confidence": 100.0, "text_length": len(document_text), "file_type": "txt", "words": []})
+                else:
+                    document_text = result
+                    confidence_info = self._create_confidence_info_for_text(document_text, 100.0, "txt")
             elif file_extension in ['.jpg', '.jpeg', '.png', '.webp']:
-                document_text = self.extract_text_from_image(file_path)
+                result = self.extract_text_from_image(file_path)
+                if isinstance(result, dict):
+                    document_text = result.get("text", "")
+                    confidence_info = result.get("confidence_info", {"confidence": 0.0, "text_length": len(document_text), "file_type": "image", "words": []})
+                else:
+                    document_text = result
+                    confidence_info = self._create_confidence_info_for_text(document_text, 50.0, "image")
             else:
                 return False, f"Неподдерживаемый формат файла: {file_extension}"
             
             print(f"Извлечено текста: {len(document_text)} символов")
             
+            # Сохраняем информацию об уверенности
+            if confidence_info:
+                self.confidence_data[filename] = confidence_info
+                print(f"Сохранена информация об уверенности для {filename}: {confidence_info['confidence']:.2f}%")
+            
+            # Сохраняем путь к изображению, если это изображение
+            if file_extension in ['.jpg', '.jpeg', '.png', '.webp']:
+                self.image_paths[filename] = file_path
+                print(f"Сохранен путь к изображению для {filename}: {file_path}")
+            
             # Добавляем документ в коллекцию
-            self.add_document_to_collection(document_text, os.path.basename(file_path))
+            self.add_document_to_collection(document_text, filename)
             print(f"Документ добавлен в коллекцию. Всего документов: {len(self.doc_names)}")
-            return True, f"Документ {os.path.basename(file_path)} успешно обработан"
+            return True, f"Документ {filename} успешно обработан"
             
         except Exception as e:
             print(f"Ошибка при обработке документа: {str(e)}")
             return False, f"Ошибка при обработке документа: {str(e)}"
+    
+    def _create_confidence_info_for_text(self, text, confidence_per_word, file_type):
+        """Создание структуры информации об уверенности для текста"""
+        import re
+        # Улучшенное разбиение на слова: разделяем слова и знаки препинания
+        # Находим слова (буквы, цифры, дефисы внутри слов) и знаки препинания отдельно
+        # Паттерн: \w+ для слов (включая буквы, цифры, подчеркивания), или [^\w\s] для знаков препинания
+        # Но лучше использовать более простой подход: разбиваем по пробелам и сохраняем структуру
+        
+        # Разбиваем текст на токены, сохраняя структуру
+        # Используем регулярное выражение, которое находит слова и знаки препинания отдельно
+        tokens = re.findall(r'\w+|[^\w\s]+', text)
+        
+        # Фильтруем пустые токены и формируем список слов
+        words_with_confidence = []
+        for token in tokens:
+            token = token.strip()
+            if token:  # Пропускаем пустые токены
+                words_with_confidence.append({"word": token, "confidence": float(confidence_per_word)})
+        
+        avg_confidence = confidence_per_word
+        
+        return {
+            "confidence": avg_confidence,
+            "text_length": len(text),
+            "file_type": file_type,
+            "words": words_with_confidence
+        }
     
     def extract_text_from_docx(self, file_path):
         """Извлечение текста из DOCX файла"""
@@ -91,15 +181,28 @@ class DocumentProcessor:
         return result
     
     def extract_text_from_pdf(self, file_path):
-        """Извлечение текста из PDF файла"""
+        """Извлечение текста из PDF файла с информацией об уверенности"""
         print(f"Извлекаем текст из PDF файла: {file_path}")
         text = ""
+        confidence_scores = []
+        total_chars = 0
         
         # Используем PDFPlumber для более точного извлечения текста
         try:
             with pdfplumber.open(file_path) as pdf:
-                for page in pdf.pages:
-                    text += page.extract_text() or ""
+                for page_num, page in enumerate(pdf.pages):
+                    page_text = page.extract_text() or ""
+                    text += page_text
+                    total_chars += len(page_text)
+                    
+                    # Для PDF оцениваем уверенность на основе возможности извлечения текста
+                    # Если текст извлекается успешно, считаем уверенность высокой
+                    if page_text.strip():
+                        # PDFPlumber обычно имеет высокую уверенность, если текст извлекается
+                        confidence_scores.append(95.0)  # Высокая уверенность для успешного извлечения
+                    else:
+                        confidence_scores.append(50.0)  # Средняя уверенность, если текст не найден
+                        
             print(f"PDFPlumber успешно извлек {len(text)} символов")
         except Exception as e:
             print(f"Ошибка при извлечении текста с помощью pdfplumber: {str(e)}")
@@ -109,13 +212,30 @@ class DocumentProcessor:
                 with open(file_path, 'rb') as file:
                     reader = PyPDF2.PdfReader(file)
                     for page in reader.pages:
-                        text += page.extract_text() or ""
+                        page_text = page.extract_text() or ""
+                        text += page_text
+                        total_chars += len(page_text)
+                        if page_text.strip():
+                            confidence_scores.append(85.0)  # Немного ниже уверенность для PyPDF2
+                        else:
+                            confidence_scores.append(40.0)
                 print(f"PyPDF2 успешно извлек {len(text)} символов")
             except Exception as e2:
                 print(f"Ошибка при извлечении текста с помощью PyPDF2: {str(e2)}")
                 raise
         
-        return text
+        # Вычисляем среднюю уверенность
+        avg_confidence = sum(confidence_scores) / len(confidence_scores) if confidence_scores else 0.0
+        
+        # Создаем слова с уверенностью (для PDF используем среднюю уверенность или 100%)
+        confidence_per_word = 100.0 if avg_confidence > 90.0 else avg_confidence
+        confidence_info = self._create_confidence_info_for_text(text, confidence_per_word, "pdf")
+        confidence_info["pages_processed"] = len(confidence_scores)
+        
+        return {
+            "text": text,
+            "confidence_info": confidence_info
+        }
     
     def extract_text_from_excel(self, file_path):
         """Извлечение текста из Excel файла"""
@@ -137,7 +257,7 @@ class DocumentProcessor:
         
         result = "\n".join(text_content)
         print(f"Извлечено {len(result)} символов из Excel")
-        return result
+        return resultDocumentProcessor
     
     def extract_text_from_txt(self, file_path):
         """Извлечение текста из TXT файла"""
@@ -168,12 +288,13 @@ class DocumentProcessor:
                 return result
 
     def extract_text_from_image(self, file_path):
-        """Извлечение текста из изображения с помощью OCR"""
+        """Извлечение текста из изображения с помощью OCR с информацией об уверенности"""
         print(f"Извлекаем текст из изображения: {file_path}")
         try:
             # Проверяем наличие библиотеки pytesseract
             import pytesseract
             from PIL import Image
+            import re
             
             # Открываем изображение с помощью Pillow
             img = Image.open(file_path)
@@ -181,23 +302,100 @@ class DocumentProcessor:
             # Извлекаем текст с изображения
             text = pytesseract.image_to_string(img, lang='rus+eng')
             
+            # Получаем детальную информацию об уверенности с помощью image_to_data
+            words_with_confidence = []
+            avg_confidence = 0.0
+            
+            try:
+                ocr_data = pytesseract.image_to_data(img, lang='rus+eng', output_type=pytesseract.Output.DICT)
+                
+                # Обрабатываем данные OCR для получения слов с уверенностью
+                n_boxes = len(ocr_data['text'])
+                for i in range(n_boxes):
+                    word_text = ocr_data['text'][i].strip()
+                    conf = int(ocr_data['conf'][i]) if ocr_data['conf'][i] else 0
+                    
+                    # Добавляем только валидные слова (не пустые строки)
+                    if word_text and conf > 0:
+                        words_with_confidence.append({
+                            "word": word_text,
+                            "confidence": float(conf)
+                        })
+                
+                # Вычисляем среднюю уверенность
+                if words_with_confidence:
+                    avg_confidence = sum(w['confidence'] for w in words_with_confidence) / len(words_with_confidence)
+                else:
+                    avg_confidence = 50.0
+                    
+            except Exception as e:
+                print(f"Не удалось получить детальную информацию об уверенности OCR: {e}")
+                # Если не удалось получить детальную информацию, разбиваем текст на слова
+                # и присваиваем среднюю уверенность 50%
+                # Используем улучшенное разбиение: разделяем слова и знаки препинания
+                tokens = re.findall(r'\w+|[^\w\s]+', text)
+                words_with_confidence = []
+                for token in tokens:
+                    token = token.strip()
+                    if token:
+                        words_with_confidence.append({"word": token, "confidence": 50.0})
+                avg_confidence = 50.0
+            
             # Если текст не извлечен, добавляем описание изображения
             if not text.strip():
-                result = f"[Изображение: {os.path.basename(file_path)}. OCR не смог извлечь текст.]"
-                print(f"OCR не смог извлечь текст, возвращаем описание: {len(result)} символов")
-                return result
+                result_text = f"[Изображение: {os.path.basename(file_path)}. OCR не смог извлечь текст.]"
+                print(f"OCR не смог извлечь текст, возвращаем описание: {len(result_text)} символов")
+                return {
+                    "text": result_text,
+                    "confidence_info": {
+                        "confidence": 0.0,
+                        "text_length": len(result_text),
+                        "file_type": "image",
+                        "ocr_available": False,
+                        "words": []
+                    }
+                }
             
-            print(f"OCR успешно извлек {len(text)} символов")
-            return text
+            print(f"OCR успешно извлек {len(text)} символов, {len(words_with_confidence)} слов, средняя уверенность: {avg_confidence:.2f}%")
+            
+            return {
+                "text": text,
+                "confidence_info": {
+                    "confidence": avg_confidence,
+                    "text_length": len(text),
+                    "file_type": "image",
+                    "ocr_available": True,
+                    "words": words_with_confidence
+                }
+            }
         except ImportError:
             # Если pytesseract не установлен, возвращаем информацию о файле
-            result = f"[Изображение: {os.path.basename(file_path)}. Для распознавания текста требуется установка pytesseract.]"
-            print(f"pytesseract не установлен, возвращаем описание: {len(result)} символов")
-            return result
+            result_text = f"[Изображение: {os.path.basename(file_path)}. Для распознавания текста требуется установка pytesseract.]"
+            print(f"pytesseract не установлен, возвращаем описание: {len(result_text)} символов")
+            return {
+                "text": result_text,
+                "confidence_info": {
+                    "confidence": 0.0,
+                    "text_length": len(result_text),
+                    "file_type": "image",
+                    "ocr_available": False,
+                    "words": []
+                }
+            }
         except Exception as e:
-            result = f"[Изображение: {os.path.basename(file_path)}. Ошибка при обработке: {str(e)}]"
-            print(f"Ошибка при обработке изображения: {len(result)} символов")
-            return result
+            result_text = f"[Изображение: {os.path.basename(file_path)}. Ошибка при обработке: {str(e)}]"
+            print(f"Ошибка при обработке изображения: {len(result_text)} символов")
+            return {
+                "text": result_text,
+                "confidence_info": {
+                    "confidence": 0.0,
+                    "text_length": len(result_text),
+                    "file_type": "image",
+                    "ocr_available": False,
+                    "error": str(e),
+                    "words": []
+                }
+            }
     
     def add_document_to_collection(self, text, doc_name):
         """Добавление документа в коллекцию и обновление векторного хранилища"""
@@ -312,14 +510,106 @@ class DocumentProcessor:
         print(f"get_document_list вызван. Документы: {self.doc_names}")
         return self.doc_names
     
+    def get_image_paths(self):
+        """Получение списка путей к изображениям для мультимодальной модели"""
+        print(f"get_image_paths вызван. Изображения: {list(self.image_paths.values())}")
+        return list(self.image_paths.values())
+    
     def clear_documents(self):
         """Очистка коллекции документов"""
         print("Очищаем коллекцию документов...")
         self.documents = []
         self.doc_names = []
         self.vectorstore = None
+        self.confidence_data = {}
+        self.image_paths = {}
         print("Коллекция документов очищена")
         return "Коллекция документов очищена"
+    
+    def get_confidence_report_data(self):
+        """Получение данных для отчета об уверенности с процентами над словами"""
+        if not self.confidence_data:
+            return {
+                "total_documents": 0,
+                "documents": [],
+                "average_confidence": 0.0,
+                "formatted_texts": []
+            }
+        
+        documents = []
+        formatted_texts = []
+        total_confidence = 0.0
+        total_weighted_confidence = 0.0
+        total_words = 0
+        
+        for filename, info in self.confidence_data.items():
+            words = info.get("words", [])
+            
+            # Форматируем текст с процентами над словами
+            formatted_lines = []
+            current_line = []
+            
+            for word_info in words:
+                word = word_info.get("word", "")
+                conf = word_info.get("confidence", 0.0)
+                
+                # Пропускаем пустые слова
+                if not word:
+                    continue
+                
+                # Форматируем каждое слово с процентом над ним
+                formatted_word = f"{conf:.0f}%\n{word}"
+                current_line.append(formatted_word)
+                
+                # Добавляем перенос строки после каждого слова для читаемости
+                if len(current_line) >= 10:  # Примерно 10 слов на строку
+                    formatted_lines.append("  ".join(current_line))
+                    current_line = []
+            
+            # Добавляем оставшиеся слова
+            if current_line:
+                formatted_lines.append("  ".join(current_line))
+            
+            formatted_text = "\n".join(formatted_lines)
+            
+            # Вычисляем среднюю уверенность для документа
+            doc_avg_confidence = info.get("confidence", 0.0)
+            if words:
+                doc_avg_confidence = sum(w.get("confidence", 0.0) for w in words) / len(words)
+            
+            documents.append({
+                "filename": filename,
+                "confidence": doc_avg_confidence,
+                "text_length": info.get("text_length", 0),
+                "file_type": info.get("file_type", "unknown"),
+                "words_count": len(words)
+            })
+            
+            formatted_texts.append({
+                "filename": filename,
+                "formatted_text": formatted_text,
+                "words": words
+            })
+            
+            total_confidence += doc_avg_confidence
+            if words:
+                total_weighted_confidence += sum(w.get("confidence", 0.0) for w in words)
+                total_words += len(words)
+        
+        # Вычисляем общую среднюю уверенность
+        avg_confidence = total_confidence / len(documents) if documents else 0.0
+        
+        # Вычисляем итоговую уверенность по всем словам
+        overall_confidence = total_weighted_confidence / total_words if total_words > 0 else avg_confidence
+        
+        return {
+            "total_documents": len(documents),
+            "documents": documents,
+            "average_confidence": avg_confidence,
+            "overall_confidence": overall_confidence,
+            "total_words": total_words,
+            "formatted_texts": formatted_texts
+        }
     
     def process_query(self, query, agent_function):
         """Обработка запроса с контекстом документов для LLM"""
@@ -385,6 +675,16 @@ class DocumentProcessor:
             index = self.doc_names.index(filename)
             self.doc_names.pop(index)
             print(f"Документ {filename} удален из списка имен")
+            
+            # Удаляем информацию об уверенности
+            if filename in self.confidence_data:
+                del self.confidence_data[filename]
+                print(f"Информация об уверенности для {filename} удалена")
+            
+            # Удаляем путь к изображению, если это изображение
+            if filename in self.image_paths:
+                del self.image_paths[filename]
+                print(f"Путь к изображению для {filename} удален")
             
             # Удаляем ВСЕ чанки этого документа из списка документов
             # Ищем все документы с этим именем и удаляем их

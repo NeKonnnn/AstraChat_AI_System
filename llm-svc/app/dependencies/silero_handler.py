@@ -14,11 +14,14 @@ async def get_silero_handler() -> Optional[Dict[str, any]]:
     """Получение экземпляров моделей Silero TTS"""
     global silero_models
     
+    logger.info(f"[DEBUG] get_silero_handler вызван. silero_models={silero_models}, enabled={settings.silero.enabled}")
+    
     if not settings.silero.enabled:
-        logger.info("Silero TTS отключен в конфигурации")
+        logger.warning("Silero TTS отключен в конфигурации")
         return None
     
     if silero_models is None:
+        logger.info("[DEBUG] silero_models is None, начинаем загрузку...")
         try:
             models_dir = settings.silero.models_dir
             logger.info(f"Загрузка моделей Silero TTS из {models_dir}")
@@ -35,21 +38,40 @@ async def get_silero_handler() -> Optional[Dict[str, any]]:
             try:
                 # Загрузка модели для русского языка
                 ru_model_path = os.path.join(models_dir, "ru", "model.pt")
+                logger.info(f"Проверка наличия модели Silero TTS (ru) по пути: {ru_model_path}")
+                logger.info(f"Файл существует: {os.path.exists(ru_model_path)}")
+                
                 if os.path.exists(ru_model_path):
-                    silero_models['ru'] = torch.jit.load(ru_model_path, map_location='cpu')
+                    logger.info(f"Загрузка модели Silero TTS (ru) из {ru_model_path}...")
+                    silero_models['ru'] = torch.package.PackageImporter(ru_model_path).load_pickle("tts_models", "model")
                     logger.info("Модель Silero TTS (ru) успешно загружена")
+                else:
+                    logger.warning(f"Модель Silero TTS (ru) не найдена в {ru_model_path}")
                 
                 # Загрузка модели для английского языка
                 en_model_path = os.path.join(models_dir, "en", "model.pt")
+                logger.info(f"Проверка наличия модели Silero TTS (en) по пути: {en_model_path}")
+                logger.info(f"Файл существует: {os.path.exists(en_model_path)}")
+                
                 if os.path.exists(en_model_path):
-                    silero_models['en'] = torch.jit.load(en_model_path, map_location='cpu')
+                    logger.info(f"Загрузка модели Silero TTS (en) из {en_model_path}...")
+                    silero_models['en'] = torch.package.PackageImporter(en_model_path).load_pickle("tts_models", "model")
                     logger.info("Модель Silero TTS (en) успешно загружена")
+                else:
+                    logger.warning(f"Модель Silero TTS (en) не найдена в {en_model_path}")
                     
             except Exception as e:
                 logger.error(f"Ошибка загрузки моделей Silero TTS: {str(e)}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
                 return None
             
-            logger.info("Модели Silero TTS успешно загружены")
+            # Проверяем что хотя бы одна модель загружена
+            if not silero_models or len(silero_models) == 0:
+                logger.error("Ни одна модель Silero TTS не была загружена!")
+                return None
+            
+            logger.info(f"Модели Silero TTS успешно загружены: {list(silero_models.keys())}")
             
         except Exception as e:
             logger.error(f"Ошибка инициализации моделей Silero TTS: {str(e)}")

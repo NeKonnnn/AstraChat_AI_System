@@ -188,100 +188,48 @@ def get_model_info():
     if USE_LLM_SVC:
         try:
             import asyncio
-            
-            async def _get_model_info_async():
-                service = await get_llm_service()
-                
-                # Получаем информацию о модели через llm-svc
-                try:
-                    models = await service.client.get_models()
-                    if models and len(models) > 0:
-                        # Берем первую модель как текущую
-                        current_model = models[0]
-                        model_name = current_model.get("id", "Unknown")
-                        
-                        return {
-                            "loaded": True,
-                            "name": model_name,
-                            "metadata": {
-                                "general.name": model_name,
-                                "general.architecture": "LLM-SVC",
-                                "general.size_label": current_model.get("owned_by", "Unknown")
-                            },
-                            "path": f"llm-svc://{model_name}",
-                            "status": "loaded",
-                            "type": "llm-svc",
-                            "n_ctx": MODEL_CONTEXT_SIZE,
-                            "n_gpu_layers": 0,
-                            "size": 0,
-                            "size_mb": 0
-                        }
-                    else:
-                        return {
-                            "loaded": False,
-                            "error": "Нет доступных моделей в llm-svc",
-                            "path": "llm-svc",
-                            "status": "not_loaded"
-                        }
-                except Exception as e:
-                    logger.error(f"Ошибка получения списка моделей: {e}")
-                    # Пытаемся хотя бы проверить health
-                    try:
-                        health = await service.client.health_check()
-                        if health.get("status") == "healthy":
-                            return {
-                                "loaded": True,
-                                "name": service.model_name or "Unknown",
-                                "metadata": {
-                                    "general.name": service.model_name or "Unknown",
-                                    "general.architecture": "LLM-SVC",
-                                    "general.size_label": "Unknown"
-                                },
-                                "path": f"llm-svc://{service.model_name or 'unknown'}",
-                                "status": "loaded",
-                                "type": "llm-svc",
-                                "n_ctx": MODEL_CONTEXT_SIZE,
-                                "n_gpu_layers": 0,
-                                "size": 0,
-                                "size_mb": 0
-                            }
-                    except:
-                        pass
-                    
-                    return {
-                        "loaded": False,
-                        "error": f"llm-svc недоступен: {str(e)}",
-                        "path": "llm-svc",
-                        "status": "error"
-                    }
-            
-            # Запускаем асинхронную функцию
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, _get_model_info_async())
-                    return future.result()
+                    future = executor.submit(asyncio.run, get_llm_service())
+                    service = future.result()
             else:
-                return loop.run_until_complete(_get_model_info_async())
-                
+                service = loop.run_until_complete(get_llm_service())
+            
+            # Получаем информацию о модели через llm-svc
+            health = service.client.health_check()
+            if health.get("status") == "healthy":
+                return {
+                    "loaded": True,
+                    "metadata": {
+                        "general.name": service.model_name,
+                        "general.architecture": "LLM-SVC",
+                        "general.size_label": "Unknown"
+                    },
+                    "path": "llm-svc",
+                    "n_ctx": MODEL_CONTEXT_SIZE,
+                    "n_gpu_layers": 0
+                }
+            else:
+                return {
+                    "loaded": False,
+                    "error": "llm-svc недоступен",
+                    "path": "llm-svc"
+                }
         except Exception as e:
             logger.error(f"Ошибка получения информации о модели: {e}")
             return {
                 "loaded": False,
                 "error": str(e),
-                "path": "llm-svc",
-                "status": "error"
+                "path": "llm-svc"
             }
     else:
         # Fallback к оригинальной логике
         return {
             "loaded": True,
-            "name": "Local Model",
             "metadata": {"general.name": "Local Model"},
-            "path": MODEL_PATH,
-            "status": "loaded",
-            "type": "local"
+            "path": MODEL_PATH
         }
 
 def prepare_prompt(text, system_prompt=None, history=None, model_path=None, custom_prompt_id=None):
@@ -316,7 +264,7 @@ def prepare_prompt(text, system_prompt=None, history=None, model_path=None, cust
     
     return "".join(prompt_parts)
 
-def ask_agent(prompt, history=None, max_tokens=None, streaming=False, stream_callback=None, model_path=None, custom_prompt_id=None):
+def ask_agent(prompt, history=None, max_tokens=None, streaming=False, stream_callback=None, model_path=None, custom_prompt_id=None, images=None):
     """Основная функция для работы с AI агентом через llm-svc"""
     
     if USE_LLM_SVC:
@@ -336,7 +284,8 @@ def ask_agent(prompt, history=None, max_tokens=None, streaming=False, stream_cal
                 streaming=streaming,
                 stream_callback=stream_callback,
                 model_path=model_path,
-                custom_prompt_id=custom_prompt_id
+                custom_prompt_id=custom_prompt_id,
+                images=images
             )
             
             return response

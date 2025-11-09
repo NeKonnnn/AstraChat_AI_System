@@ -18,7 +18,8 @@ class AgentOrchestrator:
     def __init__(self):
         self.langgraph_orchestrator = None
         self.is_initialized = False
-        self.mode = "agent"  # "agent" или "direct"
+        self.mode = "agent"  # "agent", "direct" или "multi-llm"
+        self.multi_llm_models = []  # Список выбранных моделей для режима multi-llm
         
     async def initialize(self) -> bool:
         """Инициализация оркестратора"""
@@ -62,7 +63,7 @@ class AgentOrchestrator:
         context: Dict[str, Any] = None
     ) -> str:
         """Обработка сообщения через агентную архитектуру"""
-        if not self.is_initialized:
+        if not self.is_initialized and self.mode != "multi-llm":
             await self.initialize()
         
         try:
@@ -79,6 +80,11 @@ class AgentOrchestrator:
                     history=history or [],
                     context=context or {}
                 )
+            elif self.mode == "multi-llm":
+                # Режим с несколькими LLM - возвращаем специальный маркер
+                # Фактическая обработка происходит в WebSocket обработчике
+                logger.info(f"РЕЖИМ MULTI-LLM: Обработка через несколько моделей")
+                return "MULTI_LLM_MODE"
             else:
                 # Используем прямое обращение к LLM
                 logger.info(f"ПРЯМОЙ РЕЖИМ: Обращение напрямую к LLM")
@@ -118,11 +124,20 @@ class AgentOrchestrator:
     
     def set_mode(self, mode: str):
         """Установка режима работы"""
-        if mode in ["agent", "direct"]:
+        if mode in ["agent", "direct", "multi-llm"]:
             self.mode = mode
             logger.info(f"Режим работы изменен на: {mode}")
         else:
             logger.warning(f"Недопустимый режим: {mode}")
+    
+    def set_multi_llm_models(self, models: List[str]):
+        """Установка списка моделей для режима multi-llm"""
+        self.multi_llm_models = models
+        logger.info(f"Установлены модели для режима multi-llm: {models}")
+    
+    def get_multi_llm_models(self) -> List[str]:
+        """Получение списка моделей для режима multi-llm"""
+        return self.multi_llm_models
     
     def get_mode(self) -> str:
         """Получение текущего режима работы"""

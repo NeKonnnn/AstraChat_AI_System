@@ -72,3 +72,13 @@ class DocumentVector(BaseModel):
 
 
 
+
+
+
+
+
+
+
+
+
+

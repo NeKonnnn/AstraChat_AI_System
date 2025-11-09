@@ -336,7 +336,7 @@ def speak_text_pyttsx3(text, speech_rate=1.0):
 
 def speak_text(text, speaker='baya', voice_id='ru', speech_rate=1.0, save_to_file=None):
     """Основная функция озвучивания текста"""
-    print(f"🔧 speak_text вызвана с параметрами: speaker={speaker}, voice_id={voice_id}, speech_rate={speech_rate}")
+    print(f"speak_text вызвана с параметрами: speaker={speaker}, voice_id={voice_id}, speech_rate={speech_rate}")
     
     # Если используем llm-svc, вызываем его API
     if USE_LLM_SVC:

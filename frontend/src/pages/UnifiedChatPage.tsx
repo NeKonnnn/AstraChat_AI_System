@@ -58,6 +58,8 @@ import {
   ChevronLeft as ChevronLeftIcon,
   ChevronRight as ChevronRightIcon,
   Add as AddIcon,
+  Assessment as AssessmentIcon,
+  Description as DescriptionIcon,
 } from '@mui/icons-material';
 import { useAppContext, useAppActions, Message } from '../contexts/AppContext';
 import { useSocket } from '../contexts/SocketContext';
@@ -1539,10 +1541,14 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'application/vnd.ms-excel',
       'text/plain',
+      'image/jpeg',
+      'image/jpg',
+      'image/png',
+      'image/webp',
     ];
 
     if (!allowedTypes.includes(file.type)) {
-      showNotification('error', 'Поддерживаются только файлы PDF, Word (.docx), Excel (.xlsx) и TXT');
+      showNotification('error', 'Поддерживаются только файлы PDF, Word (.docx), Excel (.xlsx), TXT и изображения (JPG, PNG, WebP)');
       return;
     }
 
@@ -1712,6 +1718,60 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
     // Очищаем input файла, чтобы можно было повторно загрузить тот же файл
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
+    }
+  };
+
+  const handleGenerateReport = async (): Promise<void> => {
+    if (uploadedFiles.length === 0) {
+      showNotification('warning', 'Нет загруженных документов для генерации отчета');
+      return;
+    }
+
+    try {
+      showNotification('info', 'Генерация отчета...');
+      
+      // Скачиваем отчет напрямую
+      const response = await fetch(getApiUrl('/api/documents/report/download'));
+      
+      if (response.ok) {
+        // Получаем blob для скачивания
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        
+        // Получаем имя файла из заголовка Content-Disposition или используем дефолтное
+        const contentDisposition = response.headers.get('Content-Disposition');
+        let filename = 'confidence_report.xlsx'; // Дефолтное расширение - .xlsx
+        if (contentDisposition) {
+          // Пробуем разные форматы Content-Disposition
+          // Формат: filename*=UTF-8''filename.xlsx
+          const utf8Match = contentDisposition.match(/filename\*=UTF-8''(.+)/i);
+          if (utf8Match) {
+            filename = decodeURIComponent(utf8Match[1]);
+          } else {
+            // Формат: filename="filename.xlsx" или filename=filename.xlsx
+            const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+            if (filenameMatch) {
+              filename = filenameMatch[1].replace(/['"]/g, '');
+            }
+          }
+        }
+        
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+        
+        showNotification('success', 'Отчет успешно сгенерирован и скачан');
+      } else {
+        const error = await response.json();
+        showNotification('error', error.detail || 'Ошибка при генерации отчета');
+      }
+    } catch (error) {
+      console.error('Ошибка при генерации отчета:', error);
+      showNotification('error', 'Ошибка при генерации отчета');
     }
   };
 
@@ -2611,12 +2671,12 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
             Перетащите файл сюда или нажмите для выбора
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Поддерживаются PDF, Word, Excel и текстовые файлы до 50MB
+            Поддерживаются PDF, Word, Excel, текстовые файлы и изображения (JPG, PNG, WebP) до 50MB
           </Typography>
           <input
             ref={fileInputRef}
             type="file"
-            accept=".pdf,.docx,.xlsx,.txt"
+            accept=".pdf,.docx,.xlsx,.txt,.jpg,.jpeg,.png,.webp"
             onChange={handleFileSelect}
             style={{ display: 'none' }}
           />
@@ -2882,7 +2942,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
             <input
               ref={fileInputRef}
               type="file"
-              accept=".pdf,.docx,.xlsx,.txt"
+              accept=".pdf,.docx,.xlsx,.txt,.jpg,.jpeg,.png,.webp"
               onChange={handleFileSelect}
               style={{ display: 'none' }}
             />
@@ -2890,6 +2950,28 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
             {/* Прикрепленные файлы - выше поля ввода */}
             {uploadedFiles.length > 0 && (
               <Box sx={{ mb: 2 }}>
+                {/* Кнопка генерации отчета в области файлов */}
+                <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    startIcon={<AssessmentIcon />}
+                    onClick={handleGenerateReport}
+                    sx={{
+                      color: '#4caf50',
+                      borderColor: '#4caf50',
+                      '&:hover': {
+                        borderColor: '#4caf50',
+                        bgcolor: 'rgba(76, 175, 80, 0.1)',
+                      },
+                      fontSize: '0.75rem',
+                      textTransform: 'none',
+                    }}
+                    disabled={isUploading || modelWindows.some(w => w.isStreaming)}
+                  >
+                    Сгенерировать отчет об уверенности
+                  </Button>
+                </Box>
                 <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
                   {uploadedFiles.map((file, index) => (
                     <Box
@@ -3051,6 +3133,29 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                     {isUploading ? <CircularProgress size={16} /> : <AttachFileIcon sx={{ color: '#2196f3', fontSize: '1.2rem' }} />}
                   </IconButton>
                 </Tooltip>
+
+                {/* Кнопка генерации отчета */}
+                {uploadedFiles.length > 0 && (
+                  <Tooltip title="Сгенерировать отчет об уверенности">
+                    <IconButton
+                      onClick={handleGenerateReport}
+                      sx={{ 
+                        color: '#4caf50',
+                        bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+                        '&:hover': {
+                          bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)',
+                        },
+                        '&:active': {
+                          transform: 'none',
+                        }
+                      }}
+                      disableRipple
+                      disabled={isUploading || modelWindows.some(w => w.isStreaming)}
+                    >
+                      <AssessmentIcon sx={{ color: '#4caf50', fontSize: '1.2rem' }} />
+                    </IconButton>
+                  </Tooltip>
+                )}
 
                 {/* Кнопка добавления модели */}
                 {modelWindows.length < 4 && (
@@ -3415,7 +3520,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".pdf,.docx,.xlsx,.txt"
+                accept=".pdf,.docx,.xlsx,.txt,.jpg,.jpeg,.png,.webp"
                 onChange={handleFileSelect}
                 style={{ display: 'none' }}
               />
@@ -3575,6 +3680,29 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                        {isUploading ? <CircularProgress size={16} /> : <AttachFileIcon sx={{ color: '#2196f3', fontSize: '1.2rem' }} />}
                      </IconButton>
                    </Tooltip>
+
+                   {/* Кнопка генерации отчета */}
+                   {uploadedFiles.length > 0 && (
+                     <Tooltip title="Сгенерировать отчет об уверенности">
+                       <IconButton
+                         onClick={handleGenerateReport}
+                         sx={{ 
+                           color: '#4caf50',
+                           bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+                           '&:hover': {
+                             bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)',
+                           },
+                           '&:active': {
+                             transform: 'none',
+                           }
+                         }}
+                         disableRipple
+                         disabled={isUploading || (state.isLoading && !messages.some(msg => msg.isStreaming))}
+                       >
+                         <AssessmentIcon sx={{ color: '#4caf50', fontSize: '1.2rem' }} />
+                       </IconButton>
+                     </Tooltip>
+                   )}
 
                                        {/* Кнопка меню с шестеренкой */}
                     <Tooltip title="Дополнительные действия">

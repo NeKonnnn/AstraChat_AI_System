@@ -490,9 +490,13 @@ def prepare_prompt(text, system_prompt=None, history=None, model_path=None, cust
     
     return "".join(prompt_parts)
 
-def ask_agent(prompt, history=None, max_tokens=None, streaming=False, stream_callback=None, model_path=None, custom_prompt_id=None):
+def ask_agent(prompt, history=None, max_tokens=None, streaming=False, stream_callback=None, model_path=None, custom_prompt_id=None, images=None):
     if not LLAMA_CPP_AVAILABLE:
         raise ValueError("llama_cpp недоступен. Используйте llm-svc для работы с моделями.")
+    
+    # Параметр images игнорируется в этой реализации (для совместимости с agent_llm_svc)
+    if images:
+        print(f"ВНИМАНИЕ: Параметр images не поддерживается в agent.py, используйте agent_llm_svc.py для работы с изображениями")
     
     if llm is None:
         raise ValueError("Модель не загружена. Пожалуйста, убедитесь, что модель инициализирована.")

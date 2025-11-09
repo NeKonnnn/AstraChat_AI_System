@@ -112,23 +112,24 @@ function App() {
                   position: 'relative',
                 }}
               >
-                {/* Кнопка меню - всегда видна для открытия сайдбара */}
-                <Box
-                  sx={{
-                    position: 'fixed',
-                    top: 16,
-                    left: sidebarOpen ? 296 : 16,
-                    zIndex: 1200,
-                    transition: 'left 0.3s ease',
-                  }}
-                >
-                  <IconButton
-                    onClick={toggleSidebar}
-                    className="menu-button"
+                {/* Кнопка меню - видна только когда сайдбар закрыт */}
+                {!sidebarOpen && (
+                  <Box
+                    sx={{
+                      position: 'fixed',
+                      top: 16,
+                      left: 16,
+                      zIndex: 1200,
+                    }}
                   >
-                    <MenuIcon />
-                  </IconButton>
-                </Box>
+                    <IconButton
+                      onClick={toggleSidebar}
+                      className="menu-button"
+                    >
+                      <MenuIcon />
+                    </IconButton>
+                  </Box>
+                )}
                 
                 <Routes>
                   <Route path="/" element={<UnifiedChatPage isDarkMode={isDarkMode} />} />

@@ -25,6 +25,7 @@ class CorsConfig(BaseModel):
 class ModelConfig(BaseModel):
     path: str = os.environ.get("LLM_MODEL_PATH", "/app/models/llama-2-7b-chat.Q4_K_M.gguf")
     name: str = os.environ.get("LLM_MODEL_NAME", "llama-2-7b-chat")
+    mmproj_path: Optional[str] = os.environ.get("LLM_MMPROJ_PATH", None)  # Путь к multimodal projection для VL моделей
     ctx_size: int = 4096
     gpu_layers: int = 0
     verbose: bool = False

@@ -19,6 +19,9 @@ langchain-core>=0.3.72
 langgraph==0.6.10
 faiss-cpu==1.12.0
 sentence-transformers==5.1.0
+# Зависимости для обработки изображений (OCR)
+Pillow==11.3.0
+pytesseract==0.3.13
 
 # Зависимости для изменения темпа аудио
 librosa==0.11.0

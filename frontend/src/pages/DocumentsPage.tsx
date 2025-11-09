@@ -85,10 +85,14 @@ export default function DocumentsPage() {
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'application/vnd.ms-excel',
+      'image/jpeg',
+      'image/jpg',
+      'image/png',
+      'image/webp',
     ];
 
     if (!allowedTypes.includes(file.type)) {
-      showNotification('error', 'Поддерживаются только файлы PDF, Word (.docx) и Excel (.xlsx)');
+      showNotification('error', 'Поддерживаются только файлы PDF, Word (.docx), Excel (.xlsx) и изображения (JPG, PNG, WebP)');
       return;
     }
 
@@ -459,7 +463,7 @@ export default function DocumentsPage() {
               Перетащите файл сюда или нажмите для выбора
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Поддерживаются: PDF, Word (.docx), Excel (.xlsx)
+              Поддерживаются: PDF, Word (.docx), Excel (.xlsx), изображения (JPG, PNG, WebP)
             </Typography>
             <Typography variant="caption" color="text.secondary">
               Максимальный размер: 50MB
@@ -470,7 +474,7 @@ export default function DocumentsPage() {
             ref={fileInputRef}
             type="file"
             hidden
-            accept=".pdf,.docx,.xlsx,.xls"
+            accept=".pdf,.docx,.xlsx,.xls,.jpg,.jpeg,.png,.webp"
             onChange={handleFileSelect}
           />
           

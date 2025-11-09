@@ -27,12 +27,8 @@ class LLMClient:
         
         # Определяем URL для подключения
         if base_url is None:
-            # Проверяем переменную окружения LLM_SVC_BASE_URL
-            env_base_url = os.getenv("LLM_SVC_BASE_URL")
-            if env_base_url:
-                self.base_url = env_base_url.rstrip('/')
             # В Docker используем внутренний URL, в разработке - внешний
-            elif os.getenv("DOCKER_ENV") == "true":
+            if os.getenv("DOCKER_ENV") == "true":
                 self.base_url = llm_svc_config.get("base_url", "http://llm-svc:8000").rstrip('/')
             else:
                 self.base_url = llm_svc_config.get("external_url", "http://localhost:8001").rstrip('/')
@@ -41,22 +37,6 @@ class LLMClient:
             
         self.api_key = api_key
         self.timeout = llm_svc_config.get("timeout", 300.0)
-        
-        # Создаем постоянный httpx клиент для потоковых запросов
-        self.client = httpx.AsyncClient(timeout=self.timeout)
-    
-    async def __aenter__(self):
-        """Асинхронный контекстный менеджер - вход"""
-        return self
-    
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Асинхронный контекстный менеджер - выход"""
-        await self.close()
-    
-    async def close(self):
-        """Закрытие HTTP клиента"""
-        if self.client:
-            await self.client.aclose()
         
     def _get_headers(self) -> Dict[str, str]:
         """Получение заголовков для запросов"""
@@ -390,13 +370,33 @@ class LLMService:
         temperature: float = 0.7,
         max_tokens: int = 1024,
         streaming: bool = False,
-        stream_callback: Optional[Callable[[str, str], bool]] = None
+        stream_callback: Optional[Callable[[str, str], bool]] = None,
+        images: Optional[List[str]] = None
     ) -> str:
         """Генерация ответа через llm-svc"""
         
         try:
             # Подготавливаем сообщения
             messages = self.prepare_messages(prompt, history, system_prompt)
+            
+            # Если есть изображения, добавляем их к последнему сообщению пользователя
+            if images:
+                logger.info(f"Добавление {len(images)} изображений к запросу")
+                # Находим последнее сообщение пользователя
+                for msg in reversed(messages):
+                    if msg.get("role") == "user":
+                        # Преобразуем содержимое в мультимодальный формат
+                        content = msg.get("content", "")
+                        msg["content"] = [
+                            {"type": "text", "text": content}
+                        ]
+                        # Добавляем изображения
+                        for image_path in images:
+                            msg["content"].append({
+                                "type": "image_url",
+                                "image_url": {"url": f"file://{image_path}"}
+                            })
+                        break
             
             if streaming and stream_callback:
                 # Потоковая генерация
@@ -611,7 +611,8 @@ async def get_llm_service() -> LLMService:
 def ask_agent_llm_svc(prompt: str, history: Optional[List[Dict[str, str]]] = None, 
                      max_tokens: Optional[int] = None, streaming: bool = False,
                      stream_callback: Optional[Callable[[str, str], bool]] = None,
-                     model_path: Optional[str] = None, custom_prompt_id: Optional[str] = None) -> str:
+                     model_path: Optional[str] = None, custom_prompt_id: Optional[str] = None,
+                     images: Optional[List[str]] = None) -> str:
     """Синхронная обертка для ask_agent через llm-svc"""
     
     async def _async_generate():
@@ -623,7 +624,8 @@ def ask_agent_llm_svc(prompt: str, history: Optional[List[Dict[str, str]]] = Non
             temperature=0.7,
             max_tokens=max_tokens or 1024,
             streaming=streaming,
-            stream_callback=stream_callback
+            stream_callback=stream_callback,
+            images=images
         )
     
     # Запускаем асинхронную функцию в новом event loop

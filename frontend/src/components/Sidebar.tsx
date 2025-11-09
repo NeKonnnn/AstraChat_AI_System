@@ -26,7 +26,6 @@ import {
   Chat as ChatIcon,
   Transcribe as TranscribeIcon,
   Settings as SettingsIcon,
-  Computer as ComputerIcon,
   Info as InfoIcon,
   Add as AddIcon,
   Delete as DeleteIcon,
@@ -37,6 +36,7 @@ import {
   Search as SearchIcon,
   Folder as FolderIcon,
   CreateNewFolder as AddFolderIcon,
+  Menu as MenuIcon,
 } from '@mui/icons-material';
 import { useAppContext, useAppActions } from '../contexts/AppContext';
 import { useSocket } from '../contexts/SocketContext';
@@ -398,19 +398,48 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-          <Avatar sx={{ bgcolor: 'rgba(255,255,255,0.2)' }}>
-            <ComputerIcon />
-          </Avatar>
+          <Box
+            sx={{
+              width: 48,
+              height: 48,
+              borderRadius: '50%',
+              overflow: 'hidden',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+            }}
+          >
+            <Box
+              component="img"
+              src="/astra.png"
+              alt="Astra"
+              sx={{
+                width: '150%',
+                height: '150%',
+                objectFit: 'cover',
+                transform: 'scale(1.2)',
+              }}
+            />
+          </Box>
           <Box>
             <Typography variant="h6" fontWeight="bold">
-              Газик ИИ
+              AstraChat
             </Typography>
-            <Typography variant="caption" sx={{ opacity: 0.8 }}>
-              Web Interface
-            </Typography>
+            
           </Box>
         </Box>
-
+        <IconButton
+          onClick={onToggle}
+          sx={{
+            color: 'white',
+            '&:hover': {
+              backgroundColor: 'rgba(255,255,255,0.1)',
+            },
+          }}
+        >
+          <MenuIcon />
+        </IconButton>
       </Box>
 
       {/* Статус соединения */}

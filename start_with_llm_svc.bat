@@ -1,61 +1,67 @@
 @echo off
+chcp 65001 >nul 2>&1
+title MemoAI with LLM-SVC Integration
+
+REM Переходим в директорию, где находится батник
+cd /d %~dp0
+
 echo ========================================
-echo    MemoAI с llm-svc интеграцией
-echo    (Фоновый запуск)
+echo    MemoAI with llm-svc integration
+echo    (Background launch)
 echo ========================================
 echo.
 
-echo Проверка конфигурации...
+echo Checking configuration...
 if not exist "llm-svc\config\config.yml" (
-    echo ОШИБКА: Файл llm-svc\config\config.yml не найден!
-    echo Создайте конфигурацию согласно INTEGRATION_GUIDE.md
+    echo ERROR: File llm-svc\config\config.yml not found!
+    echo Create configuration according to INTEGRATION_GUIDE.md
     pause
     exit /b 1
 )
 
-echo Проверка директории models...
+echo Checking models directory...
 if not exist "models" (
-    echo ВНИМАНИЕ: Директория models\ не найдена!
-    echo Создайте директорию и поместите туда ваши .gguf модели
+    echo WARNING: Directory models\ not found!
+    echo Create directory and place your .gguf models there
     mkdir models
 )
 
-echo Проверка виртуального окружения...
+echo Checking virtual environment...
 if not exist "venv_312\Scripts\activate.bat" (
-    echo ОШИБКА: Виртуальное окружение venv_312 не найдено!
-    echo Создайте виртуальное окружение: python -m venv venv_312
+    echo ERROR: Virtual environment venv_312 not found!
+    echo Create virtual environment: python -m venv venv_312
     pause
     exit /b 1
 )
 
-echo Все файлы найдены
+echo All files found
 echo.
 
 echo.
-echo Запуск llm-svc сервиса в фоне...
-start /B "LLM-SVC" cmd /c "venv_312\Scripts\activate.bat && cd llm-svc && python -m app.main"
+echo Starting llm-svc service in background...
+start /B "LLM-SVC" cmd /c "chcp 65001 >nul 2>&1 && cd /d %~dp0 && cd llm-svc && ..\venv_312\Scripts\python.exe -m app.main"
 
-echo Запуск Backend сервера в фоне (с llm-svc)...
-start /B "MemoAI Backend" cmd /c "venv_312\Scripts\activate.bat && set USE_LLM_SVC=true && python backend\main.py"
+echo Starting Backend server in background (with llm-svc)...
+start /B "MemoAI Backend" cmd /c "chcp 65001 >nul 2>&1 && cd /d %~dp0 && set USE_LLM_SVC=true && venv_312\Scripts\python.exe backend\main.py"
 
-echo Запуск Frontend сервера в фоне...
-start /B "MemoAI Frontend" cmd /c "cd frontend && npm start"
+echo Starting Frontend server in background...
+start /B "MemoAI Frontend" cmd /c "chcp 65001 >nul 2>&1 && cd frontend && npm start"
 
 echo.
-echo Ожидание запуска серверов (15 секунд)...
-echo llm-svc загружает модель, это может занять несколько минут...
+echo Waiting for servers to start (15 seconds)...
+echo llm-svc is loading model, this may take several minutes...
 timeout /t 15 /nobreak >nul
 
 echo.
 echo ========================================
-echo    Сервисы запущены в фоне:
-echo    - llm-svc: http://localhost:8001 (загружает модель...)
-echo    - Backend: http://localhost:8000 (с llm-svc интеграцией)
+echo    Services started in background:
+echo    - llm-svc: http://localhost:8001 (loading model...)
+echo    - Backend: http://localhost:8000 (with llm-svc integration)
 echo    - Frontend: http://localhost:3000
 echo ========================================
 echo.
-echo ВАЖНО: Дождитесь полной загрузки модели в llm-svc!
-echo Это может занять 2-5 минут для больших моделей.
+echo IMPORTANT: Wait for complete model loading in llm-svc!
+echo This may take 2-5 minutes for large models.
 echo.
-echo Нажмите любую клавишу для выхода...
+echo Press any key to exit...
 pause >nul
