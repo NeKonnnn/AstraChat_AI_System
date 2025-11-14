@@ -37,9 +37,12 @@ import {
   Folder as FolderIcon,
   CreateNewFolder as AddFolderIcon,
   Menu as MenuIcon,
+  Person as PersonIcon,
+  Logout as LogoutIcon,
 } from '@mui/icons-material';
 import { useAppContext, useAppActions } from '../contexts/AppContext';
 import { useSocket } from '../contexts/SocketContext';
+import { useAuth } from '../contexts/AuthContext';
 import SettingsModal from './SettingsModal';
 
 // Функция для оценки количества токенов в тексте (дублируем из AppContext)
@@ -64,6 +67,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
   const navigate = useNavigate();
   const location = useLocation();
   const { state } = useAppContext();
+  const { user, logout } = useAuth();
   const { 
     createChat, 
     setCurrentChat, 
@@ -170,6 +174,10 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
       case 'statistics':
         // Показываем статистику в диалоге
         setShowStatsDialog(true);
+        break;
+      case 'logout':
+        logout();
+        navigate('/login');
         break;
     }
   };
@@ -415,8 +423,8 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
               src="/astra.png"
               alt="Astra"
               sx={{
-                width: '150%',
-                height: '150%',
+                width: '70%',
+                height: '70%',
                 objectFit: 'cover',
                 transform: 'scale(1.2)',
               }}
@@ -831,30 +839,66 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
         })}
       </List>
 
-      {/* Выпадающее меню с функциями */}
-      <Box sx={{ p: 2, background: 'rgba(0,0,0,0.2)' }}>
-        <Button
-          fullWidth
-          variant="contained"
-          startIcon={<MoreVertIcon />}
-          onClick={handleMenuClick}
-          sx={{
-            backgroundColor: 'rgba(255,255,255,0.1)',
-            color: 'white',
-            '&:hover': {
-              backgroundColor: 'rgba(255,255,255,0.2)',
-            },
-            textTransform: 'none',
-            fontWeight: 500,
-            py: 1,
-            px: 2,
-            justifyContent: 'flex-start',
-            borderRadius: 2,
-            fontSize: '0.875rem',
-          }}
-        >
-          Меню
-        </Button>
+      {/* Кнопка пользователя внизу */}
+      <Box sx={{ p: 1.5, background: 'rgba(0,0,0,0.2)' }}>
+        {user ? (
+          <Box
+            onClick={handleMenuClick}
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1.5,
+              p: 1,
+              borderRadius: 2,
+              backgroundColor: 'rgba(255,255,255,0.05)',
+              cursor: 'pointer',
+              transition: 'background-color 0.2s',
+              '&:hover': {
+                backgroundColor: 'rgba(255,255,255,0.1)',
+              },
+            }}
+          >
+            <Avatar
+              sx={{
+                width: 36,
+                height: 36,
+                bgcolor: 'primary.main',
+                fontSize: 16,
+              }}
+            >
+              {user.username.charAt(0).toUpperCase()}
+            </Avatar>
+            <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+              <Typography variant="body2" fontWeight="600" noWrap sx={{ fontSize: '0.875rem' }}>
+                {user.full_name || user.username}
+              </Typography>
+            </Box>
+            <MoreVertIcon sx={{ opacity: 0.5, fontSize: '1.2rem' }} />
+          </Box>
+        ) : (
+          <Button
+            fullWidth
+            variant="contained"
+            startIcon={<MoreVertIcon />}
+            onClick={handleMenuClick}
+            sx={{
+              backgroundColor: 'rgba(255,255,255,0.1)',
+              color: 'white',
+              '&:hover': {
+                backgroundColor: 'rgba(255,255,255,0.2)',
+              },
+              textTransform: 'none',
+              fontWeight: 500,
+              py: 1,
+              px: 2,
+              justifyContent: 'flex-start',
+              borderRadius: 2,
+              fontSize: '0.875rem',
+            }}
+          >
+            Меню
+          </Button>
+        )}
         
         <Menu
           anchorEl={anchorEl}
@@ -916,6 +960,19 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
               <BarChartIcon fontSize="small" />
             </ListItemIcon>
             <ListItemText primary="Статистика" />
+          </MenuItem>
+          
+          <MenuItem 
+            onClick={() => handleMenuAction('logout')}
+            sx={{ 
+              color: 'white',
+              '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+            }}
+          >
+            <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+              <LogoutIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText primary="Выйти из аккаунта" />
           </MenuItem>
         </Menu>
       </Box>

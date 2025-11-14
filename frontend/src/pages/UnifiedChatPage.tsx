@@ -35,14 +35,15 @@ import {
   Menu,
   Collapse,
 } from '@mui/material';
+import { useAuth } from '../contexts/AuthContext';
 import {
   Send as SendIcon,
   Person as PersonIcon,
-  SmartToy as BotIcon,
   Clear as ClearIcon,
   ContentCopy as CopyIcon,
   Stop as StopIcon,
   Refresh as RefreshIcon,
+  Edit as EditIcon,
   Mic as MicIcon,
   VolumeUp as VolumeUpIcon,
   AttachFile as AttachFileIcon,
@@ -63,7 +64,7 @@ import {
 } from '@mui/icons-material';
 import { useAppContext, useAppActions, Message } from '../contexts/AppContext';
 import { useSocket } from '../contexts/SocketContext';
-import { getApiUrl, getWsUrl } from '../config/api';
+import { getApiUrl, getWsUrl, API_CONFIG } from '../config/api';
 import MessageRenderer from '../components/MessageRenderer';
 
 interface UnifiedChatPageProps {
@@ -90,6 +91,11 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
   const [inputMessage, setInputMessage] = useState('');
   const [showCopyAlert, setShowCopyAlert] = useState(false);
   
+  // Состояние для редактирования сообщений
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editingMessage, setEditingMessage] = useState<Message | null>(null);
+  const [editText, setEditText] = useState('');
+  
   // Состояние для голосового чата
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -103,20 +109,12 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
     const savedVoiceId = localStorage.getItem('voice_id');
     const savedSpeechRate = localStorage.getItem('speech_rate');
     
-    console.log('Инициализация voiceSettings из localStorage:', {
-      savedVoiceSpeaker,
-      savedVoiceId,
-      savedSpeechRate,
-      parsedSpeechRate: savedSpeechRate ? parseFloat(savedSpeechRate) : 1.0
-    });
-    
     const settings = {
       voice_id: savedVoiceId || 'ru',
       speech_rate: savedSpeechRate ? parseFloat(savedSpeechRate) : 1.0,
       voice_speaker: savedVoiceSpeaker || 'baya',
     };
     
-    console.log('Инициализированные настройки:', settings);
     return settings;
   });
   const [showVoiceDialog, setShowVoiceDialog] = useState(false);
@@ -188,9 +186,10 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
     getCurrentChat,
     createChat,
     setCurrentChat,
-    updateChatTitle
+    updateChatTitle,
+    updateChatMessages
   } = useAppActions();
-  const { sendMessage, isConnected, reconnect, stopGeneration, socket, onMultiLLMEvent, offMultiLLMEvent } = useSocket();
+  const { sendMessage, regenerateResponse, isConnected, reconnect, stopGeneration, socket, onMultiLLMEvent, offMultiLLMEvent } = useSocket();
 
   // Получаем текущий чат и сообщения
   const currentChat = getCurrentChat();
@@ -232,9 +231,6 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
   
   // Состояние для показа/скрытия настроек голоса
   const [showVoiceSettings, setShowVoiceSettings] = useState(false);
-
-  // Отладочная информация при инициализации
-  console.log('Инициализация: voiceSettings.voice_speaker =', voiceSettings.voice_speaker, 'currentVoiceIndex =', currentVoiceIndex);
 
   // Автоскролл к последнему сообщению
   useEffect(() => {
@@ -446,12 +442,8 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
   useEffect(() => {
     const voices = Object.keys(voiceTestMessages);
     const currentIndex = voices.indexOf(voiceSettings.voice_speaker);
-    console.log('useEffect [voiceSettings.voice_speaker]: voice_speaker =', voiceSettings.voice_speaker, 'найденный index =', currentIndex);
     if (currentIndex !== -1) {
       setCurrentVoiceIndex(currentIndex);
-      console.log('Синхронизация при изменении voice_speaker: voice_speaker =', voiceSettings.voice_speaker, 'index =', currentIndex);
-    } else {
-      console.log('Голос не найден в списке: voice_speaker =', voiceSettings.voice_speaker);
     }
   }, [voiceSettings.voice_speaker]);
 
@@ -459,12 +451,8 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
   useEffect(() => {
     const voices = Object.keys(voiceTestMessages);
     const currentIndex = voices.indexOf(voiceSettings.voice_speaker);
-    console.log('useEffect [] (загрузка): voice_speaker =', voiceSettings.voice_speaker, 'найденный index =', currentIndex);
     if (currentIndex !== -1) {
       setCurrentVoiceIndex(currentIndex);
-      console.log('Принудительная синхронизация при загрузке: voice_speaker =', voiceSettings.voice_speaker, 'index =', currentIndex);
-    } else {
-      console.log('Голос не найден при загрузке: voice_speaker =', voiceSettings.voice_speaker);
     }
   }, []); // Пустой массив зависимостей - выполняется только при монтировании
 
@@ -473,7 +461,6 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
     const voices = Object.keys(voiceTestMessages);
     const currentIndex = voices.indexOf(voiceSettings.voice_speaker);
     if (currentIndex !== -1 && currentIndex !== currentVoiceIndex) {
-      console.log('🔧 Исправляю рассинхронизацию: currentVoiceIndex =', currentVoiceIndex, 'должен быть =', currentIndex);
       setCurrentVoiceIndex(currentIndex);
     }
   });
@@ -612,6 +599,196 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
     }
   };
 
+  // Функция для перегенерации ответа LLM
+  const handleRegenerate = (message: Message, customUserMessage?: string): void => {
+    if (!currentChat || !isConnected) {
+      showNotification('error', 'Нет соединения с сервером');
+      return;
+    }
+
+    // Находим индекс текущего сообщения
+    const messageIndex = messages.findIndex(m => m.id === message.id);
+    if (messageIndex === -1) {
+      showNotification('error', 'Сообщение не найдено');
+      return;
+    }
+
+    // Ищем предыдущее сообщение пользователя
+    let userMessage: Message | null = null;
+    for (let i = messageIndex - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') {
+        userMessage = messages[i];
+        break;
+      }
+    }
+
+    if (!userMessage) {
+      showNotification('error', 'Не найдено предыдущее сообщение пользователя');
+      return;
+    }
+    
+    // Используем customUserMessage если передан, иначе берем из userMessage
+    const userMessageContent = customUserMessage || userMessage.content;
+
+    // Сохраняем текущий ответ в альтернативные ответы
+    const currentContent = message.content;
+    let existingAlternatives = message.alternativeResponses || [];
+    const currentIndex = message.currentResponseIndex ?? 0;
+    
+    // Если альтернативных ответов еще нет, инициализируем массив с текущим ответом
+    if (existingAlternatives.length === 0) {
+      existingAlternatives = [currentContent];
+    } else {
+      // Обновляем текущий вариант в альтернативных ответах, если он изменился
+      const updated = [...existingAlternatives];
+      if (currentIndex < updated.length) {
+        // Обновляем текущий вариант
+        updated[currentIndex] = currentContent;
+      } else {
+        // Если индекс выходит за границы, добавляем текущий ответ
+        updated.push(currentContent);
+      }
+      existingAlternatives = updated;
+    }
+    
+    // Устанавливаем новый индекс для нового ответа (будет последним)
+    const newIndex = existingAlternatives.length;
+    
+    // Добавляем пустое место для нового ответа (будет заполнено при генерации)
+    const updatedAlternatives = [...existingAlternatives, ''];
+    
+    // Обновляем сообщение с альтернативными ответами и новым индексом
+    // Не обнуляем content, оставляем текущий
+    updateMessage(
+      currentChat.id,
+      message.id,
+      currentContent, // Оставляем текущий контент, не обнуляем
+      true, // isStreaming - начинаем стриминг
+      undefined, // multiLLMResponses
+      updatedAlternatives,
+      newIndex // Новый индекс для нового ответа
+    );
+
+    // Вызываем перегенерацию без создания нового сообщения пользователя
+    // Передаем updatedAlternatives и newIndex для сохранения в SocketContext ref
+    regenerateResponse(userMessageContent, message.id, currentChat.id, updatedAlternatives, newIndex);
+  };
+
+  // Функция для открытия диалога редактирования
+  const handleEditClick = (message: Message): void => {
+    setEditingMessage(message);
+    setEditText(message.content);
+    setEditDialogOpen(true);
+  };
+
+  // Функция для сохранения отредактированного сообщения
+  const handleSaveEdit = async (): Promise<void> => {
+    if (!editingMessage || !currentChat || !editText.trim()) {
+      return;
+    }
+
+    const trimmedContent = editText.trim();
+    
+    // Обновляем сообщение в локальном состоянии
+    updateMessage(currentChat.id, editingMessage.id, trimmedContent);
+    
+    // Сохраняем в MongoDB через API
+    try {
+      const response = await fetch(
+        `${getApiUrl(API_CONFIG.ENDPOINTS.UPDATE_MESSAGE)}/${currentChat.id}/${editingMessage.id}`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ 
+            content: trimmedContent,
+            old_content: editingMessage.content  // Передаем старое содержимое для поиска
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: 'Ошибка сервера' }));
+        throw new Error(errorData.detail || 'Ошибка при сохранении сообщения');
+      }
+      
+      showNotification('success', 'Сообщение обновлено и сохранено в базе данных');
+    } catch (error) {
+      console.error('Ошибка при сохранении сообщения в БД:', error);
+      showNotification('warning', 'Сообщение обновлено локально, но не сохранено в базе данных');
+    }
+    
+    setEditDialogOpen(false);
+    setEditingMessage(null);
+    setEditText('');
+  };
+
+  // Функция для сохранения и отправки на повторную генерацию (только для сообщений пользователя)
+  const handleSaveAndSend = async (): Promise<void> => {
+    if (!editingMessage || !currentChat || !editText.trim() || !isConnected) {
+      if (!isConnected) {
+        showNotification('error', 'Нет соединения с сервером');
+      }
+      return;
+    }
+
+    const trimmedContent = editText.trim();
+    
+    // Обновляем сообщение пользователя в локальном состоянии
+    updateMessage(currentChat.id, editingMessage.id, trimmedContent);
+    
+    // Сохраняем в MongoDB через API
+    try {
+      const response = await fetch(
+        `${getApiUrl(API_CONFIG.ENDPOINTS.UPDATE_MESSAGE)}/${currentChat.id}/${editingMessage.id}`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ 
+            content: trimmedContent,
+            old_content: editingMessage.content  // Передаем старое содержимое для поиска
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: 'Ошибка сервера' }));
+        throw new Error(errorData.detail || 'Ошибка при сохранении сообщения');
+      }
+    } catch (error) {
+      console.error('Ошибка при сохранении сообщения в БД:', error);
+      showNotification('warning', 'Сообщение обновлено локально, но не сохранено в базе данных');
+    }
+    
+    // Находим следующее сообщение LLM после этого сообщения пользователя
+    const messageIndex = messages.findIndex(m => m.id === editingMessage.id);
+    if (messageIndex !== -1) {
+      // Ищем следующее сообщение LLM
+      for (let i = messageIndex + 1; i < messages.length; i++) {
+        if (messages[i].role === 'assistant') {
+          // Найдено сообщение LLM - перегенерируем его с обновленным текстом пользователя
+          handleRegenerate(messages[i], trimmedContent);
+          break;
+        }
+      }
+    }
+    
+    setEditDialogOpen(false);
+    setEditingMessage(null);
+    setEditText('');
+    showNotification('success', 'Сообщение обновлено и отправлено на перегенерацию');
+  };
+
+  // Функция для отмены редактирования
+  const handleCancelEdit = (): void => {
+    setEditDialogOpen(false);
+    setEditingMessage(null);
+    setEditText('');
+  };
+
   const formatTimestamp = (timestamp: string): string => {
     return new Date(timestamp).toLocaleTimeString('ru-RU', {
       hour: '2-digit',
@@ -619,20 +796,27 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
     });
   };
 
+  // Получаем данные пользователя
+  const { user } = useAuth();
+  
   // Функция для определения приветствия по времени суток (Московское время)
   const getGreeting = (): string => {
     const now = new Date();
     const moscowTime = new Date(now.toLocaleString("en-US", {timeZone: "Europe/Moscow"}));
     const hour = moscowTime.getHours();
     
+    // Определяем имя пользователя для приветствия
+    const userName = user?.full_name || user?.username || "";
+    const nameToShow = userName ? `, ${userName}` : "";
+    
     if (hour >= 5 && hour < 12) {
-      return "Доброе утро";
+      return `Доброе утро${nameToShow}`;
     } else if (hour >= 12 && hour < 18) {
-      return "Добрый день";
+      return `Добрый день${nameToShow}`;
     } else if (hour >= 18 && hour < 22) {
-      return "Добрый вечер";
+      return `Добрый вечер${nameToShow}`;
     } else {
-      return "Доброй ночи";
+      return `Доброй ночи${nameToShow}`;
     }
   };
 
@@ -680,7 +864,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
               console.log('ОТВЕТ ОТ LLM:', data.text);
               console.log('ОТЛАДКА: LLM обработал запрос и предоставил ответ, начинаю синтез речи');
               setRecordedText(data.text);
-              showNotification('success', 'Получен ответ от Газик ИИ');
+              showNotification('success', 'Получен ответ от AstraChat');
               break;
               
             case 'speech_error':
@@ -1184,7 +1368,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
         await synthesizeSpeech(result.response);
       } else {
         console.error('Ошибка получения ответа от LLM:', result);
-        showNotification('error', 'Ошибка получения ответа от Газик ИИ');
+        showNotification('error', 'Ошибка получения ответа от AstraChat');
       }
     } catch (error) {
       console.error('Ошибка отправки голосового сообщения:', error);
@@ -1836,27 +2020,28 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
               : '0 2px 8px rgba(0, 0, 0, 0.1)',
           }}
         >
-          <CardContent sx={{ p: 1.2, pb: 0.8 }}>
+          <CardContent sx={{ p: 1.2, '&:last-child': { pb: 1.2 } }}>
             <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.3 }}>
               <Avatar
                 sx={{
                   width: 24,
                   height: 24,
                   mr: 1,
-                  bgcolor: isUser ? 'primary.dark' : 'secondary.main',
+                  bgcolor: isUser ? 'primary.dark' : 'transparent',
                 }}
+                src={isUser ? undefined : '/astra.png'}
               >
-                {isUser ? <PersonIcon /> : <BotIcon />}
+                {isUser ? <PersonIcon /> : null}
               </Avatar>
                              <Typography variant="caption" sx={{ opacity: 0.8, fontSize: '0.75rem', fontWeight: 500 }}>
-                 {isUser ? 'Вы' : 'Газик ИИ'}
+                 {isUser ? 'Вы' : 'AstraChat'}
                </Typography>
               <Typography variant="caption" sx={{ ml: 'auto', opacity: 0.6, fontSize: '0.7rem' }}>
                 {formatTimestamp(message.timestamp)}
               </Typography>
             </Box>
             
-            <Box sx={{ mb: 0.3 }}>
+            <Box sx={{ width: '100%' }}>
               {message.multiLLMResponses && message.multiLLMResponses.length > 0 ? (
                 // Отображение нескольких ответов от разных моделей
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -1893,22 +2078,146 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                   ))}
                 </Box>
               ) : (
-                // Обычное отображение одного ответа
-                <MessageRenderer content={message.content} isStreaming={message.isStreaming} />
+                // Обычное отображение одного ответа (с поддержкой альтернативных вариантов)
+                <MessageRenderer 
+                  content={(() => {
+                    // Если есть альтернативные ответы, показываем текущий вариант
+                    if (message.alternativeResponses && message.alternativeResponses.length > 0 && message.currentResponseIndex !== undefined) {
+                      const currentIndex = message.currentResponseIndex;
+                      
+                      if (currentIndex >= 0 && currentIndex < message.alternativeResponses.length) {
+                        const alternativeContent = message.alternativeResponses[currentIndex];
+                        // Убираем лишние пробелы и переносы строк в конце (только если не идет стриминг)
+                        const resultContent = alternativeContent !== undefined 
+                          ? (message.isStreaming ? alternativeContent : alternativeContent.trimEnd())
+                          : message.content;
+                        
+                        // Всегда используем альтернативный контент, если установлен currentResponseIndex
+                        // Это важно для стриминга - alternativeContent обновляется при каждом чанке
+                        return resultContent;
+                      }
+                    }
+                    // Fallback на message.content, если нет альтернативных ответов
+                    // Убираем лишние пробелы и переносы строк в конце (только если не идет стриминг)
+                    return message.isStreaming ? message.content : message.content.trimEnd();
+                  })()} 
+                  isStreaming={message.isStreaming} 
+                />
               )}
             </Box>
           </CardContent>
         </Card>
         
-        {/* Кнопка копирования снизу карточки - для всех сообщений при наведении */}
+        {/* Кнопки действий снизу карточки - для всех сообщений при наведении */}
         <Box sx={{ 
           display: 'flex', 
           justifyContent: 'center',
+          alignItems: 'center',
+          gap: 0.5,
           mt: 1,
-          height: 20, /* Фиксированная высота для кнопки */
+          minHeight: 28, /* Минимальная высота для кнопок */
           opacity: isHovered ? 1 : 0, /* Мгновенное появление/исчезновение */
           visibility: isHovered ? 'visible' : 'hidden', /* Скрываем кнопку, но сохраняем место */
         }}>
+          {/* Навигация по вариантам ответов (только для сообщений помощника с альтернативными ответами) */}
+          {!isUser && message.alternativeResponses && message.alternativeResponses.length > 1 && (
+            <>
+              <Tooltip title="Предыдущий вариант">
+                <span>
+                  <IconButton
+                    size="small"
+                    onClick={() => {
+                      const currentIndex = message.currentResponseIndex ?? 0;
+                      if (currentIndex > 0) {
+                        const newIndex = currentIndex - 1;
+                        const newContent = message.alternativeResponses![newIndex];
+                        updateMessage(
+                          currentChat!.id,
+                          message.id,
+                          newContent,
+                          undefined,
+                          undefined,
+                          message.alternativeResponses,
+                          newIndex
+                        );
+                      }
+                    }}
+                    disabled={(message.currentResponseIndex ?? 0) === 0}
+                    sx={{
+                      opacity: 0.7,
+                      p: 0.5,
+                      borderRadius: '6px',
+                      minWidth: '28px',
+                      width: '28px',
+                      height: '28px',
+                      '&:hover:not(:disabled)': {
+                        opacity: 1,
+                        '& .MuiSvgIcon-root': {
+                          color: 'primary.main',
+                        },
+                      },
+                    }}
+                  >
+                    <ChevronLeftIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+              
+              <Typography variant="caption" sx={{
+                opacity: 0.7,
+                fontSize: '0.7rem',
+                minWidth: '35px',
+                textAlign: 'center',
+              }}>
+                {((message.currentResponseIndex ?? 0) + 1)}/{message.alternativeResponses.length}
+              </Typography>
+              
+              <Tooltip title="Следующий вариант">
+                <span>
+                  <IconButton
+                    size="small"
+                    onClick={() => {
+                      const currentIndex = message.currentResponseIndex ?? 0;
+                      if (currentIndex < message.alternativeResponses!.length - 1) {
+                        const newIndex = currentIndex + 1;
+                        const newContent = message.alternativeResponses![newIndex];
+                        updateMessage(
+                          currentChat!.id,
+                          message.id,
+                          newContent,
+                          undefined,
+                          undefined,
+                          message.alternativeResponses,
+                          newIndex
+                        );
+                      }
+                    }}
+                    disabled={(message.currentResponseIndex ?? 0) >= message.alternativeResponses!.length - 1}
+                    sx={{
+                      opacity: 0.7,
+                      p: 0.5,
+                      borderRadius: '6px',
+                      minWidth: '28px',
+                      width: '28px',
+                      height: '28px',
+                      '&:hover:not(:disabled)': {
+                        opacity: 1,
+                        '& .MuiSvgIcon-root': {
+                          color: 'primary.main',
+                        },
+                      },
+                    }}
+                  >
+                    <ChevronRightIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+              
+              {/* Разделитель между навигацией и остальными кнопками */}
+              <Box sx={{ width: '1px', height: '16px', bgcolor: 'divider', mx: 0.5 }} />
+            </>
+          )}
+          
           <Tooltip title="Копировать">
             <IconButton
               size="small"
@@ -1925,15 +2234,93 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
               }}
               className="message-copy-button"
               data-theme={isDarkMode ? 'dark' : 'light'}
-                             sx={{ 
-                 opacity: 0.7,
-                 p: 0.5,
-                 /* Убираем hover эффекты, чтобы кнопка была статичной */
-               }}
+              sx={{ 
+                opacity: 0.7,
+                p: 0.5,
+                borderRadius: '6px',
+                minWidth: '28px',
+                width: '28px',
+                height: '28px',
+                '&:hover': {
+                  opacity: 1,
+                  '& .MuiSvgIcon-root': {
+                    color: 'primary.main',
+                  },
+                },
+                '& .MuiSvgIcon-root': {
+                  fontSize: '18px !important',
+                  width: '18px !important',
+                  height: '18px !important',
+                },
+              }}
             >
-              <CopyIcon fontSize="small" />
+              <CopyIcon />
             </IconButton>
           </Tooltip>
+          
+          {/* Кнопка редактирования - для всех сообщений */}
+          <Tooltip title="Редактировать">
+            <IconButton
+              size="small"
+              onClick={() => handleEditClick(message)}
+              className="message-edit-button"
+              data-theme={isDarkMode ? 'dark' : 'light'}
+              sx={{ 
+                opacity: 0.7,
+                p: 0.5,
+                borderRadius: '6px',
+                minWidth: '28px',
+                width: '28px',
+                height: '28px',
+                '&:hover': {
+                  opacity: 1,
+                  '& .MuiSvgIcon-root': {
+                    color: 'primary.main',
+                  },
+                },
+                '& .MuiSvgIcon-root': {
+                  fontSize: '18px !important',
+                  width: '18px !important',
+                  height: '18px !important',
+                },
+              }}
+            >
+              <EditIcon />
+            </IconButton>
+          </Tooltip>
+          
+          {/* Кнопка перегенерации - только для сообщений LLM/агента */}
+          {!isUser && (
+            <Tooltip title="Перегенерировать">
+              <IconButton
+                size="small"
+                onClick={() => handleRegenerate(message)}
+                className="message-regenerate-button"
+                data-theme={isDarkMode ? 'dark' : 'light'}
+                sx={{ 
+                  opacity: 0.7,
+                  p: 0.5,
+                  borderRadius: '6px',
+                  minWidth: '28px',
+                  width: '28px',
+                  height: '28px',
+                  '&:hover': {
+                    opacity: 1,
+                    '& .MuiSvgIcon-root': {
+                      color: 'primary.main',
+                    },
+                  },
+                  '& .MuiSvgIcon-root': {
+                    fontSize: '18px !important',
+                    width: '18px !important',
+                    height: '18px !important',
+                  },
+                }}
+              >
+                <RefreshIcon />
+              </IconButton>
+            </Tooltip>
+          )}
         </Box>
       </Box>
     );
@@ -2095,37 +2482,31 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                   const isPlaying = isSpeaking && currentTestVoice === voiceKey;
                   
                                      // Вычисляем позицию и размер для каждого кружка
-                   const distance = Math.abs(index - currentVoiceIndex);
-                   let size, opacity, scale, zIndex, translateX;
-                   
-                   // Отладочная информация для всех кружков
-                   console.log(`Кружок ${voiceKey}: index = ${index}, currentVoiceIndex = ${currentVoiceIndex}, distance = ${distance}`);
-                   
-                   if (distance === 0) {
-                     // Активный кружок - большой и по центру
-                     size = 80;
-                     opacity = 1;
-                     scale = 1;
-                     zIndex = 3;
-                     translateX = 0;
-                     console.log(`${voiceKey} - АКТИВНЫЙ: size = ${size}, opacity = ${opacity}, scale = ${scale}`);
-                   } else if (distance === 1) {
-                     // Соседние кружки - средние и по бокам
-                     size = 60;
-                     opacity = 0.7;
-                     scale = 0.8;
-                     zIndex = 2;
-                     translateX = index < currentVoiceIndex ? -62 : 81; // Одинаковое расстояние в обе стороны
-                     console.log(`${voiceKey} - Соседний: size = ${size}, opacity = ${opacity}, scale = ${scale}`);
-                   } else {
-                     // Дальние кружки - маленькие и на заднем плане
-                     size = 40;
-                     opacity = 0.3;
-                     scale = 0.6;
-                     zIndex = 1;
-                     translateX = index < currentVoiceIndex ? -95 : 134 // Одинаковое расстояние в обе стороны
-                     console.log(`${voiceKey} - Дальний: size = ${size}, opacity = ${opacity}, scale = ${scale}`);
-                   }
+                  const distance = Math.abs(index - currentVoiceIndex);
+                  let size, opacity, scale, zIndex, translateX;
+                  
+                  if (distance === 0) {
+                    // Активный кружок - большой и по центру
+                    size = 80;
+                    opacity = 1;
+                    scale = 1;
+                    zIndex = 3;
+                    translateX = 0;
+                  } else if (distance === 1) {
+                    // Соседние кружки - средние и по бокам
+                    size = 60;
+                    opacity = 0.7;
+                    scale = 0.8;
+                    zIndex = 2;
+                    translateX = index < currentVoiceIndex ? -62 : 81; // Одинаковое расстояние в обе стороны
+                  } else {
+                    // Дальние кружки - маленькие и на заднем плане
+                    size = 40;
+                    opacity = 0.3;
+                    scale = 0.6;
+                    zIndex = 1;
+                    translateX = index < currentVoiceIndex ? -95 : 134 // Одинаковое расстояние в обе стороны
+                  }
                   
                   return (
                     <Box
@@ -3209,25 +3590,27 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                   </Tooltip>
                 ) : (
                   <Tooltip title="Отправить">
-                    <IconButton
-                      onClick={handleSendMessage}
-                      disabled={!inputMessage.trim() || !isConnected || !modelWindows.some(w => w.selectedModel)}
-                      color="primary"
-                      sx={{
-                        bgcolor: 'primary.main',
-                        color: 'white',
-                        '&:hover': {
-                          bgcolor: 'primary.dark',
-                        },
-                        '&:disabled': {
-                          bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.12)',
-                          color: isDarkMode ? 'rgba(255, 255, 255, 0.6)' : 'rgba(0, 0, 0, 0.26)',
-                          border: isDarkMode ? '1px solid rgba(255, 255, 255, 0.2)' : 'none',
-                        }
-                      }}
-                    >
-                      <SendIcon sx={{ fontSize: '1.2rem' }} />
-                    </IconButton>
+                    <span>
+                      <IconButton
+                        onClick={handleSendMessage}
+                        disabled={!inputMessage.trim() || !isConnected || !modelWindows.some(w => w.selectedModel)}
+                        color="primary"
+                        sx={{
+                          bgcolor: 'primary.main',
+                          color: 'white',
+                          '&:hover': {
+                            bgcolor: 'primary.dark',
+                          },
+                          '&:disabled': {
+                            bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.12)',
+                            color: isDarkMode ? 'rgba(255, 255, 255, 0.6)' : 'rgba(0, 0, 0, 0.26)',
+                            border: isDarkMode ? '1px solid rgba(255, 255, 255, 0.2)' : 'none',
+                          }
+                        }}
+                      >
+                        <SendIcon sx={{ fontSize: '1.2rem' }} />
+                      </IconButton>
+                    </span>
                   </Tooltip>
                 )}
               </Box>
@@ -3280,6 +3663,141 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
               {messages.map((message, index) => (
                 <MessageCard key={index} message={message} />
               ))}
+              
+              {/* Индикатор размышления - показывается только до начала потоковой генерации, сразу после сообщений */}
+              {state.isLoading && !messages.some(msg => msg.isStreaming) && (
+                <Box sx={{ 
+                  width: '100%', 
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'flex-start',
+                  mb: 1.5,
+                }}>
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'flex-start',
+                      maxWidth: '75%',
+                      minWidth: '180px',
+                    }}
+                  >
+                    <Card
+                      sx={{
+                        backgroundColor: isDarkMode ? 'background.paper' : '#f8f9fa',
+                        color: isDarkMode ? 'text.primary' : '#333',
+                        boxShadow: isDarkMode 
+                          ? '0 2px 8px rgba(0, 0, 0, 0.15)' 
+                          : '0 2px 8px rgba(0, 0, 0, 0.1)',
+                        width: '100%',
+                      }}
+                    >
+                      <CardContent sx={{ p: 1.2, pb: 0.8 }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.3 }}>
+                          <Avatar
+                            src="/astra.png"
+                            sx={{
+                              width: 24,
+                              height: 24,
+                              mr: 1,
+                              bgcolor: 'transparent',
+                              position: 'relative',
+                              '&::before': {
+                                content: '""',
+                                position: 'absolute',
+                                top: '-2px',
+                                left: '-2px',
+                                right: '-2px',
+                                bottom: '-2px',
+                                borderRadius: '50%',
+                                background: 'radial-gradient(circle, rgba(33, 150, 243, 0.3) 0%, transparent 70%)',
+                                animation: 'thinking-glow 2s ease-in-out infinite',
+                                '@keyframes thinking-glow': {
+                                  '0%, 100%': { 
+                                    opacity: 0.3,
+                                    transform: 'scale(1)',
+                                  },
+                                  '50%': { 
+                                    opacity: 0.8,
+                                    transform: 'scale(1.3)',
+                                  },
+                                },
+                              },
+                              animation: 'thinking 2s ease-in-out infinite',
+                            }}
+                          />
+                          <Typography variant="caption" sx={{ opacity: 0.8, fontSize: '0.75rem', fontWeight: 500 }}>
+                            AstraChat
+                          </Typography>
+                          <Typography variant="caption" sx={{ ml: 'auto', opacity: 0.6, fontSize: '0.7rem' }}>
+                            {new Date().toLocaleTimeString('ru-RU', {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                          </Typography>
+                        </Box>
+                        
+                        <Box sx={{ 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          gap: 1,
+                          minHeight: '24px',
+                        }}>
+                          <Box sx={{ display: 'flex', gap: 0.5 }}>
+                            <Box
+                              sx={{
+                                width: 6,
+                                height: 6,
+                                borderRadius: '50%',
+                                bgcolor: '#2196f3',
+                                animation: 'dot1 1.4s ease-in-out infinite both',
+                                '@keyframes dot1': {
+                                  '0%, 80%, 100%': { transform: 'scale(0)' },
+                                  '40%': { transform: 'scale(1)' },
+                                },
+                              }}
+                            />
+                            <Box
+                              sx={{
+                                width: 6,
+                                height: 6,
+                                borderRadius: '50%',
+                                bgcolor: '#2196f3',
+                                animation: 'dot2 1.4s ease-in-out infinite both',
+                                animationDelay: '0.2s',
+                                '@keyframes dot2': {
+                                  '0%, 80%, 100%': { transform: 'scale(0)' },
+                                  '40%': { transform: 'scale(1)' },
+                                },
+                              }}
+                            />
+                            <Box
+                              sx={{
+                                width: 6,
+                                height: 6,
+                                borderRadius: '50%',
+                                bgcolor: '#2196f3',
+                                animation: 'dot3 1.4s ease-in-out infinite both',
+                                animationDelay: '0.4s',
+                                '@keyframes dot3': {
+                                  '0%, 80%, 100%': { transform: 'scale(0)' },
+                                  '40%': { transform: 'scale(1)' },
+                                },
+                              }}
+                            />
+                          </Box>
+                          <Typography variant="body2" sx={{ 
+                            color: isDarkMode ? 'rgba(255, 255, 255, 0.8)' : 'rgba(0, 0, 0, 0.8)',
+                            fontSize: '0.875rem',
+                          }}>
+                            думает...
+                          </Typography>
+                        </Box>
+                      </CardContent>
+                    </Card>
+                  </Box>
+                </Box>
+              )}
             </Box>
           )}
           <div ref={messagesEndRef} />
@@ -3311,149 +3829,6 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
           )}
         </Box>
 
-                 {/* Индикатор размышления - показывается только до начала потоковой генерации */}
-         {state.isLoading && !messages.some(msg => msg.isStreaming) && (
-           <Box sx={{ 
-             width: '100%', 
-             maxWidth: '800px', 
-             mx: 'auto',
-             px: 2,
-             mb: 3,
-             // Для новых чатов позиционируем в центре
-             ...(messages.length === 0 && {
-               position: 'absolute',
-               top: '50%',
-               left: '50%',
-               transform: 'translate(-50%, 20%)',
-               mb: 0,
-             }),
-           }}>
-             <Box
-               sx={{
-                 display: 'flex',
-                 flexDirection: 'column',
-                 alignItems: 'flex-start',
-                 maxWidth: '75%',
-                 minWidth: '180px',
-               }}
-             >
-               <Card
-                 sx={{
-                   backgroundColor: isDarkMode ? 'background.paper' : '#f8f9fa',
-                   color: isDarkMode ? 'text.primary' : '#333',
-                   boxShadow: isDarkMode 
-                     ? '0 2px 8px rgba(0, 0, 0, 0.15)' 
-                     : '0 2px 8px rgba(0, 0, 0, 0.1)',
-                   width: '100%',
-                 }}
-               >
-                 <CardContent sx={{ p: 1.2, pb: 0.8 }}>
-                   <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.3 }}>
-                     <Avatar
-                       sx={{
-                         width: 24,
-                         height: 24,
-                         mr: 1,
-                         bgcolor: 'secondary.main',
-                         position: 'relative',
-                         '&::before': {
-                           content: '""',
-                           position: 'absolute',
-                           top: '-2px',
-                           left: '-2px',
-                           right: '-2px',
-                           bottom: '-2px',
-                           borderRadius: '50%',
-                           background: 'radial-gradient(circle, rgba(33, 150, 243, 0.3) 0%, transparent 70%)',
-                           animation: 'thinking-glow 2s ease-in-out infinite',
-                           '@keyframes thinking-glow': {
-                             '0%, 100%': { 
-                               opacity: 0.3,
-                               transform: 'scale(1)',
-                             },
-                             '50%': { 
-                               opacity: 0.8,
-                               transform: 'scale(1.3)',
-                             },
-                           },
-                         },
-                         animation: 'thinking 2s ease-in-out infinite',
-                       }}
-                     >
-                       <BotIcon />
-                     </Avatar>
-                     <Typography variant="caption" sx={{ opacity: 0.8, fontSize: '0.75rem', fontWeight: 500 }}>
-                       Газик ИИ
-                     </Typography>
-                     <Typography variant="caption" sx={{ ml: 'auto', opacity: 0.6, fontSize: '0.7rem' }}>
-                       {new Date().toLocaleTimeString('ru-RU', {
-                         hour: '2-digit',
-                         minute: '2-digit',
-                       })}
-                     </Typography>
-                   </Box>
-                   
-                   <Box sx={{ 
-                     display: 'flex', 
-                     alignItems: 'center', 
-                     gap: 1,
-                     minHeight: '24px',
-                   }}>
-                     <Box sx={{ display: 'flex', gap: 0.5 }}>
-                       <Box
-                         sx={{
-                           width: 6,
-                           height: 6,
-                           borderRadius: '50%',
-                           bgcolor: '#2196f3',
-                           animation: 'dot1 1.4s ease-in-out infinite both',
-                           '@keyframes dot1': {
-                             '0%, 80%, 100%': { transform: 'scale(0)' },
-                             '40%': { transform: 'scale(1)' },
-                           },
-                         }}
-                       />
-                       <Box
-                         sx={{
-                           width: 6,
-                           height: 6,
-                           borderRadius: '50%',
-                           bgcolor: '#2196f3',
-                           animation: 'dot2 1.4s ease-in-out infinite both',
-                           animationDelay: '0.2s',
-                           '@keyframes dot2': {
-                             '0%, 80%, 100%': { transform: 'scale(0)' },
-                             '40%': { transform: 'scale(1)' },
-                           },
-                         }}
-                       />
-                       <Box
-                         sx={{
-                           width: 6,
-                           height: 6,
-                           borderRadius: '50%',
-                           bgcolor: '#2196f3',
-                           animation: 'dot3 1.4s ease-in-out infinite both',
-                           animationDelay: '0.4s',
-                           '@keyframes dot3': {
-                             '0%, 80%, 100%': { transform: 'scale(0)' },
-                             '40%': { transform: 'scale(1)' },
-                           },
-                         }}
-                       />
-                     </Box>
-                     <Typography variant="body2" sx={{ 
-                       color: isDarkMode ? 'rgba(255, 255, 255, 0.8)' : 'rgba(0, 0, 0, 0.8)',
-                       fontSize: '0.875rem',
-                     }}>
-                       думает...
-                     </Typography>
-                   </Box>
-                 </CardContent>
-               </Card>
-             </Box>
-           </Box>
-         )}
 
                  {/* Поле ввода */}
          <Box
@@ -3706,23 +4081,25 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
 
                                        {/* Кнопка меню с шестеренкой */}
                     <Tooltip title="Дополнительные действия">
-                      <IconButton
-                        onClick={handleMenuOpen}
-                        disabled={state.isLoading && !messages.some(msg => msg.isStreaming)}
-                        sx={{ 
-                          color: isDarkMode ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.7)',
-                          bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
-                          '&:hover': {
-                            bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)',
-                          },
-                          '&:disabled': {
-                            color: isDarkMode ? 'rgba(255, 255, 255, 0.3)' : 'rgba(0, 0, 0, 0.3)',
-                            bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)',
-                          }
-                        }}
-                      >
-                        <SettingsIcon sx={{ fontSize: '1.2rem' }} />
-                      </IconButton>
+                      <span>
+                        <IconButton
+                          onClick={handleMenuOpen}
+                          disabled={state.isLoading && !messages.some(msg => msg.isStreaming)}
+                          sx={{ 
+                            color: isDarkMode ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.7)',
+                            bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+                            '&:hover': {
+                              bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)',
+                            },
+                            '&:disabled': {
+                              color: isDarkMode ? 'rgba(255, 255, 255, 0.3)' : 'rgba(0, 0, 0, 0.3)',
+                              bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)',
+                            }
+                          }}
+                        >
+                          <SettingsIcon sx={{ fontSize: '1.2rem' }} />
+                        </IconButton>
+                      </span>
                     </Tooltip>
                  </Box>
 
@@ -3753,25 +4130,27 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                      </Tooltip>
                    ) : (
                      <Tooltip title="Отправить">
-                       <IconButton
-                         onClick={handleSendMessage}
-                         disabled={!inputMessage.trim() || !isConnected || (state.isLoading && !messages.some(msg => msg.isStreaming))}
-                         color="primary"
-                         sx={{
-                           bgcolor: 'primary.main',
-                           color: 'white',
-                           '&:hover': {
-                             bgcolor: 'primary.dark',
-                           },
-                           '&:disabled': {
-                             bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.12)',
-                             color: isDarkMode ? 'rgba(255, 255, 255, 0.6)' : 'rgba(0, 0, 0, 0.26)',
-                               border: isDarkMode ? '1px solid rgba(255, 255, 255, 0.2)' : 'none',
-                           }
-                         }}
-                       >
-                         <SendIcon sx={{ fontSize: '1.2rem' }} />
-                       </IconButton>
+                       <span>
+                         <IconButton
+                           onClick={handleSendMessage}
+                           disabled={!inputMessage.trim() || !isConnected || (state.isLoading && !messages.some(msg => msg.isStreaming))}
+                           color="primary"
+                           sx={{
+                             bgcolor: 'primary.main',
+                             color: 'white',
+                             '&:hover': {
+                               bgcolor: 'primary.dark',
+                             },
+                             '&:disabled': {
+                               bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.12)',
+                               color: isDarkMode ? 'rgba(255, 255, 255, 0.6)' : 'rgba(0, 0, 0, 0.26)',
+                                 border: isDarkMode ? '1px solid rgba(255, 255, 255, 0.2)' : 'none',
+                             }
+                           }}
+                         >
+                           <SendIcon sx={{ fontSize: '1.2rem' }} />
+                         </IconButton>
+                       </span>
                      </Tooltip>
                    )}
 
@@ -3836,6 +4215,59 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
            Переподключиться
          </MenuItem>
        </Menu>
+
+       {/* Диалог редактирования сообщения */}
+       <Dialog
+         open={editDialogOpen}
+         onClose={handleCancelEdit}
+         maxWidth="md"
+         fullWidth
+         PaperProps={{
+           sx: {
+             bgcolor: 'background.paper',
+             borderRadius: 2,
+           }
+         }}
+       >
+        <DialogTitle>
+          Редактировать сообщение
+        </DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            margin="dense"
+            label="Текст сообщения"
+            fullWidth
+            multiline
+            rows={6}
+            variant="outlined"
+            value={editText}
+            onChange={(e) => setEditText(e.target.value)}
+            sx={{ mt: 1 }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCancelEdit}>
+            Отменить
+          </Button>
+          {editingMessage?.role === 'user' ? (
+            // Кнопки для сообщений пользователя
+            <>
+              <Button onClick={handleSaveEdit} variant="outlined" color="primary">
+                Сохранить
+              </Button>
+              <Button onClick={handleSaveAndSend} variant="contained" color="primary">
+                Сохранить и отправить
+              </Button>
+            </>
+          ) : (
+            // Кнопки для сообщений LLM
+            <Button onClick={handleSaveEdit} variant="contained" color="primary">
+              Сохранить
+            </Button>
+          )}
+        </DialogActions>
+       </Dialog>
 
        {/* Уведомления */}
        <Snackbar

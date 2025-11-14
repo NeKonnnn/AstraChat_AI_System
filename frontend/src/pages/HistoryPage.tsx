@@ -123,7 +123,7 @@ export default function HistoryPage() {
     const text = filteredHistory
       .map(entry => {
         const timestamp = new Date(entry.timestamp).toLocaleString('ru-RU');
-        const role = entry.role === 'user' ? 'Пользователь' : 'Газик ИИ';
+        const role = entry.role === 'user' ? 'Пользователь' : 'AstraChat';
         return `[${timestamp}] ${role}: ${entry.content}`;
       })
       .join('\n\n');
@@ -191,7 +191,7 @@ export default function HistoryPage() {
                 История диалогов
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                Просмотр и управление историей общения с Газик ИИ
+                Просмотр и управление историей общения с AstraChat
               </Typography>
             </Box>
             
@@ -358,7 +358,7 @@ export default function HistoryPage() {
                           <Box sx={{ flexGrow: 1, minWidth: 0 }}>
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
                               <Typography variant="subtitle2" fontWeight="500">
-                                {isUser ? 'Вы' : 'Газик ИИ'}
+                                {isUser ? 'Вы' : 'AstraChat'}
                               </Typography>
                               <Chip
                                 size="small"
@@ -452,7 +452,7 @@ export default function HistoryPage() {
             </Avatar>
             <Box>
               <Typography variant="h6">
-                {selectedEntry?.role === 'user' ? 'Сообщение пользователя' : 'Ответ Газик ИИ'}
+                {selectedEntry?.role === 'user' ? 'Сообщение пользователя' : 'Ответ AstraChat'}
               </Typography>
               <Typography variant="caption" color="text.secondary">
                 {selectedEntry && formatTimestamp(selectedEntry.timestamp)}

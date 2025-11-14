@@ -12,6 +12,10 @@ import TranscriptionPage from './pages/TranscriptionPage';
 import HistoryPage from './pages/HistoryPage';
 import { SocketProvider } from './contexts/SocketContext';
 import { AppProvider } from './contexts/AppContext';
+import { AuthProvider } from './contexts/AuthContext';
+import PrivateRoute from './components/PrivateRoute';
+import LoginPage from './pages/LoginPage';
+import ProfilePage from './pages/ProfilePage';
 import './App.css';
 
 // Создаем тему Material-UI
@@ -90,60 +94,75 @@ function App() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <AppProvider>
-        <SocketProvider>
-          <Router>
-            <Box sx={{ display: 'flex', height: '100vh' }}>
-              <Sidebar 
-                open={sidebarOpen} 
-                onToggle={toggleSidebar}
-                isDarkMode={isDarkMode}
-                onToggleTheme={toggleTheme}
-              />
-              <Box 
-                component="main" 
-                sx={{ 
-                  flexGrow: 1, 
-                  display: 'flex',
-                  flexDirection: 'column',
-                  overflow: 'hidden',
-                  marginLeft: sidebarOpen ? 0 : '-280px',
-                  transition: 'margin-left 0.3s ease',
-                  position: 'relative',
-                }}
-              >
-                {/* Кнопка меню - видна только когда сайдбар закрыт */}
-                {!sidebarOpen && (
-                  <Box
-                    sx={{
-                      position: 'fixed',
-                      top: 16,
-                      left: 16,
-                      zIndex: 1200,
-                    }}
-                  >
-                    <IconButton
-                      onClick={toggleSidebar}
-                      className="menu-button"
-                    >
-                      <MenuIcon />
-                    </IconButton>
-                  </Box>
-                )}
+      <AuthProvider>
+        <AppProvider>
+          <SocketProvider>
+            <Router>
+              <Routes>
+                {/* Публичный маршрут для логина */}
+                <Route path="/login" element={<LoginPage />} />
                 
-                <Routes>
-                  <Route path="/" element={<UnifiedChatPage isDarkMode={isDarkMode} />} />
-                  <Route path="/voice" element={<VoicePage />} />
-                  <Route path="/documents" element={<DocumentsPage />} />
-                  <Route path="/transcription" element={<TranscriptionPage />} />
-                  {/* <Route path="/settings" element={<SettingsPage />} /> */} {/* Удалено - теперь используется модальное окно */}
-                  <Route path="/history" element={<HistoryPage />} />
-                </Routes>
-              </Box>
-            </Box>
-          </Router>
-        </SocketProvider>
-      </AppProvider>
+                {/* Защищенные маршруты */}
+                <Route
+                  path="/*"
+                  element={
+                    <PrivateRoute>
+                      <Box sx={{ display: 'flex', height: '100vh' }}>
+                        <Sidebar 
+                          open={sidebarOpen} 
+                          onToggle={toggleSidebar}
+                          isDarkMode={isDarkMode}
+                          onToggleTheme={toggleTheme}
+                        />
+                        <Box 
+                          component="main" 
+                          sx={{ 
+                            flexGrow: 1, 
+                            display: 'flex',
+                            flexDirection: 'column',
+                            overflow: 'hidden',
+                            marginLeft: sidebarOpen ? 0 : '-280px',
+                            transition: 'margin-left 0.3s ease',
+                            position: 'relative',
+                          }}
+                        >
+                          {/* Кнопка меню - видна только когда сайдбар закрыт */}
+                          {!sidebarOpen && (
+                            <Box
+                              sx={{
+                                position: 'fixed',
+                                top: 16,
+                                left: 16,
+                                zIndex: 1200,
+                              }}
+                            >
+                              <IconButton
+                                onClick={toggleSidebar}
+                                className="menu-button"
+                              >
+                                <MenuIcon />
+                              </IconButton>
+                            </Box>
+                          )}
+                          
+                          <Routes>
+                            <Route path="/" element={<UnifiedChatPage isDarkMode={isDarkMode} />} />
+                            <Route path="/voice" element={<VoicePage />} />
+                            <Route path="/documents" element={<DocumentsPage />} />
+                            <Route path="/transcription" element={<TranscriptionPage />} />
+                            <Route path="/profile" element={<ProfilePage />} />
+                            <Route path="/history" element={<HistoryPage />} />
+                          </Routes>
+                        </Box>
+                      </Box>
+                    </PrivateRoute>
+                  }
+                />
+              </Routes>
+            </Router>
+          </SocketProvider>
+        </AppProvider>
+      </AuthProvider>
     </ThemeProvider>
   );
 }

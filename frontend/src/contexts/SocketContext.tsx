@@ -7,6 +7,7 @@ interface SocketContextType {
   socket: Socket | null;
   isConnected: boolean;
   sendMessage: (message: string, chatId: string, streaming?: boolean) => void;
+  regenerateResponse: (userMessage: string, assistantMessageId: string, chatId: string, alternativeResponses: string[], currentIndex: number, streaming?: boolean) => void;
   stopGeneration: () => void;
   reconnect: () => void;
   onMultiLLMEvent?: (event: string, handler: (data: any) => void) => void;
@@ -22,6 +23,13 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   const { addMessage, updateMessage, setLoading, showNotification, getCurrentChat } = useAppActions();
   const currentMessageRef = useRef<string | null>(null);
   const currentChatIdRef = useRef<string | null>(null);
+  
+  // Ref для отслеживания режима перегенерации
+  const regenerationStateRef = useRef<{
+    isRegenerating: boolean;
+    alternativeResponses: string[];
+    currentIndex: number;
+  } | null>(null);
 
   const connectSocket = () => {
     console.log('🔌 Подключение к Socket.IO...');
@@ -76,7 +84,6 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 
     // Обработка событий Socket.IO
     newSocket.on('chat_chunk', (data) => {
-      console.log('Получен chunk:', data);
       handleServerMessage({ type: 'chunk', ...data });
     });
 
@@ -121,8 +128,6 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   const expectedModelsCountRef = useRef<number>(0); // Количество моделей, от которых ожидаем ответы
 
   const handleServerMessage = (data: any) => {
-    console.log('Получено сообщение:', data.type, data);
-
     switch (data.type) {
       case 'multi_llm_start':
         // Начало генерации от нескольких моделей
@@ -258,13 +263,40 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         break;
 
       case 'chunk':
-        console.log('Обрабатывается chunk, current ID:', currentMessageRef.current);
         // Потоковая генерация - обновляем существующее сообщение
         if (!currentChatIdRef.current) return;
         
         if (currentMessageRef.current) {
-          console.log('Обновляем существующее сообщение:', currentMessageRef.current);
-          updateMessage(currentChatIdRef.current, currentMessageRef.current, data.accumulated || data.chunk, true);
+          // Проверяем, находимся ли мы в режиме перегенерации (используем ref вместо getCurrentChat)
+          if (regenerationStateRef.current && regenerationStateRef.current.isRegenerating) {
+            // Это перегенерация - используем данные из ref
+            const updatedAlternatives = [...regenerationStateRef.current.alternativeResponses];
+            const currentIndex = regenerationStateRef.current.currentIndex;
+            const newContent = data.accumulated || data.chunk;
+            
+            // Обновляем ответ по текущему индексу
+            if (currentIndex < updatedAlternatives.length) {
+              updatedAlternatives[currentIndex] = newContent;
+            } else {
+              updatedAlternatives.push(newContent);
+            }
+            
+            // Обновляем ref с новым содержимым
+            regenerationStateRef.current.alternativeResponses = updatedAlternatives;
+            
+            updateMessage(
+              currentChatIdRef.current,
+              currentMessageRef.current,
+              newContent, // Обновляем message.content, чтобы он соответствовал текущему индексу
+              true,
+              undefined,
+              updatedAlternatives,
+              currentIndex
+            );
+          } else {
+            // Обычное обновление
+            updateMessage(currentChatIdRef.current, currentMessageRef.current, data.accumulated || data.chunk, true);
+          }
         } else {
           // Создаем новое сообщение для стриминга
           console.log('Создаем новое сообщение для стриминга');
@@ -280,14 +312,47 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         break;
 
       case 'complete':
-        console.log('Генерация завершена, current ID:', currentMessageRef.current);
         // Генерация завершена
-        if (!currentChatIdRef.current) return;
+        if (!currentChatIdRef.current) {
+          console.warn('currentChatIdRef пуст при завершении генерации');
+          setLoading(false);
+          return;
+        }
         
         if (currentMessageRef.current) {
-          // Обновляем сообщение и убираем флаг стриминга
-          console.log('Финализируем сообщение:', currentMessageRef.current);
-          updateMessage(currentChatIdRef.current, currentMessageRef.current, data.response, false);
+          // Обновляем сообщение и ЯВНО убираем флаг стриминга
+          
+          // Проверяем, находимся ли мы в режиме перегенерации (используем ref вместо getCurrentChat)
+          if (regenerationStateRef.current && regenerationStateRef.current.isRegenerating) {
+            // Это перегенерация - используем данные из ref
+            const updatedAlternatives = [...regenerationStateRef.current.alternativeResponses];
+            const currentIndex = regenerationStateRef.current.currentIndex;
+            
+            // Обновляем или добавляем ответ по текущему индексу
+            if (currentIndex < updatedAlternatives.length) {
+              updatedAlternatives[currentIndex] = data.response;
+            } else {
+              updatedAlternatives.push(data.response);
+            }
+            
+            updateMessage(
+              currentChatIdRef.current,
+              currentMessageRef.current,
+              data.response, // Обновляем message.content, чтобы он соответствовал текущему индексу
+              false,
+              undefined,
+              updatedAlternatives,
+              currentIndex
+            );
+            
+            // Очищаем состояние перегенерации
+            regenerationStateRef.current = null;
+          } else {
+            // Обычное обновление
+            updateMessage(currentChatIdRef.current, currentMessageRef.current, data.response, false);
+          }
+          
+          console.log('Флаг isStreaming установлен в false');
           currentMessageRef.current = null;
         } else {
           // Если нет текущего сообщения, создаем новое
@@ -302,26 +367,34 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         }
         setLoading(false);
         currentChatIdRef.current = null; // Очищаем после завершения
-
+        console.log('Генерация полностью завершена');
         break;
 
       case 'error':
         console.error('Ошибка от сервера:', data.error);
         showNotification('error', `Ошибка сервера: ${data.error}`);
         setLoading(false);
+        
+        // Убираем флаг стриминга у текущего сообщения при ошибке
+        if (currentChatIdRef.current && currentMessageRef.current) {
+          console.log('Сбрасываем isStreaming при ошибке');
+          updateMessage(currentChatIdRef.current, currentMessageRef.current, undefined, false);
+        }
+        
         currentMessageRef.current = null;
         currentChatIdRef.current = null; // Очищаем при ошибке
         multiLLMMessageRef.current = null;
         multiLLMResponsesRef.current.clear();
-
+        console.log('Все рефы очищены после ошибки');
         break;
         
       case 'stopped':
-        console.log('Генерация остановлена сервером');
-
+        console.log('Генерация остановлена пользователем или сервером');
         setLoading(false);
+        
         // Убираем флаг стриминга у текущего сообщения
         if (currentChatIdRef.current && currentMessageRef.current) {
+          console.log('Сбрасываем isStreaming при остановке');
           updateMessage(currentChatIdRef.current, currentMessageRef.current, undefined, false);
           currentMessageRef.current = null;
         }
@@ -370,6 +443,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       message,
       streaming,
       timestamp: new Date().toISOString(),
+      message_id: userMessageId,  // Передаем ID сообщения с фронтенда
+      conversation_id: chatId,     // Передаем ID диалога
     };
 
     socket.emit('chat_message', messageData);
@@ -393,6 +468,53 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         }
       }
     }, 30000); // 30 секунд таймаут
+  };
+
+  const regenerateResponse = (
+    userMessage: string, 
+    assistantMessageId: string, 
+    chatId: string, 
+    alternativeResponses: string[],
+    currentIndex: number,
+    streaming: boolean = true
+  ) => {
+    if (!socket || !isConnected) {
+      showNotification('error', 'Нет соединения с сервером');
+      return;
+    }
+
+    console.log('Перегенерация ответа для сообщения:', assistantMessageId);
+    
+    // Сохраняем chatId и ID сообщения помощника для обработки ответов
+    currentChatIdRef.current = chatId;
+    currentMessageRef.current = assistantMessageId;
+    
+    // Сохраняем состояние перегенерации в ref
+    regenerationStateRef.current = {
+      isRegenerating: true,
+      alternativeResponses: [...alternativeResponses], // Копируем массив
+      currentIndex
+    };
+    
+    // Сбрасываем состояние для multi-llm режима
+    multiLLMMessageRef.current = null;
+    multiLLMResponsesRef.current.clear();
+    expectedModelsCountRef.current = 0;
+    
+    // Устанавливаем состояние загрузки
+    setLoading(true);
+
+    // Отправляем запрос на перегенерацию через Socket.IO
+    // Используем тот же endpoint, но без создания нового сообщения пользователя
+    const messageData = {
+      message: userMessage,
+      streaming,
+      timestamp: new Date().toISOString(),
+      regenerate: true, // Флаг перегенерации
+      assistant_message_id: assistantMessageId, // ID сообщения помощника для обновления
+    };
+
+    socket.emit('chat_message', messageData);
   };
 
   const stopGeneration = () => {
@@ -456,6 +578,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     socket,
     isConnected,
     sendMessage,
+    regenerateResponse,
     stopGeneration,
     reconnect,
     onMultiLLMEvent,

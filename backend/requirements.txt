@@ -35,6 +35,11 @@ llama-cpp-python==0.3.16
 # Дополнительные зависимости
 psutil==7.0.0
 
+# Аутентификация
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-ldap==3.4.4
+
 # Зависимости для TTS и распознавания речи
 sounddevice==0.5.2
 vosk==0.3.45

@@ -14,6 +14,9 @@ export interface Message {
     isStreaming?: boolean;
     error?: boolean;
   }>;
+  // Для хранения нескольких вариантов ответов (при перегенерации)
+  alternativeResponses?: string[];
+  currentResponseIndex?: number; // Индекс текущего отображаемого варианта (0-based)
 }
 
 export interface Chat {
@@ -107,9 +110,10 @@ type AppAction =
   | { type: 'RESTORE_CHATS'; payload: { chats: Chat[]; currentChatId: string | null; folders: Folder[] } }
   | { type: 'SET_CURRENT_CHAT'; payload: string | null }
   | { type: 'UPDATE_CHAT_TITLE'; payload: { chatId: string; title: string } }
+  | { type: 'UPDATE_CHAT_MESSAGES'; payload: { chatId: string; messages: Message[] } }
   | { type: 'DELETE_CHAT'; payload: string }
   | { type: 'ADD_MESSAGE'; payload: { chatId: string; message: Message } }
-  | { type: 'UPDATE_MESSAGE'; payload: { chatId: string; messageId: string; content?: string; isStreaming?: boolean; multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }> } }
+  | { type: 'UPDATE_MESSAGE'; payload: { chatId: string; messageId: string; content?: string; isStreaming?: boolean; multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>; alternativeResponses?: string[]; currentResponseIndex?: number } }
   | { type: 'APPEND_CHUNK'; payload: { chatId: string; messageId: string; chunk: string; isStreaming?: boolean } }
   | { type: 'SET_LOADING'; payload: boolean }
   | { type: 'SET_CURRENT_MODEL'; payload: ModelInfo }
@@ -245,6 +249,16 @@ function appReducer(state: AppState, action: AppAction): AppState {
         ),
       };
       
+    case 'UPDATE_CHAT_MESSAGES':
+      return {
+        ...state,
+        chats: state.chats.map(chat =>
+          chat.id === action.payload.chatId
+            ? { ...chat, messages: action.payload.messages, updatedAt: new Date().toISOString() }
+            : chat
+        ),
+      };
+      
     case 'DELETE_CHAT':
       return {
         ...state,
@@ -274,14 +288,10 @@ function appReducer(state: AppState, action: AppAction): AppState {
     }
       
     case 'UPDATE_MESSAGE': {
-      const { chatId, messageId, content, isStreaming, multiLLMResponses } = action.payload;
-      console.log('UPDATE_MESSAGE вызван для чата:', chatId, 'сообщения:', messageId);
-      console.log('Новый контент:', content);
-      console.log('Новый isStreaming:', isStreaming);
+      const { chatId, messageId, content, isStreaming, multiLLMResponses, alternativeResponses, currentResponseIndex } = action.payload;
       
       const currentChat = state.chats.find(chat => chat.id === chatId);
       const updatedMessage = currentChat?.messages.find(msg => msg.id === messageId);
-      console.log('Найдено сообщение для обновления:', updatedMessage ? 'да' : 'нет');
       
       return {
         ...state,
@@ -295,7 +305,9 @@ function appReducer(state: AppState, action: AppAction): AppState {
                         ...msg, 
                         ...(content !== undefined && { content }),
                         ...(isStreaming !== undefined && { isStreaming }),
-                        ...(multiLLMResponses !== undefined && { multiLLMResponses })
+                        ...(multiLLMResponses !== undefined && { multiLLMResponses }),
+                        ...(alternativeResponses !== undefined && { alternativeResponses }),
+                        ...(currentResponseIndex !== undefined && { currentResponseIndex })
                       }
                     : msg
                 ),
@@ -615,6 +627,13 @@ export function useAppActions() {
       });
     },
     
+    updateChatMessages: (chatId: string, messages: Message[]) => {
+      dispatch({
+        type: 'UPDATE_CHAT_MESSAGES',
+        payload: { chatId, messages },
+      });
+    },
+    
     deleteChat: (chatId: string) => {
       dispatch({
         type: 'DELETE_CHAT',
@@ -623,7 +642,11 @@ export function useAppActions() {
     },
     
     addMessage: (chatId: string, message: Omit<Message, 'id'>) => {
-      const messageId = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+      // Генерируем ID в формате msg_{12 hex символов}, как в MongoDB
+      const randomHex = Array.from({ length: 12 }, () => 
+        Math.floor(Math.random() * 16).toString(16)
+      ).join('');
+      const messageId = `msg_${randomHex}`;
       console.log('ADD_MESSAGE вызван для чата:', chatId, 'роли:', message.role);
       console.log('Содержимое:', message.content.substring(0, 100) + '...');
       console.log('isStreaming:', message.isStreaming);
@@ -642,8 +665,8 @@ export function useAppActions() {
       return messageId;
     },
     
-    updateMessage: (chatId: string, messageId: string, content?: string, isStreaming?: boolean, multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>) => {
-      dispatch({ type: 'UPDATE_MESSAGE', payload: { chatId, messageId, content, isStreaming, multiLLMResponses } });
+    updateMessage: (chatId: string, messageId: string, content?: string, isStreaming?: boolean, multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>, alternativeResponses?: string[], currentResponseIndex?: number) => {
+      dispatch({ type: 'UPDATE_MESSAGE', payload: { chatId, messageId, content, isStreaming, multiLLMResponses, alternativeResponses, currentResponseIndex } });
     },
     
     appendChunk: (chatId: string, messageId: string, chunk: string, isStreaming?: boolean) => {

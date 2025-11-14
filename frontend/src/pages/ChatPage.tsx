@@ -348,10 +348,10 @@ export default function ChatPage() {
                   <BotIcon sx={{ fontSize: 40 }} />
                 </Avatar>
                 <Typography variant="h5" fontWeight="600" gutterBottom>
-                  Добро пожаловать в Газик ИИ! 👋
+                  Добро пожаловать в AstraChat! 👋
                 </Typography>
                 <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
-                  Я ваш персональный ассистент - Газик ИИ. Задавайте любые вопросы,
+                  Я ваш персональный ассистент - AstraChat. Задавайте любые вопросы,
                   и я постараюсь помочь вам найти ответы.
                 </Typography>
                 <Typography variant="body2" color="text.secondary">

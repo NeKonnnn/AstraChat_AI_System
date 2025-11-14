@@ -36,6 +36,9 @@ export const API_CONFIG = {
     
     // История
     HISTORY: '/api/history',
+    
+    // Сообщения
+    UPDATE_MESSAGE: '/api/messages',
   }
 };
 

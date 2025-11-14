@@ -102,6 +102,18 @@ logger.info(f"  MONGODB_PASSWORD: {'*' * len(mongodb_password) if mongodb_passwo
 if mongodb_user.startswith('#') or mongodb_password.startswith('#'):
     logger.warning("⚠️ MONGODB_USER или MONGODB_PASSWORD начинаются с '#', будут игнорироваться")
 
+# Импорт authentication router
+try:
+    logger.info("Попытка импорта auth router...")
+    from backend.auth.routes import router as auth_router
+    logger.info("auth router импортирован успешно")
+except ImportError as e:
+    logger.warning(f"auth router недоступен: {e}")
+    auth_router = None
+except Exception as e:
+    logger.warning(f"Ошибка при импорте auth router: {e}")
+    auth_router = None
+
 # Импорты из оригинального MemoAI
 try:
     logger.info("Попытка импорта agent...")
@@ -382,6 +394,13 @@ app.add_middleware(
     allow_methods=cors_config.get("allow_methods", ["*"]),
     allow_headers=cors_config.get("allow_headers", ["*"]),
 )
+
+# Подключаем authentication routes
+if auth_router:
+    app.include_router(auth_router)
+    logger.info("✅ Auth routes подключены (/api/auth/*)")
+else:
+    logger.warning("⚠️ Auth routes не подключены (auth_router недоступен)")
 
 # Startup событие для инициализации агентной архитектуры и баз данных
 @app.on_event("startup")
@@ -717,7 +736,10 @@ async def chat_message(sid, data):
         
         # Сохраняем сообщение пользователя
         try:
-            await save_dialog_entry("user", user_message)
+            # Получаем message_id и conversation_id из данных, если они переданы
+            user_message_id = data.get("message_id", None)
+            conversation_id = data.get("conversation_id", None)
+            await save_dialog_entry("user", user_message, None, user_message_id, conversation_id)
         except RuntimeError as e:
             # Ошибка MongoDB - продолжаем работу, но логируем
             error_msg = str(e)
@@ -990,7 +1012,8 @@ async def chat_message(sid, data):
                 
                 # Сохраняем ответ в память
                 try:
-                    await save_dialog_entry("assistant", response)
+                    conversation_id = data.get("conversation_id", None)
+                    await save_dialog_entry("assistant", response, None, None, conversation_id)
                 except RuntimeError as e:
                     # Ошибка MongoDB - логируем, но продолжаем работу
                     error_msg = str(e)
@@ -1107,7 +1130,8 @@ async def chat_message(sid, data):
             
             # Сохраняем ответ
             try:
-                await save_dialog_entry("assistant", response)
+                conversation_id = data.get("conversation_id", None)
+                await save_dialog_entry("assistant", response, None, None, conversation_id)
             except RuntimeError as e:
                 # Ошибка MongoDB - логируем, но продолжаем работу
                 error_msg = str(e)
@@ -1320,6 +1344,37 @@ async def chat_with_ai(message: ChatMessage):
         
     except Exception as e:
         logger.error(f"Chat error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/messages/{conversation_id}/{message_id}")
+async def update_message(conversation_id: str, message_id: str, request: Dict[str, str]):
+    """Обновить содержимое сообщения в MongoDB"""
+    try:
+        if not get_conversation_repository:
+            raise HTTPException(status_code=503, detail="MongoDB repository не доступен")
+        
+        conversation_repo = get_conversation_repository()
+        content = request.get("content", "")
+        old_content = request.get("old_content", None)  # Старое содержимое для поиска
+        
+        if not content:
+            raise HTTPException(status_code=400, detail="Поле 'content' обязательно")
+        
+        success = await conversation_repo.update_message(conversation_id, message_id, content, old_content)
+        
+        if success:
+            return {
+                "message": "Сообщение обновлено",
+                "success": True,
+                "timestamp": datetime.now().isoformat()
+            }
+        else:
+            raise HTTPException(status_code=404, detail="Сообщение не найдено")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Ошибка при обновлении сообщения: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.websocket("/ws/chat")

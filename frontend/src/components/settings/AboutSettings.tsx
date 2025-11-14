@@ -125,7 +125,7 @@ export default function AboutSettings() {
                 Название
               </Typography>
               <Typography variant="body1" sx={{ mb: 2 }}>
-                Газик ИИ - Голосовой ассистент
+                AstraChat - Голосовой ассистент
               </Typography>
               
               <Typography variant="subtitle1" fontWeight="600" gutterBottom>

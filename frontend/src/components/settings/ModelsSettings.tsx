@@ -334,12 +334,12 @@ export default function ModelsSettings() {
         Настройки моделей
       </Typography>
 
-      {/* Настройки модели Газик ИИ */}
+      {/* Настройки модели AstraChat */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <SettingsIcon color="primary" />
-            Настройки модели Газик ИИ
+            Настройки модели AstraChat
           </Typography>
           
           <Alert severity="info" sx={{ mb: 2 }}>

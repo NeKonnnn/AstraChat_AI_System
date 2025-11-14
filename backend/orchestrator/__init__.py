@@ -18,7 +18,7 @@ class AgentOrchestrator:
     def __init__(self):
         self.langgraph_orchestrator = None
         self.is_initialized = False
-        self.mode = "agent"  # "agent", "direct" или "multi-llm"
+        self.mode = "direct"  # "agent", "direct" или "multi-llm" - по умолчанию прямой режим
         self.multi_llm_models = []  # Список выбранных моделей для режима multi-llm
         
     async def initialize(self) -> bool:

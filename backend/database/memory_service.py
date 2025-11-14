@@ -81,7 +81,7 @@ def reset_conversation():
     current_conversation_id = None
 
 
-async def save_dialog_entry_mongodb(role: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> bool:
+async def save_dialog_entry_mongodb(role: str, content: str, metadata: Optional[Dict[str, Any]] = None, message_id: Optional[str] = None, conversation_id: Optional[str] = None) -> bool:
     """
     Сохранение сообщения в MongoDB
     
@@ -89,6 +89,8 @@ async def save_dialog_entry_mongodb(role: str, content: str, metadata: Optional[
         role: Роль отправителя (user, assistant, system)
         content: Содержание сообщения
         metadata: Дополнительные метаданные
+        message_id: ID сообщения (если не указан, генерируется автоматически)
+        conversation_id: ID диалога (если не указан, используется текущий или создается новый)
         
     Returns:
         True если успешно, False в случае ошибки
@@ -104,11 +106,17 @@ async def save_dialog_entry_mongodb(role: str, content: str, metadata: Optional[
         if conversation_repo is None:
             conversation_repo = get_conversation_repository()
         
-        conversation_id = get_or_create_conversation_id()
+        # Используем переданный conversation_id или получаем/создаем новый
+        if conversation_id is None:
+            conversation_id = get_or_create_conversation_id()
+        
+        # Используем переданный message_id или генерируем новый
+        if message_id is None:
+            message_id = f"msg_{uuid.uuid4().hex[:12]}"
         
         # Создаем сообщение
         message = Message(
-            message_id=f"msg_{uuid.uuid4().hex[:12]}",
+            message_id=message_id,
             role=role,
             content=content,
             timestamp=datetime.utcnow(),
@@ -147,9 +155,16 @@ async def save_dialog_entry_mongodb(role: str, content: str, metadata: Optional[
         return False
 
 
-async def save_dialog_entry(role: str, content: str, metadata: Optional[Dict[str, Any]] = None):
+async def save_dialog_entry(role: str, content: str, metadata: Optional[Dict[str, Any]] = None, message_id: Optional[str] = None, conversation_id: Optional[str] = None):
     """
     Сохранение сообщения в MongoDB (файловый режим отключен)
+    
+    Args:
+        role: Роль отправителя
+        content: Содержание сообщения
+        metadata: Дополнительные метаданные
+        message_id: ID сообщения (опционально)
+        conversation_id: ID диалога (опционально)
     """
     # Проверяем реальную доступность MongoDB
     if not _check_mongodb_available():
@@ -157,7 +172,7 @@ async def save_dialog_entry(role: str, content: str, metadata: Optional[Dict[str
         raise RuntimeError("MongoDB недоступен. Невозможно сохранить сообщение.")
     
     try:
-        success = await save_dialog_entry_mongodb(role, content, metadata)
+        success = await save_dialog_entry_mongodb(role, content, metadata, message_id, conversation_id)
         if not success:
             raise RuntimeError("Не удалось сохранить сообщение в MongoDB")
     except RuntimeError:

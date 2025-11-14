@@ -104,7 +104,7 @@ class ModelSettings:
         """Получение максимальных значений для настроек"""
         return {
             "context_size": 32768,
-            "output_tokens": 8192,
+            "output_tokens": 100000,  # Увеличено для снятия ограничения на длину генерации
             "batch_size": 2048,
             "n_threads": 24,
             "temperature": 2.0,

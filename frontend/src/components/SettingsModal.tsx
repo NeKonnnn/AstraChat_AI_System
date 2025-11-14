@@ -21,9 +21,11 @@ import {
   Mic as MicIcon,
   Info as InfoIcon,
   Palette as PaletteIcon,
+  Person as PersonIcon,
 } from '@mui/icons-material';
 import {
   GeneralSettings,
+  ProfileSettings,
   ModelsSettings,
   AgentsSettings,
   TranscriptionSettings,
@@ -37,7 +39,7 @@ interface SettingsModalProps {
   onToggleTheme: () => void;
 }
 
-type SettingsSection = 'general' | 'models' | 'agents' | 'transcription' | 'about';
+type SettingsSection = 'general' | 'profile' | 'models' | 'agents' | 'transcription' | 'about';
 
 const settingsSections = [
   {
@@ -45,6 +47,12 @@ const settingsSections = [
     title: 'Общее',
     icon: <PaletteIcon />,
     description: 'Тема и настройки памяти'
+  },
+  {
+    id: 'profile' as SettingsSection,
+    title: 'Профиль',
+    icon: <PersonIcon />,
+    description: 'Личная информация и аккаунт'
   },
   {
     id: 'models' as SettingsSection,
@@ -85,6 +93,8 @@ export default function SettingsModal({ open, onClose, isDarkMode, onToggleTheme
     switch (activeSection) {
       case 'general':
         return <GeneralSettings isDarkMode={isDarkMode} onToggleTheme={onToggleTheme} />;
+      case 'profile':
+        return <ProfileSettings />;
       case 'models':
         return <ModelsSettings />;
       case 'agents':
@@ -124,7 +134,7 @@ export default function SettingsModal({ open, onClose, isDarkMode, onToggleTheme
           backgroundColor: theme.palette.mode === 'dark' ? '#2a2a2a' : '#f5f5f5',
         }}
       >
-        <Typography variant="h6" fontWeight="600">
+        <Typography component="span" variant="h6" fontWeight="600">
           Настройки
         </Typography>
         <IconButton

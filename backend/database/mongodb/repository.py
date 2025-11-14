@@ -135,6 +135,73 @@ class ConversationRepository:
             logger.error(f"Ошибка при добавлении сообщения: {e}")
             return False
     
+    async def update_message(
+        self,
+        conversation_id: str,
+        message_id: str,
+        content: str,
+        old_content: str = None
+    ) -> bool:
+        """
+        Обновление сообщения в диалоге
+        
+        Args:
+            conversation_id: ID диалога
+            message_id: ID сообщения для обновления (может быть фронтенд ID)
+            content: Новое содержимое сообщения
+            old_content: Старое содержимое сообщения (для поиска, если message_id не найден)
+            
+        Returns:
+            True если успешно, False в случае ошибки
+        """
+        try:
+            collection = self._get_collection()
+            
+            # Сначала пытаемся найти по message_id
+            result = await collection.update_one(
+                {
+                    "conversation_id": conversation_id,
+                    "messages.message_id": message_id
+                },
+                {
+                    "$set": {
+                        "messages.$.content": content,
+                        "updated_at": datetime.utcnow()
+                    }
+                }
+            )
+            
+            if result.modified_count > 0:
+                logger.debug(f"Обновлено сообщение {message_id} в диалоге: {conversation_id}")
+                return True
+            
+            # Если не найдено по message_id и передано старое содержимое, ищем по нему
+            if old_content:
+                logger.debug(f"Сообщение {message_id} не найдено, ищем по старому содержимому")
+                result = await collection.update_one(
+                    {
+                        "conversation_id": conversation_id,
+                        "messages.content": old_content
+                    },
+                    {
+                        "$set": {
+                            "messages.$.content": content,
+                            "updated_at": datetime.utcnow()
+                        }
+                    }
+                )
+                
+                if result.modified_count > 0:
+                    logger.debug(f"Обновлено сообщение по старому содержимому в диалоге: {conversation_id}")
+                    return True
+            
+            logger.warning(f"Сообщение {message_id} не найдено в диалоге {conversation_id}")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении сообщения: {e}")
+            return False
+    
     async def get_user_conversations(
         self, 
         user_id: str, 
