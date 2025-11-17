@@ -48,6 +48,15 @@ except ImportError as e:
     DocumentRepository = None
     VectorRepository = None
 
+# Попытка импорта MinIO модулей
+try:
+    from .minio import get_minio_client
+    minio_available = True
+    logger.debug("MinIO модули импортированы успешно")
+except ImportError as e:
+    logger.warning(f"MinIO модули недоступны: {e}")
+    minio_available = False
+
 # Глобальные подключения
 mongodb_connection: Optional[MongoDBConnection] = None
 postgresql_connection: Optional[PostgreSQLConnection] = None
@@ -171,6 +180,32 @@ async def init_postgresql() -> bool:
         return False
 
 
+def init_minio() -> bool:
+    """Инициализация подключения к MinIO"""
+    if not minio_available:
+        logger.warning("MinIO модули недоступны. Пропускаем инициализацию.")
+        return False
+    
+    try:
+        logger.info("Инициализация MinIO...")
+        minio_client = get_minio_client()
+        if minio_client:
+            endpoint = minio_client.endpoint
+            bucket_temp = minio_client.bucket_name
+            logger.info(f"  Endpoint: {endpoint}")
+            logger.info(f"  Bucket (temp): {bucket_temp}")
+            logger.info("MinIO успешно инициализирован")
+            return True
+        else:
+            logger.warning("MinIO клиент недоступен")
+            logger.warning("  Будет использоваться локальное хранение файлов")
+            return False
+    except Exception as e:
+        logger.error(f"Ошибка при инициализации MinIO: {e}")
+        logger.warning("  Будет использоваться локальное хранение файлов")
+        return False
+
+
 async def init_databases() -> bool:
     """Инициализация всех подключений к базам данных"""
     logger.info("=" * 60)
@@ -179,9 +214,10 @@ async def init_databases() -> bool:
     
     mongodb_ok = await init_mongodb()
     postgresql_ok = await init_postgresql()
+    minio_ok = init_minio()  # MinIO инициализация синхронная
     
     logger.info("=" * 60)
-    if mongodb_ok and postgresql_ok:
+    if mongodb_ok and postgresql_ok and minio_ok:
         logger.info("Все базы данных успешно инициализированы")
         logger.info("=" * 60)
         return True
@@ -195,6 +231,10 @@ async def init_databases() -> bool:
             logger.info("PostgreSQL: готов")
         else:
             logger.warning("PostgreSQL: не инициализирован")
+        if minio_ok:
+            logger.info("MinIO: готов")
+        else:
+            logger.warning("MinIO: не инициализирован")
         logger.info("=" * 60)
         # Возвращаем True если хотя бы MongoDB инициализирован
         return mongodb_ok

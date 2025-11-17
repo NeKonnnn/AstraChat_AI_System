@@ -1,5 +1,6 @@
 import os
 import tempfile
+from io import BytesIO
 import docx
 import PyPDF2
 import openpyxl
@@ -21,7 +22,8 @@ class DocumentProcessor:
         # {filename: {"confidence": float, "text_length": int, "file_type": str, "words": [{"word": str, "confidence": float}]}}
         self.confidence_data = {}
         # Хранилище путей к изображениям для мультимодальной модели
-        # {filename: file_path}
+        # {filename: {"path": file_path, "minio_object": object_name, "minio_bucket": bucket_name}}
+        # или {filename: file_path} для обратной совместимости
         self.image_paths = {}
 
         print("DocumentProcessor инициализирован")
@@ -59,18 +61,26 @@ class DocumentProcessor:
             traceback.print_exc()
             self.embeddings = None
     
-    def process_document(self, file_path):
-        """Обработка документа в зависимости от его типа"""
-        file_extension = os.path.splitext(file_path)[1].lower()
+    def process_document(self, file_data: bytes, filename: str, file_extension: str, minio_object_name=None, minio_bucket=None):
+        """
+        Обработка документа в зависимости от его типа
+        
+        Args:
+            file_data: Данные файла в виде bytes
+            filename: Имя файла (для идентификации)
+            file_extension: Расширение файла (например, '.pdf', '.docx')
+            minio_object_name: Имя объекта в MinIO (если файл хранится в MinIO)
+            minio_bucket: Имя bucket в MinIO (если файл хранится в MinIO)
+        """
+        file_extension = file_extension.lower()
         document_text = ""
         confidence_info = None
-        filename = os.path.basename(file_path)
         
         try:
-            print(f"Обрабатываем документ: {file_path} (тип: {file_extension})")
+            print(f"Обрабатываем документ: {filename} (тип: {file_extension}, размер: {len(file_data)} байт)")
             
             if file_extension == '.docx':
-                result = self.extract_text_from_docx(file_path)
+                result = self.extract_text_from_docx_bytes(file_data)
                 if isinstance(result, dict):
                     document_text = result.get("text", "")
                     confidence_info = result.get("confidence_info", {"confidence": 100.0, "text_length": len(document_text), "file_type": "docx", "words": []})
@@ -78,7 +88,7 @@ class DocumentProcessor:
                     document_text = result
                     confidence_info = self._create_confidence_info_for_text(document_text, 100.0, "docx")
             elif file_extension == '.pdf':
-                result = self.extract_text_from_pdf(file_path)
+                result = self.extract_text_from_pdf_bytes(file_data)
                 if isinstance(result, dict):
                     document_text = result.get("text", "")
                     confidence_info = result.get("confidence_info", {"confidence": 100.0, "text_length": len(document_text), "file_type": "pdf", "words": []})
@@ -86,7 +96,7 @@ class DocumentProcessor:
                     document_text = result
                     confidence_info = self._create_confidence_info_for_text(document_text, 100.0, "pdf")
             elif file_extension in ['.xlsx', '.xls']:
-                result = self.extract_text_from_excel(file_path)
+                result = self.extract_text_from_excel_bytes(file_data)
                 if isinstance(result, dict):
                     document_text = result.get("text", "")
                     confidence_info = result.get("confidence_info", {"confidence": 100.0, "text_length": len(document_text), "file_type": "excel", "words": []})
@@ -94,7 +104,7 @@ class DocumentProcessor:
                     document_text = result
                     confidence_info = self._create_confidence_info_for_text(document_text, 100.0, "excel")
             elif file_extension == '.txt':
-                result = self.extract_text_from_txt(file_path)
+                result = self.extract_text_from_txt_bytes(file_data)
                 if isinstance(result, dict):
                     document_text = result.get("text", "")
                     confidence_info = result.get("confidence_info", {"confidence": 100.0, "text_length": len(document_text), "file_type": "txt", "words": []})
@@ -102,7 +112,7 @@ class DocumentProcessor:
                     document_text = result
                     confidence_info = self._create_confidence_info_for_text(document_text, 100.0, "txt")
             elif file_extension in ['.jpg', '.jpeg', '.png', '.webp']:
-                result = self.extract_text_from_image(file_path)
+                result = self.extract_text_from_image_bytes(file_data)
                 if isinstance(result, dict):
                     document_text = result.get("text", "")
                     confidence_info = result.get("confidence_info", {"confidence": 0.0, "text_length": len(document_text), "file_type": "image", "words": []})
@@ -119,10 +129,22 @@ class DocumentProcessor:
                 self.confidence_data[filename] = confidence_info
                 print(f"Сохранена информация об уверенности для {filename}: {confidence_info['confidence']:.2f}%")
             
-            # Сохраняем путь к изображению, если это изображение
+            # Сохраняем информацию об изображении в MinIO, если это изображение
             if file_extension in ['.jpg', '.jpeg', '.png', '.webp']:
-                self.image_paths[filename] = file_path
-                print(f"Сохранен путь к изображению для {filename}: {file_path}")
+                # Сохраняем информацию о MinIO объекте
+                if minio_object_name and minio_bucket:
+                    self.image_paths[filename] = {
+                        "minio_object": minio_object_name,
+                        "minio_bucket": minio_bucket,
+                        "file_data": file_data  # Сохраняем данные в памяти для быстрого доступа
+                    }
+                    print(f"Сохранена информация об изображении в MinIO для {filename}: {minio_bucket}/{minio_object_name}")
+                else:
+                    # Fallback: сохраняем данные в памяти
+                    self.image_paths[filename] = {
+                        "file_data": file_data
+                    }
+                    print(f"Сохранены данные изображения в памяти для {filename}")
             
             # Добавляем документ в коллекцию
             self.add_document_to_collection(document_text, filename)
@@ -161,10 +183,10 @@ class DocumentProcessor:
             "words": words_with_confidence
         }
     
-    def extract_text_from_docx(self, file_path):
-        """Извлечение текста из DOCX файла"""
-        print(f"Извлекаем текст из DOCX файла: {file_path}")
-        doc = docx.Document(file_path)
+    def extract_text_from_docx_bytes(self, file_data: bytes):
+        """Извлечение текста из DOCX файла из bytes"""
+        print(f"Извлекаем текст из DOCX файла (размер: {len(file_data)} байт)")
+        doc = docx.Document(BytesIO(file_data))
         full_text = []
         
         for para in doc.paragraphs:
@@ -180,16 +202,16 @@ class DocumentProcessor:
         print(f"Извлечено {len(result)} символов из DOCX")
         return result
     
-    def extract_text_from_pdf(self, file_path):
-        """Извлечение текста из PDF файла с информацией об уверенности"""
-        print(f"Извлекаем текст из PDF файла: {file_path}")
+    def extract_text_from_pdf_bytes(self, file_data: bytes):
+        """Извлечение текста из PDF файла из bytes с информацией об уверенности"""
+        print(f"Извлекаем текст из PDF файла (размер: {len(file_data)} байт)")
         text = ""
         confidence_scores = []
         total_chars = 0
         
         # Используем PDFPlumber для более точного извлечения текста
         try:
-            with pdfplumber.open(file_path) as pdf:
+            with pdfplumber.open(BytesIO(file_data)) as pdf:
                 for page_num, page in enumerate(pdf.pages):
                     page_text = page.extract_text() or ""
                     text += page_text
@@ -209,20 +231,66 @@ class DocumentProcessor:
             
             # Резервный метод с PyPDF2
             try:
-                with open(file_path, 'rb') as file:
-                    reader = PyPDF2.PdfReader(file)
-                    for page in reader.pages:
-                        page_text = page.extract_text() or ""
-                        text += page_text
-                        total_chars += len(page_text)
-                        if page_text.strip():
-                            confidence_scores.append(85.0)  # Немного ниже уверенность для PyPDF2
-                        else:
-                            confidence_scores.append(40.0)
+                reader = PyPDF2.PdfReader(BytesIO(file_data))
+                for page in reader.pages:
+                    page_text = page.extract_text() or ""
+                    text += page_text
+                    total_chars += len(page_text)
+                    if page_text.strip():
+                        confidence_scores.append(85.0)  # Немного ниже уверенность для PyPDF2
+                    else:
+                        confidence_scores.append(40.0)
                 print(f"PyPDF2 успешно извлек {len(text)} символов")
             except Exception as e2:
                 print(f"Ошибка при извлечении текста с помощью PyPDF2: {str(e2)}")
                 raise
+        
+        # Если текст не извлечен (сканированный PDF), пробуем OCR
+        if not text or len(text.strip()) == 0:
+            print("PDF не содержит текста, возможно это сканированный документ. Пробуем OCR...")
+            try:
+                # Пробуем использовать pdf2image для конвертации PDF в изображения
+                try:
+                    from pdf2image import convert_from_bytes
+                    import pytesseract
+                    
+                    # Конвертируем PDF в изображения из bytes
+                    images = convert_from_bytes(file_data, dpi=300)
+                    print(f"PDF конвертирован в {len(images)} изображений для OCR")
+                    
+                    # Применяем OCR к каждому изображению
+                    ocr_text = ""
+                    ocr_confidence_scores = []
+                    for i, image in enumerate(images):
+                        print(f"Обрабатываем страницу {i+1}/{len(images)} с помощью OCR...")
+                        page_text = pytesseract.image_to_string(image, lang='rus+eng')
+                        ocr_text += f"\n--- Страница {i+1} ---\n{page_text}\n"
+                        
+                        # Получаем уверенность OCR
+                        try:
+                            ocr_data = pytesseract.image_to_data(image, lang='rus+eng', output_type=pytesseract.Output.DICT)
+                            page_confidences = [int(conf) for conf in ocr_data['conf'] if conf and int(conf) > 0]
+                            if page_confidences:
+                                avg_page_conf = sum(page_confidences) / len(page_confidences)
+                                ocr_confidence_scores.append(avg_page_conf)
+                            else:
+                                ocr_confidence_scores.append(50.0)
+                        except:
+                            ocr_confidence_scores.append(50.0)
+                    
+                    if ocr_text.strip():
+                        text = ocr_text
+                        confidence_scores = ocr_confidence_scores
+                        print(f"OCR успешно извлек {len(text)} символов из {len(images)} страниц")
+                    else:
+                        print("OCR не смог извлечь текст из PDF")
+                except ImportError:
+                    print("Библиотеки pdf2image или pytesseract не установлены. Для обработки сканированных PDF установите: pip install pdf2image pytesseract")
+                    print("Также требуется установить poppler: https://github.com/oschwartz10612/poppler-windows/releases")
+                except Exception as ocr_error:
+                    print(f"Ошибка при OCR обработке PDF: {ocr_error}")
+            except Exception as e:
+                print(f"Не удалось применить OCR к PDF: {e}")
         
         # Вычисляем среднюю уверенность
         avg_confidence = sum(confidence_scores) / len(confidence_scores) if confidence_scores else 0.0
@@ -257,47 +325,43 @@ class DocumentProcessor:
         
         result = "\n".join(text_content)
         print(f"Извлечено {len(result)} символов из Excel")
-        return resultDocumentProcessor
+        return result
     
-    def extract_text_from_txt(self, file_path):
-        """Извлечение текста из TXT файла"""
-        print(f"Извлекаем текст из TXT файла: {file_path}")
+    def extract_text_from_txt_bytes(self, file_data: bytes):
+        """Извлечение текста из TXT файла из bytes"""
+        print(f"Извлекаем текст из TXT файла (размер: {len(file_data)} байт)")
         try:
-            # Пробуем открыть файл как UTF-8
-            with open(file_path, 'r', encoding='utf-8') as file:
-                result = file.read()
-                print(f"UTF-8 успешно извлек {len(result)} символов")
-                return result
+            # Пробуем декодировать как UTF-8
+            result = file_data.decode('utf-8')
+            print(f"UTF-8 успешно извлек {len(result)} символов")
+            return result
         except UnicodeDecodeError:
-            # Если не удалось открыть как UTF-8, пробуем другие кодировки
+            # Если не удалось декодировать как UTF-8, пробуем другие кодировки
             encodings = ['cp1251', 'latin-1', 'koi8-r']
             for encoding in encodings:
                 try:
-                    with open(file_path, 'r', encoding=encoding) as file:
-                        result = file.read()
-                        print(f"{encoding} успешно извлек {len(result)} символов")
-                        return result
+                    result = file_data.decode(encoding)
+                    print(f"{encoding} успешно извлек {len(result)} символов")
+                    return result
                 except UnicodeDecodeError:
                     continue
             
-            # Если все кодировки не подошли, открываем в бинарном режиме
-            with open(file_path, 'rb') as file:
-                content = file.read()
-                result = str(content)
-                print(f"Бинарный режим извлек {len(result)} символов")
-                return result
+            # Если все кодировки не подошли, возвращаем строковое представление
+            result = str(file_data)
+            print(f"Бинарный режим извлек {len(result)} символов")
+            return result
 
-    def extract_text_from_image(self, file_path):
-        """Извлечение текста из изображения с помощью OCR с информацией об уверенности"""
-        print(f"Извлекаем текст из изображения: {file_path}")
+    def extract_text_from_image_bytes(self, file_data: bytes):
+        """Извлечение текста из изображения из bytes с помощью OCR с информацией об уверенности"""
+        print(f"Извлекаем текст из изображения (размер: {len(file_data)} байт)")
         try:
             # Проверяем наличие библиотеки pytesseract
             import pytesseract
             from PIL import Image
             import re
             
-            # Открываем изображение с помощью Pillow
-            img = Image.open(file_path)
+            # Открываем изображение из bytes
+            img = Image.open(BytesIO(file_data))
             
             # Извлекаем текст с изображения
             text = pytesseract.image_to_string(img, lang='rus+eng')
@@ -343,7 +407,7 @@ class DocumentProcessor:
             
             # Если текст не извлечен, добавляем описание изображения
             if not text.strip():
-                result_text = f"[Изображение: {os.path.basename(file_path)}. OCR не смог извлечь текст.]"
+                result_text = f"[Изображение. OCR не смог извлечь текст.]"
                 print(f"OCR не смог извлечь текст, возвращаем описание: {len(result_text)} символов")
                 return {
                     "text": result_text,
@@ -511,9 +575,36 @@ class DocumentProcessor:
         return self.doc_names
     
     def get_image_paths(self):
-        """Получение списка путей к изображениям для мультимодальной модели"""
-        print(f"get_image_paths вызван. Изображения: {list(self.image_paths.values())}")
-        return list(self.image_paths.values())
+        """
+        Получение списка путей к изображениям для мультимодальной модели
+        Возвращает список путей к локальным файлам (временные файлы, скачанные из MinIO при необходимости)
+        """
+        image_paths_list = []
+        for filename, path_info in self.image_paths.items():
+            if isinstance(path_info, dict):
+                # Если есть информация о MinIO, используем временный путь
+                image_paths_list.append(path_info.get("path"))
+            else:
+                # Обратная совместимость: просто путь
+                image_paths_list.append(path_info)
+        print(f"get_image_paths вызван. Изображения: {image_paths_list}")
+        return image_paths_list
+    
+    def get_image_minio_info(self, filename):
+        """
+        Получение информации о MinIO объекте для изображения
+        
+        Returns:
+            dict: {"minio_object": str, "minio_bucket": str} или None
+        """
+        if filename in self.image_paths:
+            path_info = self.image_paths[filename]
+            if isinstance(path_info, dict):
+                return {
+                    "minio_object": path_info.get("minio_object"),
+                    "minio_bucket": path_info.get("minio_bucket")
+                }
+        return None
     
     def clear_documents(self):
         """Очистка коллекции документов"""

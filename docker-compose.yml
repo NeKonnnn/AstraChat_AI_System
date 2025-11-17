@@ -78,12 +78,22 @@ services:
       - POSTGRES_DB=${POSTGRES_DB:-memoai}
       - POSTGRES_USER=${POSTGRES_USER:-admin}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}
+      # MinIO настройки
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio}
+      - MINIO_PORT=${MINIO_PORT:-9000}
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
+      - MINIO_USE_SSL=${MINIO_USE_SSL:-false}
+      - MINIO_BUCKET_NAME=${MINIO_BUCKET_NAME:-memoai-temp}
+      - MINIO_DOCUMENTS_BUCKET_NAME=${MINIO_DOCUMENTS_BUCKET_NAME:-memoai-documents}
     depends_on:
       llm-svc:
         condition: service_started
       mongodb:
         condition: service_healthy
       postgresql:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     restart: unless-stopped
     networks:
@@ -156,6 +166,28 @@ services:
     networks:
       - memoai-network
 
+  # MinIO - для хранения временных файлов (голосовые файлы, транскрибация)
+  minio:
+    image: minio/minio:latest
+    container_name: memoai-minio
+    ports:
+      - "9000:9000"  # API порт
+      - "9001:9001"  # Console порт
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - memoai-network
+
   # Redis удален - не используется в проекте
 
   # Nginx для продакшена (опционально)
@@ -192,6 +224,9 @@ volumes:
     driver: local
   # PostgreSQL данные
   postgresql_data:
+    driver: local
+  # MinIO данные
+  minio_data:
     driver: local
 
 networks:

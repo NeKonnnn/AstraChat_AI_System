@@ -247,6 +247,24 @@ except Exception as e:
     recognize_speech_from_file = None
     check_vosk_model = None
 
+# Импорт MinIO клиента для хранения временных файлов
+try:
+    logger.info("Попытка импорта MinIO клиента...")
+    from backend.database.minio import get_minio_client
+    minio_client = get_minio_client()
+    if minio_client:
+        logger.info("MinIO клиент успешно инициализирован")
+    else:
+        logger.warning("MinIO клиент недоступен, будут использоваться локальные временные файлы")
+except ImportError as e:
+    logger.warning(f"MinIO клиент недоступен: {e}. Будут использоваться локальные временные файлы")
+    minio_client = None
+except Exception as e:
+    logger.warning(f"Ошибка при инициализации MinIO клиента: {e}. Будут использоваться локальные временные файлы")
+    import traceback
+    logger.error(f"Traceback: {traceback.format_exc()}")
+    minio_client = None
+
 try:
     logger.info("Попытка импорта document_processor...")
     from backend.document_processor import DocumentProcessor
@@ -418,6 +436,11 @@ async def startup_event():
                 logger.info("Базы данных успешно инициализированы")
                 logger.info("  - MongoDB: готов для хранения диалогов")
                 logger.info("  - PostgreSQL + pgvector: готов для RAG системы")
+                # Проверяем статус MinIO
+                if minio_client:
+                    logger.info(f"  - MinIO: готов для хранения файлов (endpoint: {minio_client.endpoint})")
+                else:
+                    logger.warning("  - MinIO: не инициализирован, используется локальное хранение")
             else:
                 logger.warning("Не удалось инициализировать некоторые базы данных")
                 logger.warning("Приложение продолжит работу в файловом режиме")
@@ -1040,12 +1063,28 @@ async def chat_message(sid, data):
                 logger.info("Socket.IO: doc_processor доступен")
                 doc_list = doc_processor.get_document_list()
                 logger.info(f"Socket.IO: список документов: {doc_list}")
+                logger.info(f"Socket.IO: количество документов: {len(doc_list) if doc_list else 0}")
+                # Дополнительная диагностика
+                if hasattr(doc_processor, 'doc_names'):
+                    logger.info(f"Socket.IO: doc_processor.doc_names = {doc_processor.doc_names}")
+                if hasattr(doc_processor, 'vectorstore'):
+                    logger.info(f"Socket.IO: vectorstore доступен: {doc_processor.vectorstore is not None}")
+                    if doc_processor.vectorstore:
+                        logger.info(f"Socket.IO: количество документов в vectorstore: {len(doc_processor.documents) if hasattr(doc_processor, 'documents') and doc_processor.documents else 0}")
                 
                 # Получаем пути к изображениям для мультимодальной модели
+                # get_image_paths создает временные файлы из данных в памяти только при необходимости
                 image_paths = doc_processor.get_image_paths()
                 if image_paths and len(image_paths) > 0:
-                    images = image_paths
-                    logger.info(f"Socket.IO: найдены изображения для мультимодальной модели: {images}")
+                    # Проверяем, что временные файлы существуют (они создаются в get_image_paths)
+                    available_images = []
+                    for img_path in image_paths:
+                        if img_path and os.path.exists(img_path):
+                            available_images.append(img_path)
+                    images = available_images if available_images else None
+                    if images:
+                        logger.info(f"Socket.IO: найдены изображения для мультимодальной модели: {len(images)} файлов")
+                        # Временные файлы будут удалены после использования в LLM клиенте
                 
                 if doc_list and len(doc_list) > 0:
                     logger.info(f"Socket.IO: найдены документы: {doc_list}")
@@ -1744,7 +1783,8 @@ async def process_audio_data(websocket: WebSocket, data: bytes):
     """Обработка аудио данных от WebSocket клиента"""
     import tempfile
     temp_dir = tempfile.gettempdir()
-    audio_file = os.path.join(temp_dir, f"voice_{datetime.now().timestamp()}.wav")
+    audio_object_name = None
+    audio_file = None
     
     # Проверяем флаг остановки голосового чата
     if globals().get('voice_chat_stop_flag', False):
@@ -1754,10 +1794,6 @@ async def process_audio_data(websocket: WebSocket, data: bytes):
     logger.info(f"Начинаю обработку аудио данных размером {len(data)} байт")
     
     try:
-        # Сохраняем временный файл для обработки
-        with open(audio_file, "wb") as f:
-            f.write(data)
-        
         # Проверяем, что получили действительно аудио данные
         if len(data) < 100:  # Слишком маленький размер для аудио
             logger.warning(f"Получены данные слишком маленького размера: {len(data)} байт")
@@ -1766,6 +1802,24 @@ async def process_audio_data(websocket: WebSocket, data: bytes):
                 "error": "Получены некорректные аудио данные"
             }))
             return
+        
+        # Сохраняем файл в MinIO или локально
+        if minio_client:
+            try:
+                audio_object_name = minio_client.generate_object_name(prefix="voice_", extension=".wav")
+                minio_client.upload_file(data, audio_object_name, content_type="audio/wav")
+                # Получаем локальный путь для обработки (функция распознавания требует файл)
+                audio_file = minio_client.get_file_path(audio_object_name)
+                logger.info(f"Аудио файл загружен в MinIO: {audio_object_name}")
+            except Exception as e:
+                logger.warning(f"Ошибка загрузки в MinIO, используем локальный файл: {e}")
+                audio_file = os.path.join(temp_dir, f"voice_{datetime.now().timestamp()}.wav")
+                with open(audio_file, "wb") as f:
+                    f.write(data)
+        else:
+            audio_file = os.path.join(temp_dir, f"voice_{datetime.now().timestamp()}.wav")
+            with open(audio_file, "wb") as f:
+                f.write(data)
         
         # Распознаем речь
         logger.info(f"Обрабатываю аудио файл: {audio_file}")
@@ -1829,6 +1883,7 @@ async def process_audio_data(websocket: WebSocket, data: bytes):
             
             # Синтезируем речь
             speech_file = os.path.join(temp_dir, f"speech_{datetime.now().timestamp()}.wav")
+            speech_object_name = None
             
             if not speak_text:
                 logger.warning("speak_text функция не доступна")
@@ -1843,8 +1898,24 @@ async def process_audio_data(websocket: WebSocket, data: bytes):
                 if os.path.exists(speech_file) and os.path.getsize(speech_file) > 44:  # Минимальный размер WAV заголовка
                     with open(speech_file, "rb") as f:
                         audio_data = f.read()
+                    
+                    # Сохраняем в MinIO, если доступен
+                    if minio_client:
+                        try:
+                            speech_object_name = minio_client.generate_object_name(prefix="speech_", extension=".wav")
+                            minio_client.upload_file(audio_data, speech_object_name, content_type="audio/wav")
+                            logger.debug(f"Синтезированная речь сохранена в MinIO: {speech_object_name}")
+                        except Exception as e:
+                            logger.warning(f"Ошибка сохранения синтезированной речи в MinIO: {e}")
+                    
                     await websocket.send_bytes(audio_data)
-                    os.remove(speech_file)
+                    
+                    # Удаляем локальный файл
+                    try:
+                        if os.path.exists(speech_file):
+                            os.remove(speech_file)
+                    except Exception as e:
+                        logger.warning(f"Ошибка удаления локального файла речи: {e}")
                 else:
                     # Файл не создался или поврежден
                     await websocket.send_text(json.dumps({
@@ -1871,18 +1942,19 @@ async def process_audio_data(websocket: WebSocket, data: bytes):
         logger.error(f"Тип ошибки: {type(e).__name__}")
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
-        
-        try:
-            await websocket.send_text(json.dumps({
-                "type": "error",
-                "error": f"Ошибка обработки аудио: {str(e)}"
-            }))
-        except Exception as send_error:
-            logger.error(f"Не удалось отправить сообщение об ошибке: {send_error}")
     finally:
-        # Удаляем временный аудио файл
-        if os.path.exists(audio_file):
-            os.remove(audio_file)
+        # Очистка временных файлов
+        try:
+            if audio_file and os.path.exists(audio_file):
+                os.remove(audio_file)
+            # Удаляем из MinIO, если был загружен
+            if minio_client and audio_object_name:
+                try:
+                    minio_client.delete_file(audio_object_name)
+                except Exception as e:
+                    logger.warning(f"Ошибка удаления файла из MinIO: {e}")
+        except Exception as e:
+            logger.warning(f"Ошибка очистки временных файлов: {e}")
 
 @app.websocket("/ws/voice")
 async def websocket_voice(websocket: WebSocket):
@@ -2382,6 +2454,7 @@ async def synthesize_speech(request: VoiceSynthesizeRequest):
     import tempfile
     temp_dir = tempfile.gettempdir()
     audio_file = os.path.join(temp_dir, f"speech_{datetime.now().timestamp()}.wav")
+    audio_object_name = None
     
     try:
         # Логируем отладочную информацию
@@ -2399,6 +2472,17 @@ async def synthesize_speech(request: VoiceSynthesizeRequest):
         
         if success and os.path.exists(audio_file):
             logger.info(f"Аудиофайл создан: {audio_file}, размер: {os.path.getsize(audio_file)} байт")
+            
+            # Сохраняем в MinIO, если доступен
+            if minio_client:
+                try:
+                    with open(audio_file, "rb") as f:
+                        audio_data = f.read()
+                    audio_object_name = minio_client.generate_object_name(prefix="speech_", extension=".wav")
+                    minio_client.upload_file(audio_data, audio_object_name, content_type="audio/wav")
+                    logger.debug(f"Синтезированная речь сохранена в MinIO: {audio_object_name}")
+                except Exception as e:
+                    logger.warning(f"Ошибка сохранения в MinIO: {e}")
             
             # Создаем временную копию для возврата, оригинал удалится автоматически
             temp_copy = os.path.join(temp_dir, f"speech_copy_{datetime.now().timestamp()}.wav")
@@ -2450,15 +2534,40 @@ async def recognize_speech_api(audio_file: UploadFile = File(...)):
     
     import tempfile
     temp_dir = tempfile.gettempdir()
-    file_path = os.path.join(temp_dir, f"audio_{datetime.now().timestamp()}.wav")
+    file_path = None
+    file_object_name = None
     
     try:
         # Сохраняем загруженный файл
         content = await audio_file.read()
         logger.info(f"Получен аудиофайл: {audio_file.filename}, размер: {len(content)} байт")
         
-        with open(file_path, "wb") as f:
-            f.write(content)
+        # Сохраняем в MinIO или локально
+        if minio_client:
+            try:
+                logger.info("MinIO клиент доступен, загружаю файл в MinIO...")
+                file_object_name = minio_client.generate_object_name(prefix="audio_", extension=".wav")
+                logger.debug(f"Сгенерировано имя объекта: {file_object_name}")
+                minio_client.upload_file(content, file_object_name, content_type="audio/wav")
+                # Получаем локальный путь для обработки
+                file_path = minio_client.get_file_path(file_object_name)
+                logger.info(f"✅ Аудиофайл загружен в MinIO: {file_object_name}")
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка загрузки в MinIO, используем локальный файл: {e}")
+                import traceback
+                logger.debug(f"Traceback: {traceback.format_exc()}")
+                file_path = os.path.join(temp_dir, f"audio_{datetime.now().timestamp()}.wav")
+                with open(file_path, "wb") as f:
+                    f.write(content)
+        else:
+            logger.warning("⚠️ MinIO клиент недоступен (minio_client is None), используем локальное хранение")
+            logger.info("Проверьте:")
+            logger.info("  1. Запущен ли MinIO: docker-compose ps minio (или локально)")
+            logger.info("  2. Правильно ли настроен .env файл (MINIO_ENDPOINT, MINIO_PORT и т.д.)")
+            logger.info("  3. Установлена ли библиотека: pip install minio")
+            file_path = os.path.join(temp_dir, f"audio_{datetime.now().timestamp()}.wav")
+            with open(file_path, "wb") as f:
+                f.write(content)
         
         logger.info(f"Аудиофайл сохранен: {file_path}")
         
@@ -2479,9 +2588,18 @@ async def recognize_speech_api(audio_file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         # Всегда удаляем временный файл
-        if os.path.exists(file_path):
-            os.remove(file_path)
-            logger.info(f"Временный файл удален: {file_path}")
+        try:
+            if file_path and os.path.exists(file_path):
+                os.remove(file_path)
+                logger.info(f"Временный файл удален: {file_path}")
+            # Удаляем из MinIO, если был загружен
+            if minio_client and file_object_name:
+                try:
+                    minio_client.delete_file(file_object_name)
+                except Exception as e:
+                    logger.warning(f"Ошибка удаления файла из MinIO: {e}")
+        except Exception as e:
+            logger.warning(f"Ошибка очистки временных файлов: {e}")
 
 @app.get("/api/voice/settings")
 async def get_voice_settings():
@@ -2667,28 +2785,65 @@ async def upload_document(file: UploadFile = File(...)):
     if not doc_processor:
         logger.error("Document processor не доступен")
         raise HTTPException(status_code=503, detail="Document processor не доступен")
+    
+    file_object_name = None
+    documents_bucket = os.getenv('MINIO_DOCUMENTS_BUCKET_NAME', 'memoai-documents')
         
     try:
-        # Сохраняем файл в постоянную директорию uploads
-        uploads_dir = "/app/uploads"
-        os.makedirs(uploads_dir, exist_ok=True)
+        # Читаем содержимое файла в память
+        content = await file.read()
+        logger.info(f"Файл получен, размер: {len(content)} байт")
         
-        file_path = os.path.join(uploads_dir, f"doc_{datetime.now().timestamp()}_{file.filename}")
-        logger.info(f"Путь файла: {file_path}")
+        # Определяем тип файла
+        file_extension = os.path.splitext(file.filename)[1].lower() if file.filename else ""
+        is_image = file_extension in ['.jpg', '.jpeg', '.png', '.webp']
         
+        # Определяем content_type
+        content_type_map = {
+            '.pdf': 'application/pdf',
+            '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            '.doc': 'application/msword',
+            '.txt': 'text/plain',
+            '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            '.xls': 'application/vnd.ms-excel',
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.png': 'image/png',
+            '.webp': 'image/webp'
+        }
+        content_type = content_type_map.get(file_extension, 'application/octet-stream')
         
-        with open(file_path, "wb") as f:
-            content = await file.read()
-            f.write(content)
+        # Сохраняем в MinIO или локально
+        if minio_client:
+            try:
+                # Генерируем имя объекта
+                file_object_name = minio_client.generate_object_name(
+                    prefix="doc_" if not is_image else "img_",
+                    extension=file_extension
+                )
+                
+                # Загружаем в MinIO в bucket для документов
+                minio_client.upload_file(
+                    content, 
+                    file_object_name, 
+                    content_type=content_type,
+                    bucket_name=documents_bucket
+                )
+                logger.info(f"Документ загружен в MinIO: {documents_bucket}/{file_object_name}")
+            except Exception as e:
+                logger.warning(f"Ошибка загрузки в MinIO: {e}")
+                # Продолжаем обработку даже если не удалось загрузить в MinIO
+                file_object_name = None
         
-        logger.info(f"Файл сохранен, размер: {len(content)} байт")
-        
-        # Обрабатываем документ
-        logger.info("Начинаем обработку документа...")
-        logger.info(f"Файл существует: {os.path.exists(file_path)}")
-        logger.info(f"Размер файла: {os.path.getsize(file_path) if os.path.exists(file_path) else 'N/A'} байт")
-        
-        success, message = doc_processor.process_document(file_path)
+        # Обрабатываем документ напрямую из памяти (bytes)
+        logger.info("Начинаем обработку документа из памяти...")
+        success, message = doc_processor.process_document(
+            file_data=content,
+            filename=file.filename or file_object_name or "unknown",
+            file_extension=file_extension,
+            minio_object_name=file_object_name,
+            minio_bucket=documents_bucket if minio_client and file_object_name else None
+        )
         logger.info(f"Результат обработки: success={success}, message={message}")
         
         if success:
@@ -2703,39 +2858,37 @@ async def upload_document(file: UploadFile = File(...)):
                 if hasattr(doc_processor, 'documents'):
                     logger.info(f"Количество документов в коллекции: {len(doc_processor.documents) if doc_processor.documents else 0}")
             
-            # Проверяем, является ли файл изображением
-            file_extension = os.path.splitext(file.filename)[1].lower()
-            is_image = file_extension in ['.jpg', '.jpeg', '.png', '.webp']
+            # Файлы обрабатываются из памяти, локальные файлы не создаются
+            logger.info("Обработка завершена, файл хранится в MinIO")
             
-            # Для изображений сохраняем файл для мультимодальной модели
-            # Для других документов удаляем временный файл
-            if not is_image:
-                try:
-                    os.remove(file_path)
-                    logger.info(f"Временный файл удален: {file_path}")
-                except Exception as e:
-                    logger.warning(f"Не удалось удалить временный файл: {e}")
-            else:
-                logger.info(f"Изображение сохранено для мультимодальной модели: {file_path}")
-            
-            return {
+            # Возвращаем информацию о файле
+            result = {
                 "message": "Документ успешно загружен и обработан",
                 "filename": file.filename,
-                "file_path": file_path if is_image else None,  # Возвращаем путь для изображений
                 "success": True
             }
+            
+            # Для изображений возвращаем информацию о MinIO объекте
+            if is_image and minio_client and file_object_name:
+                result["minio_object"] = file_object_name
+                result["minio_bucket"] = documents_bucket
+            
+            return result
         else:
-            # Очищаем временный файл в случае ошибки
-            try:
-                os.remove(file_path)
-                logger.info(f"Временный файл удален после ошибки: {file_path}")
-            except Exception as e:
-                logger.warning(f"Не удалось удалить временный файл после ошибки: {e}")
+            # В случае ошибки удаляем файл из MinIO, если он был загружен
+            if minio_client and file_object_name:
+                try:
+                    minio_client.delete_file(file_object_name, bucket_name=documents_bucket)
+                    logger.info(f"Файл удален из MinIO после ошибки: {documents_bucket}/{file_object_name}")
+                except Exception as e:
+                    logger.warning(f"Ошибка удаления файла из MinIO: {e}")
             
             raise HTTPException(status_code=400, detail=message)
             
     except Exception as e:
         logger.error(f"Ошибка при загрузке документа: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/documents/query")
@@ -2816,7 +2969,21 @@ async def delete_document(filename: str):
             logger.warning(f"Документ {filename} не найден")
             raise HTTPException(status_code=404, detail=f"Документ {filename} не найден")
         
-        # Удаляем документ
+        # Удаляем файл из MinIO, если он там хранится
+        documents_bucket = os.getenv('MINIO_DOCUMENTS_BUCKET_NAME', 'memoai-documents')
+        if minio_client:
+            minio_info = doc_processor.get_image_minio_info(filename)
+            if minio_info:
+                try:
+                    minio_client.delete_file(
+                        minio_info["minio_object"],
+                        bucket_name=minio_info["minio_bucket"]
+                    )
+                    logger.info(f"Файл удален из MinIO: {minio_info['minio_bucket']}/{minio_info['minio_object']}")
+                except Exception as e:
+                    logger.warning(f"Ошибка удаления файла из MinIO: {e}")
+        
+        # Удаляем документ из процессора
         success = doc_processor.remove_document(filename)
         logger.info(f"Результат удаления: {success}")
         
@@ -3266,18 +3433,38 @@ async def transcribe_file(file: UploadFile = File(...)):
     if not transcriber:
         logger.error("Transcriber не доступен")
         raise HTTPException(status_code=503, detail="Transcriber не доступен")
+    
+    import tempfile
+    temp_dir = tempfile.gettempdir()
+    file_path = None
+    file_object_name = None
         
     try:
         # Сохраняем файл
-        import tempfile
-        temp_dir = tempfile.gettempdir()
-        file_path = os.path.join(temp_dir, f"media_{datetime.now().timestamp()}_{file.filename}")
+        content = await file.read()
+        logger.info(f"Файл получен, размер: {len(content)} байт")
+        
+        # Сохраняем в MinIO или локально
+        if minio_client:
+            try:
+                # Определяем расширение файла
+                file_ext = os.path.splitext(file.filename)[1] if file.filename else ""
+                file_object_name = minio_client.generate_object_name(prefix="media_", extension=file_ext)
+                minio_client.upload_file(content, file_object_name, content_type="application/octet-stream")
+                # Получаем локальный путь для обработки
+                file_path = minio_client.get_file_path(file_object_name)
+                logger.info(f"Файл загружен в MinIO: {file_object_name}")
+            except Exception as e:
+                logger.warning(f"Ошибка загрузки в MinIO, используем локальный файл: {e}")
+                file_path = os.path.join(temp_dir, f"media_{datetime.now().timestamp()}_{file.filename}")
+                with open(file_path, "wb") as f:
+                    f.write(content)
+        else:
+            file_path = os.path.join(temp_dir, f"media_{datetime.now().timestamp()}_{file.filename}")
+            with open(file_path, "wb") as f:
+                f.write(content)
+        
         logger.info(f"Временный путь файла: {file_path}")
-        
-        with open(file_path, "wb") as f:
-            content = await file.read()
-            f.write(content)
-        
         logger.info(f"Файл сохранен, размер: {len(content)} байт")
         
         # Транскрибируем с принудительной диаризацией
@@ -3311,6 +3498,20 @@ async def transcribe_file(file: UploadFile = File(...)):
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # Очистка временных файлов
+        try:
+            if file_path and os.path.exists(file_path):
+                os.remove(file_path)
+                logger.info(f"Временный файл удален: {file_path}")
+            # Удаляем из MinIO, если был загружен
+            if minio_client and file_object_name:
+                try:
+                    minio_client.delete_file(file_object_name)
+                except Exception as e:
+                    logger.warning(f"Ошибка удаления файла из MinIO: {e}")
+        except Exception as e:
+            logger.warning(f"Ошибка очистки временных файлов: {e}")
 
 @app.post("/api/transcribe/upload/diarization")
 async def transcribe_file_with_diarization(file: UploadFile = File(...)):
@@ -3320,18 +3521,38 @@ async def transcribe_file_with_diarization(file: UploadFile = File(...)):
     if not transcriber:
         logger.error("Transcriber не доступен")
         raise HTTPException(status_code=503, detail="Transcriber не доступен")
+    
+    import tempfile
+    temp_dir = tempfile.gettempdir()
+    file_path = None
+    file_object_name = None
         
     try:
         # Сохраняем файл
-        import tempfile
-        temp_dir = tempfile.gettempdir()
-        file_path = os.path.join(temp_dir, f"media_diarization_{datetime.now().timestamp()}_{file.filename}")
+        content = await file.read()
+        logger.info(f"Файл получен, размер: {len(content)} байт")
+        
+        # Сохраняем в MinIO или локально
+        if minio_client:
+            try:
+                # Определяем расширение файла
+                file_ext = os.path.splitext(file.filename)[1] if file.filename else ""
+                file_object_name = minio_client.generate_object_name(prefix="media_diarization_", extension=file_ext)
+                minio_client.upload_file(content, file_object_name, content_type="application/octet-stream")
+                # Получаем локальный путь для обработки
+                file_path = minio_client.get_file_path(file_object_name)
+                logger.info(f"Файл загружен в MinIO: {file_object_name}")
+            except Exception as e:
+                logger.warning(f"Ошибка загрузки в MinIO, используем локальный файл: {e}")
+                file_path = os.path.join(temp_dir, f"media_diarization_{datetime.now().timestamp()}_{file.filename}")
+                with open(file_path, "wb") as f:
+                    f.write(content)
+        else:
+            file_path = os.path.join(temp_dir, f"media_diarization_{datetime.now().timestamp()}_{file.filename}")
+            with open(file_path, "wb") as f:
+                f.write(content)
+        
         logger.info(f"Временный путь файла для диаризации: {file_path}")
-        
-        with open(file_path, "wb") as f:
-            content = await file.read()
-            f.write(content)
-        
         logger.info(f"Файл сохранен, размер: {len(content)} байт")
         
         # Принудительная диаризация с WhisperX
@@ -3364,6 +3585,20 @@ async def transcribe_file_with_diarization(file: UploadFile = File(...)):
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # Очистка временных файлов
+        try:
+            if file_path and os.path.exists(file_path):
+                os.remove(file_path)
+                logger.info(f"Временный файл удален: {file_path}")
+            # Удаляем из MinIO, если был загружен
+            if minio_client and file_object_name:
+                try:
+                    minio_client.delete_file(file_object_name)
+                except Exception as e:
+                    logger.warning(f"Ошибка удаления файла из MinIO: {e}")
+        except Exception as e:
+            logger.warning(f"Ошибка очистки временных файлов: {e}")
 
 @app.post("/api/transcribe/youtube")
 async def transcribe_youtube(request: YouTubeTranscribeRequest):
