@@ -4,6 +4,7 @@ Mock пользователи для разработки без LDAP
 
 MOCK_USERS = {
     "admin": {
+        "user_id": "admin",
         "username": "admin",
         "password": "admin123",
         "email": "admin@example.com",
@@ -12,6 +13,7 @@ MOCK_USERS = {
         "is_admin": True,
     },
     "user": {
+        "user_id": "user",
         "username": "user",
         "password": "user123",
         "email": "user@example.com",
@@ -20,6 +22,7 @@ MOCK_USERS = {
         "is_admin": False,
     },
     "test": {
+        "user_id": "test",
         "username": "test",
         "password": "test123",
         "email": "test@example.com",
@@ -37,6 +40,7 @@ def authenticate_mock(username: str, password: str):
         return None
     
     return {
+        "user_id": user["user_id"],
         "username": user["username"],
         "email": user["email"],
         "full_name": user["full_name"],

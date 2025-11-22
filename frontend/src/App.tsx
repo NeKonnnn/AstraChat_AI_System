@@ -7,9 +7,9 @@ import Sidebar from './components/Sidebar';
 import UnifiedChatPage from './pages/UnifiedChatPage';
 import VoicePage from './pages/VoicePage';
 import DocumentsPage from './pages/DocumentsPage';
-import TranscriptionPage from './pages/TranscriptionPage';
 // import SettingsPage from './pages/SettingsPage'; // Удалено - теперь используется модальное окно
 import HistoryPage from './pages/HistoryPage';
+import PromptGalleryPage from './pages/PromptGalleryPage';
 import { SocketProvider } from './contexts/SocketContext';
 import { AppProvider } from './contexts/AppContext';
 import { AuthProvider } from './contexts/AuthContext';
@@ -149,7 +149,7 @@ function App() {
                             <Route path="/" element={<UnifiedChatPage isDarkMode={isDarkMode} />} />
                             <Route path="/voice" element={<VoicePage />} />
                             <Route path="/documents" element={<DocumentsPage />} />
-                            <Route path="/transcription" element={<TranscriptionPage />} />
+                            <Route path="/prompts" element={<PromptGalleryPage />} />
                             <Route path="/profile" element={<ProfilePage />} />
                             <Route path="/history" element={<HistoryPage />} />
                           </Routes>

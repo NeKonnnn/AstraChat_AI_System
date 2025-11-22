@@ -20,7 +20,7 @@ except ImportError:
         if hasattr(sys.stderr, 'reconfigure'):
             sys.stderr.reconfigure(encoding='utf-8')
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -113,18 +113,6 @@ except ImportError as e:
 except Exception as e:
     logger.warning(f"Ошибка при импорте auth router: {e}")
     auth_router = None
-
-# Импорт prompts gallery router
-try:
-    logger.info("Попытка импорта prompts router...")
-    from backend.api_prompts import router as prompts_router
-    logger.info("prompts router импортирован успешно")
-except ImportError as e:
-    logger.warning(f"prompts router недоступен: {e}")
-    prompts_router = None
-except Exception as e:
-    logger.warning(f"Ошибка при импорте prompts router: {e}")
-    prompts_router = None
 
 # Импорты из оригинального MemoAI
 try:
@@ -378,9 +366,6 @@ stop_generation_flags = {}
 # Глобальный флаг для остановки голосового чата
 voice_chat_stop_flag = False
 
-# Флаги для остановки транскрибации (по session_id или user_id)
-stop_transcription_flags = {}
-
 # Создание Socket.IO сервера
 sio = AsyncServer(
     async_mode='asgi',
@@ -431,16 +416,9 @@ app.add_middleware(
 # Подключаем authentication routes
 if auth_router:
     app.include_router(auth_router)
-    logger.info("Auth routes подключены (/api/auth/*)")
+    logger.info("✅ Auth routes подключены (/api/auth/*)")
 else:
-    logger.warning("Auth routes не подключены (auth_router недоступен)")
-
-# Подключаем prompts gallery routes
-if prompts_router:
-    app.include_router(prompts_router)
-    logger.info("Prompts gallery routes подключены (/api/prompts/*)")
-else:
-    logger.warning("Prompts gallery routes не подключены (prompts_router недоступен)")
+    logger.warning("⚠️ Auth routes не подключены (auth_router недоступен)")
 
 # Startup событие для инициализации агентной архитектуры и баз данных
 @app.on_event("startup")
@@ -744,22 +722,6 @@ async def stop_generation(sid, data):
     }, room=sid)
     
     logger.info(f"Socket.IO: установлен флаг остановки для {sid}")
-
-@sio.event
-async def stop_transcription(sid, data):
-    """Обработка команды остановки транскрибации через Socket.IO"""
-    logger.info(f"Socket.IO: получена команда остановки транскрибации от {sid}")
-    
-    # Устанавливаем флаг остановки транскрибации для этого пользователя
-    stop_transcription_flags[sid] = True  # True = остановить транскрибацию
-    
-    # Отправляем подтверждение остановки
-    await sio.emit('transcription_stopped', {
-        'message': 'Транскрибация остановлена',
-        'timestamp': datetime.now().isoformat()
-    }, room=sid)
-    
-    logger.info(f"Socket.IO: установлен флаг остановки транскрибации для {sid}")
 
 @sio.event
 async def chat_message(sid, data):
@@ -1402,7 +1364,7 @@ async def chat_with_ai(message: ChatMessage):
         
         # Добавляем отладочную информацию в ответ для прямого режима
         # if not use_agent_mode:
-        #     debug_info = f"\n\n--- ОТЛАДОЧНАЯ ИНФОРМАЦИЯ ---\n"
+        #     debug_info = f"\n\n--- AstraChatЦИЯ ---\n"
         #     debug_info += f"Режим: Прямое общение с LLM\n"
         #     debug_info += f"Модель: {get_current_model_path()}\n"
         #     debug_info += f"История диалога: {len(history)} сообщений\n"
@@ -3464,23 +3426,13 @@ async def download_confidence_report():
 # ================================
 
 @app.post("/api/transcribe/upload")
-async def transcribe_file(
-    file: UploadFile = File(...),
-    request_id: Optional[str] = Form(None)
-):
+async def transcribe_file(file: UploadFile = File(...)):
     """Транскрибировать аудио/видео файл с диаризацией по ролям"""
-    import uuid
-    
-    # Получаем request_id из формы или генерируем новый
-    transcription_id = request_id if request_id else str(uuid.uuid4())
-    logger.info(f"=== Начало транскрибации файла с диаризацией: {file.filename}, ID: {transcription_id} ===")
+    logger.info(f"=== Начало транскрибации файла с диаризацией: {file.filename} ===")
     
     if not transcriber:
         logger.error("Transcriber не доступен")
         raise HTTPException(status_code=503, detail="Transcriber не доступен")
-    
-    # Сбрасываем флаг остановки для этого ID транскрибации
-    stop_transcription_flags[transcription_id] = False
     
     import tempfile
     temp_dir = tempfile.gettempdir()
@@ -3515,52 +3467,18 @@ async def transcribe_file(
         logger.info(f"Временный путь файла: {file_path}")
         logger.info(f"Файл сохранен, размер: {len(content)} байт")
         
-        # Проверяем флаг остановки перед началом транскрибации
-        if stop_transcription_flags.get(transcription_id, False):
-            logger.info(f"Транскрибация {transcription_id} была остановлена до начала")
-            raise HTTPException(status_code=499, detail="Транскрибация была остановлена")
-        
         # Транскрибируем с принудительной диаризацией
-        # Выполняем в отдельном потоке, чтобы не блокировать event loop
         logger.info(f"Начинаем транскрибацию с диаризацией по ролям...")
         
-        import concurrent.futures
-        loop = asyncio.get_event_loop()
-        
-        # Определяем функцию транскрибации
-        def _transcribe():
-            # Проверяем флаг остановки перед началом
-            if stop_transcription_flags.get(transcription_id, False):
-                logger.info(f"Транскрибация {transcription_id} остановлена перед началом")
-                return False, "Транскрибация была остановлена"
-            
-            try:
-                if hasattr(transcriber, 'transcribe_with_diarization'):
-                    logger.info("Используем принудительную диаризацию...")
-                    result = transcriber.transcribe_with_diarization(file_path)
-                else:
-                    logger.info("Используем стандартную транскрибацию...")
-                    result = transcriber.transcribe_audio_file(file_path)
-                
-                # Проверяем флаг остановки после завершения
-                if stop_transcription_flags.get(transcription_id, False):
-                    logger.info(f"Транскрибация {transcription_id} была остановлена после завершения")
-                    return False, "Транскрибация была остановлена"
-                
-                return result
-            except Exception as e:
-                logger.error(f"Ошибка транскрибации: {e}")
-                return False, str(e)
-        
-        # Выполняем транскрибацию в отдельном потоке
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            success, result = await loop.run_in_executor(executor, _transcribe)
+        # Проверяем, поддерживает ли транскрайбер диаризацию
+        if hasattr(transcriber, 'transcribe_with_diarization'):
+            logger.info("Используем принудительную диаризацию...")
+            success, result = transcriber.transcribe_with_diarization(file_path)
+        else:
+            logger.info("Используем стандартную транскрибацию...")
+            success, result = transcriber.transcribe_audio_file(file_path)
         
         logger.info(f"Результат транскрибации: success={success}, result_length={len(str(result)) if result else 0}")
-        
-        # Удаляем флаг остановки после завершения
-        if transcription_id in stop_transcription_flags:
-            del stop_transcription_flags[transcription_id]
         
         if success:
             logger.info("Транскрибация с диаризацией завершена успешно")
@@ -3569,14 +3487,10 @@ async def transcribe_file(
                 "filename": file.filename,
                 "success": True,
                 "timestamp": datetime.now().isoformat(),
-                "diarization": True,
-                "transcription_id": transcription_id
+                "diarization": True
             }
         else:
             logger.error(f"Ошибка транскрибации: {result}")
-            # Если транскрибация была остановлена, возвращаем специальный код
-            if "остановлена" in str(result).lower():
-                raise HTTPException(status_code=499, detail=result)
             raise HTTPException(status_code=400, detail=result)
             
     except Exception as e:
@@ -3598,23 +3512,6 @@ async def transcribe_file(
                     logger.warning(f"Ошибка удаления файла из MinIO: {e}")
         except Exception as e:
             logger.warning(f"Ошибка очистки временных файлов: {e}")
-
-@app.post("/api/transcribe/stop")
-async def stop_transcription(request: Dict[str, Any]):
-    """Остановить транскрибацию по ID"""
-    transcription_id = request.get('transcription_id')
-    if not transcription_id:
-        raise HTTPException(status_code=400, detail="transcription_id обязателен")
-    
-    # Устанавливаем флаг остановки
-    stop_transcription_flags[transcription_id] = True
-    logger.info(f"Установлен флаг остановки для транскрибации {transcription_id}")
-    
-    return {
-        "success": True,
-        "message": "Команда остановки транскрибации отправлена",
-        "transcription_id": transcription_id
-    }
 
 @app.post("/api/transcribe/upload/diarization")
 async def transcribe_file_with_diarization(file: UploadFile = File(...)):
@@ -3659,23 +3556,13 @@ async def transcribe_file_with_diarization(file: UploadFile = File(...)):
         logger.info(f"Файл сохранен, размер: {len(content)} байт")
         
         # Принудительная диаризация с WhisperX
-        # Выполняем в отдельном потоке, чтобы не блокировать event loop
         logger.info("Начинаем принудительную диаризацию по ролям...")
         
-        import concurrent.futures
-        loop = asyncio.get_event_loop()
-        
-        # Определяем функцию транскрибации
-        def _transcribe():
-            if hasattr(transcriber, 'transcribe_with_diarization'):
-                return transcriber.transcribe_with_diarization(file_path)
-            else:
-                logger.warning("Транскрайбер не поддерживает диаризацию, используем стандартную транскрибацию")
-                return transcriber.transcribe_audio_file(file_path)
-        
-        # Выполняем транскрибацию в отдельном потоке
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            success, result = await loop.run_in_executor(executor, _transcribe)
+        if hasattr(transcriber, 'transcribe_with_diarization'):
+            success, result = transcriber.transcribe_with_diarization(file_path)
+        else:
+            logger.warning("Транскрайбер не поддерживает диаризацию, используем стандартную транскрибацию")
+            success, result = transcriber.transcribe_audio_file(file_path)
         
         logger.info(f"Результат диаризации: success={success}, result_length={len(str(result)) if result else 0}")
         
@@ -3724,18 +3611,7 @@ async def transcribe_youtube(request: YouTubeTranscribeRequest):
         
     try:
         logger.info("Начинаем YouTube транскрибацию с диаризацией...")
-        
-        # Выполняем транскрибацию в отдельном потоке, чтобы не блокировать event loop
-        import concurrent.futures
-        loop = asyncio.get_event_loop()
-        
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            success, result = await loop.run_in_executor(
-                executor, 
-                transcriber.transcribe_youtube, 
-                request.url
-            )
-        
+        success, result = transcriber.transcribe_youtube(request.url)
         logger.info(f"Результат YouTube транскрибации: success={success}, result_length={len(str(result)) if result else 0}")
         
         if success:

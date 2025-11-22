@@ -61,8 +61,11 @@ async def login(credentials: LoginRequest):
             detail="Неверное имя пользователя или пароль"
         )
     
-    # Создаем JWT токен
-    token = create_access_token(credentials.username)
+    # Создаем JWT токен с user_id
+    token = create_access_token(
+        username=credentials.username,
+        user_id=user.get("user_id", credentials.username)
+    )
     
     return {
         "access_token": token,

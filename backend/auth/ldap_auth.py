@@ -143,6 +143,7 @@ def authenticate_ldap(username: str, password: str) -> Optional[Dict]:
                     break
             
             user_data = {
+                "user_id": username,  # Используем username как user_id для LDAP
                 "username": username,
                 "email": email,
                 "full_name": full_name,

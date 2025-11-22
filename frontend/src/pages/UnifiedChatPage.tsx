@@ -34,6 +34,7 @@ import {
   Divider,
   Menu,
   Collapse,
+  Drawer,
 } from '@mui/material';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -61,11 +62,16 @@ import {
   Add as AddIcon,
   Assessment as AssessmentIcon,
   Description as DescriptionIcon,
+  Menu as MenuIcon,
+  Transcribe as TranscribeIcon,
+  AutoAwesome as PromptsIcon,
 } from '@mui/icons-material';
 import { useAppContext, useAppActions, Message } from '../contexts/AppContext';
 import { useSocket } from '../contexts/SocketContext';
 import { getApiUrl, getWsUrl, API_CONFIG } from '../config/api';
 import MessageRenderer from '../components/MessageRenderer';
+import { useNavigate } from 'react-router-dom';
+import TranscriptionModal from '../components/TranscriptionModal';
 
 interface UnifiedChatPageProps {
   isDarkMode: boolean;
@@ -87,6 +93,17 @@ interface AgentStatus {
 }
 
 export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
+  const navigate = useNavigate();
+  
+  // Состояние для правой панели
+  const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
+  const [rightSidebarHidden, setRightSidebarHidden] = useState(false);
+  
+  // Состояние для модального окна транскрибации
+  const [transcriptionModalOpen, setTranscriptionModalOpen] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [transcriptionResult, setTranscriptionResult] = useState('');
+  
   // Состояние для текстового чата
   const [inputMessage, setInputMessage] = useState('');
   const [showCopyAlert, setShowCopyAlert] = useState(false);
@@ -124,11 +141,11 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
   
   // Предзаписанные тестовые сообщения для каждого голоса
   const voiceTestMessages = {
-    baya: "Привет! Я Газик И И. Что обсудим?",
-    xenia: "Привет! Я Газик И И. Что обсудим?",
-    kseniya: "Привет! Я Газик И И. Что обсудим?",
-    aidar: "Привет! Я Газик И И. Что обсудим?",
-    eugene: "Привет! Я Газик И И. Что обсудим?"
+    baya: "Привет! Я Астра Чат И И. Что обсудим?",
+    xenia: "Привет! Я Астра Чат И И. Что обсудим?",
+    kseniya: "Привет! Я Астра Чат И И. Что обсудим?",
+    aidar: "Привет! Я Астра Чат И И. Что обсудим?",
+    eugene: "Привет! Я Астра Чат И И. Что обсудим?"
   };
   
   // WebSocket для голосового чата
@@ -1403,7 +1420,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
       console.log('Отправляю запрос на синтез речи:', requestBody);
       console.log('Проверяю speech_rate в requestBody:', requestBody.speech_rate, 'тип:', typeof requestBody.speech_rate);
       
-      const response = await fetch('http://localhost:8000/api/voice/synthesize', {
+      const response = await fetch(getApiUrl(API_CONFIG.ENDPOINTS.VOICE_SYNTHESIZE), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2009,8 +2026,9 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
           className="message-bubble"
           data-theme={isDarkMode ? 'dark' : 'light'}
           sx={{
-            maxWidth: '75%',
+            maxWidth: isUser ? '75%' : '100%',
             minWidth: '180px',
+            width: isUser ? undefined : '100%',
             backgroundColor: isUser 
               ? 'primary.main' 
               : isDarkMode ? 'background.paper' : '#f8f9fa',
@@ -2318,6 +2336,64 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                 }}
               >
                 <RefreshIcon />
+              </IconButton>
+            </Tooltip>
+          )}
+          
+          {/* Кнопка озвучивания - только для сообщений LLM/агента */}
+          {!isUser && (
+            <Tooltip title="Прочесть вслух">
+              <IconButton
+                size="small"
+                onClick={() => {
+                  // Получаем текущий контент сообщения
+                  let textToSpeak = message.content;
+                  
+                  // Если есть альтернативные ответы, берём текущий вариант
+                  if (message.alternativeResponses && message.alternativeResponses.length > 0 && message.currentResponseIndex !== undefined) {
+                    const currentIndex = message.currentResponseIndex;
+                    if (currentIndex >= 0 && currentIndex < message.alternativeResponses.length) {
+                      textToSpeak = message.alternativeResponses[currentIndex];
+                    }
+                  }
+                  
+                  // Для multi-llm берём первый ответ или все ответы
+                  if (message.multiLLMResponses && message.multiLLMResponses.length > 0) {
+                    textToSpeak = message.multiLLMResponses
+                      .filter(r => !r.error)
+                      .map(r => r.content)
+                      .join(' ');
+                  }
+                  
+                  synthesizeSpeech(textToSpeak);
+                }}
+                className="message-speak-button"
+                data-theme={isDarkMode ? 'dark' : 'light'}
+                disabled={isSpeaking}
+                sx={{ 
+                  opacity: 0.7,
+                  p: 0.5,
+                  borderRadius: '6px',
+                  minWidth: '28px',
+                  width: '28px',
+                  height: '28px',
+                  '&:hover:not(:disabled)': {
+                    opacity: 1,
+                    '& .MuiSvgIcon-root': {
+                      color: 'primary.main',
+                    },
+                  },
+                  '&:disabled': {
+                    opacity: 0.4,
+                  },
+                  '& .MuiSvgIcon-root': {
+                    fontSize: '18px !important',
+                    width: '18px !important',
+                    height: '18px !important',
+                  },
+                }}
+              >
+                <VolumeUpIcon />
               </IconButton>
             </Tooltip>
           )}
@@ -3315,7 +3391,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
               borderRadius: 2,
               bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)',
               border: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'}`,
-              maxWidth: '800px',
+              maxWidth: '1000px',
               width: '100%',
             }}
           >
@@ -3622,16 +3698,24 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
   }
 
   return (
-    <Box 
-      className="fullscreen-chat" 
-      sx={{ 
-        pt: 8,
-        background: isDarkMode 
-          ? 'linear-gradient(135deg, #1e1e1e 0%, #2d2d2d 50%, #1a1a1a 100%)'
-          : 'linear-gradient(135deg, #f5f5f5 0%, #ffffff 50%, #fafafa 100%)',
-        color: isDarkMode ? 'white' : '#333',
-      }}
-    >
+    <Box sx={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
+      {/* Основной контент */}
+      <Box 
+        className="fullscreen-chat" 
+        sx={{ 
+          flexGrow: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          marginRight: rightSidebarHidden ? 0 : (rightSidebarOpen ? 0 : '-64px'),
+          transition: 'margin-right 0.3s ease',
+          pt: 8,
+          background: isDarkMode 
+            ? 'linear-gradient(135deg, #1e1e1e 0%, #2d2d2d 50%, #1a1a1a 100%)'
+            : 'linear-gradient(135deg, #f5f5f5 0%, #ffffff 50%, #fafafa 100%)',
+          color: isDarkMode ? 'white' : '#333',
+        }}
+      >
       {/* Область сообщений */}
       <Box
         className="chat-messages-area"
@@ -3646,6 +3730,32 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
            justifyContent: messages.length === 0 ? 'center' : 'flex-start',
            alignItems: 'center',
            py: 4,
+           // Кастомные стили для скроллбара
+           '&::-webkit-scrollbar': {
+             width: '8px',
+           },
+           '&::-webkit-scrollbar-track': {
+             background: isDarkMode 
+               ? 'rgba(30, 30, 30, 0.5)' 
+               : 'rgba(245, 245, 245, 0.5)',
+             borderRadius: '4px',
+           },
+           '&::-webkit-scrollbar-thumb': {
+             background: isDarkMode 
+               ? 'rgba(45, 45, 45, 0.8)' 
+               : 'rgba(200, 200, 200, 0.8)',
+             borderRadius: '4px',
+             '&:hover': {
+               background: isDarkMode 
+                 ? 'rgba(60, 60, 60, 0.9)' 
+                 : 'rgba(180, 180, 180, 0.9)',
+             },
+           },
+           // Для Firefox
+           scrollbarWidth: 'thin',
+           scrollbarColor: isDarkMode 
+             ? 'rgba(45, 45, 45, 0.8) rgba(30, 30, 30, 0.5)' 
+             : 'rgba(200, 200, 200, 0.8) rgba(245, 245, 245, 0.5)',
          }}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -3656,12 +3766,12 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
           ) : (
             <Box sx={{ 
               width: '100%', 
-              maxWidth: '800px', 
+              maxWidth: '1000px', 
               mx: 'auto',
               px: 2,
             }}>
               {messages.map((message, index) => (
-                <MessageCard key={index} message={message} />
+                <MessageCard key={message.id || index} message={message} />
               ))}
               
               {/* Индикатор размышления - показывается только до начала потоковой генерации, сразу после сообщений */}
@@ -3848,7 +3958,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                        <Box sx={{ 
                          textAlign: 'center', 
                          mb: 3,
-                         maxWidth: '800px',
+                         maxWidth: '1000px',
                          mx: 'auto',
                          px: 2,
                          position: 'absolute',
@@ -3877,7 +3987,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                borderRadius: 2,
                bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)',
                border: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'}`,
-               maxWidth: '800px', // Расширяем до ширины карточек сообщений
+               maxWidth: '1000px', // Расширяем до ширины карточек сообщений
                width: '100%', // Занимает всю доступную ширину до maxWidth
                mx: 'auto', // Центрируем по горизонтали
                // Центрируем по вертикали при пустом чате
@@ -4000,9 +4110,9 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                   !isConnected 
                     ? "Нет соединения с сервером. Запустите backend на порту 8000" 
                     : state.isLoading && !messages.some(msg => msg.isStreaming)
-                      ? "ГазикИИ думает..." 
+                      ? "AstraChat думает..." 
                       : state.isLoading && messages.some(msg => msg.isStreaming)
-                        ? "ГазикИИ генерирует ответ... Нажмите ⏹️ чтобы остановить"
+                        ? "AstraChat генерирует ответ... Нажмите ⏹️ чтобы остановить"
                         : "Чем я могу помочь вам сегодня?"
                 }
                 variant="outlined"
@@ -4279,6 +4389,232 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
            Текст скопирован в буфер обмена
          </Alert>
        </Snackbar>
-     </Box>
-   );
- }
+      </Box>
+
+      {/* Правый сайдбар с кнопками */}
+      {!rightSidebarHidden && (
+      <Drawer
+        variant="persistent"
+        anchor="right"
+        open={true}
+        sx={{
+          width: rightSidebarOpen ? 280 : 64,
+          flexShrink: 0,
+          transition: 'width 0.3s ease',
+          '& .MuiDrawer-paper': {
+            width: rightSidebarOpen ? 280 : 64,
+            boxSizing: 'border-box',
+            background: rightSidebarOpen 
+              ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
+              : 'background.default',
+            color: rightSidebarOpen ? 'white' : 'text.primary',
+            borderLeft: '1px solid',
+            borderColor: 'divider',
+            transition: 'width 0.3s ease, background 0.3s ease, color 0.3s ease',
+            overflowX: 'hidden',
+            display: 'flex',
+            flexDirection: 'column',
+          },
+        }}
+      >
+        {/* Заголовок */}
+        <Box
+          sx={{
+            p: rightSidebarOpen ? 2 : 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: rightSidebarOpen ? 'space-between' : 'center',
+            background: rightSidebarOpen ? 'rgba(0,0,0,0.1)' : 'transparent',
+            minHeight: 64,
+          }}
+        >
+          {rightSidebarOpen && (
+            <Typography variant="h6" fontWeight="bold" sx={{ color: 'white' }}>
+              Действия
+            </Typography>
+          )}
+          <IconButton
+            onClick={() => setRightSidebarOpen(!rightSidebarOpen)}
+            sx={{
+              color: rightSidebarOpen ? 'white' : 'text.primary',
+              '&:hover': {
+                backgroundColor: rightSidebarOpen 
+                  ? 'rgba(255,255,255,0.1)' 
+                  : 'action.hover',
+              },
+            }}
+          >
+            <MenuIcon />
+          </IconButton>
+        </Box>
+
+        {rightSidebarOpen && <Divider sx={{ borderColor: 'rgba(255,255,255,0.1)' }} />}
+
+        {/* Кнопки */}
+        <Box sx={{ 
+          p: rightSidebarOpen ? 2 : 1, 
+          display: 'flex', 
+          flexDirection: 'column', 
+          gap: rightSidebarOpen ? 2 : 1,
+          flex: 1,
+        }}>
+          {/* Кнопка "Транскрибация" */}
+          <Tooltip title={rightSidebarOpen ? '' : 'Транскрибация'} placement="left">
+            <Button
+              fullWidth={rightSidebarOpen}
+              variant={rightSidebarOpen ? 'contained' : 'text'}
+              startIcon={<TranscribeIcon />}
+              onClick={() => setTranscriptionModalOpen(true)}
+              sx={{
+                bgcolor: rightSidebarOpen ? 'rgba(255,255,255,0.2)' : 'transparent',
+                color: rightSidebarOpen ? 'white' : 'text.primary',
+                opacity: !rightSidebarOpen ? 0.7 : 1,
+                '&:hover': {
+                  bgcolor: rightSidebarOpen 
+                    ? 'rgba(255,255,255,0.3)' 
+                    : (isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'),
+                  opacity: 1,
+                  '& .MuiSvgIcon-root': !rightSidebarOpen ? {
+                    color: 'primary.main',
+                  } : {},
+                },
+                textTransform: 'none',
+                py: rightSidebarOpen ? 1.5 : 1,
+                minWidth: rightSidebarOpen ? 'auto' : 40,
+                width: rightSidebarOpen ? '100%' : 40,
+                justifyContent: rightSidebarOpen ? 'flex-start' : 'center',
+                '& .MuiButton-startIcon': {
+                  margin: rightSidebarOpen ? '0 8px 0 0' : 0,
+                },
+              }}
+            >
+              {rightSidebarOpen && 'Транскрибация'}
+            </Button>
+          </Tooltip>
+
+          {/* Кнопка "Галерея промптов" */}
+          <Tooltip title={rightSidebarOpen ? '' : 'Галерея промптов'} placement="left">
+            <Button
+              fullWidth={rightSidebarOpen}
+              variant={rightSidebarOpen ? 'outlined' : 'text'}
+              startIcon={<PromptsIcon />}
+              onClick={() => navigate('/prompts')}
+              sx={{
+                bgcolor: rightSidebarOpen ? 'transparent' : 'transparent',
+                color: rightSidebarOpen ? 'white' : 'text.primary',
+                borderColor: rightSidebarOpen ? 'rgba(255,255,255,0.3)' : 'transparent',
+                opacity: !rightSidebarOpen ? 0.7 : 1,
+                '&:hover': {
+                  bgcolor: rightSidebarOpen 
+                    ? 'rgba(255,255,255,0.2)' 
+                    : (isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'),
+                  borderColor: rightSidebarOpen ? 'rgba(255,255,255,0.5)' : 'transparent',
+                  opacity: 1,
+                  '& .MuiSvgIcon-root': !rightSidebarOpen ? {
+                    color: 'primary.main',
+                  } : {},
+                },
+                textTransform: 'none',
+                py: rightSidebarOpen ? 1.5 : 1,
+                minWidth: rightSidebarOpen ? 'auto' : 40,
+                width: rightSidebarOpen ? '100%' : 40,
+                justifyContent: rightSidebarOpen ? 'flex-start' : 'center',
+                '& .MuiButton-startIcon': {
+                  margin: rightSidebarOpen ? '0 8px 0 0' : 0,
+                },
+              }}
+            >
+              {rightSidebarOpen && 'Галерея промптов'}
+            </Button>
+          </Tooltip>
+        </Box>
+
+        {/* Кнопка "Скрыть панель" внизу узкой панели */}
+        {!rightSidebarOpen && (
+          <Box sx={{ 
+            p: 1, 
+            display: 'flex', 
+            justifyContent: 'center',
+            mt: 'auto',
+          }}>
+            <Tooltip title="Скрыть панель" placement="left">
+              <IconButton
+                onClick={() => setRightSidebarHidden(true)}
+                sx={{
+                  color: 'text.primary',
+                  opacity: 0.7,
+                  '&:hover': {
+                    backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+                    opacity: 1,
+                    '& .MuiSvgIcon-root': {
+                      color: 'primary.main',
+                    },
+                  },
+                }}
+              >
+                <ChevronRightIcon />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        )}
+      </Drawer>
+      )}
+
+      {/* Кнопка для показа скрытой панели */}
+      {rightSidebarHidden && (
+        <Box
+          sx={{
+            position: 'fixed',
+            right: 0,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            zIndex: 1200,
+          }}
+        >
+          <Tooltip title="Показать панель" placement="left">
+            <IconButton
+              onClick={() => {
+                setRightSidebarHidden(false);
+                setRightSidebarOpen(false);
+              }}
+              sx={{
+                bgcolor: 'background.paper',
+                color: 'text.primary',
+                borderRadius: '8px 0 0 8px',
+                boxShadow: 2,
+                '&:hover': {
+                  bgcolor: 'action.hover',
+                },
+              }}
+            >
+              <ChevronRightIcon sx={{ transform: 'rotate(180deg)' }} />
+            </IconButton>
+          </Tooltip>
+        </Box>
+      )}
+
+      {/* Модальное окно транскрибации */}
+      <TranscriptionModal
+        open={transcriptionModalOpen}
+        onClose={() => setTranscriptionModalOpen(false)}
+        isTranscribing={isTranscribing}
+        transcriptionResult={transcriptionResult}
+        onTranscriptionStart={() => setIsTranscribing(true)}
+        onTranscriptionComplete={(result) => {
+          setIsTranscribing(false);
+          setTranscriptionResult(result);
+          // Показываем уведомление, даже если окно закрыто
+          showNotification('success', 'Транскрибация завершена! Откройте окно транскрибации для просмотра результата.');
+        }}
+        onTranscriptionError={() => setIsTranscribing(false)}
+        onInsertToChat={(text) => {
+          setInputMessage(text);
+          // Фокусируемся на поле ввода после вставки текста
+          setTimeout(() => {
+            inputRef.current?.focus();
+          }, 100);
+        }}
+      />
+    </Box>
+  );
+}

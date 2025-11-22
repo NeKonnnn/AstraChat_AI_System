@@ -1,4 +1,4 @@
-/* Газик ИИ Web Interface Styles */
+/* AstraChat Web Interface Styles */
 
 .App {
   text-align: center;
@@ -300,6 +300,24 @@
   justify-content: flex-start;
   /* Убираем gap, так как отступы уже есть в .message-bubble */
   /* Карточки полностью статичны, никаких анимаций */
+}
+
+/* Стили скроллбара для чата - будут переопределены через sx в компоненте */
+.chat-messages-area::-webkit-scrollbar {
+  width: 8px;
+}
+
+.chat-messages-area::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chat-messages-area::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+.chat-messages-area::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
 }
 
 .chat-input-area {

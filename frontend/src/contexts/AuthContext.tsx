@@ -3,6 +3,7 @@ import axios from 'axios';
 
 interface User {
   username: string;
+  user_id?: string;  // ID пользователя (может быть равен username)
   email: string | null;
   full_name: string | null;
   is_active: boolean;

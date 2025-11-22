@@ -21,6 +21,7 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
+  Tooltip,
 } from '@mui/material';
 import {
   Chat as ChatIcon,
@@ -39,6 +40,7 @@ import {
   Menu as MenuIcon,
   Person as PersonIcon,
   Logout as LogoutIcon,
+  AutoAwesome as PromptsIcon,
 } from '@mui/icons-material';
 import { useAppContext, useAppActions } from '../contexts/AppContext';
 import { useSocket } from '../contexts/SocketContext';
@@ -168,8 +170,8 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
       case 'settings':
         setShowSettingsModal(true);
         break;
-      case 'transcription':
-        navigate('/transcription');
+      case 'prompts':
+        navigate('/prompts');
         break;
       case 'statistics':
         // Показываем статистику в диалоге
@@ -502,14 +504,15 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
           InputProps={{
             startAdornment: <SearchIcon sx={{ color: 'rgba(255,255,255,0.7)', mr: 1, fontSize: '1rem' }} />,
             endAdornment: (
-              <IconButton
-                size="small"
-                onClick={() => setShowCreateFolderDialog(true)}
-                sx={{ color: 'rgba(255,255,255,0.7)', p: 0.5 }}
-                title="Создать папку"
-              >
-                <AddFolderIcon fontSize="small" />
-              </IconButton>
+              <Tooltip title="Создать папку">
+                <IconButton
+                  size="small"
+                  onClick={() => setShowCreateFolderDialog(true)}
+                  sx={{ color: 'rgba(255,255,255,0.7)', p: 0.5 }}
+                >
+                  <AddFolderIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
             ),
             sx: {
               backgroundColor: 'rgba(255,255,255,0.1)',
@@ -532,7 +535,28 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
       </Box>
 
       {/* Список чатов */}
-      <Box sx={{ flexGrow: 1, overflow: 'auto' }}>
+      <Box sx={{ 
+        flexGrow: 1, 
+        overflow: 'auto',
+        // Кастомные стили для скроллбара под фиолетовый градиент сайдбара
+        '&::-webkit-scrollbar': {
+          width: '8px',
+        },
+        '&::-webkit-scrollbar-track': {
+          background: 'rgba(102, 126, 234, 0.3)', // Полупрозрачный фиолетовый из градиента
+          borderRadius: '4px',
+        },
+        '&::-webkit-scrollbar-thumb': {
+          background: 'rgba(118, 75, 162, 0.6)', // Полупрозрачный фиолетовый из градиента
+          borderRadius: '4px',
+          '&:hover': {
+            background: 'rgba(118, 75, 162, 0.8)',
+          },
+        },
+        // Для Firefox
+        scrollbarWidth: 'thin',
+        scrollbarColor: 'rgba(118, 75, 162, 0.6) rgba(102, 126, 234, 0.3)',
+      }}>
         <Box sx={{ p: 1 }}>
           <Box
             onClick={() => setChatsExpanded(!chatsExpanded)}
@@ -935,19 +959,6 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
             <ListItemText primary="Настройки" />
           </MenuItem>
           
-          
-          <MenuItem 
-            onClick={() => handleMenuAction('transcription')}
-            sx={{ 
-              color: 'white',
-              '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
-            }}
-          >
-            <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
-              <TranscribeIcon fontSize="small" />
-            </ListItemIcon>
-            <ListItemText primary="Транскрибация" />
-          </MenuItem>
           
           <MenuItem 
             onClick={() => handleMenuAction('statistics')}

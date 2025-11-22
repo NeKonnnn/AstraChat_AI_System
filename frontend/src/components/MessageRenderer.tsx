@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { Box, IconButton, Typography, Tooltip, Link, Paper, Table, TableBody, TableCell, TableContainer, TableHead, TableRow } from '@mui/material';
-import { ContentCopy as CopyIcon, Check as CheckIcon, Info as InfoIcon, Warning as WarningIcon, Error as ErrorIcon, CheckCircle as SuccessIcon } from '@mui/icons-material';
+import { ContentCopy as CopyIcon, Check as CheckIcon, Info as InfoIcon, Warning as WarningIcon, Error as ErrorIcon, CheckCircle as SuccessIcon, GetApp as DownloadIcon } from '@mui/icons-material';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import * as XLSX from 'xlsx';
 
 interface MessageRendererProps {
   content: string;
@@ -161,58 +162,164 @@ const MessageRenderer: React.FC<MessageRendererProps> = ({ content, isStreaming 
     return processed;
   };
 
+  // Функция для экспорта таблицы в Excel
+  const exportTableToExcel = (headers: string[], rows: string[][], tableIndex: number) => {
+    try {
+      // Очищаем ячейки от HTML и Markdown тегов для Excel
+      const cleanText = (text: string): string => {
+        if (!text) return '';
+        
+        let cleaned = text;
+        
+        // Удаляем HTML теги
+        cleaned = cleaned.replace(/<[^>]+>/g, '');
+        
+        // Удаляем Markdown форматирование
+        cleaned = cleaned.replace(/\*\*([^*]+)\*\*/g, '$1'); // Жирный текст
+        cleaned = cleaned.replace(/__([^_]+)__/g, '$1'); // Жирный текст (альтернативный)
+        cleaned = cleaned.replace(/\*([^*]+)\*/g, '$1'); // Курсив
+        cleaned = cleaned.replace(/_([^_]+)_/g, '$1'); // Курсив (альтернативный)
+        cleaned = cleaned.replace(/~~([^~]+)~~/g, '$1'); // Зачеркнутый текст
+        cleaned = cleaned.replace(/`([^`]+)`/g, '$1'); // Инлайн код
+        cleaned = cleaned.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1'); // Ссылки
+        cleaned = cleaned.replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1'); // Изображения
+        
+        // Декодируем HTML сущности
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = cleaned;
+        cleaned = tempDiv.textContent || tempDiv.innerText || cleaned;
+        
+        // Убираем лишние пробелы
+        cleaned = cleaned.trim();
+        
+        return cleaned;
+      };
+
+      // Подготавливаем данные для Excel
+      const excelData: any[][] = [];
+      
+      // Добавляем заголовки
+      if (headers.length > 0) {
+        excelData.push(headers.map(header => cleanText(header)));
+      }
+      
+      // Добавляем строки данных
+      rows.forEach(row => {
+        excelData.push(row.map(cell => cleanText(cell)));
+      });
+
+      // Создаем рабочую книгу
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.aoa_to_sheet(excelData);
+
+      // Настраиваем ширину колонок
+      const colWidths = headers.map((_, colIndex) => {
+        let maxLength = headers[colIndex] ? cleanText(headers[colIndex]).length : 10;
+        rows.forEach(row => {
+          if (row[colIndex]) {
+            const cellLength = cleanText(row[colIndex]).length;
+            if (cellLength > maxLength) {
+              maxLength = cellLength;
+            }
+          }
+        });
+        return { wch: Math.min(Math.max(maxLength + 2, 10), 50) };
+      });
+      ws['!cols'] = colWidths;
+
+      // Добавляем лист в книгу
+      XLSX.utils.book_append_sheet(wb, ws, 'Таблица');
+
+      // Генерируем имя файла с датой и временем
+      const now = new Date();
+      const dateStr = now.toISOString().slice(0, 19).replace(/:/g, '-').replace('T', '_');
+      const fileName = `table_${dateStr}.xlsx`;
+
+      // Сохраняем файл
+      XLSX.writeFile(wb, fileName);
+    } catch (error) {
+      console.error('Ошибка при экспорте таблицы в Excel:', error);
+    }
+  };
+
   // Рендеринг таблицы
   const renderTable = (headers: string[], rows: string[][], index: number) => {
     return (
-      <TableContainer component={Paper} key={index} sx={{ my: 2, maxWidth: '100%', overflow: 'auto' }}>
-        <Table size="small" sx={{ minWidth: 650 }}>
-          {headers.length > 0 && (
-            <TableHead>
-              <TableRow sx={{ backgroundColor: 'primary.dark' }}>
-                {headers.map((header, idx) => (
-                  <TableCell 
-                    key={idx} 
-                    sx={{ 
-                      fontWeight: 'bold',
-                      color: 'white',
-                      border: '1px solid rgba(224, 224, 224, 0.3)',
-                      fontSize: '0.875rem',
-                      whiteSpace: 'pre-wrap',
-                    }}
-                  >
-                    {parseInlineMarkdown(processCellMarkdown(header))}
-                  </TableCell>
-                ))}
-              </TableRow>
-            </TableHead>
-          )}
-          <TableBody>
-            {rows.map((row, rowIdx) => (
-              <TableRow 
-                key={rowIdx}
-                sx={{ 
-                  '&:nth-of-type(odd)': { backgroundColor: 'action.hover' },
-                  '&:hover': { backgroundColor: 'action.selected' }
-                }}
-              >
-                {row.map((cell, cellIdx) => (
-                  <TableCell 
-                    key={cellIdx}
-                    sx={{ 
-                      border: '1px solid rgba(224, 224, 224, 0.3)',
-                      fontSize: '0.875rem',
-                      whiteSpace: 'pre-wrap',
-                      fontFamily: cell.match(/^\d+$/) ? 'monospace' : 'inherit',
-                    }}
-                  >
-                    {parseInlineMarkdown(processCellMarkdown(cell))}
-                  </TableCell>
-                ))}
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
+      <Box key={index} sx={{ my: 2, position: 'relative' }}>
+        {/* Кнопка экспорта в Excel */}
+        <Box
+          sx={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            mb: 1,
+          }}
+        >
+          <Tooltip title="Скачать таблицу в Excel">
+            <IconButton
+              size="small"
+              onClick={() => exportTableToExcel(headers, rows, index)}
+              sx={{
+                color: 'primary.main',
+                '&:hover': {
+                  backgroundColor: 'action.hover',
+                },
+              }}
+            >
+              <DownloadIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Box>
+        
+        <TableContainer component={Paper} sx={{ maxWidth: '100%', overflow: 'auto' }}>
+          <Table size="small" sx={{ minWidth: 650 }}>
+            {headers.length > 0 && (
+              <TableHead>
+                <TableRow sx={{ backgroundColor: 'primary.dark' }}>
+                  {headers.map((header, idx) => (
+                    <TableCell 
+                      key={idx} 
+                      sx={{ 
+                        fontWeight: 'bold',
+                        color: 'white',
+                        border: '1px solid rgba(224, 224, 224, 0.3)',
+                        fontSize: '0.875rem',
+                        whiteSpace: 'pre-wrap',
+                      }}
+                    >
+                      {parseInlineMarkdown(processCellMarkdown(header))}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              </TableHead>
+            )}
+            <TableBody>
+              {rows.map((row, rowIdx) => (
+                <TableRow 
+                  key={rowIdx}
+                  sx={{ 
+                    '&:nth-of-type(odd)': { backgroundColor: 'action.hover' },
+                    '&:hover': { backgroundColor: 'action.selected' }
+                  }}
+                >
+                  {row.map((cell, cellIdx) => (
+                    <TableCell 
+                      key={cellIdx}
+                      sx={{ 
+                        border: '1px solid rgba(224, 224, 224, 0.3)',
+                        fontSize: '0.875rem',
+                        whiteSpace: 'pre-wrap',
+                        fontFamily: cell.match(/^\d+$/) ? 'monospace' : 'inherit',
+                      }}
+                    >
+                      {parseInlineMarkdown(processCellMarkdown(cell))}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      </Box>
     );
   };
 

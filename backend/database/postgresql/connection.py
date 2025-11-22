@@ -19,8 +19,8 @@ class PostgreSQLConnection:
         host: str = "localhost",
         port: int = 5432,
         database: str = "memoai",
-        user: str = "postgres",
-        password: str = "postgres"
+        user: str = "memoai_user",
+        password: str = "password"
     ):
         """
         Инициализация подключения к PostgreSQL
@@ -48,6 +48,8 @@ class PostgreSQLConnection:
             max_size: Максимальный размер пула
         """
         try:
+            logger.info(f"Попытка подключения к PostgreSQL: {self.user}@{self.host}:{self.port}/{self.database}")
+            
             self.pool = await asyncpg.create_pool(
                 host=self.host,
                 port=self.port,
@@ -77,8 +79,55 @@ class PostgreSQLConnection:
             logger.info(f"Успешное подключение к PostgreSQL. База данных: {self.database}")
             return True
             
+        except asyncpg.exceptions.InvalidPasswordError:
+            logger.error("ОШИБКА: Неверный пароль для пользователя PostgreSQL!")
+            logger.error(f"Пользователь: {self.user}")
+            logger.error("Проверьте POSTGRES_PASSWORD в .env файле")
+            return False
+            
+        except asyncpg.exceptions.InvalidCatalogNameError:
+            logger.error(f"ОШИБКА: База данных '{self.database}' не существует!")
+            logger.error(f"Создайте базу данных:")
+            logger.error(f"CREATE DATABASE {self.database};")
+            logger.error("Или используйте скрипт test_postgres_connection.py для автоматического создания")
+            return False
+            
+        except asyncpg.exceptions.InvalidAuthorizationSpecificationError:
+            logger.error(f"ОШИБКА: Пользователь '{self.user}' не существует или нет прав доступа!")
+            logger.error(f"Создайте пользователя:")
+            logger.error(f"CREATE USER {self.user} WITH PASSWORD '{self.password}';")
+            logger.error(f"GRANT ALL PRIVILEGES ON DATABASE {self.database} TO {self.user};")
+            return False
+            
+        except ConnectionRefusedError:
+            logger.error(f"ОШИБКА: Не удалось подключиться к {self.host}:{self.port}")
+            logger.error("Проверьте:")
+            logger.error("1. PostgreSQL запущен")
+            logger.error("2. Хост и порт правильные (для локальной БД используйте localhost, а не postgresql)")
+            logger.error("3. Firewall не блокирует подключение")
+            logger.error(f"4. В .env файле POSTGRES_HOST=localhost (не postgresql)")
+            return False
+            
+        except OSError as e:
+            if "No connection could be made" in str(e) or "не удается установить соединение" in str(e):
+                logger.error(f"ОШИБКА: Не удалось установить соединение с {self.host}:{self.port}")
+                logger.error("Проверьте:")
+                logger.error("1. PostgreSQL запущен")
+                logger.error("2. Хост и порт правильные")
+                logger.error(f"3. В .env файле POSTGRES_HOST=localhost (не postgresql для локальной БД)")
+            else:
+                logger.error(f"ОШИБКА подключения: {e}")
+            return False
+            
         except Exception as e:
-            logger.error(f"Ошибка при подключении к PostgreSQL: {e}")
+            error_type = type(e).__name__
+            logger.error(f"ОШИБКА при подключении к PostgreSQL ({error_type}): {e}")
+            logger.error(f"Параметры подключения:")
+            logger.error(f"Host: {self.host}")
+            logger.error(f"Port: {self.port}")
+            logger.error(f"Database: {self.database}")
+            logger.error(f"User: {self.user}")
+            logger.error("Проверьте настройки в .env файле")
             return False
     
     async def disconnect(self):
@@ -99,11 +148,11 @@ class PostgreSQLConnection:
             logger.error(f"Ошибка при проверке здоровья PostgreSQL: {e}")
             return False
     
-    async def acquire(self) -> Connection:
-        """Получение соединения из пула"""
+    def acquire(self):
+        """Получение соединения из пула (контекстный менеджер)"""
         if not self.pool:
             raise RuntimeError("Пул соединений не создан. Вызовите connect() сначала.")
-        return await self.pool.acquire()
+        return self.pool.acquire()
     
     async def release(self, conn: Connection):
         """Освобождение соединения обратно в пул"""
@@ -128,6 +177,9 @@ class PostgreSQLConnection:
         """Выполнение запроса с возвратом одного значения"""
         async with self.pool.acquire() as conn:
             return await conn.fetchval(query, *args)
+
+
+
 
 
 

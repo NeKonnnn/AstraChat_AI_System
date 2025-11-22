@@ -1,0 +1,738 @@
+import React, { useState, useRef } from 'react';
+import {
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Box,
+  Typography,
+  Card,
+  CardContent,
+  Button,
+  TextField,
+  Tabs,
+  Tab,
+  Alert,
+  IconButton,
+  Chip,
+  useTheme,
+  useMediaQuery,
+  Paper,
+} from '@mui/material';
+import {
+  Close as CloseIcon,
+  Upload as UploadIcon,
+  YouTube as YouTubeIcon,
+  PlayArrow as PlayIcon,
+  Download as DownloadIcon,
+  ContentCopy as CopyIcon,
+  Videocam as VideoIcon,
+  AudioFile as AudioIcon,
+  Send as SendIcon,
+  Stop as StopIcon,
+} from '@mui/icons-material';
+import { useAppActions } from '../contexts/AppContext';
+
+interface TabPanelProps {
+  children?: React.ReactNode;
+  index: number;
+  value: number;
+}
+
+function TabPanel(props: TabPanelProps) {
+  const { children, value, index, ...other } = props;
+  return (
+    <div role="tabpanel" hidden={value !== index} {...other}>
+      {value === index && <Box sx={{ py: 3 }}>{children}</Box>}
+    </div>
+  );
+}
+
+interface TranscriptionModalProps {
+  open: boolean;
+  onClose: () => void;
+  isTranscribing?: boolean;
+  transcriptionResult?: string;
+  onTranscriptionStart?: () => void;
+  onTranscriptionComplete?: (result: string) => void;
+  onTranscriptionError?: (error: string) => void;
+  onInsertToChat?: (text: string) => void;
+}
+
+export default function TranscriptionModal({ 
+  open, 
+  onClose,
+  isTranscribing: externalIsTranscribing,
+  transcriptionResult: externalTranscriptionResult,
+  onTranscriptionStart,
+  onTranscriptionComplete,
+  onTranscriptionError,
+  onInsertToChat,
+}: TranscriptionModalProps) {
+  const theme = useTheme();
+  const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
+  
+  const [tabValue, setTabValue] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const [internalIsTranscribing, setInternalIsTranscribing] = useState(false);
+  const [youtubeUrl, setYoutubeUrl] = useState('');
+  const [internalTranscriptionResult, setInternalTranscriptionResult] = useState('');
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [showResult, setShowResult] = useState(false);
+  const [transcriptionId, setTranscriptionId] = useState<string | null>(null);
+  
+  // Используем внешнее состояние, если оно передано, иначе внутреннее
+  const isTranscribing = externalIsTranscribing !== undefined ? externalIsTranscribing : internalIsTranscribing;
+  const transcriptionResult = externalTranscriptionResult !== undefined ? externalTranscriptionResult : internalTranscriptionResult;
+  
+  const { showNotification } = useAppActions();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
+    setTabValue(newValue);
+    // Не сбрасываем transcriptionResult, так как он управляется извне
+    if (!externalTranscriptionResult) {
+      setInternalTranscriptionResult('');
+    }
+    setUploadedFile(null);
+    setYoutubeUrl('');
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0) {
+      handleFileSelect(files[0]);
+    }
+  };
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      handleFileSelect(files[0]);
+    }
+  };
+
+  const handleFileSelect = (file: File) => {
+    // Проверка типа файла
+    const allowedTypes = [
+      'audio/mpeg', 'audio/wav', 'audio/m4a', 'audio/aac', 'audio/flac',
+      'video/mp4', 'video/avi', 'video/mov', 'video/mkv', 'video/webm',
+    ];
+
+    const isValidType = allowedTypes.some(type => 
+      file.type.includes(type.split('/')[1]) || 
+      file.name.toLowerCase().includes(type.split('/')[1])
+    );
+
+    if (!isValidType) {
+      showNotification('error', 'Поддерживаются только аудио и видео файлы');
+      return;
+    }
+
+    // Проверка размера файла (макс 500MB)
+    if (file.size > 500 * 1024 * 1024) {
+      showNotification('error', 'Размер файла не должен превышать 500MB');
+      return;
+    }
+
+    setUploadedFile(file);
+    showNotification('success', `Файл ${file.name} готов к транскрибации`);
+  };
+
+  const handleFileTranscription = async () => {
+    if (!uploadedFile) {
+      showNotification('warning', 'Выберите файл для транскрибации');
+      return;
+    }
+
+    if (onTranscriptionStart) {
+      onTranscriptionStart();
+    } else {
+      setInternalIsTranscribing(true);
+    }
+    
+    // Генерируем уникальный ID для транскрибации
+    const currentTranscriptionId = `transcribe_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    setTranscriptionId(currentTranscriptionId);
+    
+    try {
+      const formData = new FormData();
+      formData.append('file', uploadedFile);
+      formData.append('request_id', currentTranscriptionId);
+
+      const response = await fetch('http://localhost:8000/api/transcribe/upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      // Проверяем статус ответа
+      if (!response.ok) {
+        // Если статус 499 (Client Closed Request) - транскрибация была остановлена
+        if (response.status === 499) {
+          const errorData = await response.json().catch(() => ({ detail: 'Транскрибация была остановлена' }));
+          throw { status: 499, message: errorData.detail || 'Транскрибация была остановлена' };
+        }
+        // Для других ошибок
+        const errorData = await response.json().catch(() => ({ detail: 'Ошибка при транскрибации' }));
+        throw new Error(errorData.detail || 'Ошибка при транскрибации');
+      }
+
+      const result = await response.json();
+
+      if (result.success) {
+        // Сохраняем ID транскрибации, если он передан
+        if (result.transcription_id) {
+          setTranscriptionId(result.transcription_id);
+        }
+        
+        if (onTranscriptionComplete) {
+          onTranscriptionComplete(result.transcription);
+        } else {
+          setInternalTranscriptionResult(result.transcription);
+        }
+        setShowResult(true);
+        showNotification('success', 'Транскрибация завершена');
+        setTranscriptionId(null); // Сбрасываем ID после завершения
+      } else {
+        const errorMsg = result.message || 'Ошибка при транскрибации';
+        if (onTranscriptionError) {
+          onTranscriptionError(errorMsg);
+        }
+        showNotification('error', errorMsg);
+        setTranscriptionId(null); // Сбрасываем ID при ошибке
+      }
+    } catch (error: any) {
+      console.error('Ошибка транскрибации:', error);
+      // Проверяем, была ли транскрибация остановлена
+      if (error?.status === 499 || error?.message?.includes('остановлена')) {
+        const errorMsg = 'Транскрибация была остановлена';
+        if (onTranscriptionError) {
+          onTranscriptionError(errorMsg);
+        }
+        showNotification('info', errorMsg);
+      } else {
+        const errorMsg = 'Ошибка при отправке файла';
+        if (onTranscriptionError) {
+          onTranscriptionError(errorMsg);
+        }
+        showNotification('error', errorMsg);
+      }
+      setTranscriptionId(null);
+    } finally {
+      if (!onTranscriptionStart) {
+        setInternalIsTranscribing(false);
+      }
+    }
+  };
+
+  const handleYouTubeTranscription = async () => {
+    if (!youtubeUrl.trim()) {
+      showNotification('warning', 'Введите URL YouTube видео');
+      return;
+    }
+
+    // Простая проверка URL
+    if (!youtubeUrl.includes('youtube.com') && !youtubeUrl.includes('youtu.be')) {
+      showNotification('error', 'Некорректный URL YouTube');
+      return;
+    }
+
+    if (onTranscriptionStart) {
+      onTranscriptionStart();
+    } else {
+      setInternalIsTranscribing(true);
+    }
+    
+    try {
+      const response = await fetch('http://localhost:8000/api/transcribe/youtube', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ url: youtubeUrl }),
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        if (onTranscriptionComplete) {
+          onTranscriptionComplete(result.transcription);
+        } else {
+          setInternalTranscriptionResult(result.transcription);
+        }
+        setShowResult(true);
+        showNotification('success', 'Транскрибация YouTube видео завершена');
+      } else {
+        const errorMsg = result.message || 'Ошибка при транскрибации YouTube';
+        if (onTranscriptionError) {
+          onTranscriptionError(errorMsg);
+        }
+        showNotification('error', errorMsg);
+      }
+    } catch (error) {
+      console.error('Ошибка YouTube транскрибации:', error);
+      const errorMsg = 'Ошибка при обработке YouTube URL';
+      if (onTranscriptionError) {
+        onTranscriptionError(errorMsg);
+      }
+      showNotification('error', errorMsg);
+    } finally {
+      if (!onTranscriptionStart) {
+        setInternalIsTranscribing(false);
+      }
+    }
+  };
+
+  const handleCopyTranscription = async () => {
+    try {
+      const textToCopy = transcriptionResult || '';
+      await navigator.clipboard.writeText(textToCopy);
+      showNotification('success', 'Транскрипция скопирована в буфер обмена');
+    } catch (error) {
+      showNotification('error', 'Не удалось скопировать текст');
+    }
+  };
+
+  const handleDownloadTranscription = () => {
+    const textToDownload = transcriptionResult || '';
+    const blob = new Blob([textToDownload], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `transcription_${new Date().toISOString().split('T')[0]}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleInsertToChat = () => {
+    const textToInsert = transcriptionResult || '';
+    if (textToInsert && onInsertToChat) {
+      onInsertToChat(textToInsert);
+      showNotification('success', 'Текст вставлен в поле ввода чата');
+      // Закрываем диалог с результатом, но не само модальное окно
+      setShowResult(false);
+    } else if (!onInsertToChat) {
+      showNotification('warning', 'Функция вставки в чат недоступна');
+    }
+  };
+
+  const handleStopTranscription = async () => {
+    if (!transcriptionId) {
+      showNotification('warning', 'ID транскрибации не найден');
+      return;
+    }
+
+    try {
+      const response = await fetch('http://localhost:8000/api/transcribe/stop', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ transcription_id: transcriptionId }),
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        showNotification('info', 'Транскрибация остановлена');
+        // Сбрасываем состояние транскрибации
+        if (onTranscriptionError) {
+          onTranscriptionError('Транскрибация была остановлена пользователем');
+        }
+        setTranscriptionId(null);
+      } else {
+        showNotification('error', result.message || 'Ошибка при остановке транскрибации');
+      }
+    } catch (error) {
+      console.error('Ошибка остановки транскрибации:', error);
+      showNotification('error', 'Ошибка при отправке команды остановки');
+    }
+  };
+
+  const formatFileSize = (bytes: number) => {
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    if (bytes === 0) return '0 Byte';
+    const i = parseInt(Math.floor(Math.log(bytes) / Math.log(1024)).toString());
+    return Math.round(bytes / Math.pow(1024, i) * 100) / 100 + ' ' + sizes[i];
+  };
+
+  const getFileIcon = (file: File) => {
+    if (file.type.startsWith('video/')) return <VideoIcon color="primary" />;
+    if (file.type.startsWith('audio/')) return <AudioIcon color="secondary" />;
+    return <AudioIcon />;
+  };
+
+  const handleClose = () => {
+    // Не сбрасываем состояние транскрибации, если она идет или есть результат
+    // Позволяем закрыть окно, но сохраняем состояние
+    setTabValue(0);
+    setUploadedFile(null);
+    setYoutubeUrl('');
+    setShowResult(false);
+    // Не сбрасываем isTranscribing и transcriptionResult - они управляются извне или сохраняются
+    onClose();
+  };
+
+  return (
+    <>
+      <Dialog
+        open={open}
+        onClose={handleClose}
+        maxWidth="lg"
+        fullWidth
+        fullScreen={fullScreen}
+        PaperProps={{
+          sx: {
+            height: fullScreen ? '100%' : '90vh',
+            maxHeight: '90vh',
+          },
+        }}
+      >
+        <DialogTitle>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'relative' }}>
+            <Box sx={{ flex: 1, textAlign: 'center' }}>
+              <Typography variant="h5" fontWeight="600">
+                Транскрибация
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                Преобразование аудио и видео в текст
+              </Typography>
+            </Box>
+            <IconButton 
+              onClick={handleClose} 
+              size="small"
+              sx={{ position: 'absolute', right: 0 }}
+            >
+              <CloseIcon />
+            </IconButton>
+          </Box>
+        </DialogTitle>
+
+        <DialogContent dividers sx={{ p: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <Box sx={{ flex: 1, overflow: 'auto', p: 3 }}>
+            {/* Вкладки */}
+            <Card sx={{ mb: 3 }}>
+              <Tabs
+                value={tabValue}
+                onChange={handleTabChange}
+                variant="fullWidth"
+                textColor="primary"
+                indicatorColor="primary"
+              >
+                <Tab icon={<UploadIcon />} label="Загрузить файл" />
+                <Tab icon={<YouTubeIcon />} label="YouTube видео" />
+              </Tabs>
+            </Card>
+
+            {/* Вкладка загрузки файла */}
+            <TabPanel value={tabValue} index={0}>
+              <Card>
+                <CardContent>
+                  {!uploadedFile ? (
+                    <Box
+                      sx={{
+                        border: '2px dashed',
+                        borderColor: isDragging ? 'primary.main' : 'grey.300',
+                        borderRadius: 2,
+                        p: 6,
+                        textAlign: 'center',
+                        backgroundColor: isDragging ? 'primary.50' : 'background.default',
+                        cursor: 'pointer',
+                        transition: 'all 0.3s ease',
+                        '&:hover': {
+                          borderColor: 'primary.main',
+                          backgroundColor: 'primary.50',
+                        },
+                      }}
+                      onDragOver={handleDragOver}
+                      onDragLeave={handleDragLeave}
+                      onDrop={handleDrop}
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      <UploadIcon sx={{ fontSize: 64, color: 'primary.main', mb: 2 }} />
+                      <Typography variant="h5" gutterBottom>
+                        Перетащите файл сюда или нажмите для выбора
+                      </Typography>
+                      <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
+                        Поддерживаются аудио и видео файлы
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        Форматы: MP3, WAV, M4A, AAC, FLAC, MP4, AVI, MOV, MKV, WebM
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
+                        Максимальный размер: 500MB
+                      </Typography>
+                    </Box>
+                  ) : (
+                    <Box>
+                      <Alert severity="success" sx={{ mb: 3 }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          {getFileIcon(uploadedFile)}
+                          <Box>
+                            <Typography variant="body1" fontWeight="500">
+                              {uploadedFile.name}
+                            </Typography>
+                            <Typography variant="body2" color="text.secondary">
+                              {formatFileSize(uploadedFile.size)}
+                            </Typography>
+                          </Box>
+                        </Box>
+                      </Alert>
+                      
+                      <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center' }}>
+                        <Button
+                          variant="contained"
+                          size="large"
+                          startIcon={<PlayIcon />}
+                          onClick={handleFileTranscription}
+                          disabled={isTranscribing}
+                        >
+                          Начать транскрибацию
+                        </Button>
+                        <Button
+                          variant="outlined"
+                          onClick={() => setUploadedFile(null)}
+                          disabled={isTranscribing}
+                        >
+                          Выбрать другой файл
+                        </Button>
+                      </Box>
+                    </Box>
+                  )}
+                  
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    hidden
+                    accept="audio/*,video/*"
+                    onChange={handleFileInputChange}
+                  />
+                </CardContent>
+              </Card>
+            </TabPanel>
+
+            {/* Вкладка YouTube */}
+            <TabPanel value={tabValue} index={1}>
+              <Card>
+                <CardContent>
+                  <Box sx={{ textAlign: 'center', mb: 4 }}>
+                    <YouTubeIcon sx={{ fontSize: 64, color: 'error.main', mb: 2 }} />
+                    <Typography variant="h5" gutterBottom>
+                      Транскрибация YouTube видео
+                    </Typography>
+                    <Typography variant="body1" color="text.secondary">
+                      Вставьте ссылку на YouTube видео для получения транскрипции
+                    </Typography>
+                  </Box>
+
+                  <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
+                    <TextField
+                      fullWidth
+                      placeholder="https://www.youtube.com/watch?v=..."
+                      value={youtubeUrl}
+                      onChange={(e) => setYoutubeUrl(e.target.value)}
+                      disabled={isTranscribing}
+                      variant="outlined"
+                    />
+                    <Button
+                      variant="contained"
+                      size="large"
+                      startIcon={<PlayIcon />}
+                      onClick={handleYouTubeTranscription}
+                      disabled={!youtubeUrl.trim() || isTranscribing}
+                      sx={{ minWidth: 200 }}
+                    >
+                      Транскрибировать
+                    </Button>
+                  </Box>
+
+                  <Alert severity="info">
+                    <Typography variant="body2">
+                      Поддерживаются публичные YouTube видео. Время обработки зависит от длительности видео.
+                    </Typography>
+                  </Alert>
+                </CardContent>
+              </Card>
+            </TabPanel>
+
+            {/* Индикатор загрузки */}
+            {isTranscribing && (
+              <Card sx={{ mt: 3 }}>
+                <CardContent>
+                  <Box sx={{ textAlign: 'center', py: 4 }}>
+                    {/* Три мигающие точки */}
+                    <Box sx={{ 
+                      display: 'flex', 
+                      justifyContent: 'center', 
+                      alignItems: 'center',
+                      gap: 1.5,
+                      mb: 4,
+                      height: 50
+                    }}>
+                      {[0, 1, 2].map((index) => (
+                        <Box
+                          key={index}
+                          sx={{
+                            width: 12,
+                            height: 12,
+                            borderRadius: '50%',
+                            backgroundColor: 'primary.main',
+                            animation: 'pulse 1.4s ease-in-out infinite',
+                            animationDelay: `${index * 0.2}s`,
+                            '@keyframes pulse': {
+                              '0%, 80%, 100%': {
+                                transform: 'scale(0.8)',
+                                opacity: 0.5,
+                              },
+                              '40%': {
+                                transform: 'scale(1.2)',
+                                opacity: 1,
+                              },
+                            },
+                          }}
+                        />
+                      ))}
+                    </Box>
+                    <Typography variant="h6" gutterBottom sx={{ fontWeight: 600 }}>
+                      Выполняется транскрибация...
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                      Это может занять несколько минут в зависимости от размера файла
+                    </Typography>
+                    {/* Кнопка остановки транскрибации */}
+                    <Button
+                      variant="outlined"
+                      color="error"
+                      size="large"
+                      startIcon={<StopIcon />}
+                      onClick={handleStopTranscription}
+                      disabled={!transcriptionId}
+                      sx={{ mt: 2 }}
+                    >
+                      Остановить транскрибацию
+                    </Button>
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 2, fontStyle: 'italic' }}>
+                      Вы можете закрыть это окно, транскрибация продолжится в фоне
+                    </Typography>
+                  </Box>
+                </CardContent>
+              </Card>
+            )}
+            
+            {/* Показываем результат, если транскрибация завершена и есть результат */}
+            {!isTranscribing && transcriptionResult && !showResult && (
+              <Card sx={{ mt: 3 }}>
+                <CardContent>
+                  <Alert severity="success" sx={{ mb: 2 }}>
+                    Транскрибация завершена! Нажмите кнопку ниже, чтобы просмотреть результат.
+                  </Alert>
+                  <Box sx={{ display: 'flex', justifyContent: 'center' }}>
+                    <Button
+                      variant="contained"
+                      onClick={() => setShowResult(true)}
+                      startIcon={<CopyIcon />}
+                    >
+                      Просмотреть результат
+                    </Button>
+                  </Box>
+                </CardContent>
+              </Card>
+            )}
+          </Box>
+        </DialogContent>
+      </Dialog>
+
+      {/* Диалог с результатом */}
+      <Dialog
+        open={showResult}
+        onClose={() => setShowResult(false)}
+        maxWidth="md"
+        fullWidth
+        scroll="paper"
+      >
+        <DialogTitle>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Typography variant="h6">Результат транскрибации</Typography>
+            <Box>
+              <IconButton onClick={handleCopyTranscription} title="Копировать">
+                <CopyIcon />
+              </IconButton>
+              <IconButton onClick={handleDownloadTranscription} title="Скачать">
+                <DownloadIcon />
+              </IconButton>
+              {onInsertToChat && (
+                <IconButton onClick={handleInsertToChat} title="Вставить в чат" color="primary">
+                  <SendIcon />
+                </IconButton>
+              )}
+            </Box>
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          <Paper variant="outlined" sx={{ p: 2, backgroundColor: 'background.default' }}>
+            <Typography
+              variant="body1"
+              sx={{
+                whiteSpace: 'pre-wrap',
+                fontFamily: 'monospace',
+                lineHeight: 1.6,
+                maxHeight: 400,
+                overflow: 'auto',
+              }}
+            >
+              {transcriptionResult || 'Результат транскрибации появится здесь...'}
+            </Typography>
+          </Paper>
+          
+          <Box sx={{ mt: 2, display: 'flex', gap: 1 }}>
+            <Chip
+              label={`${(transcriptionResult || '').length} символов`}
+              size="small"
+              variant="outlined"
+            />
+            <Chip
+              label={`~${Math.ceil((transcriptionResult || '').split(' ').length)} слов`}
+              size="small"
+              variant="outlined"
+            />
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCopyTranscription} startIcon={<CopyIcon />}>
+            Копировать
+          </Button>
+          <Button onClick={handleDownloadTranscription} startIcon={<DownloadIcon />}>
+            Скачать
+          </Button>
+          {onInsertToChat && (
+            <Button 
+              onClick={handleInsertToChat} 
+              startIcon={<SendIcon />}
+              variant="outlined"
+              color="primary"
+            >
+              Вставить в чат
+            </Button>
+          )}
+          <Button onClick={() => setShowResult(false)} variant="contained">
+            Закрыть
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </>
+  );
+}
+
