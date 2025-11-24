@@ -236,6 +236,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
     const savedLeftAlignMessages = localStorage.getItem('left_align_messages');
     const savedWidescreenMode = localStorage.getItem('widescreen_mode');
     const savedShowUserName = localStorage.getItem('show_user_name');
+    const savedEnableNotification = localStorage.getItem('enable_notification');
     return {
       autoGenerateTitles: savedAutoTitle !== null ? savedAutoTitle === 'true' : true,
       largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
@@ -244,6 +245,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
       leftAlignMessages: savedLeftAlignMessages !== null ? savedLeftAlignMessages === 'true' : false,
       widescreenMode: savedWidescreenMode !== null ? savedWidescreenMode === 'true' : false,
       showUserName: savedShowUserName !== null ? savedShowUserName === 'true' : false,
+      enableNotification: savedEnableNotification !== null ? savedEnableNotification === 'true' : false,
     };
   });
 
@@ -257,6 +259,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
       const savedLeftAlignMessages = localStorage.getItem('left_align_messages');
       const savedWidescreenMode = localStorage.getItem('widescreen_mode');
       const savedShowUserName = localStorage.getItem('show_user_name');
+      const savedEnableNotification = localStorage.getItem('enable_notification');
       setInterfaceSettings({
         autoGenerateTitles: savedAutoTitle !== null ? savedAutoTitle === 'true' : true,
         largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
@@ -265,6 +268,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
         leftAlignMessages: savedLeftAlignMessages !== null ? savedLeftAlignMessages === 'true' : false,
         widescreenMode: savedWidescreenMode !== null ? savedWidescreenMode === 'true' : false,
         showUserName: savedShowUserName !== null ? savedShowUserName === 'true' : false,
+        enableNotification: savedEnableNotification !== null ? savedEnableNotification === 'true' : false,
       });
     };
 
@@ -304,6 +308,47 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Функция для воспроизведения звукового оповещения
+  const playNotificationSound = useCallback(() => {
+    if (!interfaceSettings.enableNotification) return;
+    
+    try {
+      // Создаем простой звуковой сигнал через Web Audio API
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      
+      oscillator.frequency.value = 800; // Частота в Гц
+      oscillator.type = 'sine';
+      
+      gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.3);
+      
+      oscillator.start(audioContext.currentTime);
+      oscillator.stop(audioContext.currentTime + 0.3);
+    } catch (error) {
+      console.warn('Не удалось воспроизвести звуковое оповещение:', error);
+    }
+  }, [interfaceSettings.enableNotification]);
+
+  // Отслеживаем завершение генерации сообщений для воспроизведения звука
+  const prevStreamingRef = useRef<boolean>(false);
+  useEffect(() => {
+    const hasStreamingMessages = messages.some(msg => msg.isStreaming);
+    const hasStreamingMultiLLM = modelWindows.some(w => w.isStreaming);
+    const isCurrentlyStreaming = hasStreamingMessages || hasStreamingMultiLLM;
+    
+    // Если стриминг только что завершился (был true, стал false), воспроизводим звук
+    if (prevStreamingRef.current && !isCurrentlyStreaming) {
+      playNotificationSound();
+    }
+    
+    prevStreamingRef.current = isCurrentlyStreaming;
+  }, [messages, modelWindows, playNotificationSound]);
 
   // Фокус на поле ввода при загрузке
   useEffect(() => {

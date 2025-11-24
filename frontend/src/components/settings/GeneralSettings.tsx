@@ -51,6 +51,7 @@ export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSe
     const savedLeftAlignMessages = localStorage.getItem('left_align_messages');
     const savedWidescreenMode = localStorage.getItem('widescreen_mode');
     const savedShowUserName = localStorage.getItem('show_user_name');
+    const savedEnableNotification = localStorage.getItem('enable_notification');
     return {
       autoGenerateTitles: savedAutoTitle !== null ? savedAutoTitle === 'true' : true,
       largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
@@ -59,6 +60,7 @@ export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSe
       leftAlignMessages: savedLeftAlignMessages !== null ? savedLeftAlignMessages === 'true' : false,
       widescreenMode: savedWidescreenMode !== null ? savedWidescreenMode === 'true' : false,
       showUserName: savedShowUserName !== null ? savedShowUserName === 'true' : false,
+      enableNotification: savedEnableNotification !== null ? savedEnableNotification === 'true' : false,
     };
   });
   
@@ -155,6 +157,7 @@ export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSe
     localStorage.setItem('left_align_messages', String(newSettings.leftAlignMessages));
     localStorage.setItem('widescreen_mode', String(newSettings.widescreenMode));
     localStorage.setItem('show_user_name', String(newSettings.showUserName));
+    localStorage.setItem('enable_notification', String(newSettings.enableNotification));
     // Отправляем кастомное событие для обновления настроек в том же окне
     window.dispatchEvent(new Event('interfaceSettingsChanged'));
     showNotification('success', 'Настройки интерфейса сохранены');
@@ -427,6 +430,31 @@ export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSe
               <Switch
                 checked={interfaceSettings.assistantNoBorder}
                 onChange={(e) => handleInterfaceSettingChange('assistantNoBorder', e.target.checked)}
+              />
+            </ListItem>
+
+            <Divider />
+
+            {/* Включить оповещение */}
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <ListItemText
+                primary="Включить оповещение"
+                primaryTypographyProps={{
+                  variant: 'body1',
+                  fontWeight: 500,
+                }}
+              />
+              <Switch
+                checked={interfaceSettings.enableNotification}
+                onChange={(e) => handleInterfaceSettingChange('enableNotification', e.target.checked)}
               />
             </ListItem>
 
