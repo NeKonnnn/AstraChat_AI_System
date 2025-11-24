@@ -46,9 +46,19 @@ export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSe
   const [interfaceSettings, setInterfaceSettings] = useState(() => {
     const savedAutoTitle = localStorage.getItem('auto_generate_titles');
     const savedLargeTextAsFile = localStorage.getItem('large_text_as_file');
+    const savedUserNoBorder = localStorage.getItem('user_no_border');
+    const savedAssistantNoBorder = localStorage.getItem('assistant_no_border');
+    const savedLeftAlignMessages = localStorage.getItem('left_align_messages');
+    const savedWidescreenMode = localStorage.getItem('widescreen_mode');
+    const savedShowUserName = localStorage.getItem('show_user_name');
     return {
       autoGenerateTitles: savedAutoTitle !== null ? savedAutoTitle === 'true' : true,
       largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
+      userNoBorder: savedUserNoBorder !== null ? savedUserNoBorder === 'true' : false,
+      assistantNoBorder: savedAssistantNoBorder !== null ? savedAssistantNoBorder === 'true' : false,
+      leftAlignMessages: savedLeftAlignMessages !== null ? savedLeftAlignMessages === 'true' : false,
+      widescreenMode: savedWidescreenMode !== null ? savedWidescreenMode === 'true' : false,
+      showUserName: savedShowUserName !== null ? savedShowUserName === 'true' : false,
     };
   });
   
@@ -140,6 +150,11 @@ export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSe
     setInterfaceSettings(newSettings);
     localStorage.setItem('auto_generate_titles', String(newSettings.autoGenerateTitles));
     localStorage.setItem('large_text_as_file', String(newSettings.largeTextAsFile));
+    localStorage.setItem('user_no_border', String(newSettings.userNoBorder));
+    localStorage.setItem('assistant_no_border', String(newSettings.assistantNoBorder));
+    localStorage.setItem('left_align_messages', String(newSettings.leftAlignMessages));
+    localStorage.setItem('widescreen_mode', String(newSettings.widescreenMode));
+    localStorage.setItem('show_user_name', String(newSettings.showUserName));
     // Отправляем кастомное событие для обновления настроек в том же окне
     window.dispatchEvent(new Event('interfaceSettingsChanged'));
     showNotification('success', 'Настройки интерфейса сохранены');
@@ -337,6 +352,131 @@ export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSe
               <Switch
                 checked={interfaceSettings.largeTextAsFile}
                 onChange={(e) => handleInterfaceSettingChange('largeTextAsFile', e.target.checked)}
+              />
+            </ListItem>
+
+            <Divider />
+
+            {/* Отображение имени пользователя */}
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <ListItemText
+                primary="Отображать имя пользователя вместо 'Вы' в чате"
+                primaryTypographyProps={{
+                  variant: 'body1',
+                  fontWeight: 500,
+                }}
+              />
+              <Switch
+                checked={interfaceSettings.showUserName}
+                onChange={(e) => handleInterfaceSettingChange('showUserName', e.target.checked)}
+              />
+            </ListItem>
+
+            <Divider />
+
+            {/* Режим отображения сообщений пользователя */}
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <ListItemText
+                primary="Сообщения пользователя без рамки"
+                primaryTypographyProps={{
+                  variant: 'body1',
+                  fontWeight: 500,
+                }}
+              />
+              <Switch
+                checked={interfaceSettings.userNoBorder}
+                onChange={(e) => handleInterfaceSettingChange('userNoBorder', e.target.checked)}
+              />
+            </ListItem>
+
+            <Divider />
+
+            {/* Режим отображения сообщений ассистента */}
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <ListItemText
+                primary="Сообщения ассистента без рамки"
+                primaryTypographyProps={{
+                  variant: 'body1',
+                  fontWeight: 500,
+                }}
+              />
+              <Switch
+                checked={interfaceSettings.assistantNoBorder}
+                onChange={(e) => handleInterfaceSettingChange('assistantNoBorder', e.target.checked)}
+              />
+            </ListItem>
+
+            <Divider />
+
+            {/* Выравнивание сообщений */}
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <ListItemText
+                primary="Выравнивание по левому краю"
+                primaryTypographyProps={{
+                  variant: 'body1',
+                  fontWeight: 500,
+                }}
+              />
+              <Switch
+                checked={interfaceSettings.leftAlignMessages}
+                onChange={(e) => handleInterfaceSettingChange('leftAlignMessages', e.target.checked)}
+              />
+            </ListItem>
+
+            <Divider />
+
+            {/* Режим широкоформатного экрана */}
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <ListItemText
+                primary="Режим широкоформатного экрана"
+                primaryTypographyProps={{
+                  variant: 'body1',
+                  fontWeight: 500,
+                }}
+              />
+              <Switch
+                checked={interfaceSettings.widescreenMode}
+                onChange={(e) => handleInterfaceSettingChange('widescreenMode', e.target.checked)}
               />
             </ListItem>
           </List>

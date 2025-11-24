@@ -231,9 +231,19 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
   const [interfaceSettings, setInterfaceSettings] = useState(() => {
     const savedAutoTitle = localStorage.getItem('auto_generate_titles');
     const savedLargeTextAsFile = localStorage.getItem('large_text_as_file');
+    const savedUserNoBorder = localStorage.getItem('user_no_border');
+    const savedAssistantNoBorder = localStorage.getItem('assistant_no_border');
+    const savedLeftAlignMessages = localStorage.getItem('left_align_messages');
+    const savedWidescreenMode = localStorage.getItem('widescreen_mode');
+    const savedShowUserName = localStorage.getItem('show_user_name');
     return {
       autoGenerateTitles: savedAutoTitle !== null ? savedAutoTitle === 'true' : true,
       largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
+      userNoBorder: savedUserNoBorder !== null ? savedUserNoBorder === 'true' : false,
+      assistantNoBorder: savedAssistantNoBorder !== null ? savedAssistantNoBorder === 'true' : false,
+      leftAlignMessages: savedLeftAlignMessages !== null ? savedLeftAlignMessages === 'true' : false,
+      widescreenMode: savedWidescreenMode !== null ? savedWidescreenMode === 'true' : false,
+      showUserName: savedShowUserName !== null ? savedShowUserName === 'true' : false,
     };
   });
 
@@ -242,9 +252,19 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
     const handleStorageChange = () => {
       const savedAutoTitle = localStorage.getItem('auto_generate_titles');
       const savedLargeTextAsFile = localStorage.getItem('large_text_as_file');
+      const savedUserNoBorder = localStorage.getItem('user_no_border');
+      const savedAssistantNoBorder = localStorage.getItem('assistant_no_border');
+      const savedLeftAlignMessages = localStorage.getItem('left_align_messages');
+      const savedWidescreenMode = localStorage.getItem('widescreen_mode');
+      const savedShowUserName = localStorage.getItem('show_user_name');
       setInterfaceSettings({
         autoGenerateTitles: savedAutoTitle !== null ? savedAutoTitle === 'true' : true,
         largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
+        userNoBorder: savedUserNoBorder !== null ? savedUserNoBorder === 'true' : false,
+        assistantNoBorder: savedAssistantNoBorder !== null ? savedAssistantNoBorder === 'true' : false,
+        leftAlignMessages: savedLeftAlignMessages !== null ? savedLeftAlignMessages === 'true' : false,
+        widescreenMode: savedWidescreenMode !== null ? savedWidescreenMode === 'true' : false,
+        showUserName: savedShowUserName !== null ? savedShowUserName === 'true' : false,
       });
     };
 
@@ -2090,122 +2110,139 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
     const MessageCard = ({ message }: { message: Message }): React.ReactElement => {
     const isUser = message.role === 'user';
     const [isHovered, setIsHovered] = useState(false);
+    const shouldShowBorder = isUser 
+      ? !interfaceSettings.userNoBorder 
+      : !interfaceSettings.assistantNoBorder;
+    
+    const messageContent = (
+      <>
+        <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.3 }}>
+          <Avatar
+            sx={{
+              width: 24,
+              height: 24,
+              mr: 1,
+              bgcolor: isUser ? 'primary.dark' : 'transparent',
+            }}
+            src={isUser ? undefined : '/astra.png'}
+          >
+            {isUser ? <PersonIcon /> : null}
+          </Avatar>
+          <Typography variant="caption" sx={{ opacity: 0.8, fontSize: '0.75rem', fontWeight: 500 }}>
+            {isUser 
+              ? (interfaceSettings.showUserName && user?.username ? user.username : 'Вы')
+              : 'AstraChat'}
+          </Typography>
+          <Typography variant="caption" sx={{ ml: 'auto', opacity: 0.6, fontSize: '0.7rem' }}>
+            {formatTimestamp(message.timestamp)}
+          </Typography>
+        </Box>
+        
+        <Box sx={{ width: '100%' }}>
+          {message.multiLLMResponses && message.multiLLMResponses.length > 0 ? (
+            // Отображение нескольких ответов от разных моделей
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {message.multiLLMResponses.map((response, index) => (
+                <Card
+                  key={index}
+                  sx={{
+                    border: '1px solid',
+                    borderColor: response.error ? 'error.main' : 'divider',
+                    bgcolor: response.error ? 'error.light' : 'background.paper',
+                  }}
+                >
+                  <CardContent>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                      <Typography variant="caption" fontWeight="bold" color={response.error ? 'error' : 'primary'}>
+                        {response.model}
+                      </Typography>
+                      {response.isStreaming && (
+                        <Chip label="Генерируется..." size="small" color="info" />
+                      )}
+                      {response.error && (
+                        <Chip label="Ошибка" size="small" color="error" />
+                      )}
+                    </Box>
+                    {response.error ? (
+                      <Alert severity="error" sx={{ mt: 1 }}>
+                        <Typography variant="body2">{response.content}</Typography>
+                      </Alert>
+                    ) : (
+                      <MessageRenderer content={response.content} isStreaming={response.isStreaming} />
+                    )}
+                  </CardContent>
+                </Card>
+              ))}
+            </Box>
+          ) : (
+            // Обычное отображение одного ответа (с поддержкой альтернативных вариантов)
+            <MessageRenderer 
+              content={(() => {
+                // Если есть альтернативные ответы, показываем текущий вариант
+                if (message.alternativeResponses && message.alternativeResponses.length > 0 && message.currentResponseIndex !== undefined) {
+                  const currentIndex = message.currentResponseIndex;
+                  
+                  if (currentIndex >= 0 && currentIndex < message.alternativeResponses.length) {
+                    const alternativeContent = message.alternativeResponses[currentIndex];
+                    // Убираем лишние пробелы и переносы строк в конце (только если не идет стриминг)
+                    const resultContent = alternativeContent !== undefined 
+                      ? (message.isStreaming ? alternativeContent : alternativeContent.trimEnd())
+                      : message.content;
+                    
+                    // Всегда используем альтернативный контент, если установлен currentResponseIndex
+                    // Это важно для стриминга - alternativeContent обновляется при каждом чанке
+                    return resultContent;
+                  }
+                }
+                // Fallback на message.content, если нет альтернативных ответов
+                // Убираем лишние пробелы и переносы строк в конце (только если не идет стриминг)
+                return message.isStreaming ? message.content : message.content.trimEnd();
+              })()} 
+              isStreaming={message.isStreaming} 
+            />
+          )}
+        </Box>
+      </>
+    );
     
     return (
       <Box
         sx={{
           display: 'flex',
           flexDirection: 'column',
-          alignItems: isUser ? 'flex-end' : 'flex-start',
+          alignItems: interfaceSettings.leftAlignMessages ? 'flex-start' : (isUser ? 'flex-end' : 'flex-start'),
           mb: 1.5, /* Увеличиваем отступ между сообщениями (соответствует CSS margin-bottom: 28px) */
           width: '100%',
         }}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
       >
-        <Card
-          className="message-bubble"
-          data-theme={isDarkMode ? 'dark' : 'light'}
-          sx={{
-            maxWidth: isUser ? '75%' : '100%',
-            minWidth: '180px',
-            width: isUser ? undefined : '100%',
-            backgroundColor: isUser 
-              ? 'primary.main' 
-              : isDarkMode ? 'background.paper' : '#f8f9fa',
-            color: isUser ? 'primary.contrastText' : isDarkMode ? 'text.primary' : '#333',
-            boxShadow: isDarkMode 
-              ? '0 2px 8px rgba(0, 0, 0, 0.15)' 
-              : '0 2px 8px rgba(0, 0, 0, 0.1)',
-          }}
-        >
-          <CardContent sx={{ p: 1.2, '&:last-child': { pb: 1.2 } }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.3 }}>
-              <Avatar
-                sx={{
-                  width: 24,
-                  height: 24,
-                  mr: 1,
-                  bgcolor: isUser ? 'primary.dark' : 'transparent',
-                }}
-                src={isUser ? undefined : '/astra.png'}
-              >
-                {isUser ? <PersonIcon /> : null}
-              </Avatar>
-                             <Typography variant="caption" sx={{ opacity: 0.8, fontSize: '0.75rem', fontWeight: 500 }}>
-                 {isUser ? 'Вы' : 'AstraChat'}
-               </Typography>
-              <Typography variant="caption" sx={{ ml: 'auto', opacity: 0.6, fontSize: '0.7rem' }}>
-                {formatTimestamp(message.timestamp)}
-              </Typography>
-            </Box>
-            
-            <Box sx={{ width: '100%' }}>
-              {message.multiLLMResponses && message.multiLLMResponses.length > 0 ? (
-                // Отображение нескольких ответов от разных моделей
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  {message.multiLLMResponses.map((response, index) => (
-                    <Card
-                      key={index}
-                      sx={{
-                        border: '1px solid',
-                        borderColor: response.error ? 'error.main' : 'divider',
-                        bgcolor: response.error ? 'error.light' : 'background.paper',
-                      }}
-                    >
-                      <CardContent>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                          <Typography variant="caption" fontWeight="bold" color={response.error ? 'error' : 'primary'}>
-                            {response.model}
-                          </Typography>
-                          {response.isStreaming && (
-                            <Chip label="Генерируется..." size="small" color="info" />
-                          )}
-                          {response.error && (
-                            <Chip label="Ошибка" size="small" color="error" />
-                          )}
-                        </Box>
-                        {response.error ? (
-                          <Alert severity="error" sx={{ mt: 1 }}>
-                            <Typography variant="body2">{response.content}</Typography>
-                          </Alert>
-                        ) : (
-                          <MessageRenderer content={response.content} isStreaming={response.isStreaming} />
-                        )}
-                      </CardContent>
-                    </Card>
-                  ))}
-                </Box>
-              ) : (
-                // Обычное отображение одного ответа (с поддержкой альтернативных вариантов)
-                <MessageRenderer 
-                  content={(() => {
-                    // Если есть альтернативные ответы, показываем текущий вариант
-                    if (message.alternativeResponses && message.alternativeResponses.length > 0 && message.currentResponseIndex !== undefined) {
-                      const currentIndex = message.currentResponseIndex;
-                      
-                      if (currentIndex >= 0 && currentIndex < message.alternativeResponses.length) {
-                        const alternativeContent = message.alternativeResponses[currentIndex];
-                        // Убираем лишние пробелы и переносы строк в конце (только если не идет стриминг)
-                        const resultContent = alternativeContent !== undefined 
-                          ? (message.isStreaming ? alternativeContent : alternativeContent.trimEnd())
-                          : message.content;
-                        
-                        // Всегда используем альтернативный контент, если установлен currentResponseIndex
-                        // Это важно для стриминга - alternativeContent обновляется при каждом чанке
-                        return resultContent;
-                      }
-                    }
-                    // Fallback на message.content, если нет альтернативных ответов
-                    // Убираем лишние пробелы и переносы строк в конце (только если не идет стриминг)
-                    return message.isStreaming ? message.content : message.content.trimEnd();
-                  })()} 
-                  isStreaming={message.isStreaming} 
-                />
-              )}
-            </Box>
-          </CardContent>
-        </Card>
+        {shouldShowBorder ? (
+          <Card
+            className="message-bubble"
+            data-theme={isDarkMode ? 'dark' : 'light'}
+            sx={{
+              maxWidth: interfaceSettings.leftAlignMessages ? '100%' : (isUser ? '75%' : '100%'),
+              minWidth: '180px',
+              width: interfaceSettings.leftAlignMessages ? '100%' : (isUser ? undefined : '100%'),
+              backgroundColor: isUser 
+                ? 'primary.main' 
+                : isDarkMode ? 'background.paper' : '#f8f9fa',
+              color: isUser ? 'primary.contrastText' : isDarkMode ? 'text.primary' : '#333',
+              boxShadow: isDarkMode 
+                ? '0 2px 8px rgba(0, 0, 0, 0.15)' 
+                : '0 2px 8px rgba(0, 0, 0, 0.1)',
+            }}
+          >
+            <CardContent sx={{ p: 1.2, '&:last-child': { pb: 1.2 } }}>
+              {messageContent}
+            </CardContent>
+          </Card>
+        ) : (
+          <Box sx={{ width: '100%', p: 1.2 }}>
+            {messageContent}
+          </Box>
+        )}
         
         {/* Кнопки действий снизу карточки - для всех сообщений при наведении */}
         <Box sx={{ 
@@ -3846,9 +3883,9 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
           ) : (
             <Box sx={{ 
               width: '100%', 
-              maxWidth: '1000px', 
+              maxWidth: interfaceSettings.widescreenMode ? '100%' : '1000px', 
               mx: 'auto',
-              px: 2,
+              px: interfaceSettings.widescreenMode ? 4 : 2,
             }}>
               {messages.map((message, index) => (
                 <MessageCard key={message.id || index} message={message} />
@@ -3860,7 +3897,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                   width: '100%', 
                   display: 'flex',
                   flexDirection: 'column',
-                  alignItems: 'flex-start',
+                  alignItems: interfaceSettings.leftAlignMessages ? 'flex-start' : 'flex-start',
                   mb: 1.5,
                 }}>
                   <Box
@@ -3868,7 +3905,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                       display: 'flex',
                       flexDirection: 'column',
                       alignItems: 'flex-start',
-                      maxWidth: '75%',
+                      maxWidth: interfaceSettings.widescreenMode ? '100%' : '75%',
                       minWidth: '180px',
                     }}
                   >
@@ -4038,9 +4075,9 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                        <Box sx={{ 
                          textAlign: 'center', 
                          mb: 3,
-                         maxWidth: '1000px',
+                         maxWidth: interfaceSettings.widescreenMode ? '100%' : '1000px',
                          mx: 'auto',
-                         px: 2,
+                         px: interfaceSettings.widescreenMode ? 4 : 2,
                          position: 'absolute',
                          top: '45%',
                          left: '50%',
@@ -4067,9 +4104,10 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                borderRadius: 2,
                bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)',
                border: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'}`,
-               maxWidth: '1000px', // Расширяем до ширины карточек сообщений
+               maxWidth: interfaceSettings.widescreenMode ? '100%' : '1000px', // Расширяем до ширины карточек сообщений
                width: '100%', // Занимает всю доступную ширину до maxWidth
                mx: 'auto', // Центрируем по горизонтали
+               px: interfaceSettings.widescreenMode ? 4 : 2,
                // Центрируем по вертикали при пустом чате
                ...(messages.length === 0 && {
                  position: 'absolute',
