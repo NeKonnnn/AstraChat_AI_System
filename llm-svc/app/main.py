@@ -15,6 +15,7 @@ from app.dependencies.vosk_handler import get_vosk_handler, cleanup_vosk_handler
 from app.dependencies.silero_handler import get_silero_handler, cleanup_silero_handler
 from app.dependencies.whisperx_handler import get_whisperx_handler, cleanup_whisperx_handler
 from app.dependencies.diarization_handler import get_diarization_handler, cleanup_diarization_handler
+from app.dependencies.surya_handler import get_surya_handler, cleanup_surya_handler
 from app.services.nexus_client import download_model_from_nexus_if_needed
 
 from fastapi import Request
@@ -83,6 +84,11 @@ async def lifespan(app: FastAPI):
             await get_diarization_handler()
             logger.info("Diarization handler initialized")
         
+        # Инициализируем обработчик Surya OCR (если включен)
+        if settings.surya.enabled:
+            await get_surya_handler()
+            logger.info("Surya OCR handler initialized")
+        
         logger.info("Application started successfully")
     except Exception as e:
         logger.error(f"Failed to initialize application: {str(e)}")
@@ -96,6 +102,7 @@ async def lifespan(app: FastAPI):
     await cleanup_silero_handler()
     await cleanup_whisperx_handler()
     await cleanup_diarization_handler()
+    await cleanup_surya_handler()
     logger.info("Application shut down gracefully")
 
 

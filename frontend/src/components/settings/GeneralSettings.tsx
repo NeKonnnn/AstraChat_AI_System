@@ -12,10 +12,19 @@ import {
   Switch,
   Button,
   Alert,
+  IconButton,
+  Tooltip,
+  List,
+  ListItem,
+  ListItemText,
+  Divider,
 } from '@mui/material';
 import {
   Palette as PaletteIcon,
   Memory as MemoryIcon,
+  HelpOutline as HelpOutlineIcon,
+  Restore as RestoreIcon,
+  Computer as ComputerIcon,
 } from '@mui/icons-material';
 import { useAppContext, useAppActions } from '../../contexts/AppContext';
 
@@ -32,6 +41,15 @@ export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSe
     max_messages: 20,
     include_system_prompts: true,
     clear_on_restart: false,
+  });
+  
+  const [interfaceSettings, setInterfaceSettings] = useState(() => {
+    const savedAutoTitle = localStorage.getItem('auto_generate_titles');
+    const savedLargeTextAsFile = localStorage.getItem('large_text_as_file');
+    return {
+      autoGenerateTitles: savedAutoTitle !== null ? savedAutoTitle === 'true' : true,
+      largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
+    };
   });
   
   const { showNotification } = useAppActions();
@@ -117,13 +135,18 @@ export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSe
     showNotification('info', 'Настройки памяти сброшены к значениям по умолчанию');
   };
 
+  const handleInterfaceSettingChange = (key: keyof typeof interfaceSettings, value: boolean) => {
+    const newSettings = { ...interfaceSettings, [key]: value };
+    setInterfaceSettings(newSettings);
+    localStorage.setItem('auto_generate_titles', String(newSettings.autoGenerateTitles));
+    localStorage.setItem('large_text_as_file', String(newSettings.largeTextAsFile));
+    // Отправляем кастомное событие для обновления настроек в том же окне
+    window.dispatchEvent(new Event('interfaceSettingsChanged'));
+    showNotification('success', 'Настройки интерфейса сохранены');
+  };
+
   return (
     <Box sx={{ p: 3 }}>
-      <Typography variant="h5" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 3 }}>
-        <PaletteIcon color="primary" />
-        Общие настройки
-      </Typography>
-
       {/* Настройки темы */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
@@ -163,19 +186,32 @@ export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSe
         <CardContent>
           <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <MemoryIcon color="primary" />
-            Настройки памяти ассистента
+            Настройки памяти
+            <Tooltip 
+              title="Как это работает: Ассистент использует последние сообщения из диалога для понимания контекста. Больше сообщений = лучше понимание, но больше потребление памяти. Рекомендуется: 20-40 сообщений для обычного общения." 
+              arrow
+            >
+              <IconButton 
+                size="small" 
+                sx={{ 
+                  ml: 0.5,
+                  opacity: 0.7,
+                  '&:hover': {
+                    opacity: 1,
+                    '& .MuiSvgIcon-root': {
+                      color: 'primary.main',
+                    },
+                  },
+                }}
+              >
+                <HelpOutlineIcon fontSize="small" color="action" />
+              </IconButton>
+            </Tooltip>
           </Typography>
           
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             Управление контекстом и памятью ассистента для более эффективного общения
           </Typography>
-
-          <Alert severity="info" sx={{ mb: 2 }}>
-            <Typography variant="body2">
-              <strong>Как это работает:</strong> Ассистент использует последние сообщения из диалога для понимания контекста. 
-              Больше сообщений = лучше понимание, но больше потребление памяти. Рекомендуется: 20-40 сообщений для обычного общения.
-            </Typography>
-          </Alert>
 
           <Box display="grid" gridTemplateColumns="repeat(auto-fit, minmax(250px, 1fr))" gap={2} sx={{ mb: 2 }}>
             <TextField
@@ -235,47 +271,75 @@ export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSe
             </Alert>
           )}
 
-          <Box sx={{ p: 2, bgcolor: 'background.default', borderRadius: 1, mb: 2 }}>
-            <Typography variant="body2" color="text.secondary" gutterBottom>
-              <strong>Текущие настройки памяти:</strong>
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              • Ассистент запоминает последние <strong>{memorySettings.max_messages}</strong> сообщений
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              • Примерный размер контекста: <strong>{Math.round(memorySettings.max_messages * 150)}</strong> токенов
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              • Системные промпты: <strong>{memorySettings.include_system_prompts ? 'включены' : 'отключены'}</strong>
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              • Очистка при перезапуске: <strong>{memorySettings.clear_on_restart ? 'включена' : 'отключена'}</strong>
-            </Typography>
-          </Box>
-
-          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mt: 3 }}>
             <Button
               variant="outlined"
-              color="warning"
-              onClick={clearMemory}
-            >
-              Очистить память сейчас
-            </Button>
-            <Button
-              variant="outlined"
-              color="info"
-              onClick={getMemoryStatus}
-            >
-              Статус памяти
-            </Button>
-            <Button
-              variant="outlined"
-              color="secondary"
+              startIcon={<RestoreIcon />}
               onClick={resetMemorySettings}
             >
-              Сбросить к умолчаниям
+              Восстановить настройки
             </Button>
           </Box>
+        </CardContent>
+      </Card>
+
+      {/* Настройки интерфейса */}
+      <Card sx={{ mb: 3 }}>
+        <CardContent>
+          <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <ComputerIcon color="primary" />
+            Интерфейс
+          </Typography>
+
+          <List>
+            {/* Автогенерация заголовков */}
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <ListItemText
+                primary="Автогенерация заголовков"
+                primaryTypographyProps={{
+                  variant: 'body1',
+                  fontWeight: 500,
+                }}
+              />
+              <Switch
+                checked={interfaceSettings.autoGenerateTitles}
+                onChange={(e) => handleInterfaceSettingChange('autoGenerateTitles', e.target.checked)}
+              />
+            </ListItem>
+
+            <Divider />
+
+            {/* Вставить большой текст как файл */}
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <ListItemText
+                primary="Вставить большой текст как файл"
+                primaryTypographyProps={{
+                  variant: 'body1',
+                  fontWeight: 500,
+                }}
+              />
+              <Switch
+                checked={interfaceSettings.largeTextAsFile}
+                onChange={(e) => handleInterfaceSettingChange('largeTextAsFile', e.target.checked)}
+              />
+            </ListItem>
+          </List>
         </CardContent>
       </Card>
     </Box>

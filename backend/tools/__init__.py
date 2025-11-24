@@ -5,17 +5,15 @@
 
 try:
     from backend.tools.agent_tools import AgentTools
-    from backend.tools.file_tools import FileTools
     from backend.tools.web_tools import WebTools
-    from backend.tools.calculation_tools import CalculationTools
-    from backend.tools.system_tools import SystemTools
+    from backend.tools.prompt_tools import PromptTools
+    from backend.tools.summarization_tools import SummarizationTools
 except ModuleNotFoundError:
     # Если запущено из backend/, используем относительные импорты
     from tools.agent_tools import AgentTools
-    from tools.file_tools import FileTools
     from tools.web_tools import WebTools
-    from tools.calculation_tools import CalculationTools
-    from tools.system_tools import SystemTools
+    from tools.prompt_tools import PromptTools
+    from tools.summarization_tools import SummarizationTools
 
 
 def get_all_tools():
@@ -30,17 +28,14 @@ def get_all_tools():
     # Инструменты агентов (основные, приоритетные)
     all_tools.extend(AgentTools.get_tools())
     
-    # Инструменты для работы с файлами
-    all_tools.extend(FileTools.get_tools())
-    
     # Инструменты для веб-поиска
     all_tools.extend(WebTools.get_tools())
     
-    # Инструменты для вычислений
-    all_tools.extend(CalculationTools.get_tools())
+    # Инструменты для работы с промптами
+    all_tools.extend(PromptTools.get_tools())
     
-    # Системные инструменты
-    all_tools.extend(SystemTools.get_tools())
+    # Инструменты для суммаризации
+    all_tools.extend(SummarizationTools.get_tools())
     
     return all_tools
 
@@ -54,10 +49,9 @@ def get_tool_categories():
     """
     return {
         "agents": AgentTools.get_tools(),
-        "files": FileTools.get_tools(),
         "web": WebTools.get_tools(),
-        "calculations": CalculationTools.get_tools(),
-        "system": SystemTools.get_tools()
+        "prompts": PromptTools.get_tools(),
+        "summarization": SummarizationTools.get_tools()
     }
 
 
@@ -74,10 +68,9 @@ def get_tools_info():
         "total_count": len(tools),
         "categories": {
             "agents": len(AgentTools.get_tools()),
-            "files": len(FileTools.get_tools()),
             "web": len(WebTools.get_tools()),
-            "calculations": len(CalculationTools.get_tools()),
-            "system": len(SystemTools.get_tools())
+            "prompts": len(PromptTools.get_tools()),
+            "summarization": len(SummarizationTools.get_tools())
         },
         "tools": [
             {
@@ -108,8 +101,7 @@ __all__ = [
     'get_tool_categories',
     'get_tools_info',
     'AgentTools',
-    'FileTools',
     'WebTools',
-    'CalculationTools',
-    'SystemTools'
+    'PromptTools',
+    'SummarizationTools'
 ]

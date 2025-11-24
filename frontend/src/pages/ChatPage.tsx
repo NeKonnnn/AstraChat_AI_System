@@ -139,6 +139,12 @@ export default function ChatPage() {
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-word',
                   lineHeight: 1.5,
+                  fontSize: (() => {
+                    const saved = localStorage.getItem('chat-font-size');
+                    if (saved === 'small') return '0.875rem';
+                    if (saved === 'large') return '1.125rem';
+                    return '1rem';
+                  })(),
                 }}
               >
                 {message.content}

@@ -10,7 +10,6 @@ import {
   ListItemText,
   Typography,
   IconButton,
-  Divider,
   useTheme,
   useMediaQuery,
 } from '@mui/material';
@@ -22,6 +21,7 @@ import {
   Info as InfoIcon,
   Palette as PaletteIcon,
   Person as PersonIcon,
+  Chat as ChatIcon,
 } from '@mui/icons-material';
 import {
   GeneralSettings,
@@ -29,7 +29,8 @@ import {
   ModelsSettings,
   AgentsSettings,
   TranscriptionSettings,
-  AboutSettings
+  AboutSettings,
+  ChatSettings
 } from './settings';
 
 interface SettingsModalProps {
@@ -39,7 +40,7 @@ interface SettingsModalProps {
   onToggleTheme: () => void;
 }
 
-type SettingsSection = 'general' | 'profile' | 'models' | 'agents' | 'transcription' | 'about';
+type SettingsSection = 'general' | 'profile' | 'models' | 'agents' | 'transcription' | 'chats' | 'about';
 
 const settingsSections = [
   {
@@ -53,6 +54,12 @@ const settingsSections = [
     title: 'Профиль',
     icon: <PersonIcon />,
     description: 'Личная информация и аккаунт'
+  },
+  {
+    id: 'chats' as SettingsSection,
+    title: 'Чаты',
+    icon: <ChatIcon />,
+    description: 'Управление чатами и сообщениями'
   },
   {
     id: 'models' as SettingsSection,
@@ -101,6 +108,8 @@ export default function SettingsModal({ open, onClose, isDarkMode, onToggleTheme
         return <AgentsSettings />;
       case 'transcription':
         return <TranscriptionSettings />;
+      case 'chats':
+        return <ChatSettings />;
       case 'about':
         return <AboutSettings />;
       default:
@@ -194,23 +203,15 @@ export default function SettingsModal({ open, onClose, isDarkMode, onToggleTheme
                       <Box sx={{ flex: 1, minWidth: 0 }}>
                         <ListItemText
                           primary={section.title}
-                          secondary={section.description}
                           primaryTypographyProps={{
                             fontSize: '0.875rem',
                             fontWeight: activeSection === section.id ? 600 : 400,
-                          }}
-                          secondaryTypographyProps={{
-                            fontSize: '0.75rem',
-                            color: activeSection === section.id ? 'rgba(255,255,255,0.7)' : theme.palette.text.secondary,
                           }}
                         />
                       </Box>
                     </Box>
                   </ListItemButton>
                 </ListItem>
-                {index < settingsSections.length - 1 && (
-                  <Divider sx={{ mx: 1, my: 0.5 }} />
-                )}
               </React.Fragment>
             ))}
           </List>

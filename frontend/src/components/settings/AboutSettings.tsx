@@ -100,11 +100,6 @@ export default function AboutSettings() {
 
   return (
     <Box sx={{ p: 3 }}>
-      <Typography variant="h5" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 3 }}>
-        <InfoIcon color="primary" />
-        О приложении
-      </Typography>
-
       {error && (
         <Alert severity="warning" sx={{ mb: 3 }} onClose={() => setError(null)}>
           {error}

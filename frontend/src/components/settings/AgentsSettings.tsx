@@ -26,6 +26,7 @@ import {
   DialogActions,
   Checkbox,
   FormGroup,
+  Tooltip,
 } from '@mui/material';
 import {
   SmartToy as AgentIcon,
@@ -36,6 +37,7 @@ import {
   ExpandMore as ExpandMoreIcon,
   ExpandLess as ExpandLessIcon,
   ViewModule as MultiLLMIcon,
+  HelpOutline as HelpOutlineIcon,
 } from '@mui/icons-material';
 
 const API_BASE_URL = 'http://localhost:8000';
@@ -123,15 +125,6 @@ export default function AgentsSettings() {
       if (response.ok) {
         const data = await response.json();
         
-        // ОТЛАДКА: Выводим что приходит с бэкенда для агентного статуса
-        console.log('=== ОТЛАДКА АГЕНТНОГО СТАТУСА ===');
-        console.log('Полные данные агентного статуса с бэкенда:', data);
-        console.log('Режим:', data.mode);
-        console.log('Инициализирован:', data.is_initialized);
-        console.log('Доступно агентов:', data.available_agents);
-        console.log('Оркестратор активен:', data.orchestrator_active);
-        console.log('=== КОНЕЦ ОТЛАДКИ АГЕНТНОГО СТАТУСА ===');
-        
         // Если режим не установлен, устанавливаем прямой режим по умолчанию
         if (!data.mode) {
           data.mode = 'direct';
@@ -143,7 +136,7 @@ export default function AgentsSettings() {
               body: JSON.stringify({ mode: 'direct' }),
             });
           } catch (err) {
-            console.warn('Не удалось переключить режим на сервере:', err);
+            // Игнорируем ошибку переключения режима
           }
         }
         setAgentStatus(data);
@@ -176,11 +169,9 @@ export default function AgentsSettings() {
       if (response.ok) {
         const data = await response.json();
         setMcpStatus(data.mcp_status);
-      } else {
-        console.warn('Не удалось загрузить статус MCP');
       }
     } catch (err) {
-      console.error('Ошибка загрузки статуса MCP:', err);
+      // Ошибка загрузки статуса MCP
     }
   };
 
@@ -189,19 +180,10 @@ export default function AgentsSettings() {
       const response = await fetch(`${API_BASE_URL}/api/agent/langgraph/status`);
       if (response.ok) {
         const data = await response.json();
-        
-        // ОТЛАДКА: Выводим что приходит с бэкенда для LangGraph
-        console.log('=== ОТЛАДКА LANGGRAPH СТАТУСА ===');
-        console.log('Полные данные LangGraph с бэкенда:', data);
-        console.log('LangGraph статус:', data.langgraph_status);
-        console.log('=== КОНЕЦ ОТЛАДКИ LANGGRAPH ===');
-        
         setLanggraphStatus(data.langgraph_status);
-      } else {
-        console.warn('Не удалось загрузить статус LangGraph');
       }
     } catch (err) {
-      console.error('Ошибка загрузки статуса LangGraph:', err);
+      // Ошибка загрузки статуса LangGraph
     }
   };
 
@@ -211,29 +193,11 @@ export default function AgentsSettings() {
       if (response.ok) {
         const data = await response.json();
         const agents = data.agents || [];
-        
-        // ОТЛАДКА: Выводим что приходит с бэкенда
-        console.log('=== ОТЛАДКА ЗАГРУЗКИ АГЕНТОВ ===');
-        console.log('Полные данные с бэкенда:', data);
-        console.log('Количество агентов:', agents.length);
-        agents.forEach((agent: any, index: number) => {
-          console.log(`Агент ${index + 1}:`, {
-            name: agent.name,
-            agent_id: agent.agent_id,
-            tools_count: agent.tools?.length || 0,
-            tools: agent.tools,
-            capabilities: agent.capabilities,
-            usage_examples: agent.usage_examples
-          });
-        });
-        console.log('=== КОНЕЦ ОТЛАДКИ ===');
-        
         setAvailableAgents(agents);
       } else {
         throw new Error('Не удалось загрузить список агентов');
       }
     } catch (err) {
-      console.error('Ошибка загрузки агентов:', err);
       setError(`Ошибка загрузки агентов: ${err}`);
     }
   };
@@ -365,7 +329,7 @@ export default function AgentsSettings() {
         setSelectedMultiLLMModels(data.models || []);
       }
     } catch (err) {
-      console.error('Ошибка загрузки выбранных моделей:', err);
+      // Ошибка загрузки выбранных моделей
     }
   };
 
@@ -459,11 +423,6 @@ export default function AgentsSettings() {
 
   return (
     <Box sx={{ p: 3 }}>
-      <Typography variant="h5" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 3 }}>
-        <AgentIcon color="primary" />
-        Настройки агентов
-      </Typography>
-
       {/* Статус агентной архитектуры */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
@@ -548,14 +507,30 @@ export default function AgentsSettings() {
                       label={
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                           <DirectIcon fontSize="small" />
-                          <Box>
-                            <Typography variant="body2" fontWeight="500">
-                              Прямой режим
-                            </Typography>
-                            <Typography variant="caption" color="text.secondary">
-                              Общение с моделью напрямую без использования агентов
-                            </Typography>
-                          </Box>
+                          <Typography variant="body2" fontWeight="500">
+                            Прямой режим
+                          </Typography>
+                          <Tooltip 
+                            title="Общение с моделью напрямую без использования агентов" 
+                            arrow
+                          >
+                            <IconButton 
+                              size="small" 
+                              sx={{ 
+                                ml: 0.5,
+                                opacity: 0.7,
+                                '&:hover': {
+                                  opacity: 1,
+                                  '& .MuiSvgIcon-root': {
+                                    color: 'primary.main',
+                                  },
+                                },
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <HelpOutlineIcon fontSize="small" color="action" />
+                            </IconButton>
+                          </Tooltip>
                         </Box>
                       }
                     />
@@ -565,14 +540,30 @@ export default function AgentsSettings() {
                       label={
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                           <AgentIcon fontSize="small" />
-                          <Box>
-                            <Typography variant="body2" fontWeight="500">
-                              Агентный режим
-                            </Typography>
-                            <Typography variant="caption" color="text.secondary">
-                              Использование специализированных агентов для решения задач
-                            </Typography>
-                          </Box>
+                          <Typography variant="body2" fontWeight="500">
+                            Агентный режим
+                          </Typography>
+                          <Tooltip 
+                            title="Использование специализированных агентов для решения задач" 
+                            arrow
+                          >
+                            <IconButton 
+                              size="small" 
+                              sx={{ 
+                                ml: 0.5,
+                                opacity: 0.7,
+                                '&:hover': {
+                                  opacity: 1,
+                                  '& .MuiSvgIcon-root': {
+                                    color: 'primary.main',
+                                  },
+                                },
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <HelpOutlineIcon fontSize="small" color="action" />
+                            </IconButton>
+                          </Tooltip>
                         </Box>
                       }
                     />
@@ -582,14 +573,30 @@ export default function AgentsSettings() {
                       label={
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                           <MultiLLMIcon fontSize="small" />
-                          <Box>
-                            <Typography variant="body2" fontWeight="500">
-                              Прямой режим с несколькими LLM
-                            </Typography>
-                            <Typography variant="caption" color="text.secondary">
-                              Параллельная генерация ответов от нескольких моделей одновременно
-                            </Typography>
-                          </Box>
+                          <Typography variant="body2" fontWeight="500">
+                            Прямой режим с несколькими LLM
+                          </Typography>
+                          <Tooltip 
+                            title="Параллельная генерация ответов от нескольких моделей одновременно" 
+                            arrow
+                          >
+                            <IconButton 
+                              size="small" 
+                              sx={{ 
+                                ml: 0.5,
+                                opacity: 0.7,
+                                '&:hover': {
+                                  opacity: 1,
+                                  '& .MuiSvgIcon-root': {
+                                    color: 'primary.main',
+                                  },
+                                },
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <HelpOutlineIcon fontSize="small" color="action" />
+                            </IconButton>
+                          </Tooltip>
                         </Box>
                       }
                     />
@@ -636,8 +643,28 @@ export default function AgentsSettings() {
       {mcpStatus && (
         <Card sx={{ mb: 3 }}>
           <CardContent>
-            <Typography variant="h6" gutterBottom>
+            <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               MCP Серверы
+              <Tooltip 
+                title="В агентном режиме рекомендуется подключить MCP серверы для расширенной функциональности агентов." 
+                arrow
+              >
+                <IconButton 
+                  size="small" 
+                  sx={{ 
+                    ml: 0.5,
+                    opacity: 0.7,
+                    '&:hover': {
+                      opacity: 1,
+                      '& .MuiSvgIcon-root': {
+                        color: 'primary.main',
+                      },
+                    },
+                  }}
+                >
+                  <HelpOutlineIcon fontSize="small" color="action" />
+                </IconButton>
+              </Tooltip>
             </Typography>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1 }}>
               {(mcpStatus.servers_connected || 0) > 0 ? (
@@ -659,14 +686,6 @@ export default function AgentsSettings() {
                 ))}
               </Box>
             )}
-            
-            {(mcpStatus.servers_connected || 0) === 0 && agentStatus?.mode === 'agent' && (
-              <Alert severity="warning" sx={{ mt: 2 }}>
-                <Typography variant="body2">
-                  <strong>Внимание:</strong> В агентном режиме рекомендуется подключить MCP серверы для расширенной функциональности агентов.
-                </Typography>
-              </Alert>
-            )}
           </CardContent>
         </Card>
       )}
@@ -674,8 +693,28 @@ export default function AgentsSettings() {
       {/* Статус LangGraph */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
-          <Typography variant="h6" gutterBottom>
+          <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             LangGraph Оркестратор
+            <Tooltip 
+              title="Оркестратор автоматически выберет лучшего агента для решения вашей задачи." 
+              arrow
+            >
+              <IconButton 
+                size="small" 
+                sx={{ 
+                  ml: 0.5,
+                  opacity: 0.7,
+                  '&:hover': {
+                    opacity: 1,
+                    '& .MuiSvgIcon-root': {
+                      color: 'primary.main',
+                    },
+                  },
+                }}
+              >
+                <HelpOutlineIcon fontSize="small" color="action" />
+              </IconButton>
+            </Tooltip>
           </Typography>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1 }}>
               {langgraphStatus?.orchestrator_active ? (
@@ -739,20 +778,15 @@ export default function AgentsSettings() {
               </Alert>
             )}
             
-            {langgraphStatus?.is_active && agentStatus?.mode === 'agent' && (
+            {langgraphStatus?.is_active && agentStatus?.mode === 'agent' && !langgraphStatus?.orchestrator_active && (
               <Alert 
-                severity={langgraphStatus?.orchestrator_active ? "success" : "warning"} 
+                severity="warning" 
                 sx={{ mt: 2 }}
               >
                 <Typography variant="body2">
-                  <strong>
-                    {langgraphStatus?.orchestrator_active ? 'Режим оркестратора:' : 'Режим прямого управления:'}
-                  </strong>
+                  <strong>Режим прямого управления:</strong>
                   {' '}
-                  {langgraphStatus?.orchestrator_active 
-                    ? 'Оркестратор автоматически выберет лучшего агента для решения вашей задачи.'
-                    : 'Вы должны самостоятельно выбирать подходящего агента для каждой задачи.'
-                  }
+                  Вы должны самостоятельно выбирать подходящего агента для каждой задачи.
                 </Typography>
               </Alert>
             )}

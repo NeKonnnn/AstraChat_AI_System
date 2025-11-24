@@ -1,5 +1,5 @@
 {
-  "global_prompt": "Объясняй все как пятилетнему ребенку!",
+  "global_prompt": "\n",
   "model_prompts": {},
   "custom_prompts": {}
 }

@@ -4,7 +4,7 @@
   "current_model_status": "loaded",
   "transcription_engine": "whisperx",
   "transcription_language": "ru",
-  "memory_max_messages": 20,
+  "memory_max_messages": 50,
   "memory_include_system_prompts": true,
   "memory_clear_on_restart": false
 }

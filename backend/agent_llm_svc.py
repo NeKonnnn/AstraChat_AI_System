@@ -299,13 +299,7 @@ def ask_agent(prompt, history=None, max_tokens=None, streaming=False, stream_cal
         logger.warning("llm-svc недоступен, используется fallback режим")
         return "llm-svc недоступен. Пожалуйста, запустите llm-svc сервис."
 
-# Инициализация при импорте модуля
-try:
-    if USE_LLM_SVC:
-        logger.info("Инициализация llm-svc...")
-        initialize_model()
-    else:
-        logger.info("llm-svc отключен, используется локальная модель")
-except Exception as e:
-    logger.error(f"Ошибка инициализации: {e}")
-    print(f"Ошибка инициализации: {e}")
+# Инициализация НЕ происходит автоматически при импорте модуля!
+# Это позволяет избежать двойной загрузки модели.
+# Инициализация будет выполнена явно из main.py при первом использовании.
+logger.info("Модуль agent_llm_svc импортирован (инициализация отложена)")

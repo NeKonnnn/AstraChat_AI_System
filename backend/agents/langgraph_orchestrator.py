@@ -108,8 +108,8 @@ class LangGraphOrchestrator:
         # Создаем ToolNode для LangGraph
         self.tool_node = ToolNode(self.tools)
         
-        # Checkpoint для сохранения состояния между вызовами
-        self.checkpointer = MemorySaver()
+        # НЕ используем checkpoint - он блокирует event loop и вызывает проблемы с сериализацией
+        self.checkpointer = None
         
         # Создаем граф
         self.graph = self._build_graph()
@@ -167,6 +167,7 @@ class LangGraphOrchestrator:
             logger.info(f"\n{'='*70}")
             logger.info(f"[PLANNER] Планирование задачи")
             logger.info(f"[PLANNER] Запрос: {user_query[:100]}...")
+            logger.info(f"[PLANNER] Контекст при входе: streaming={context.get('streaming', False)}, has_callback={context.get('stream_callback') is not None}")
             logger.info(f"{'='*70}")
             
             # Получаем список активных инструментов
@@ -323,6 +324,10 @@ class LangGraphOrchestrator:
                 state["plan"] = plan if needs_tools else []
                 state["current_step"] = 0
                 state["tool_results"] = []
+                # ВАЖНО: Явно сохраняем context обратно в state
+                state["context"] = context
+                
+                logger.info(f"[PLANNER] Контекст при выходе: streaming={context.get('streaming', False)}")
                 
             except json.JSONDecodeError as e:
                 logger.error(f"[PLANNER] Ошибка парсинга JSON: {e}")
@@ -331,6 +336,8 @@ class LangGraphOrchestrator:
                 state["plan"] = []
                 state["current_step"] = 0
                 state["tool_results"] = []
+                # ВАЖНО: Сохраняем context даже при ошибке
+                state["context"] = context
             
             return state
             
@@ -340,11 +347,16 @@ class LangGraphOrchestrator:
             logger.error(traceback.format_exc())
             state["error"] = f"Ошибка планирования: {str(e)}"
             state["plan"] = []
+            # ВАЖНО: Сохраняем context даже при критической ошибке
+            state["context"] = state.get("context", {})
             return state
     
     def _should_execute_tools(self, state: OrchestratorState) -> str:
         """Условное ребро: определяет нужно ли выполнять инструменты"""
         plan = state.get("plan", [])
+        context = state.get("context", {})
+        
+        logger.info(f"[ROUTER] Проверка context: streaming={context.get('streaming', False)}, has_callback={context.get('stream_callback') is not None}")
         
         if plan and len(plan) > 0:
             logger.info(f"[ROUTER] Переход к выполнению инструментов ({len(plan)} шагов)")
@@ -360,6 +372,25 @@ class LangGraphOrchestrator:
         try:
             plan = state.get("plan", [])
             tool_results = state.get("tool_results", [])
+            context = state.get("context", {})
+            socket_id = context.get("socket_id")
+            
+            # Получаем sio из tool_context (не из state, так как sio не сериализуется)
+            try:
+                from backend.tools.prompt_tools import set_tool_context, get_tool_context
+            except ModuleNotFoundError:
+                from tools.prompt_tools import set_tool_context, get_tool_context
+            
+            # Получаем расширенный контекст с несериализуемыми объектами
+            extended_context = get_tool_context()
+            sio = extended_context.get("sio")
+            
+            logger.info(f"[EXECUTOR] Контекст перед установкой: streaming={context.get('streaming', False)}, has_callback={context.get('stream_callback') is not None}")
+            
+            # Объединяем контексты - context из state + extended_context из tool_context
+            merged_context = {**extended_context, **context}
+            set_tool_context(merged_context)
+            logger.info(f"[EXECUTOR] Установлен контекст для инструментов")
             
             logger.info(f"\n{'='*70}")
             logger.info(f"[EXECUTOR] 🔧 Выполнение инструментов")
@@ -372,6 +403,14 @@ class LangGraphOrchestrator:
                 
                 logger.info(f"\n[EXECUTOR] Шаг {i}/{len(plan)}: {tool_name}")
                 logger.info(f"[EXECUTOR] Вход: {tool_input[:100]}...")
+                
+                # Отправляем heartbeat для каждого инструмента
+                if sio and socket_id:
+                    import asyncio
+                    asyncio.create_task(sio.emit('chat_thinking', {
+                        'status': 'executing',
+                        'message': f'Выполняю инструмент {tool_name} ({i}/{len(plan)})...'
+                    }, room=socket_id))
                 
                 # Проверяем что инструмент активен
                 logger.debug(f"[EXECUTOR] Проверка статуса инструмента '{tool_name}'...")
@@ -452,28 +491,106 @@ class LangGraphOrchestrator:
         try:
             user_query = state.get("user_query", "")
             tool_results = state.get("tool_results", [])
+            context = state.get("context", {})
+            socket_id = context.get("socket_id")
+            
+            # Получаем sio из tool_context (не из state, так как sio не сериализуется)
+            try:
+                from backend.tools.prompt_tools import get_tool_context
+            except ModuleNotFoundError:
+                from tools.prompt_tools import get_tool_context
+            
+            extended_context = get_tool_context()
+            sio = extended_context.get("sio")
+            streaming = context.get("streaming", False)
+            # Получаем stream_callback из extended_context (не из context!)
+            stream_callback_async = extended_context.get("stream_callback")
             
             logger.info(f"\n{'='*70}")
             logger.info(f"[AGGREGATOR] Формирование финального ответа")
             logger.info(f"[AGGREGATOR] Результатов инструментов: {len(tool_results)}")
+            logger.info(f"[AGGREGATOR] Стриминг: {'включен' if streaming else 'выключен'}")
+            logger.info(f"[AGGREGATOR] Stream callback: {'есть' if stream_callback_async else 'нет'}")
             logger.info(f"{'='*70}")
             
+            # Отправляем heartbeat если есть socket
+            if sio and socket_id:
+                import asyncio
+                asyncio.create_task(sio.emit('chat_thinking', {
+                    'status': 'aggregating',
+                    'message': 'Формирую финальный ответ...'
+                }, room=socket_id))
+            
             ask_agent = _get_ask_agent()
+            
+            # Создаем синхронный wrapper для async callback
+            stream_callback_sync = None
+            if streaming and stream_callback_async:
+                import asyncio
+                loop = asyncio.get_event_loop()
+                
+                def sync_wrapper(chunk: str, accumulated: str):
+                    try:
+                        asyncio.run_coroutine_threadsafe(
+                            stream_callback_async(chunk, accumulated),
+                            loop
+                        )
+                        return True
+                    except Exception as e:
+                        logger.error(f"Ошибка в stream callback: {e}")
+                        return True
+                
+                stream_callback_sync = sync_wrapper
             
             # Если инструменты не использовались, даем прямой ответ
             if not tool_results:
                 logger.info(f"[AGGREGATOR] Инструменты не использовались, прямой ответ")
                 
+                if sio and socket_id:
+                    import asyncio
+                    asyncio.create_task(sio.emit('chat_thinking', {
+                        'status': 'generating',
+                        'message': 'Генерирую ответ...'
+                    }, room=socket_id))
+                
                 final_answer = ask_agent(
                     user_query,
-                    history=state.get("context", {}).get("history", []),
-                    streaming=False,
-                    model_path=state.get("context", {}).get("selected_model")
+                    history=context.get("history", []),
+                    streaming=streaming,
+                    stream_callback=stream_callback_sync if streaming else None,
+                    model_path=context.get("selected_model")
                 )
                 
                 state["final_answer"] = final_answer
                 logger.info(f"[AGGREGATOR] Ответ сформирован: {len(final_answer)} символов")
                 return state
+            
+            # Проверяем, являются ли результаты инструментов уже готовыми финальными ответами
+            # Инструменты, которые возвращают готовые ответы (не требуют дополнительной агрегации)
+            final_answer_tools = {
+                'enhance_prompt',
+                'improve_existing_prompt', 
+                'analyze_prompt',
+                'summarize_text',
+                'summarize_document', 
+                'extract_key_points',        
+                'create_bullet_summary',     
+                'summarize_conversation',   
+                'text_summarization' 
+            }
+            
+            # Если есть только один успешный результат от инструмента, который возвращает готовый ответ
+            successful_results = [r for r in tool_results if r.get("success", False)]
+            if len(successful_results) == 1:
+                tool_name = successful_results[0].get("tool", "")
+                output = successful_results[0].get("output", "")
+                
+                # Проверяем, является ли это инструментом, который возвращает готовый ответ
+                if tool_name in final_answer_tools and len(output) > 50:
+                    logger.info(f"[AGGREGATOR] Инструмент '{tool_name}' вернул готовый ответ, используем его напрямую")
+                    logger.info(f"[AGGREGATOR] Длина ответа: {len(output)} символов")
+                    state["final_answer"] = output
+                    return state
             
             # Формируем контекст из результатов инструментов
             context_parts = []
@@ -500,11 +617,19 @@ class LangGraphOrchestrator:
 
 Твой ответ:"""
             
+            if sio and socket_id:
+                import asyncio
+                asyncio.create_task(sio.emit('chat_thinking', {
+                    'status': 'generating',
+                    'message': 'Генерирую финальный ответ на основе результатов...'
+                }, room=socket_id))
+            
             final_answer = ask_agent(
                 aggregation_prompt,
                 history=[],
-                streaming=False,
-                model_path=state.get("context", {}).get("selected_model")
+                streaming=streaming,
+                stream_callback=stream_callback_sync if streaming else None,
+                model_path=context.get("selected_model")
             )
             
             state["final_answer"] = final_answer
@@ -540,6 +665,7 @@ class LangGraphOrchestrator:
             logger.info(f"\n{'#'*70}")
             logger.info(f"# LangGraph Orchestrator - Обработка запроса")
             logger.info(f"# Запрос: {message[:100]}...")
+            logger.info(f"# Получен context: streaming={context.get('streaming', False) if context else False}, has_callback={'stream_callback' in context if context else False}")
             logger.info(f"{'#'*70}\n")
             
             # Компилируем граф если еще не скомпилирован
@@ -643,6 +769,22 @@ class LangGraphOrchestrator:
                     "Сохрани информацию о моих предпочтениях",
                     "Запиши важные факты о проекте"
                 ]
+            elif ("prompt" in tool_name.lower() and "file" not in tool_name.lower() and "system" not in tool_name.lower()) or \
+                 "prompt_engineering" in tool_name or \
+                 "enhance_prompt" in tool_name or \
+                 "improve_existing_prompt" in tool_name or \
+                 "analyze_prompt" in tool_name or \
+                 "save_prompt" in tool_name:
+                agent_id = "prompt_engineer"
+                agent_name = "PromptEngineer"
+                description = "Создание, улучшение и анализ промптов для LLM"
+                capabilities = ["prompt_creation", "prompt_enhancement", "prompt_analysis", "prompt_optimization"]
+                usage_examples = [
+                    "Создай промпт для анализа данных",
+                    "Улучши этот промпт: [текст промпта]",
+                    "Проанализируй качество моего промпта",
+                    "Помоги написать промпт для [задача]"
+                ]
             elif "file" in tool_name.lower() or "read_file" in tool_name:
                 agent_id = "file_agent"
                 agent_name = "FileAgent"
@@ -738,7 +880,8 @@ class LangGraphOrchestrator:
             "document_agent": ["search_documents"],
             "web_search_agent": ["web_search"],
             "calculation_agent": ["calculate"],
-            "memory_agent": ["save_memory"]
+            "memory_agent": ["save_memory"],
+            "prompt_engineer": ["prompt_engineering", "enhance_prompt", "improve_existing_prompt", "analyze_prompt_quality", "save_prompt_to_gallery"]
         }
         
         # Проверяем, это agent_id или tool_name

@@ -3,7 +3,7 @@ API endpoints module.
 """
 
 from fastapi import APIRouter
-from .endpoints import chat, health, models, transcription, tts, whisperx, diarization
+from .endpoints import chat, health, models, transcription, tts, whisperx, diarization, ocr
 
 # Создаем основной роутер API
 router = APIRouter()
@@ -17,3 +17,4 @@ router.include_router(transcription.router, tags=["Transcription (Vosk)"])
 router.include_router(tts.router, tags=["Text-to-Speech (Silero)"])
 router.include_router(whisperx.router, tags=["Transcription (WhisperX)"])
 router.include_router(diarization.router, tags=["Speaker Diarization"])
+router.include_router(ocr.router, tags=["OCR (Surya)"])

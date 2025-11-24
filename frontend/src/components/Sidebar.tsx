@@ -304,10 +304,13 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
   const handleMoveToFolder = (chatId: string, folderId: string) => {
     moveChatToFolder(chatId, folderId);
     setShowMoveToFolderMenu(false);
+    handleChatMenuClose(); // Закрываем основное меню чата после перемещения
   };
 
   const handleRemoveFromFolder = (chatId: string) => {
     moveChatToFolder(chatId, null);
+    setShowMoveToFolderMenu(false);
+    handleChatMenuClose(); // Закрываем основное меню чата после удаления из папки
   };
 
   // Функции для управления папками

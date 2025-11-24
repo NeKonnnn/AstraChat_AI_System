@@ -13,11 +13,15 @@ import {
   Alert,
   Button,
   Divider,
+  IconButton,
+  Tooltip,
 } from '@mui/material';
 import {
   Mic as MicIcon,
   Refresh as RefreshIcon,
   Save as SaveIcon,
+  HelpOutline as HelpOutlineIcon,
+  Restore as RestoreIcon,
 } from '@mui/icons-material';
 import { useAppActions } from '../../contexts/AppContext';
 
@@ -95,20 +99,28 @@ export default function TranscriptionSettings() {
 
   return (
     <Box sx={{ p: 3 }}>
-      <Typography variant="h5" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 3 }}>
-        <MicIcon color="primary" />
-        Настройки транскрибации
-      </Typography>
-
-      <Alert severity="info" sx={{ mb: 3 }}>
-        Настройки автоматически сохраняются при изменении
-      </Alert>
-
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <MicIcon color="primary" />
             Основные настройки
+            <Tooltip title="Настройки автоматически сохраняются при изменении" arrow>
+              <IconButton 
+                size="small" 
+                sx={{ 
+                  ml: 0.5,
+                  opacity: 0.7,
+                  '&:hover': {
+                    opacity: 1,
+                    '& .MuiSvgIcon-root': {
+                      color: 'primary.main',
+                    },
+                  },
+                }}
+              >
+                <HelpOutlineIcon fontSize="small" color="action" />
+              </IconButton>
+            </Tooltip>
           </Typography>
           
           <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
@@ -292,10 +304,10 @@ export default function TranscriptionSettings() {
         
         <Button
           variant="outlined"
-          color="secondary"
+          startIcon={<RestoreIcon />}
           onClick={resetToDefaults}
         >
-          Сбросить к умолчаниям
+          Восстановить настройки
         </Button>
       </Box>
     </Box>

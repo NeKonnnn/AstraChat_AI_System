@@ -112,6 +112,7 @@ type AppAction =
   | { type: 'UPDATE_CHAT_TITLE'; payload: { chatId: string; title: string } }
   | { type: 'UPDATE_CHAT_MESSAGES'; payload: { chatId: string; messages: Message[] } }
   | { type: 'DELETE_CHAT'; payload: string }
+  | { type: 'DELETE_ALL_CHATS' }
   | { type: 'ADD_MESSAGE'; payload: { chatId: string; message: Message } }
   | { type: 'UPDATE_MESSAGE'; payload: { chatId: string; messageId: string; content?: string; isStreaming?: boolean; multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>; alternativeResponses?: string[]; currentResponseIndex?: number } }
   | { type: 'APPEND_CHUNK'; payload: { chatId: string; messageId: string; chunk: string; isStreaming?: boolean } }
@@ -132,6 +133,7 @@ type AppAction =
   | { type: 'DELETE_FOLDER'; payload: string }
   | { type: 'MOVE_CHAT_TO_FOLDER'; payload: { chatId: string; folderId: string | null } }
   | { type: 'TOGGLE_FOLDER'; payload: string }
+  | { type: 'ARCHIVE_ALL_CHATS' }
   | { type: 'UPDATE_STATS'; payload: Partial<AppState['stats']> }
   | { type: 'SET_INITIALIZED'; payload: boolean };
 
@@ -266,6 +268,14 @@ function appReducer(state: AppState, action: AppAction): AppState {
         currentChatId: state.currentChatId === action.payload ? null : state.currentChatId,
       };
       
+    case 'DELETE_ALL_CHATS':
+      return {
+        ...state,
+        chats: [],
+        currentChatId: null,
+        folders: [], // Также удаляем все папки, так как они пустые
+      };
+      
     case 'ADD_MESSAGE': {
       const { chatId, message } = action.payload;
       return {
@@ -325,16 +335,11 @@ function appReducer(state: AppState, action: AppAction): AppState {
       
     case 'APPEND_CHUNK': {
       const { chatId, messageId, chunk, isStreaming } = action.payload;
-      console.log('APPEND_CHUNK вызван для чата:', chatId, 'сообщения:', messageId);
-      console.log('Текст чанка:', chunk);
-      console.log('isStreaming:', isStreaming);
       
       const currentChat = state.chats.find(chat => chat.id === chatId);
       const chunkMessage = currentChat?.messages.find(msg => msg.id === messageId);
-      console.log('Найдено сообщение:', chunkMessage ? 'да' : 'нет');
       
       const newContent = chunkMessage ? smartConcatenateChunk(chunkMessage.content, chunk) : chunk;
-      console.log('Новое содержимое:', newContent.substring(0, 100) + '...');
       
       return {
         ...state,
@@ -505,6 +510,42 @@ function appReducer(state: AppState, action: AppAction): AppState {
         ),
       };
       
+    case 'ARCHIVE_ALL_CHATS': {
+      // Находим или создаем папку "Архив"
+      let archiveFolder = state.folders.find(f => f.name === 'Архив');
+      const allChatIds = state.chats.map(chat => chat.id);
+      
+      if (!archiveFolder) {
+        // Создаем папку "Архив" если её нет
+        const archiveFolderId = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+        archiveFolder = {
+          id: archiveFolderId,
+          name: 'Архив',
+          chatIds: allChatIds,
+          expanded: false,
+        };
+        // Удаляем все чаты из других папок
+        const updatedFolders = state.folders.map(folder => ({
+          ...folder,
+          chatIds: folder.chatIds.filter(id => !allChatIds.includes(id))
+        }));
+        return {
+          ...state,
+          folders: [...updatedFolders, archiveFolder],
+        };
+      } else {
+        // Добавляем все чаты в существующую папку "Архив" и удаляем из других папок
+        return {
+          ...state,
+          folders: state.folders.map(folder =>
+            folder.id === archiveFolder!.id
+              ? { ...folder, chatIds: Array.from(new Set([...folder.chatIds, ...allChatIds])) }
+              : { ...folder, chatIds: folder.chatIds.filter(id => !allChatIds.includes(id)) }
+          ),
+        };
+      }
+    }
+      
     case 'SET_INITIALIZED':
       return {
         ...state,
@@ -641,16 +682,18 @@ export function useAppActions() {
       });
     },
     
+    deleteAllChats: () => {
+      dispatch({
+        type: 'DELETE_ALL_CHATS',
+      });
+    },
+    
     addMessage: (chatId: string, message: Omit<Message, 'id'>) => {
       // Генерируем ID в формате msg_{12 hex символов}, как в MongoDB
       const randomHex = Array.from({ length: 12 }, () => 
         Math.floor(Math.random() * 16).toString(16)
       ).join('');
       const messageId = `msg_${randomHex}`;
-      console.log('ADD_MESSAGE вызван для чата:', chatId, 'роли:', message.role);
-      console.log('Содержимое:', message.content.substring(0, 100) + '...');
-      console.log('isStreaming:', message.isStreaming);
-      console.log('Сгенерированный ID:', messageId);
       
       dispatch({
         type: 'ADD_MESSAGE',
@@ -674,7 +717,6 @@ export function useAppActions() {
     },
     
     setLoading: (loading: boolean) => {
-      console.log('SET_LOADING вызван:', loading);
       dispatch({ type: 'SET_LOADING', payload: loading });
     },
     
@@ -755,6 +797,62 @@ export function useAppActions() {
     
     getFolders: () => {
       return state.folders;
+    },
+    
+    exportChats: () => {
+      const exportData = {
+        chats: state.chats,
+        folders: state.folders,
+        exportDate: new Date().toISOString(),
+        version: '1.0',
+      };
+      const dataStr = JSON.stringify(exportData, null, 2);
+      const dataBlob = new Blob([dataStr], { type: 'application/json' });
+      const url = URL.createObjectURL(dataBlob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `chats_export_${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    },
+    
+    importChats: (file: File): Promise<boolean> => {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try {
+            const content = e.target?.result as string;
+            const importData = JSON.parse(content);
+            
+            // Валидация структуры данных
+            if (!importData.chats || !Array.isArray(importData.chats)) {
+              throw new Error('Неверный формат файла: отсутствует массив чатов');
+            }
+            
+            // Восстанавливаем чаты и папки
+            dispatch({
+              type: 'RESTORE_CHATS',
+              payload: {
+                chats: importData.chats,
+                currentChatId: importData.currentChatId || null,
+                folders: importData.folders || [],
+              },
+            });
+            
+            resolve(true);
+          } catch (error) {
+            reject(error);
+          }
+        };
+        reader.onerror = () => reject(new Error('Ошибка чтения файла'));
+        reader.readAsText(file);
+      });
+    },
+    
+    archiveAllChats: () => {
+      dispatch({ type: 'ARCHIVE_ALL_CHATS' });
     },
   };
 }

@@ -227,9 +227,40 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
 
   // Убираем автоматическое создание чатов - чаты создаются только по кнопке
 
+  // Загружаем настройки интерфейса
+  const [interfaceSettings, setInterfaceSettings] = useState(() => {
+    const savedAutoTitle = localStorage.getItem('auto_generate_titles');
+    const savedLargeTextAsFile = localStorage.getItem('large_text_as_file');
+    return {
+      autoGenerateTitles: savedAutoTitle !== null ? savedAutoTitle === 'true' : true,
+      largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
+    };
+  });
+
+  // Слушаем изменения настроек интерфейса в localStorage
+  useEffect(() => {
+    const handleStorageChange = () => {
+      const savedAutoTitle = localStorage.getItem('auto_generate_titles');
+      const savedLargeTextAsFile = localStorage.getItem('large_text_as_file');
+      setInterfaceSettings({
+        autoGenerateTitles: savedAutoTitle !== null ? savedAutoTitle === 'true' : true,
+        largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
+      });
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    // Также проверяем изменения в том же окне через кастомное событие
+    window.addEventListener('interfaceSettingsChanged', handleStorageChange);
+
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('interfaceSettingsChanged', handleStorageChange);
+    };
+  }, []);
+
   // Автоматически обновляем название чата на основе первого сообщения пользователя
   useEffect(() => {
-    if (currentChat && messages.length === 1) {
+    if (currentChat && messages.length === 1 && interfaceSettings.autoGenerateTitles) {
       const firstMessage = messages[0];
       if (firstMessage.role === 'user' && currentChat.title === 'Новый чат') {
         const title = firstMessage.content.length > 50 
@@ -238,7 +269,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
         updateChatTitle(currentChat.id, title);
       }
     }
-  }, [currentChat, messages, updateChatTitle]);
+  }, [currentChat, messages, updateChatTitle, interfaceSettings.autoGenerateTitles]);
 
   // Убираем автоматическую остановку генерации при смене чата
   // Генерация должна происходить в том чате, где был задан вопрос
@@ -592,7 +623,22 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
       return;
     }
 
-    if (!inputMessage.trim() || !isConnected || state.isLoading || !currentChat) {
+    if (!inputMessage.trim() || !isConnected || state.isLoading) {
+      if (!isConnected) {
+        showNotification('error', 'Нет соединения с сервером. Попробуйте переподключиться.');
+      }
+      return;
+    }
+    
+    // Автоматически создаем новый чат, если его нет
+    if (!currentChat) {
+      const newChatId = createChat('Новый чат');
+      setCurrentChat(newChatId);
+      const messageText = inputMessage.trim();
+      setInputMessage('');
+      setTimeout(() => {
+        sendMessage(messageText, newChatId);
+      }, 50);
       return;
     }
 
@@ -604,6 +650,41 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       handleSendMessage();
+    }
+  };
+
+  // Обработчик вставки текста
+  const handlePaste = async (event: React.ClipboardEvent<HTMLDivElement>): Promise<void> => {
+    if (!interfaceSettings.largeTextAsFile) {
+      return; // Если настройка выключена, используем стандартное поведение
+    }
+
+    const pastedText = event.clipboardData.getData('text');
+    
+    // Определяем, что считается "большим текстом" (например, больше 1000 символов)
+    const LARGE_TEXT_THRESHOLD = 1000;
+    
+    if (pastedText.length > LARGE_TEXT_THRESHOLD) {
+      event.preventDefault(); // Предотвращаем стандартную вставку
+      
+      try {
+        // Создаем текстовый файл из вставленного текста
+        const blob = new Blob([pastedText], { type: 'text/plain' });
+        const fileName = `pasted_text_${Date.now()}.txt`;
+        const file = new File([blob], fileName, { type: 'text/plain' });
+        
+        // Загружаем файл через handleFileUpload
+        await handleFileUpload(file);
+        
+        // Очищаем поле ввода
+        setInputMessage('');
+        
+        showNotification('success', 'Большой текст вставлен как файл');
+      } catch (error) {
+        console.error('Ошибка при создании файла из вставленного текста:', error);
+        showNotification('error', 'Ошибка при создании файла из вставленного текста');
+        // В случае ошибки разрешаем стандартную вставку
+      }
     }
   };
 
@@ -1010,7 +1091,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
     setRecording(false);
     setSpeaking(false);
     
-    console.log('🔧 Все состояния сброшены');
+    console.log('Все состояния сброшены');
     showNotification('info', 'Все процессы остановлены');
   };
 
@@ -2340,63 +2421,61 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
             </Tooltip>
           )}
           
-          {/* Кнопка озвучивания - только для сообщений LLM/агента */}
-          {!isUser && (
-            <Tooltip title="Прочесть вслух">
-              <IconButton
-                size="small"
-                onClick={() => {
-                  // Получаем текущий контент сообщения
-                  let textToSpeak = message.content;
-                  
-                  // Если есть альтернативные ответы, берём текущий вариант
-                  if (message.alternativeResponses && message.alternativeResponses.length > 0 && message.currentResponseIndex !== undefined) {
-                    const currentIndex = message.currentResponseIndex;
-                    if (currentIndex >= 0 && currentIndex < message.alternativeResponses.length) {
-                      textToSpeak = message.alternativeResponses[currentIndex];
-                    }
+          {/* Кнопка озвучивания - для всех сообщений */}
+          <Tooltip title="Прочесть вслух">
+            <IconButton
+              size="small"
+              onClick={() => {
+                // Получаем текущий контент сообщения
+                let textToSpeak = message.content;
+                
+                // Если есть альтернативные ответы, берём текущий вариант (только для LLM)
+                if (!isUser && message.alternativeResponses && message.alternativeResponses.length > 0 && message.currentResponseIndex !== undefined) {
+                  const currentIndex = message.currentResponseIndex;
+                  if (currentIndex >= 0 && currentIndex < message.alternativeResponses.length) {
+                    textToSpeak = message.alternativeResponses[currentIndex];
                   }
-                  
-                  // Для multi-llm берём первый ответ или все ответы
-                  if (message.multiLLMResponses && message.multiLLMResponses.length > 0) {
-                    textToSpeak = message.multiLLMResponses
-                      .filter(r => !r.error)
-                      .map(r => r.content)
-                      .join(' ');
-                  }
-                  
-                  synthesizeSpeech(textToSpeak);
-                }}
-                className="message-speak-button"
-                data-theme={isDarkMode ? 'dark' : 'light'}
-                disabled={isSpeaking}
-                sx={{ 
-                  opacity: 0.7,
-                  p: 0.5,
-                  borderRadius: '6px',
-                  minWidth: '28px',
-                  width: '28px',
-                  height: '28px',
-                  '&:hover:not(:disabled)': {
-                    opacity: 1,
-                    '& .MuiSvgIcon-root': {
-                      color: 'primary.main',
-                    },
-                  },
-                  '&:disabled': {
-                    opacity: 0.4,
-                  },
+                }
+                
+                // Для multi-llm берём первый ответ или все ответы (только для LLM)
+                if (!isUser && message.multiLLMResponses && message.multiLLMResponses.length > 0) {
+                  textToSpeak = message.multiLLMResponses
+                    .filter(r => !r.error)
+                    .map(r => r.content)
+                    .join(' ');
+                }
+                
+                synthesizeSpeech(textToSpeak);
+              }}
+              className="message-speak-button"
+              data-theme={isDarkMode ? 'dark' : 'light'}
+              disabled={isSpeaking}
+              sx={{ 
+                opacity: 0.7,
+                p: 0.5,
+                borderRadius: '6px',
+                minWidth: '28px',
+                width: '28px',
+                height: '28px',
+                '&:hover:not(:disabled)': {
+                  opacity: 1,
                   '& .MuiSvgIcon-root': {
-                    fontSize: '18px !important',
-                    width: '18px !important',
-                    height: '18px !important',
+                    color: 'primary.main',
                   },
-                }}
-              >
-                <VolumeUpIcon />
-              </IconButton>
-            </Tooltip>
-          )}
+                },
+                '&:disabled': {
+                  opacity: 0.4,
+                },
+                '& .MuiSvgIcon-root': {
+                  fontSize: '18px !important',
+                  width: '18px !important',
+                  height: '18px !important',
+                },
+              }}
+            >
+              <VolumeUpIcon />
+            </IconButton>
+          </Tooltip>
         </Box>
       </Box>
     );
@@ -3522,6 +3601,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
               value={inputMessage}
               onChange={(e) => setInputMessage(e.target.value)}
               onKeyPress={handleKeyPress}
+              onPaste={handlePaste}
               placeholder={
                 !isConnected 
                   ? "Нет соединения с сервером. Запустите backend на порту 8000" 
@@ -3587,7 +3667,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                     disableRipple
                     disabled={isUploading || modelWindows.some(w => w.isStreaming)}
                   >
-                    {isUploading ? <CircularProgress size={16} /> : <AttachFileIcon sx={{ color: '#2196f3', fontSize: '1.2rem' }} />}
+                    <AttachFileIcon sx={{ color: '#2196f3', fontSize: '1.2rem' }} />
                   </IconButton>
                 </Tooltip>
 
@@ -4106,6 +4186,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                 value={inputMessage}
                 onChange={(e) => setInputMessage(e.target.value)}
                 onKeyPress={handleKeyPress}
+                onPaste={handlePaste}
                 placeholder={
                   !isConnected 
                     ? "Нет соединения с сервером. Запустите backend на порту 8000" 
@@ -4162,7 +4243,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                        disableRipple
                        disabled={isUploading || (state.isLoading && !messages.some(msg => msg.isStreaming))}
                      >
-                       {isUploading ? <CircularProgress size={16} /> : <AttachFileIcon sx={{ color: '#2196f3', fontSize: '1.2rem' }} />}
+                       <AttachFileIcon sx={{ color: '#2196f3', fontSize: '1.2rem' }} />
                      </IconButton>
                    </Tooltip>
 

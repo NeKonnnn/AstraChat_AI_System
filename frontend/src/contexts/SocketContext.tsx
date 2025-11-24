@@ -32,48 +32,41 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   } | null>(null);
 
   const connectSocket = () => {
-    console.log('🔌 Подключение к Socket.IO...');
-    
     const newSocket = io(API_CONFIG.BASE_URL, {
       transports: ['websocket', 'polling'], // Добавляем fallback на polling
       autoConnect: false,
-      timeout: 20000, // Увеличиваем timeout
+      timeout: 60000, // Увеличиваем timeout до 60 секунд
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      reconnectionAttempts: 5,
       forceNew: true, // Принудительно создаем новое соединение
     });
 
     // Подключение
     newSocket.on('connect', () => {
-      console.log('WebSocket подключен');
       setIsConnected(true);
       showNotification('success', 'Соединение с сервером установлено');
     });
 
     // Отключение
     newSocket.on('disconnect', (reason) => {
-      console.log('WebSocket отключен:', reason);
       setIsConnected(false);
       showNotification('warning', 'Соединение с сервером потеряно');
     });
 
     // Ошибки подключения
     newSocket.on('connect_error', (error: any) => {
-      console.error('Ошибка подключения Socket.IO:', error);
-      console.error('Тип ошибки:', error.type || 'unknown');
-      console.error('Сообщение:', error.message || 'No message');
-      console.error('Описание:', error.description || 'No description');
       setIsConnected(false);
       showNotification('error', `Ошибка подключения Socket.IO: ${error.message || 'Неизвестная ошибка'}`);
     });
 
     // Дополнительные события для отладки
     newSocket.on('disconnect', (reason, details) => {
-      console.log('🔌 Socket.IO отключен:', reason, details);
       setIsConnected(false);
       showNotification('warning', `Соединение потеряно: ${reason}`);
     });
 
     newSocket.on('reconnect', (attemptNumber) => {
-      console.log('Socket.IO переподключен, попытка:', attemptNumber);
       setIsConnected(true);
       showNotification('success', 'Соединение восстановлено');
     });
@@ -83,38 +76,36 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     });
 
     // Обработка событий Socket.IO
+    newSocket.on('chat_thinking', (data) => {
+      handleServerMessage({ type: 'thinking', ...data });
+    });
+
     newSocket.on('chat_chunk', (data) => {
       handleServerMessage({ type: 'chunk', ...data });
     });
 
     newSocket.on('chat_complete', (data) => {
-      console.log('Чат завершен:', data);
       handleServerMessage({ type: 'complete', ...data });
     });
 
     newSocket.on('chat_error', (data) => {
-      console.log('Ошибка чата:', data);
       handleServerMessage({ type: 'error', ...data });
     });
 
     newSocket.on('generation_stopped', (data) => {
-      console.log('Генерация остановлена:', data);
       handleServerMessage({ type: 'stopped', ...data });
     });
 
     // Обработка событий для режима multi-llm
     newSocket.on('multi_llm_start', (data) => {
-      console.log('Получен multi_llm_start:', data);
       handleServerMessage({ type: 'multi_llm_start', ...data });
     });
 
     newSocket.on('multi_llm_chunk', (data) => {
-      console.log('Получен multi_llm_chunk:', data);
       handleServerMessage({ type: 'multi_llm_chunk', ...data });
     });
 
     newSocket.on('multi_llm_complete', (data) => {
-      console.log('Получен multi_llm_complete:', data);
       handleServerMessage({ type: 'multi_llm_complete', ...data });
     });
 
@@ -129,11 +120,15 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 
   const handleServerMessage = (data: any) => {
     switch (data.type) {
+      case 'thinking':
+        // Обработка heartbeat сообщения о статусе обработки
+        // Не создаем сообщение, так как это промежуточный статус
+        break;
+
       case 'multi_llm_start':
         // Начало генерации от нескольких моделей
         if (!currentChatIdRef.current) return;
         
-        console.log('multi_llm_start: ожидаем ответы от', data.total_models, 'моделей');
         expectedModelsCountRef.current = data.total_models || 0;
         
         // Создаем сообщение для multi-llm режима
@@ -198,15 +193,12 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         // Генерация от одной модели завершена
         if (!currentChatIdRef.current) return;
         
-        console.log('multi_llm_complete получен для модели:', data.model);
-        
         const completedModel = data.model || 'unknown';
         const completedContent = data.response || '';
         const hasError = data.error || false;
         
         // Создаем сообщение для multi-llm режима, если его еще нет
         if (!multiLLMMessageRef.current) {
-          console.log('Создаем новое multi-llm сообщение');
           const messageId = addMessage(currentChatIdRef.current, {
             role: 'assistant',
             content: '',
@@ -225,10 +217,6 @@ export function SocketProvider({ children }: { children: ReactNode }) {
           error: hasError,
         });
         
-        console.log('Текущее количество ответов от моделей:', multiLLMResponsesRef.current.size);
-        console.log('Ответы от моделей:', Array.from(multiLLMResponsesRef.current.keys()));
-        console.log('Ожидаем ответов от моделей:', expectedModelsCountRef.current);
-        
         // Обновляем сообщение с актуальными данными
         const allResponses = Array.from(multiLLMResponsesRef.current.values());
         updateMessage(
@@ -245,7 +233,6 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         
         if (expectedCount > 0 && receivedCount >= expectedCount) {
           // Все модели ответили
-          console.log('Все модели завершили генерацию:', receivedCount, '/', expectedCount);
           setLoading(false);
           // Финализируем сообщение - убираем флаг стриминга
           const finalResponses = Array.from(multiLLMResponsesRef.current.values());
@@ -299,7 +286,6 @@ export function SocketProvider({ children }: { children: ReactNode }) {
           }
         } else {
           // Создаем новое сообщение для стриминга
-          console.log('Создаем новое сообщение для стриминга');
           const messageId = addMessage(currentChatIdRef.current, {
             role: 'assistant',
             content: data.accumulated || data.chunk,
@@ -307,14 +293,12 @@ export function SocketProvider({ children }: { children: ReactNode }) {
             isStreaming: true,
           });
           currentMessageRef.current = messageId;
-          console.log('Новое сообщение создано, ID:', messageId);
         }
         break;
 
       case 'complete':
         // Генерация завершена
         if (!currentChatIdRef.current) {
-          console.warn('currentChatIdRef пуст при завершении генерации');
           setLoading(false);
           return;
         }
@@ -352,22 +336,48 @@ export function SocketProvider({ children }: { children: ReactNode }) {
             updateMessage(currentChatIdRef.current, currentMessageRef.current, data.response, false);
           }
           
-          console.log('Флаг isStreaming установлен в false');
           currentMessageRef.current = null;
         } else {
-          // Если нет текущего сообщения, создаем новое
-          console.log('Создаем финальное сообщение');
-          const finalMessageId = addMessage(currentChatIdRef.current, {
-            role: 'assistant',
-            content: data.response,
-            timestamp: data.timestamp || new Date().toISOString(),
-            isStreaming: false,
-          });
-          console.log('Финальное сообщение создано, ID:', finalMessageId);
+          // Если нет текущего сообщения, но есть ответ, пытаемся найти сообщение со стримингом
+          if (data.response) {
+            // Пытаемся найти последнее сообщение с isStreaming: true в текущем чате
+            const currentChat = getCurrentChat();
+            if (currentChat && currentChat.id === currentChatIdRef.current) {
+              const streamingMessages = currentChat.messages.filter(msg => msg.isStreaming && msg.role === 'assistant');
+              if (streamingMessages.length > 0) {
+                // Обновляем последнее сообщение со стримингом
+                const lastStreamingMessage = streamingMessages[streamingMessages.length - 1];
+                updateMessage(currentChatIdRef.current, lastStreamingMessage.id, data.response, false);
+              } else {
+                // Создаем новое сообщение (например, в агентном режиме без потоковой генерации)
+                addMessage(currentChatIdRef.current, {
+                  role: 'assistant',
+                  content: data.response,
+                  timestamp: data.timestamp || new Date().toISOString(),
+                  isStreaming: false,
+                });
+              }
+            } else {
+              // Создаем новое сообщение, если не удалось найти чат
+              addMessage(currentChatIdRef.current, {
+                role: 'assistant',
+                content: data.response,
+                timestamp: data.timestamp || new Date().toISOString(),
+                isStreaming: false,
+              });
+            }
+          } else {
+            // Если нет ответа, просто сбрасываем флаги стриминга у всех сообщений в чате
+            const currentChat = getCurrentChat();
+            if (currentChat && currentChat.id === currentChatIdRef.current) {
+              const streamingMessages = currentChat.messages.filter(msg => msg.isStreaming && msg.role === 'assistant');
+              streamingMessages.forEach(msg => {
+                updateMessage(currentChatIdRef.current!, msg.id, undefined, false);
+              });
+            }
+          }
         }
         setLoading(false);
-        currentChatIdRef.current = null; // Очищаем после завершения
-        console.log('Генерация полностью завершена');
         break;
 
       case 'error':
@@ -377,7 +387,6 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         
         // Убираем флаг стриминга у текущего сообщения при ошибке
         if (currentChatIdRef.current && currentMessageRef.current) {
-          console.log('Сбрасываем isStreaming при ошибке');
           updateMessage(currentChatIdRef.current, currentMessageRef.current, undefined, false);
         }
         
@@ -385,16 +394,13 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         currentChatIdRef.current = null; // Очищаем при ошибке
         multiLLMMessageRef.current = null;
         multiLLMResponsesRef.current.clear();
-        console.log('Все рефы очищены после ошибки');
         break;
         
       case 'stopped':
-        console.log('Генерация остановлена пользователем или сервером');
         setLoading(false);
         
         // Убираем флаг стриминга у текущего сообщения
         if (currentChatIdRef.current && currentMessageRef.current) {
-          console.log('Сбрасываем isStreaming при остановке');
           updateMessage(currentChatIdRef.current, currentMessageRef.current, undefined, false);
           currentMessageRef.current = null;
         }
@@ -415,8 +421,6 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       showNotification('error', 'Нет соединения с сервером');
       return;
     }
-
-    console.log('Отправка сообщения:', message.substring(0, 50) + '...');
     
     // Сохраняем chatId для обработки ответов
     currentChatIdRef.current = chatId;
@@ -432,7 +436,6 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       content: message,
       timestamp: new Date().toISOString(),
     });
-    console.log('Сообщение пользователя добавлено, ID:', userMessageId);
 
     // Устанавливаем состояние загрузки
     setLoading(true);
@@ -482,8 +485,6 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       showNotification('error', 'Нет соединения с сервером');
       return;
     }
-
-    console.log('Перегенерация ответа для сообщения:', assistantMessageId);
     
     // Сохраняем chatId и ID сообщения помощника для обработки ответов
     currentChatIdRef.current = chatId;
@@ -522,8 +523,6 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       showNotification('error', 'Нет соединения с сервером');
       return;
     }
-
-    console.log('Отправка команды остановки генерации...');
     
     // Отправляем команду остановки через Socket.IO
     socket.emit('stop_generation', {
@@ -556,7 +555,6 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 
     return () => {
       if (socket) {
-        console.log('🔌 Закрытие WebSocket соединения');
         socket.disconnect();
       }
     };

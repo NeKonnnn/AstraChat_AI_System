@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Box, IconButton, Typography, Tooltip, Link, Paper, Table, TableBody, TableCell, TableContainer, TableHead, TableRow } from '@mui/material';
 import { ContentCopy as CopyIcon, Check as CheckIcon, Info as InfoIcon, Warning as WarningIcon, Error as ErrorIcon, CheckCircle as SuccessIcon, GetApp as DownloadIcon } from '@mui/icons-material';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -10,8 +10,51 @@ interface MessageRendererProps {
   isStreaming?: boolean;
 }
 
+type FontSize = 'small' | 'medium' | 'large';
+
+const getFontSize = (): FontSize => {
+  const saved = localStorage.getItem('chat-font-size') as FontSize;
+  return saved && ['small', 'medium', 'large'].includes(saved) ? saved : 'medium';
+};
+
+const getFontSizeValue = (size: FontSize): string => {
+  switch (size) {
+    case 'small':
+      return '0.875rem';
+    case 'large':
+      return '1.125rem';
+    default:
+      return '1rem';
+  }
+};
+
 const MessageRenderer: React.FC<MessageRendererProps> = ({ content, isStreaming = false }) => {
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [fontSize, setFontSize] = useState<FontSize>(getFontSize());
+
+  // Слушаем изменения размера шрифта
+  useEffect(() => {
+    const handleStorageChange = () => {
+      setFontSize(getFontSize());
+    };
+    
+    // Проверяем изменения каждые 100мс (для синхронизации между вкладками)
+    const interval = setInterval(() => {
+      const currentSize = getFontSize();
+      if (currentSize !== fontSize) {
+        setFontSize(currentSize);
+      }
+    }, 100);
+
+    window.addEventListener('storage', handleStorageChange);
+    
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('storage', handleStorageChange);
+    };
+  }, [fontSize]);
+
+  const fontSizeValue = getFontSizeValue(fontSize);
 
   const handleCopyCode = async (code: string) => {
     try {
@@ -595,7 +638,7 @@ const MessageRenderer: React.FC<MessageRendererProps> = ({ content, isStreaming 
           {config.icon}
         </Box>
         <Box sx={{ flex: 1 }}>
-          <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
+          <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.6, fontSize: fontSizeValue }}>
             {parseInlineMarkdown(content)}
           </Typography>
         </Box>
@@ -857,6 +900,7 @@ const MessageRenderer: React.FC<MessageRendererProps> = ({ content, isStreaming 
               wordBreak: 'break-word',
               lineHeight: 1.5,
               mb: 0.5,
+              fontSize: fontSizeValue,
             }}
           >
             {parseInlineMarkdown(line)}

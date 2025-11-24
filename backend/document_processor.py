@@ -116,6 +116,13 @@ class DocumentProcessor:
                 if isinstance(result, dict):
                     document_text = result.get("text", "")
                     confidence_info = result.get("confidence_info", {"confidence": 0.0, "text_length": len(document_text), "file_type": "image", "words": []})
+                    # Если OCR не удался (пустой текст и есть ошибка), логируем, но продолжаем обработку
+                    if not document_text and confidence_info.get("error"):
+                        error_msg = confidence_info.get("error", "Неизвестная ошибка")
+                        print(f"ВНИМАНИЕ: OCR не удался для {filename}: {error_msg}")
+                        print(f"Изображение будет сохранено, но текст не будет извлечен")
+                        # Продолжаем обработку - документ будет добавлен с пустым текстом
+                        # Изображение все равно будет доступно для мультимодальной модели
                 else:
                     document_text = result
                     confidence_info = self._create_confidence_info_for_text(document_text, 50.0, "image")
@@ -147,8 +154,15 @@ class DocumentProcessor:
                     print(f"Сохранены данные изображения в памяти для {filename}")
             
             # Добавляем документ в коллекцию
-            self.add_document_to_collection(document_text, filename)
-            print(f"Документ добавлен в коллекцию. Всего документов: {len(self.doc_names)}")
+            # Если текст пустой (например, OCR не сработал), все равно добавляем документ
+            # чтобы изображение было доступно для мультимодальной модели
+            if document_text or file_extension in ['.jpg', '.jpeg', '.png', '.webp']:
+                # Для изображений добавляем даже с пустым текстом
+                self.add_document_to_collection(document_text, filename)
+                print(f"Документ добавлен в коллекцию. Всего документов: {len(self.doc_names)}")
+            else:
+                print(f"Пропускаем добавление документа {filename} - текст пустой и это не изображение")
+            
             return True, f"Документ {filename} успешно обработан"
             
         except Exception as e:
@@ -245,50 +259,62 @@ class DocumentProcessor:
                 print(f"Ошибка при извлечении текста с помощью PyPDF2: {str(e2)}")
                 raise
         
-        # Если текст не извлечен (сканированный PDF), пробуем OCR
+        # Если текст не извлечен (сканированный PDF), пробуем OCR через Surya
         if not text or len(text.strip()) == 0:
-            print("PDF не содержит текста, возможно это сканированный документ. Пробуем OCR...")
+            print("PDF не содержит текста, возможно это сканированный документ. Пробуем OCR через Surya...")
             try:
                 # Пробуем использовать pdf2image для конвертации PDF в изображения
                 try:
                     from pdf2image import convert_from_bytes
-                    import pytesseract
+                    from backend.llm_client import recognize_text_from_image_llm_svc
+                    from PIL import Image
+                    import io
                     
                     # Конвертируем PDF в изображения из bytes
                     images = convert_from_bytes(file_data, dpi=300)
                     print(f"PDF конвертирован в {len(images)} изображений для OCR")
                     
-                    # Применяем OCR к каждому изображению
+                    # Применяем OCR к каждому изображению через Surya
                     ocr_text = ""
                     ocr_confidence_scores = []
                     for i, image in enumerate(images):
-                        print(f"Обрабатываем страницу {i+1}/{len(images)} с помощью OCR...")
-                        page_text = pytesseract.image_to_string(image, lang='rus+eng')
-                        ocr_text += f"\n--- Страница {i+1} ---\n{page_text}\n"
+                        print(f"Обрабатываем страницу {i+1}/{len(images)} с помощью Surya OCR...")
                         
-                        # Получаем уверенность OCR
-                        try:
-                            ocr_data = pytesseract.image_to_data(image, lang='rus+eng', output_type=pytesseract.Output.DICT)
-                            page_confidences = [int(conf) for conf in ocr_data['conf'] if conf and int(conf) > 0]
-                            if page_confidences:
-                                avg_page_conf = sum(page_confidences) / len(page_confidences)
-                                ocr_confidence_scores.append(avg_page_conf)
-                            else:
-                                ocr_confidence_scores.append(50.0)
-                        except:
+                        # Конвертируем PIL Image в bytes
+                        img_bytes = io.BytesIO()
+                        image.save(img_bytes, format='PNG')
+                        img_bytes.seek(0)
+                        page_image_data = img_bytes.getvalue()
+                        
+                        # Вызываем OCR через llm-svc API
+                        result = recognize_text_from_image_llm_svc(
+                            image_file=page_image_data,
+                            filename=f"page_{i+1}.png",
+                            languages="ru,en"
+                        )
+                        
+                        if result.get("success", False):
+                            page_text = result.get("text", "")
+                            page_confidence = result.get("confidence", 50.0)
+                            ocr_text += f"\n--- Страница {i+1} ---\n{page_text}\n"
+                            ocr_confidence_scores.append(page_confidence)
+                        else:
+                            print(f"Ошибка OCR для страницы {i+1}: {result.get('error', 'Unknown error')}")
                             ocr_confidence_scores.append(50.0)
                     
                     if ocr_text.strip():
                         text = ocr_text
                         confidence_scores = ocr_confidence_scores
-                        print(f"OCR успешно извлек {len(text)} символов из {len(images)} страниц")
+                        print(f"Surya OCR успешно извлек {len(text)} символов из {len(images)} страниц")
                     else:
-                        print("OCR не смог извлечь текст из PDF")
+                        print("Surya OCR не смог извлечь текст из PDF")
                 except ImportError:
-                    print("Библиотеки pdf2image или pytesseract не установлены. Для обработки сканированных PDF установите: pip install pdf2image pytesseract")
+                    print("Библиотека pdf2image не установлена. Для обработки сканированных PDF установите: pip install pdf2image")
                     print("Также требуется установить poppler: https://github.com/oschwartz10612/poppler-windows/releases")
                 except Exception as ocr_error:
-                    print(f"Ошибка при OCR обработке PDF: {ocr_error}")
+                    print(f"Ошибка при OCR обработке PDF через Surya: {ocr_error}")
+                    import traceback
+                    traceback.print_exc()
             except Exception as e:
                 print(f"Не удалось применить OCR к PDF: {e}")
         
@@ -352,75 +378,79 @@ class DocumentProcessor:
             return result
 
     def extract_text_from_image_bytes(self, file_data: bytes):
-        """Извлечение текста из изображения из bytes с помощью OCR с информацией об уверенности"""
-        print(f"Извлекаем текст из изображения (размер: {len(file_data)} байт)")
+        """Извлечение текста из изображения из bytes с помощью Surya OCR через llm-svc API с информацией об уверенности"""
+        print(f"Извлекаем текст из изображения с помощью Surya OCR (размер: {len(file_data)} байт)")
+        print(f"DEBUG: Начинаем вызов OCR через llm-svc API...")
         try:
-            # Проверяем наличие библиотеки pytesseract
-            import pytesseract
+            # Импортируем функцию для работы с OCR через llm-svc
+            from backend.llm_client import recognize_text_from_image_llm_svc
             from PIL import Image
-            import re
             
-            # Открываем изображение из bytes
+            # Определяем имя файла на основе формата изображения
             img = Image.open(BytesIO(file_data))
+            filename = "image.jpg"
+            if img.format:
+                filename = f"image.{img.format.lower()}"
             
-            # Извлекаем текст с изображения
-            text = pytesseract.image_to_string(img, lang='rus+eng')
+            print(f"DEBUG: Изображение открыто, формат: {img.format}, размер: {img.size}")
             
-            # Получаем детальную информацию об уверенности с помощью image_to_data
-            words_with_confidence = []
-            avg_confidence = 0.0
-            
+            # Вызываем OCR через llm-svc API
+            print("Отправляем запрос на распознавание текста через llm-svc...")
+            print(f"DEBUG: Вызываем recognize_text_from_image_llm_svc с filename={filename}, languages=ru,en")
             try:
-                ocr_data = pytesseract.image_to_data(img, lang='rus+eng', output_type=pytesseract.Output.DICT)
-                
-                # Обрабатываем данные OCR для получения слов с уверенностью
-                n_boxes = len(ocr_data['text'])
-                for i in range(n_boxes):
-                    word_text = ocr_data['text'][i].strip()
-                    conf = int(ocr_data['conf'][i]) if ocr_data['conf'][i] else 0
-                    
-                    # Добавляем только валидные слова (не пустые строки)
-                    if word_text and conf > 0:
-                        words_with_confidence.append({
-                            "word": word_text,
-                            "confidence": float(conf)
-                        })
-                
-                # Вычисляем среднюю уверенность
-                if words_with_confidence:
-                    avg_confidence = sum(w['confidence'] for w in words_with_confidence) / len(words_with_confidence)
-                else:
-                    avg_confidence = 50.0
-                    
-            except Exception as e:
-                print(f"Не удалось получить детальную информацию об уверенности OCR: {e}")
-                # Если не удалось получить детальную информацию, разбиваем текст на слова
-                # и присваиваем среднюю уверенность 50%
-                # Используем улучшенное разбиение: разделяем слова и знаки препинания
-                tokens = re.findall(r'\w+|[^\w\s]+', text)
-                words_with_confidence = []
-                for token in tokens:
-                    token = token.strip()
-                    if token:
-                        words_with_confidence.append({"word": token, "confidence": 50.0})
-                avg_confidence = 50.0
+                result = recognize_text_from_image_llm_svc(
+                    image_file=file_data,
+                    filename=filename,
+                    languages="ru,en"
+                )
+                print(f"DEBUG: OCR вернул результат: success={result.get('success', False)}")
+            except Exception as ocr_exception:
+                print(f"DEBUG: Исключение при вызове OCR: {ocr_exception}")
+                import traceback
+                traceback.print_exc()
+                raise
             
-            # Если текст не извлечен, добавляем описание изображения
-            if not text.strip():
-                result_text = f"[Изображение. OCR не смог извлечь текст.]"
-                print(f"OCR не смог извлечь текст, возвращаем описание: {len(result_text)} символов")
+            # Проверяем результат
+            if not result.get("success", False):
+                error_msg = result.get("error", "Неизвестная ошибка")
+                print(f"Surya OCR вернул ошибку: {error_msg}")
+                print(f"ВНИМАНИЕ: OCR не удался, текст не будет извлечен из изображения")
+                # Не сохраняем сообщение об ошибке как текст документа
+                # Вместо этого возвращаем пустой текст
                 return {
-                    "text": result_text,
+                    "text": "",  # Пустой текст вместо сообщения об ошибке
                     "confidence_info": {
                         "confidence": 0.0,
-                        "text_length": len(result_text),
+                        "text_length": 0,
+                        "file_type": "image",
+                        "ocr_available": False,
+                        "error": error_msg,
+                        "words": []
+                    }
+                }
+            
+            # Извлекаем данные из результата
+            text = result.get("text", "")
+            words_with_confidence = result.get("words", [])
+            avg_confidence = result.get("confidence", 0.0)
+            word_count = result.get("words_count", 0)
+            
+            # Если текст не извлечен, возвращаем пустой текст
+            if not text.strip():
+                print(f"Surya OCR не смог извлечь текст из изображения (текст пустой)")
+                # Не сохраняем сообщение об отсутствии текста как текст документа
+                return {
+                    "text": "",  # Пустой текст
+                    "confidence_info": {
+                        "confidence": 0.0,
+                        "text_length": 0,
                         "file_type": "image",
                         "ocr_available": False,
                         "words": []
                     }
                 }
             
-            print(f"OCR успешно извлек {len(text)} символов, {len(words_with_confidence)} слов, средняя уверенность: {avg_confidence:.2f}%")
+            print(f"Surya OCR успешно извлек {len(text)} символов, {word_count} слов, средняя уверенность: {avg_confidence:.2f}%")
             
             return {
                 "text": text,
@@ -433,9 +463,9 @@ class DocumentProcessor:
                 }
             }
         except ImportError:
-            # Если pytesseract не установлен, возвращаем информацию о файле
-            result_text = f"[Изображение: {os.path.basename(file_path)}. Для распознавания текста требуется установка pytesseract.]"
-            print(f"pytesseract не установлен, возвращаем описание: {len(result_text)} символов")
+            # Если функция не доступна, возвращаем информацию о файле
+            result_text = f"[Изображение. Для распознавания текста требуется доступ к llm-svc API.]"
+            print(f"Функция распознавания через llm-svc не доступна, возвращаем описание: {len(result_text)} символов")
             return {
                 "text": result_text,
                 "confidence_info": {
@@ -447,16 +477,23 @@ class DocumentProcessor:
                 }
             }
         except Exception as e:
-            result_text = f"[Изображение: {os.path.basename(file_path)}. Ошибка при обработке: {str(e)}]"
-            print(f"Ошибка при обработке изображения: {len(result_text)} символов")
+            error_msg = str(e)
+            print(f"Ошибка при обработке изображения через Surya OCR: {error_msg}")
+            import traceback
+            traceback.print_exc()
+            
+            # Не сохраняем сообщение об ошибке как текст документа
+            # Вместо этого возвращаем пустой текст, но сохраняем информацию об ошибке
+            result_text = ""  # Пустой текст вместо сообщения об ошибке
+            print(f"ВНИМАНИЕ: OCR не удался, текст не будет извлечен из изображения")
             return {
                 "text": result_text,
                 "confidence_info": {
                     "confidence": 0.0,
-                    "text_length": len(result_text),
+                    "text_length": 0,
                     "file_type": "image",
                     "ocr_available": False,
-                    "error": str(e),
+                    "error": error_msg,
                     "words": []
                 }
             }
@@ -475,6 +512,11 @@ class DocumentProcessor:
         
         chunks = text_splitter.split_text(text)
         print(f"Создано чанков: {len(chunks)}")
+        
+        # Если нет чанков (пустой текст), создаем хотя бы один минимальный чанк
+        if len(chunks) == 0:
+            print(f"ВНИМАНИЕ: Нет чанков для документа '{doc_name}', создаем минимальный чанк")
+            chunks = [text] if text else [f"[Документ: {doc_name}]"]
         
         # Создаем документы для langchain
         langchain_docs = []
@@ -580,13 +622,37 @@ class DocumentProcessor:
         Возвращает список путей к локальным файлам (временные файлы, скачанные из MinIO при необходимости)
         """
         image_paths_list = []
+        print(f"DEBUG get_image_paths: image_paths = {self.image_paths}")
+        
         for filename, path_info in self.image_paths.items():
+            print(f"DEBUG get_image_paths: обрабатываем {filename}, path_info = {path_info}")
+            
             if isinstance(path_info, dict):
-                # Если есть информация о MinIO, используем временный путь
-                image_paths_list.append(path_info.get("path"))
+                # Если есть file_data, создаем временный файл
+                if "file_data" in path_info:
+                    try:
+                        import tempfile
+                        # Создаем временный файл
+                        suffix = os.path.splitext(filename)[1] or ".jpg"
+                        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+                        temp_file.write(path_info["file_data"])
+                        temp_file.close()
+                        temp_path = temp_file.name
+                        print(f"DEBUG get_image_paths: создан временный файл для {filename}: {temp_path}")
+                        image_paths_list.append(temp_path)
+                    except Exception as e:
+                        print(f"ERROR get_image_paths: не удалось создать временный файл для {filename}: {e}")
+                        image_paths_list.append(None)
+                # Если есть путь, используем его
+                elif "path" in path_info:
+                    image_paths_list.append(path_info.get("path"))
+                else:
+                    print(f"WARNING get_image_paths: нет file_data или path для {filename}")
+                    image_paths_list.append(None)
             else:
                 # Обратная совместимость: просто путь
                 image_paths_list.append(path_info)
+        
         print(f"get_image_paths вызван. Изображения: {image_paths_list}")
         return image_paths_list
     

@@ -77,10 +77,6 @@ export default function ProfileSettings() {
 
   return (
     <Box sx={{ p: 3 }}>
-      <Typography variant="h6" gutterBottom fontWeight="bold" sx={{ mb: 3 }}>
-        Профиль пользователя
-      </Typography>
-
       {successMessage && (
         <Alert severity="success" sx={{ mb: 3 }} onClose={() => setSuccessMessage('')}>
           {successMessage}
@@ -201,61 +197,6 @@ export default function ProfileSettings() {
           >
             Сохранить изменения
           </Button>
-        </Box>
-      </Paper>
-
-      {/* Статистика */}
-      <Paper
-        elevation={0}
-        sx={{
-          p: 3,
-          mb: 3,
-          backgroundColor: 'action.hover',
-          borderRadius: 2,
-        }}
-      >
-        <Typography variant="subtitle1" gutterBottom fontWeight="bold">
-          Статистика
-        </Typography>
-        
-        <Box
-          sx={{
-            display: 'grid',
-            gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' },
-            gap: 2,
-            mt: 2,
-          }}
-        >
-          <Paper
-            elevation={0}
-            sx={{
-              p: 2,
-              bgcolor: 'background.paper',
-              borderRadius: 1,
-            }}
-          >
-            <Typography variant="body2" color="text.secondary">
-              Статус аккаунта
-            </Typography>
-            <Typography variant="h6" fontWeight="bold" color="success.main">
-              {user.is_active ? 'Активен' : 'Неактивен'}
-            </Typography>
-          </Paper>
-          <Paper
-            elevation={0}
-            sx={{
-              p: 2,
-              bgcolor: 'background.paper',
-              borderRadius: 1,
-            }}
-          >
-            <Typography variant="body2" color="text.secondary">
-              Роль
-            </Typography>
-            <Typography variant="h6" fontWeight="bold">
-              {user.is_admin ? 'Администратор' : 'Пользователь'}
-            </Typography>
-          </Paper>
         </Box>
       </Paper>
     </Box>

@@ -303,6 +303,59 @@ class LLMClient:
         except Exception as e:
             logger.error(f"Ошибка комбинированной обработки: {e}")
             raise
+    
+    async def recognize_text_from_image(
+        self,
+        image_file: bytes,
+        filename: str = "image.jpg",
+        languages: str = "ru,en"
+    ) -> Dict[str, Any]:
+        """Распознавание текста с изображения через Surya OCR"""
+        try:
+            # Определяем MIME тип на основе расширения файла
+            mime_type = "image/jpeg"
+            if filename.lower().endswith(".png"):
+                mime_type = "image/png"
+            elif filename.lower().endswith(".webp"):
+                mime_type = "image/webp"
+            elif filename.lower().endswith(".bmp"):
+                mime_type = "image/bmp"
+            elif filename.lower().endswith(".tiff") or filename.lower().endswith(".tif"):
+                mime_type = "image/tiff"
+            
+            files = {
+                "file": (filename, io.BytesIO(image_file), mime_type)
+            }
+            data = {
+                "languages": languages
+            }
+            
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                response = await client.post(
+                    f"{self.base_url}/v1/ocr",
+                    files=files,
+                    data=data,
+                    headers={"Accept": "application/json"}
+                )
+                response.raise_for_status()
+                return response.json()
+        except Exception as e:
+            logger.error(f"Ошибка распознавания текста с изображения: {e}")
+            raise
+    
+    async def get_ocr_health(self) -> Dict[str, Any]:
+        """Проверка состояния сервиса OCR"""
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(
+                    f"{self.base_url}/v1/ocr/health",
+                    headers=self._get_headers()
+                )
+                response.raise_for_status()
+                return response.json()
+        except Exception as e:
+            logger.error(f"Ошибка проверки состояния OCR: {e}")
+            return {"status": "unhealthy", "error": str(e)}
 
 class LLMService:
     """Сервис для работы с LLM через llm-svc"""
@@ -594,6 +647,30 @@ class LLMService:
             logger.error(f"Ошибка комбинированной обработки: {e}")
             return {"success": False, "error": str(e)}
     
+    async def recognize_text_from_image(
+        self,
+        image_file: bytes,
+        filename: str = "image.jpg",
+        languages: str = "ru,en"
+    ) -> Dict[str, Any]:
+        """Распознавание текста с изображения"""
+        try:
+            return await self.client.recognize_text_from_image(image_file, filename, languages)
+        except httpx.HTTPStatusError as e:
+            error_detail = "Неизвестная ошибка"
+            try:
+                error_response = e.response.json()
+                error_detail = error_response.get("detail", str(e))
+            except:
+                error_detail = str(e)
+            logger.error(f"Ошибка распознавания текста с изображения (HTTP {e.response.status_code}): {error_detail}")
+            return {"success": False, "error": error_detail}
+        except Exception as e:
+            logger.error(f"Ошибка распознавания текста с изображения: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return {"success": False, "error": str(e)}
+    
     async def get_audio_services_health(self) -> Dict[str, Any]:
         """Проверка состояния аудио сервисов"""
         try:
@@ -771,3 +848,23 @@ def transcribe_with_diarization_llm_svc(audio_file: bytes, filename: str = "audi
             return loop.run_until_complete(_async_transcribe_diarize())
     except RuntimeError:
         return asyncio.run(_async_transcribe_diarize())
+
+def recognize_text_from_image_llm_svc(image_file: bytes, filename: str = "image.jpg", 
+                                     languages: str = "ru,en") -> Dict[str, Any]:
+    """Синхронная обертка для распознавания текста с изображения через llm-svc"""
+    
+    async def _async_recognize():
+        service = await get_llm_service()
+        return await service.recognize_text_from_image(image_file, filename, languages)
+    
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, _async_recognize())
+                return future.result()
+        else:
+            return loop.run_until_complete(_async_recognize())
+    except RuntimeError:
+        return asyncio.run(_async_recognize())

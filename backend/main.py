@@ -46,16 +46,16 @@ try:
     env_path = os.path.join(root_dir, '.env')
     if os.path.exists(env_path):
         load_dotenv(env_path)
-        print(f"✅ .env файл загружен: {env_path}")
+        print(f".env файл загружен: {env_path}")
         # Проверяем MongoDB настройки
         mongodb_user = os.getenv("MONGODB_USER", "").strip()
         mongodb_password = os.getenv("MONGODB_PASSWORD", "").strip()
         if mongodb_user.startswith('#') or mongodb_password.startswith('#'):
-            print(f"⚠️ ВНИМАНИЕ: MONGODB_USER или MONGODB_PASSWORD начинаются с '#', будут игнорироваться")
+            print(f"ВНИМАНИЕ: MONGODB_USER или MONGODB_PASSWORD начинаются с '#', будут игнорироваться")
     else:
-        print(f"⚠️ .env файл не найден: {env_path}")
+        print(f".env файл не найден: {env_path}")
 except ImportError:
-    print("⚠️ python-dotenv не установлен, переменные окружения не будут загружены из .env")
+    print("python-dotenv не установлен, переменные окружения не будут загружены из .env")
 
 # В Docker: /app содержит main.py, agent.py и т.д.
 # Для импортов "from backend.xxx" нужно чтобы /app был доступен как /backend
@@ -86,6 +86,13 @@ logging.basicConfig(
 for handler in logging.root.handlers:
     if hasattr(handler, 'stream') and hasattr(handler.stream, 'reconfigure'):
         handler.stream.reconfigure(encoding='utf-8')
+
+# Отключаем DEBUG логи от pymongo (MongoDB heartbeat)
+logging.getLogger('pymongo').setLevel(logging.WARNING)
+logging.getLogger('pymongo.topology').setLevel(logging.WARNING)
+logging.getLogger('pymongo.connection').setLevel(logging.WARNING)
+logging.getLogger('pymongo.serverSelection').setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 logger.info("Логирование настроено")
 
@@ -126,66 +133,69 @@ except Exception as e:
     logger.warning(f"Ошибка при импорте prompts router: {e}")
     prompts_router = None
 
-# Импорты из оригинального MemoAI
-try:
-    logger.info("Попытка импорта agent...")
-    from backend.agent import ask_agent, model_settings, update_model_settings, reload_model_by_path, get_model_info, initialize_model
-    from backend.context_prompts import context_prompt_manager
-    logger.info("agent импортирован успешно")
-    if ask_agent:
-        logger.info("ask_agent функция доступна")
-    else:
-        logger.warning("ask_agent функция не доступна")
-except ImportError as e:
-    logger.error(f"Ошибка импорта agent: {e}")
-    print(f"Ошибка импорта agent: {e}")
-    print(f"Текущий путь: {os.getcwd()}")
-    print(f"Python path: {sys.path}")
-    ask_agent = None
-    model_settings = None
-    update_model_settings = None
-    reload_model_by_path = None
-    get_model_info = None
-    initialize_model = None
-except Exception as e:
-    logger.error(f"Неожиданная ошибка при импорте agent: {e}")
-    import traceback
-    logger.error(f"Traceback: {traceback.format_exc()}")
-    ask_agent = None
-    model_settings = None
-    update_model_settings = None
-    reload_model_by_path = None
-    get_model_info = None
-    initialize_model = None
+# Проверяем, нужно ли использовать llm-svc ДО импорта (избегаем двойной загрузки модели)
+use_llm_svc = os.getenv('USE_LLM_SVC', 'false').lower() == 'true'
 
-# Попытка импорта llm-svc версии (если доступна)
-try:
-    logger.info("Попытка импорта agent_llm_svc...")
-    from backend.agent_llm_svc import ask_agent as ask_agent_llm_svc, model_settings as model_settings_llm_svc, update_model_settings as update_model_settings_llm_svc, reload_model_by_path as reload_model_by_path_llm_svc, get_model_info as get_model_info_llm_svc, initialize_model as initialize_model_llm_svc
-    logger.info("agent_llm_svc импортирован успешно")
-    
-    # Проверяем, нужно ли использовать llm-svc
-    use_llm_svc = os.getenv('USE_LLM_SVC', 'false').lower() == 'true'
-    
-    # Отладочный вывод режима работы
-    print(f"Текущий режим: {'llm-svc' if use_llm_svc else 'оригинальный agent.py'}")
-    logger.info(f"Режим работы: {'llm-svc' if use_llm_svc else 'оригинальный agent.py'}")
-    
-    if use_llm_svc:
-        logger.info("Переключение на llm-svc версию agent")
-        ask_agent = ask_agent_llm_svc
-        model_settings = model_settings_llm_svc
-        update_model_settings = update_model_settings_llm_svc
-        reload_model_by_path = reload_model_by_path_llm_svc
-        get_model_info = get_model_info_llm_svc
-        initialize_model = initialize_model_llm_svc
-        logger.info("Успешно переключено на llm-svc")
-    else:
-        logger.info("Используется оригинальная версия agent")
-except ImportError as e:
-    logger.warning(f"agent_llm_svc недоступен: {e}")
-except Exception as e:
-    logger.warning(f"Ошибка при импорте agent_llm_svc: {e}")
+# Отладочный вывод режима работы
+print(f"Текущий режим: {'llm-svc' if use_llm_svc else 'оригинальный agent.py'}")
+logger.info(f"Режим работы: {'llm-svc' if use_llm_svc else 'оригинальный agent.py'}")
+
+# Импортируем ТОЛЬКО нужный модуль, чтобы избежать двойной загрузки модели
+if use_llm_svc:
+    # Используем llm-svc
+    try:
+        logger.info("Попытка импорта agent_llm_svc...")
+        from backend.agent_llm_svc import ask_agent, model_settings, update_model_settings, reload_model_by_path, get_model_info, initialize_model
+        from backend.context_prompts import context_prompt_manager
+        logger.info("agent_llm_svc импортирован успешно (модель загружается один раз)")
+    except (ImportError, Exception) as e:
+        logger.error(f"Ошибка импорта agent_llm_svc: {e}, fallback на оригинальный agent.py")
+        # Fallback на оригинальный agent
+        try:
+            from backend.agent import ask_agent, model_settings, update_model_settings, reload_model_by_path, get_model_info, initialize_model
+            from backend.context_prompts import context_prompt_manager
+            use_llm_svc = False
+            logger.info("Fallback: agent.py импортирован успешно")
+        except Exception as e2:
+            logger.error(f"Критическая ошибка: не удалось импортировать ни один модуль agent")
+            ask_agent = None
+            model_settings = None
+            update_model_settings = None
+            reload_model_by_path = None
+            get_model_info = None
+            initialize_model = None
+else:
+    # Используем оригинальный agent.py
+    try:
+        logger.info("Попытка импорта agent...")
+        from backend.agent import ask_agent, model_settings, update_model_settings, reload_model_by_path, get_model_info, initialize_model
+        from backend.context_prompts import context_prompt_manager
+        logger.info("agent импортирован успешно (модель загружается один раз)")
+        if ask_agent:
+            logger.info("ask_agent функция доступна")
+        else:
+            logger.warning("ask_agent функция не доступна")
+    except ImportError as e:
+        logger.error(f"Ошибка импорта agent: {e}")
+        print(f"Ошибка импорта agent: {e}")
+        print(f"Текущий путь: {os.getcwd()}")
+        print(f"Python path: {sys.path}")
+        ask_agent = None
+        model_settings = None
+        update_model_settings = None
+        reload_model_by_path = None
+        get_model_info = None
+        initialize_model = None
+    except Exception as e:
+        logger.error(f"Неожиданная ошибка при импорте agent: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        ask_agent = None
+        model_settings = None
+        update_model_settings = None
+        reload_model_by_path = None
+        get_model_info = None
+        initialize_model = None
 
 # Общая блокировка для загрузки моделей в режиме multi-llm
 # Используется для предотвращения конфликтов при параллельной загрузке
@@ -392,10 +402,10 @@ sio = AsyncServer(
         "http://memoai-frontend:3000",
         "http://memoai-backend:8000",
     ],
-    ping_timeout=120,  # ping timeout до 2 минут
-    ping_interval=25,  # Отправляем ping каждые 25 секунд
-    logger=True,  # Включаем логирование для отладки
-    engineio_logger=True  # Включаем логирование engine.io
+    ping_timeout=300,  # ping timeout до 5 минут (для долгих генераций)
+    ping_interval=15,  # Отправляем ping каждые 15 секунд
+    logger=False,  # Отключаем логирование Socket.IO
+    engineio_logger=False  # Отключаем логирование engine.io
 )
 
 # Создание FastAPI приложения с конфигурацией
@@ -780,6 +790,7 @@ async def chat_message(sid, data):
         streaming = data.get("streaming", True)
         
         logger.info(f"Socket.IO chat: {user_message[:50]}...")
+        logger.info(f"[Socket.IO] Получено от клиента: streaming={streaming}, тип={type(streaming)}")
         
         # Сбрасываем флаг остановки для нового сообщения
         stop_generation_flags[sid] = False
@@ -1054,22 +1065,86 @@ async def chat_message(sid, data):
                 logger.info("Socket.IO: АГЕНТНАЯ АРХИТЕКТУРА: Переключение на агентный режим обработки")
                 logger.info(f"Socket.IO: Запрос пользователя: '{user_message[:100]}{'...' if len(user_message) > 100 else ''}'")
                 
+                # Отправляем начальное сообщение о начале обработки
+                await sio.emit('chat_thinking', {
+                    'status': 'processing',
+                    'message': 'Обрабатываю запрос через агентную архитектуру...'
+                }, room=sid)
+                
+                # Создаем callback для стриминга в агентном режиме
+                async def agent_stream_callback(chunk: str, accumulated_text: str):
+                    try:
+                        logger.info(f"[agent_stream_callback] ВЫЗВАН! chunk_len={len(chunk)}, acc_len={len(accumulated_text)}")
+                        await sio.emit('chat_chunk', {
+                            'chunk': chunk,
+                            'accumulated': accumulated_text
+                        }, room=sid)
+                        logger.info(f"[agent_stream_callback] chat_chunk ОТПРАВЛЕН в комнату {sid}")
+                    except Exception as e:
+                        logger.error(f"[agent_stream_callback] Ошибка отправки chunk: {e}")
+                        import traceback
+                        logger.error(traceback.format_exc())
+                
                 # Используем агентную архитектуру
+                # ВАЖНО: Не передаем объекты которые не сериализуются (doc_processor, sio, stream_callback)
+                # LangGraph checkpointer использует msgpack и не может сериализовать такие объекты
                 context = {
                     "history": history,
                     "user_message": user_message,
-                    "doc_processor": doc_processor  # Передаем doc_processor для DocumentAgent
+                    "doc_processor_id": id(doc_processor) if doc_processor else None,  # ID вместо объекта
+                    "socket_id": sid,  # Передаем socket ID для heartbeat
+                    "streaming": streaming,  # Передаем флаг стриминга
+                    # НЕ передаем stream_callback в state - он не сериализуется!
                 }
+                
+                # Сохраняем doc_processor, sio и stream_callback в глобальное хранилище для доступа из инструментов
+                try:
+                    from backend.tools.prompt_tools import set_tool_context
+                except ModuleNotFoundError:
+                    from tools.prompt_tools import set_tool_context
+                
+                # Расширенный контекст с несериализуемыми объектами для инструментов
+                extended_context = context.copy()
+                extended_context["doc_processor"] = doc_processor
+                extended_context["sio"] = sio
+                extended_context["socket_id"] = sid  # Добавляем socket_id для прямого emit из worker threads
+                extended_context["stream_callback"] = agent_stream_callback if streaming else None
+                set_tool_context(extended_context)
+                logger.info(f"[Socket.IO] Установлен extended_context с stream_callback: {agent_stream_callback is not None if streaming else False}")
                 logger.info(f"[Socket.IO] doc_processor ID в контексте: {id(doc_processor)}")
                 logger.info(f"[Socket.IO] doc_processor doc_names: {doc_processor.doc_names if doc_processor else 'None'}")
-                response = await orchestrator.process_message(user_message, context)
+                logger.info(f"[Socket.IO] Стриминг: {'включен' if streaming else 'выключен'}")
+                logger.info(f"[Socket.IO] Передаем в orchestrator context с streaming={context.get('streaming', False)}")
+                
+                response = await orchestrator.process_message(user_message, history=history, context=context)
                 logger.info(f"Socket.IO: АГЕНТНАЯ АРХИТЕКТУРА: Получен ответ, длина: {len(response)} символов")
                 
-                # Отправляем ответ через Socket.IO
-                await sio.emit('chat_complete', {
-                    'response': response,
-                    'timestamp': datetime.now().isoformat()
-                }, room=sid)
+                # Отправляем ответ через Socket.IO (только если не было стриминга)
+                if not streaming:
+                    logger.info(f"Socket.IO: Отправка chat_complete, длина ответа: {len(response)} символов")
+                    logger.info(f"Socket.IO: Первые 200 символов ответа: {response[:200]}...")
+                    try:
+                        await sio.emit('chat_complete', {
+                            'response': response,
+                            'timestamp': datetime.now().isoformat()
+                        }, room=sid)
+                        logger.info(f"Socket.IO: Событие chat_complete успешно отправлено в комнату {sid}")
+                    except Exception as emit_error:
+                        logger.error(f"Socket.IO: Ошибка при отправке chat_complete: {emit_error}")
+                        import traceback
+                        logger.error(traceback.format_exc())
+                else:
+                    # При стриминге отправляем событие завершения
+                    try:
+                        await sio.emit('chat_complete', {
+                            'response': response,
+                            'timestamp': datetime.now().isoformat()
+                        }, room=sid)
+                        logger.info(f"Socket.IO: Стриминг завершен, отправлен chat_complete")
+                    except Exception as emit_error:
+                        logger.error(f"Socket.IO: Ошибка при отправке chat_complete: {emit_error}")
+                        import traceback
+                        logger.error(traceback.format_exc())
                 
                 # Сохраняем ответ в память
                 try:

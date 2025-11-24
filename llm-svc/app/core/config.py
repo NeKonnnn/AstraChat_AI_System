@@ -111,6 +111,14 @@ class DiarizationConfig(BaseModel):
     max_file_size: int = 100 * 1024 * 1024  # 100MB
 
 
+class SuryaConfig(BaseModel):
+    enabled: bool = True
+    models_dir: str = os.environ.get("SURYA_MODELS_DIR", "/app/models/surya")
+    device: str = "cpu"  # cpu, cuda, auto
+    max_file_size: int = 50 * 1024 * 1024  # 50MB
+    supported_languages: List[str] = ["ru", "en", "hi", "es", "fr", "de", "it", "pt", "vi", "tr", "ar", "zh", "ja", "ko", "th", "ur", "fa", "ta", "te", "ml", "kn", "gu", "pa", "bn", "or", "as", "ne", "mr", "sa", "my", "ka", "si", "km", "lo", "bo", "dz", "ti", "am", "sw", "zu", "xh", "af", "sq", "az", "eu", "be", "bs", "bg", "ca", "hr", "cs", "da", "nl", "et", "fi", "gl", "el", "he", "hu", "is", "id", "ga", "kk", "ky", "lv", "lt", "lb", "mk", "ms", "mt", "mn", "no", "pl", "ro", "sr", "sk", "sl", "sv", "tg", "tk", "uk", "uz", "cy", "yi", "yo", "zu"]
+
+
 class NexusConfig(BaseModel):
     enabled: bool = False
     url: str = ""
@@ -148,6 +156,7 @@ class Settings(BaseModel):
     silero: SileroConfig = SileroConfig()
     whisperx: WhisperXConfig = WhisperXConfig()
     diarization: DiarizationConfig = DiarizationConfig()
+    surya: SuryaConfig = SuryaConfig()
     nexus: NexusConfig = NexusConfig()
 
     @classmethod

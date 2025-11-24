@@ -10,6 +10,33 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 
 logger = logging.getLogger(__name__)
 
+# ============================================================================
+# Утилита для получения правильной версии ask_agent
+# ============================================================================
+
+def get_ask_agent():
+    """
+    Получить версию ask_agent из agent_llm_svc.py.
+    Эта функция должна использоваться всеми агентами для единообразия.
+    Всегда использует agent_llm_svc.py как основной источник.
+    """
+    # Всегда используем agent_llm_svc как основной источник
+    try:
+        from backend.agent_llm_svc import ask_agent
+        logger.debug("[BaseAgent] Используется ask_agent из agent_llm_svc")
+        return ask_agent
+    except (ImportError, ModuleNotFoundError) as e:
+        logger.warning(f"[BaseAgent] Не удалось импортировать agent_llm_svc: {e}, пробуем agent.py как fallback")
+        # Fallback на оригинальный agent только если agent_llm_svc недоступен
+        try:
+            from backend.agent import ask_agent
+            logger.debug("[BaseAgent] Используется ask_agent из agent (fallback)")
+            return ask_agent
+        except ModuleNotFoundError:
+            from agent import ask_agent
+            logger.debug("[BaseAgent] Используется ask_agent (относительный импорт, fallback)")
+            return ask_agent
+
 class BaseAgent(ABC):
     """Базовый класс для всех агентов"""
     

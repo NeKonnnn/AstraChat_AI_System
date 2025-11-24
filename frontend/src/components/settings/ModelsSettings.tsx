@@ -23,6 +23,9 @@ import {
   DialogActions,
   LinearProgress,
   Divider,
+  IconButton,
+  Tooltip,
+  InputAdornment,
 } from '@mui/material';
 import {
   Settings as SettingsIcon,
@@ -31,6 +34,8 @@ import {
   Memory as MemoryIcon,
   Refresh as RefreshIcon,
   Save as SaveIcon,
+  HelpOutline as HelpOutlineIcon,
+  Restore as RestoreIcon,
 } from '@mui/icons-material';
 import { useAppActions } from '../../contexts/AppContext';
 
@@ -149,6 +154,21 @@ export default function ModelsSettings() {
     }
   };
 
+  const resetModelSettings = () => {
+    const defaultSettings = {
+      context_size: 2048,
+      output_tokens: 512,
+      temperature: 0.7,
+      top_p: 0.95,
+      repeat_penalty: 1.05,
+      use_gpu: false,
+      streaming: true,
+      streaming_speed: 50,
+    };
+    setModelSettings(defaultSettings);
+    showNotification('success', 'Настройки модели восстановлены до значений по умолчанию');
+  };
+
   const loadModels = async () => {
     try {
       const response = await fetch(`${API_BASE_URL}/api/models`);
@@ -176,20 +196,20 @@ export default function ModelsSettings() {
 
   const loadContextPrompts = async () => {
     try {
-      // Загружаем глобальный промпт
+      // Загружаем глобальную инструкцию
       const globalResponse = await fetch(`${API_BASE_URL}/api/context-prompts/global`);
       if (globalResponse.ok) {
         const globalData = await globalResponse.json();
         setContextPrompts(prev => ({ ...prev, globalPrompt: globalData.prompt }));
       }
 
-      // Загружаем модели с промптами
+      // Загружаем модели с инструкциями
       const modelsResponse = await fetch(`${API_BASE_URL}/api/context-prompts/models`);
       if (modelsResponse.ok) {
         const modelsData = await modelsResponse.json();
         setModelsWithPrompts(modelsData.models || []);
         
-        // Обновляем промпты моделей
+        // Обновляем инструкции моделей
         const modelPrompts: Record<string, string> = {};
         modelsData.models?.forEach((model: any) => {
           if (model.has_custom_prompt) {
@@ -199,15 +219,15 @@ export default function ModelsSettings() {
         setContextPrompts(prev => ({ ...prev, modelPrompts }));
       }
 
-      // Загружаем пользовательские промпты
+      // Загружаем пользовательские инструкции
       const customResponse = await fetch(`${API_BASE_URL}/api/context-prompts/custom`);
       if (customResponse.ok) {
         const customData = await customResponse.json();
         setContextPrompts(prev => ({ ...prev, customPrompts: customData.prompts || {} }));
       }
     } catch (error) {
-      console.error('Ошибка загрузки контекстных промптов:', error);
-      showNotification('error', 'Ошибка загрузки контекстных промптов');
+      console.error('Ошибка загрузки контекстных инструкций:', error);
+      showNotification('error', 'Ошибка загрузки контекстных инструкций');
     }
   };
 
@@ -221,14 +241,14 @@ export default function ModelsSettings() {
       
       if (response.ok) {
         setContextPrompts(prev => ({ ...prev, globalPrompt: prompt }));
-        showNotification('success', 'Глобальный промпт сохранен');
+        showNotification('success', 'Глобальная инструкция сохранена');
         return true;
       } else {
-        throw new Error('Ошибка сохранения глобального промпта');
+        throw new Error('Ошибка сохранения глобальной инструкции');
       }
     } catch (error) {
-      console.error('Ошибка сохранения глобального промпта:', error);
-      showNotification('error', 'Ошибка сохранения глобального промпта');
+      console.error('Ошибка сохранения глобальной инструкции:', error);
+      showNotification('error', 'Ошибка сохранения глобальной инструкции');
       return false;
     }
   };
@@ -246,14 +266,14 @@ export default function ModelsSettings() {
           ...prev,
           modelPrompts: { ...prev.modelPrompts, [modelPath]: prompt }
         }));
-        showNotification('success', 'Промпт модели сохранен');
+        showNotification('success', 'Инструкция модели сохранена');
         return true;
       } else {
-        throw new Error('Ошибка сохранения промпта модели');
+        throw new Error('Ошибка сохранения инструкции модели');
       }
     } catch (error) {
-      console.error('Ошибка сохранения промпта модели:', error);
-      showNotification('error', 'Ошибка сохранения промпта модели');
+      console.error('Ошибка сохранения инструкции модели:', error);
+      showNotification('error', 'Ошибка сохранения инструкции модели');
       return false;
     }
   };
@@ -329,156 +349,12 @@ export default function ModelsSettings() {
 
   return (
     <Box sx={{ p: 3 }}>
-      <Typography variant="h5" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 3 }}>
-        <SettingsIcon color="primary" />
-        Настройки моделей
-      </Typography>
-
-      {/* Настройки модели AstraChat */}
-      <Card sx={{ mb: 3 }}>
-        <CardContent>
-          <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <SettingsIcon color="primary" />
-            Настройки модели AstraChat
-          </Typography>
-          
-          <Alert severity="info" sx={{ mb: 2 }}>
-            Настройки автоматически сохраняются при изменении
-          </Alert>
-          
-          <Box display="grid" gridTemplateColumns="repeat(auto-fit, minmax(250px, 1fr))" gap={2}>
-            <TextField
-              label="Размер контекста"
-              type="number"
-              value={modelSettings.context_size}
-              onChange={(e) => setModelSettings(prev => ({ 
-                ...prev, 
-                context_size: parseInt(e.target.value) || 2048 
-              }))}
-              inputProps={{ min: 512, max: maxValues.context_size, step: 512 }}
-              fullWidth
-            />
-            
-            <TextField
-              label="Максимум токенов ответа"
-              type="number"
-              value={modelSettings.output_tokens}
-              onChange={(e) => setModelSettings(prev => ({ 
-                ...prev, 
-                output_tokens: parseInt(e.target.value) || 512 
-              }))}
-              inputProps={{ min: 64, max: maxValues.output_tokens, step: 64 }}
-              fullWidth
-            />
-            
-            <TextField
-              label="Температура"
-              type="number"
-              value={modelSettings.temperature}
-              onChange={(e) => setModelSettings(prev => ({ 
-                ...prev, 
-                temperature: parseFloat(e.target.value) || 0.7 
-              }))}
-              inputProps={{ min: 0.1, max: maxValues.temperature, step: 0.1 }}
-              fullWidth
-            />
-            
-            <TextField
-              label="Top-p"
-              type="number"
-              value={modelSettings.top_p}
-              onChange={(e) => setModelSettings(prev => ({ 
-                ...prev, 
-                top_p: parseFloat(e.target.value) || 0.95 
-              }))}
-              inputProps={{ min: 0.1, max: maxValues.top_p, step: 0.05 }}
-              fullWidth
-            />
-            
-            <TextField
-              label="Штраф за повторения"
-              type="number"
-              value={modelSettings.repeat_penalty}
-              onChange={(e) => setModelSettings(prev => ({ 
-                ...prev, 
-                repeat_penalty: parseFloat(e.target.value) || 1.05 
-              }))}
-              inputProps={{ min: 1.0, max: maxValues.repeat_penalty, step: 0.05 }}
-              fullWidth
-            />
-          </Box>
-          
-          <Box mt={2}>
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={modelSettings.use_gpu}
-                  onChange={(e) => setModelSettings(prev => ({ 
-                    ...prev, 
-                    use_gpu: e.target.checked 
-                  }))}
-                />
-              }
-              label="Использовать GPU"
-            />
-            
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={modelSettings.streaming}
-                  onChange={(e) => setModelSettings(prev => ({ 
-                    ...prev, 
-                    streaming: e.target.checked 
-                  }))}
-                />
-              }
-              label="Потоковая генерация"
-            />
-            
-            {modelSettings.streaming && (
-              <Box sx={{ mt: 2 }}>
-                <Typography variant="body2" color="text.secondary" gutterBottom>
-                  Скорость потоковой генерации: {modelSettings.streaming_speed}ms
-                </Typography>
-                <input
-                  type="range"
-                  min="10"
-                  max="200"
-                  step="10"
-                  value={modelSettings.streaming_speed}
-                  onChange={(e) => setModelSettings(prev => ({ 
-                    ...prev, 
-                    streaming_speed: parseInt(e.target.value) 
-                  }))}
-                  style={{
-                    width: '100%',
-                    height: '6px',
-                    borderRadius: '3px',
-                    background: 'linear-gradient(to right, #1976d2 0%, #1976d2 50%, #e0e0e0 50%, #e0e0e0 100%)',
-                    outline: 'none',
-                    WebkitAppearance: 'none',
-                  }}
-                />
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 1 }}>
-                  <Typography variant="caption" color="text.secondary">
-                    Быстро (10ms)
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    Медленно (200ms)
-                  </Typography>
-                </Box>
-              </Box>
-            )}
-          </Box>
-        </CardContent>
-      </Card>
-
-      {/* Управление моделями */}
+      {/* Выбор модели */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <ComputerIcon color="primary" />
-            Управление моделями
+            Выбор модели
           </Typography>
           
           {/* Информация о текущей модели */}
@@ -519,24 +395,322 @@ export default function ModelsSettings() {
         </CardContent>
       </Card>
 
-      {/* Контекстные промпты */}
+      {/* Настройки модели AstraChat */}
+      <Card sx={{ mb: 3 }}>
+        <CardContent>
+          <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <SettingsIcon color="primary" />
+            Настройки выбранной модели
+            <Tooltip title="Настройки автоматически сохраняются при изменении" arrow>
+              <IconButton 
+                size="small" 
+                sx={{ 
+                  ml: 0.5,
+                  opacity: 0.7,
+                  '&:hover': {
+                    opacity: 1,
+                    '& .MuiSvgIcon-root': {
+                      color: 'primary.main',
+                    },
+                  },
+                }}
+              >
+                <HelpOutlineIcon fontSize="small" color="action" />
+              </IconButton>
+            </Tooltip>
+          </Typography>
+          
+          <Box display="grid" gridTemplateColumns="repeat(auto-fit, minmax(250px, 1fr))" gap={2} sx={{ mt: 2 }}>
+            <TextField
+              label={
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  Размер контекста
+                  <Tooltip title="Максимальное количество токенов, которые модель может использовать для понимания контекста. Больше значение = больше контекста, но больше потребление памяти." arrow>
+                    <IconButton 
+                      size="small" 
+                      sx={{ 
+                        p: 0,
+                        opacity: 0.7,
+                        '&:hover': {
+                          opacity: 1,
+                          '& .MuiSvgIcon-root': {
+                            color: 'primary.main',
+                          },
+                        },
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <HelpOutlineIcon fontSize="small" color="action" />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+              }
+              type="number"
+              value={modelSettings.context_size}
+              onChange={(e) => setModelSettings(prev => ({ 
+                ...prev, 
+                context_size: parseInt(e.target.value) || 2048 
+              }))}
+              inputProps={{ min: 512, max: maxValues.context_size, step: 512 }}
+              fullWidth
+            />
+            
+            <TextField
+              label={
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  Максимум токенов ответа
+                  <Tooltip title="Максимальное количество токенов, которые модель может сгенерировать в ответе. Ограничивает длину ответа модели." arrow>
+                    <IconButton 
+                      size="small" 
+                      sx={{ 
+                        p: 0,
+                        opacity: 0.7,
+                        '&:hover': {
+                          opacity: 1,
+                          '& .MuiSvgIcon-root': {
+                            color: 'primary.main',
+                          },
+                        },
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <HelpOutlineIcon fontSize="small" color="action" />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+              }
+              type="number"
+              value={modelSettings.output_tokens}
+              onChange={(e) => setModelSettings(prev => ({ 
+                ...prev, 
+                output_tokens: parseInt(e.target.value) || 512 
+              }))}
+              inputProps={{ min: 64, max: maxValues.output_tokens, step: 64 }}
+              fullWidth
+            />
+            
+            <TextField
+              label={
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  Температура
+                  <Tooltip title="Контролирует случайность генерации. Низкие значения (0.1-0.5) делают ответы более детерминированными и точными. Высокие значения (0.8-1.5) делают ответы более креативными и разнообразными." arrow>
+                    <IconButton 
+                      size="small" 
+                      sx={{ 
+                        p: 0,
+                        opacity: 0.7,
+                        '&:hover': {
+                          opacity: 1,
+                          '& .MuiSvgIcon-root': {
+                            color: 'primary.main',
+                          },
+                        },
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <HelpOutlineIcon fontSize="small" color="action" />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+              }
+              type="number"
+              value={modelSettings.temperature}
+              onChange={(e) => setModelSettings(prev => ({ 
+                ...prev, 
+                temperature: parseFloat(e.target.value) || 0.7 
+              }))}
+              inputProps={{ min: 0.1, max: maxValues.temperature, step: 0.1 }}
+              fullWidth
+            />
+            
+            <TextField
+              label={
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  Top-p
+                  <Tooltip title="Ядерная выборка (nucleus sampling). Контролирует разнообразие ответов, учитывая только токены с вероятностью выше порога. Значение 0.95 означает, что рассматриваются токены, сумма вероятностей которых составляет 95%." arrow>
+                    <IconButton 
+                      size="small" 
+                      sx={{ 
+                        p: 0,
+                        opacity: 0.7,
+                        '&:hover': {
+                          opacity: 1,
+                          '& .MuiSvgIcon-root': {
+                            color: 'primary.main',
+                          },
+                        },
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <HelpOutlineIcon fontSize="small" color="action" />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+              }
+              type="number"
+              value={modelSettings.top_p}
+              onChange={(e) => setModelSettings(prev => ({ 
+                ...prev, 
+                top_p: parseFloat(e.target.value) || 0.95 
+              }))}
+              inputProps={{ min: 0.1, max: maxValues.top_p, step: 0.05 }}
+              fullWidth
+            />
+            
+            <TextField
+              label={
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  Штраф за повторения
+                  <Tooltip title="Штраф за повторение токенов. Значения выше 1.0 уменьшают вероятность повторения уже использованных слов. Значения ниже 1.0 могут увеличить повторения. Рекомендуется: 1.0-1.2." arrow>
+                    <IconButton 
+                      size="small" 
+                      sx={{ 
+                        p: 0,
+                        opacity: 0.7,
+                        '&:hover': {
+                          opacity: 1,
+                          '& .MuiSvgIcon-root': {
+                            color: 'primary.main',
+                          },
+                        },
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <HelpOutlineIcon fontSize="small" color="action" />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+              }
+              type="number"
+              value={modelSettings.repeat_penalty}
+              onChange={(e) => setModelSettings(prev => ({ 
+                ...prev, 
+                repeat_penalty: parseFloat(e.target.value) || 1.05 
+              }))}
+              inputProps={{ min: 1.0, max: maxValues.repeat_penalty, step: 0.05 }}
+              fullWidth
+            />
+          </Box>
+          
+          <Box mt={2}>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={modelSettings.use_gpu}
+                  onChange={(e) => setModelSettings(prev => ({ 
+                    ...prev, 
+                    use_gpu: e.target.checked 
+                  }))}
+                />
+              }
+              label={
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  Использовать GPU
+                  <Tooltip title="Использование графического процессора для ускорения работы модели. Требует наличие GPU с поддержкой CUDA." arrow>
+                    <IconButton 
+                      size="small" 
+                      sx={{ 
+                        p: 0,
+                        ml: 0.5,
+                        opacity: 0.7,
+                        '&:hover': {
+                          opacity: 1,
+                          '& .MuiSvgIcon-root': {
+                            color: 'primary.main',
+                          },
+                        },
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <HelpOutlineIcon fontSize="small" color="action" />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+              }
+            />
+            
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={modelSettings.streaming}
+                  onChange={(e) => setModelSettings(prev => ({ 
+                    ...prev, 
+                    streaming: e.target.checked 
+                  }))}
+                />
+              }
+              label={
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  Потоковая генерация
+                  <Tooltip title="Показывать ответ модели по мере генерации (токен за токеном) вместо ожидания полного ответа. Улучшает восприятие скорости работы." arrow>
+                    <IconButton 
+                      size="small" 
+                      sx={{ 
+                        p: 0,
+                        ml: 0.5,
+                        opacity: 0.7,
+                        '&:hover': {
+                          opacity: 1,
+                          '& .MuiSvgIcon-root': {
+                            color: 'primary.main',
+                          },
+                        },
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <HelpOutlineIcon fontSize="small" color="action" />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+              }
+            />
+          </Box>
+
+          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mt: 3 }}>
+            <Button
+              variant="outlined"
+              startIcon={<RestoreIcon />}
+              onClick={resetModelSettings}
+            >
+              Восстановить настройки
+            </Button>
+          </Box>
+        </CardContent>
+      </Card>
+
+      {/* Контекстные инструкции */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <MemoryIcon color="primary" />
-            Контекстные промпты
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-            Настройте системные промпты для моделей. Глобальный промпт применяется ко всем моделям по умолчанию, 
-            но вы можете создать индивидуальные промпты для конкретных моделей.
+            Контекстные инструкции
           </Typography>
 
-          {/* Глобальный промпт */}
+          {/* Глобальная инструкция */}
           <Box sx={{ mb: 3 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
-              <Typography variant="subtitle1" fontWeight="600">
-                Глобальный промпт
-              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <Typography variant="subtitle1" fontWeight="600">
+                  Глобальная инструкция
+                </Typography>
+                <Tooltip title="Инструкция применяется ко всем моделям" arrow>
+                  <IconButton 
+                    size="small" 
+                    sx={{ 
+                      ml: 0.5,
+                      opacity: 0.7,
+                      '&:hover': {
+                        opacity: 1,
+                        '& .MuiSvgIcon-root': {
+                          color: 'primary.main',
+                        },
+                      },
+                    }}
+                  >
+                    <HelpOutlineIcon fontSize="small" color="action" />
+                  </IconButton>
+                </Tooltip>
+              </Box>
               <Button
                 variant="outlined"
                 size="small"
@@ -553,24 +727,42 @@ export default function ModelsSettings() {
               overflow: 'auto'
             }}>
               <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', color: 'text.secondary' }}>
-                {contextPrompts.globalPrompt || 'Глобальный промпт не установлен'}
+                {contextPrompts.globalPrompt || 'Глобальная инструкция не установлена'}
               </Typography>
             </Box>
           </Box>
 
-          {/* Промпты для моделей */}
+          {/* Инструкции для моделей */}
           <Box sx={{ mb: 2 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
-              <Typography variant="subtitle1" fontWeight="600">
-                Промпты для моделей
-              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <Typography variant="subtitle1" fontWeight="600">
+                  Инструкции для моделей
+                </Typography>
+                <Tooltip title="Инструкция применяется к конкретной модели" arrow>
+                  <IconButton 
+                    size="small" 
+                    sx={{ 
+                      ml: 0.5,
+                      opacity: 0.7,
+                      '&:hover': {
+                        opacity: 1,
+                        '& .MuiSvgIcon-root': {
+                          color: 'primary.main',
+                        },
+                      },
+                    }}
+                  >
+                    <HelpOutlineIcon fontSize="small" color="action" />
+                  </IconButton>
+                </Tooltip>
+              </Box>
               <Button
-                variant="contained"
+                variant="outlined"
                 size="small"
-                startIcon={<span>+</span>}
                 onClick={() => setShowModelPromptDialog(true)}
               >
-                Добавить промпт
+                Добавить инструкцию
               </Button>
             </Box>
             {modelsWithPrompts.filter(model => model.has_custom_prompt).length > 0 ? (
@@ -628,14 +820,14 @@ export default function ModelsSettings() {
               </List>
             ) : (
               <Typography variant="body2" color="text.secondary">
-                Индивидуальные промпты для моделей не созданы
+                Индивидуальные инструкции для моделей не созданы
               </Typography>
             )}
           </Box>
         </CardContent>
       </Card>
 
-      {/* Диалог редактирования промптов */}
+      {/* Диалог редактирования инструкций */}
       <Dialog
         open={promptDialogOpen}
         onClose={() => setPromptDialogOpen(false)}
@@ -643,18 +835,18 @@ export default function ModelsSettings() {
         fullWidth
       >
         <DialogTitle>
-          {promptDialogType === 'global' && 'Редактирование глобального промпта'}
-          {promptDialogType === 'model' && 'Редактирование промпта модели'}
+          {promptDialogType === 'global' && 'Редактирование глобальной инструкции'}
+          {promptDialogType === 'model' && 'Редактирование инструкции модели'}
         </DialogTitle>
         <DialogContent>
           <TextField
-            label="Промпт"
+            label="Инструкция"
             value={promptDialogData.prompt}
             onChange={(e) => setPromptDialogData(prev => ({ ...prev, prompt: e.target.value }))}
             fullWidth
             multiline
             rows={8}
-            placeholder="Введите системный промпт для модели..."
+            placeholder="Введите системную инструкцию для модели..."
           />
         </DialogContent>
         <DialogActions>
@@ -667,14 +859,14 @@ export default function ModelsSettings() {
         </DialogActions>
       </Dialog>
 
-      {/* Диалог выбора модели для промпта */}
+      {/* Диалог выбора модели для инструкции */}
       <Dialog
         open={showModelPromptDialog}
         onClose={() => setShowModelPromptDialog(false)}
         maxWidth="md"
         fullWidth
       >
-        <DialogTitle>Выберите модель для создания промпта</DialogTitle>
+        <DialogTitle>Выберите модель для создания инструкции</DialogTitle>
         <DialogContent>
           {modelsWithPrompts.length > 0 ? (
             <List>
@@ -706,7 +898,7 @@ export default function ModelsSettings() {
                           {model.name}
                         </Typography>
                         {model.has_custom_prompt && (
-                          <Chip label="Есть промпт" size="small" color="primary" />
+                          <Chip label="Есть инструкция" size="small" color="primary" />
                         )}
                       </Box>
                     }
