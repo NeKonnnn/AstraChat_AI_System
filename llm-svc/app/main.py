@@ -76,8 +76,15 @@ async def lifespan(app: FastAPI):
         
         # Инициализируем обработчик WhisperX (если включен)
         if settings.whisperx.enabled:
-            await get_whisperx_handler()
-            logger.info("WhisperX handler initialized")
+            try:
+                models = await get_whisperx_handler()
+                if models:
+                    logger.info(f"WhisperX handler initialized with {len(models)} models: {list(models.keys())}")
+                else:
+                    logger.warning("WhisperX handler initialized but no models were loaded. Use /v1/whisperx/reload to retry loading.")
+            except Exception as e:
+                logger.error(f"Failed to initialize WhisperX handler: {str(e)}", exc_info=True)
+                logger.warning("Application will continue, but WhisperX features may not work. Use /v1/whisperx/reload to retry loading.")
         
         # Инициализируем обработчик диаризации (если включен)
         if settings.diarization.enabled:
@@ -147,18 +154,31 @@ async def log_requests(request: Request, call_next):
     logger.info(f"Request {request_id}: {request.method} {request.url}")
     logger.info(f"Request {request_id}: Headers: {dict(request.headers)}")
 
-    try:
-        # Чтение тела запроса для POST запросов
-        if request.method == "POST":
-            body = await request.body()
-            if body:
-                try:
-                    body_json = json.loads(body.decode())
-                    logger.info(f"Request {request_id}: Body: {json.dumps(body_json, ensure_ascii=False)}")
-                except json.JSONDecodeError:
-                    logger.info(f"Request {request_id}: Body: {body.decode()}")
-    except Exception as e:
-        logger.error(f"Request {request_id}: Error reading body: {str(e)}")
+    # Логирование тела запроса для POST запросов (только для не-multipart)
+    if request.method == "POST":
+        content_type = request.headers.get("content-type", "").lower()
+        # Пропускаем чтение тела для multipart/form-data (бинарные файлы)
+        # чтобы не мешать обработке файлов в эндпоинтах
+        if "multipart/form-data" in content_type:
+            # Для multipart запросов логируем только размер из заголовка
+            # Не читаем тело, чтобы оно осталось доступным для эндпоинта
+            content_length = request.headers.get("content-length", "unknown")
+            logger.info(f"Request {request_id}: Body: <multipart/form-data, size: {content_length} bytes>")
+        else:
+            # Для остальных POST запросов пытаемся прочитать тело
+            try:
+                body = await request.body()
+                if body:
+                    try:
+                        body_json = json.loads(body.decode())
+                        logger.info(f"Request {request_id}: Body: {json.dumps(body_json, ensure_ascii=False)}")
+                    except json.JSONDecodeError:
+                        try:
+                            logger.info(f"Request {request_id}: Body: {body.decode()}")
+                        except UnicodeDecodeError:
+                            logger.info(f"Request {request_id}: Body: <binary data, size: {len(body)} bytes>")
+            except Exception as e:
+                logger.error(f"Request {request_id}: Error reading body: {str(e)}")
 
     # Обработка запроса
     response = await call_next(request)

@@ -30,7 +30,7 @@ class PromptRepository:
     async def create_tables(self):
         """Создание таблиц для промптов"""
         try:
-            async with self.db_connection.acquire() as conn:
+            async with await self.db_connection.acquire() as conn:
                 # Таблица промптов
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS prompts (
@@ -126,7 +126,7 @@ class PromptRepository:
             # Нормализуем author_id для консистентности
             author_id = author_id.strip().lower() if author_id else author_id
             
-            async with self.db_connection.acquire() as conn:
+            async with await self.db_connection.acquire() as conn:
                 # Создаём промпт
                 result = await conn.fetchrow("""
                     INSERT INTO prompts (title, content, description, author_id, author_name, is_public)
@@ -199,7 +199,7 @@ class PromptRepository:
             Промпт с тегами и рейтингом или None
         """
         try:
-            async with self.db_connection.acquire() as conn:
+            async with await self.db_connection.acquire() as conn:
                 # Получаем промпт
                 prompt_row = await conn.fetchrow("""
                     SELECT p.*, 
@@ -290,7 +290,7 @@ class PromptRepository:
             Кортеж (список промптов, общее количество)
         """
         try:
-            async with self.db_connection.acquire() as conn:
+            async with await self.db_connection.acquire() as conn:
                 # Строим WHERE условие для основного запроса
                 where_conditions = ["p.is_public = true"]
                 params = []
@@ -483,7 +483,7 @@ class PromptRepository:
             # Нормализуем author_id для сравнения
             author_id = author_id.strip().lower() if author_id else author_id
             
-            async with self.db_connection.acquire() as conn:
+            async with await self.db_connection.acquire() as conn:
                 # Проверяем, что пользователь - автор (используем нормализованное сравнение)
                 author_check = await conn.fetchval("""
                     SELECT LOWER(TRIM(author_id)) FROM prompts WHERE id = $1
@@ -593,7 +593,7 @@ class PromptRepository:
             # Нормализуем author_id для сравнения
             author_id = author_id.strip().lower() if author_id else author_id
             
-            async with self.db_connection.acquire() as conn:
+            async with await self.db_connection.acquire() as conn:
                 # Проверяем, что пользователь - автор (используем нормализованное сравнение)
                 author_check = await conn.fetchval("""
                     SELECT LOWER(TRIM(author_id)) FROM prompts WHERE id = $1
@@ -627,7 +627,7 @@ class PromptRepository:
             # Нормализуем user_id (убираем пробелы, приводим к нижнему регистру для консистентности)
             user_id = user_id.strip().lower() if user_id else user_id
             
-            async with self.db_connection.acquire() as conn:
+            async with await self.db_connection.acquire() as conn:
                 # Проверяем, существует ли промпт
                 exists = await conn.fetchval("SELECT EXISTS(SELECT 1 FROM prompts WHERE id = $1)", prompt_id)
                 if not exists:
@@ -667,7 +667,7 @@ class PromptRepository:
     async def increment_views(self, prompt_id: int) -> bool:
         """Увеличить счётчик просмотров"""
         try:
-            async with self.db_connection.acquire() as conn:
+            async with await self.db_connection.acquire() as conn:
                 # Сначала получаем текущее значение для логирования
                 current_views = await conn.fetchval("""
                     SELECT views_count FROM prompts WHERE id = $1
@@ -697,7 +697,7 @@ class PromptRepository:
     async def increment_usage(self, prompt_id: int) -> bool:
         """Увеличить счётчик использований"""
         try:
-            async with self.db_connection.acquire() as conn:
+            async with await self.db_connection.acquire() as conn:
                 await conn.execute("""
                     UPDATE prompts SET usage_count = usage_count + 1
                     WHERE id = $1
@@ -710,7 +710,7 @@ class PromptRepository:
     async def get_prompt_stats(self, prompt_id: int) -> Optional[PromptStats]:
         """Получить статистику промпта"""
         try:
-            async with self.db_connection.acquire() as conn:
+            async with await self.db_connection.acquire() as conn:
                 # Основная статистика
                 row = await conn.fetchrow("""
                     SELECT 
@@ -756,7 +756,7 @@ class PromptRepository:
             # Нормализуем user_id
             user_id = user_id.strip().lower() if user_id else user_id
             
-            async with self.db_connection.acquire() as conn:
+            async with await self.db_connection.acquire() as conn:
                 # Проверяем, существует ли промпт
                 exists = await conn.fetchval("SELECT EXISTS(SELECT 1 FROM prompts WHERE id = $1)", prompt_id)
                 if not exists:
@@ -783,7 +783,7 @@ class PromptRepository:
             # Нормализуем user_id
             user_id = user_id.strip().lower() if user_id else user_id
             
-            async with self.db_connection.acquire() as conn:
+            async with await self.db_connection.acquire() as conn:
                 result = await conn.execute("""
                     DELETE FROM prompt_bookmarks
                     WHERE prompt_id = $1 AND LOWER(TRIM(user_id)) = LOWER(TRIM($2))
@@ -802,7 +802,7 @@ class PromptRepository:
             # Нормализуем user_id
             user_id = user_id.strip().lower() if user_id else user_id
             
-            async with self.db_connection.acquire() as conn:
+            async with await self.db_connection.acquire() as conn:
                 # Получаем ID промптов
                 rows = await conn.fetch("""
                     SELECT prompt_id
@@ -836,7 +836,7 @@ class TagRepository:
     async def create_tag(self, tag_data: TagCreate) -> Optional[int]:
         """Создание тега"""
         try:
-            async with self.db_connection.acquire() as conn:
+            async with await self.db_connection.acquire() as conn:
                 result = await conn.fetchrow("""
                     INSERT INTO tags (name, description, color)
                     VALUES ($1, $2, $3)
@@ -853,7 +853,7 @@ class TagRepository:
     async def get_all_tags(self) -> List[Tag]:
         """Получить все теги"""
         try:
-            async with self.db_connection.acquire() as conn:
+            async with await self.db_connection.acquire() as conn:
                 rows = await conn.fetch("SELECT * FROM tags ORDER BY name")
                 tags = []
                 for row in rows:
@@ -871,7 +871,7 @@ class TagRepository:
     async def get_popular_tags(self, limit: int = 20) -> List[Tuple[Tag, int]]:
         """Получить популярные теги с количеством промптов"""
         try:
-            async with self.db_connection.acquire() as conn:
+            async with await self.db_connection.acquire() as conn:
                 rows = await conn.fetch("""
                     SELECT t.*, COUNT(pt.prompt_id) as prompt_count
                     FROM tags t

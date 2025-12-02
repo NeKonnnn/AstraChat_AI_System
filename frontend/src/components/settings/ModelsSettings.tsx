@@ -26,6 +26,9 @@ import {
   IconButton,
   Tooltip,
   InputAdornment,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
 } from '@mui/material';
 import {
   Settings as SettingsIcon,
@@ -36,6 +39,7 @@ import {
   Save as SaveIcon,
   HelpOutline as HelpOutlineIcon,
   Restore as RestoreIcon,
+  ExpandMore as ExpandMoreIcon,
 } from '@mui/icons-material';
 import { useAppActions } from '../../contexts/AppContext';
 
@@ -48,6 +52,10 @@ export default function ModelsSettings() {
     temperature: 0.7,
     top_p: 0.95,
     repeat_penalty: 1.05,
+    top_k: 40,
+    min_p: 0.05,
+    frequency_penalty: 0.0,
+    presence_penalty: 0.0,
     use_gpu: false,
     streaming: true,
     streaming_speed: 50,
@@ -60,7 +68,11 @@ export default function ModelsSettings() {
     n_threads: 24,
     temperature: 2.0,
     top_p: 1.0,
-    repeat_penalty: 2.0
+    repeat_penalty: 2.0,
+    top_k: 200,
+    min_p: 1.0,
+    frequency_penalty: 2.0,
+    presence_penalty: 2.0
   });
 
   const [contextPrompts, setContextPrompts] = useState({
@@ -161,6 +173,10 @@ export default function ModelsSettings() {
       temperature: 0.7,
       top_p: 0.95,
       repeat_penalty: 1.05,
+      top_k: 40,
+      min_p: 0.05,
+      frequency_penalty: 0.0,
+      presence_penalty: 0.0,
       use_gpu: false,
       streaming: true,
       streaming_speed: 50,
@@ -420,251 +436,587 @@ export default function ModelsSettings() {
             </Tooltip>
           </Typography>
           
-          <Box display="grid" gridTemplateColumns="repeat(auto-fit, minmax(250px, 1fr))" gap={2} sx={{ mt: 2 }}>
-            <TextField
-              label={
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                  Размер контекста
-                  <Tooltip title="Максимальное количество токенов, которые модель может использовать для понимания контекста. Больше значение = больше контекста, но больше потребление памяти." arrow>
-                    <IconButton 
-                      size="small" 
-                      sx={{ 
-                        p: 0,
-                        opacity: 0.7,
-                        '&:hover': {
-                          opacity: 1,
-                          '& .MuiSvgIcon-root': {
-                            color: 'primary.main',
-                          },
-                        },
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <HelpOutlineIcon fontSize="small" color="action" />
-                    </IconButton>
-                  </Tooltip>
-                </Box>
-              }
-              type="number"
-              value={modelSettings.context_size}
-              onChange={(e) => setModelSettings(prev => ({ 
-                ...prev, 
-                context_size: parseInt(e.target.value) || 2048 
-              }))}
-              inputProps={{ min: 512, max: maxValues.context_size, step: 512 }}
-              fullWidth
-            />
-            
-            <TextField
-              label={
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                  Максимум токенов ответа
-                  <Tooltip title="Максимальное количество токенов, которые модель может сгенерировать в ответе. Ограничивает длину ответа модели." arrow>
-                    <IconButton 
-                      size="small" 
-                      sx={{ 
-                        p: 0,
-                        opacity: 0.7,
-                        '&:hover': {
-                          opacity: 1,
-                          '& .MuiSvgIcon-root': {
-                            color: 'primary.main',
-                          },
-                        },
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <HelpOutlineIcon fontSize="small" color="action" />
-                    </IconButton>
-                  </Tooltip>
-                </Box>
-              }
-              type="number"
-              value={modelSettings.output_tokens}
-              onChange={(e) => setModelSettings(prev => ({ 
-                ...prev, 
-                output_tokens: parseInt(e.target.value) || 512 
-              }))}
-              inputProps={{ min: 64, max: maxValues.output_tokens, step: 64 }}
-              fullWidth
-            />
-            
-            <TextField
-              label={
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                  Температура
-                  <Tooltip title="Контролирует случайность генерации. Низкие значения (0.1-0.5) делают ответы более детерминированными и точными. Высокие значения (0.8-1.5) делают ответы более креативными и разнообразными." arrow>
-                    <IconButton 
-                      size="small" 
-                      sx={{ 
-                        p: 0,
-                        opacity: 0.7,
-                        '&:hover': {
-                          opacity: 1,
-                          '& .MuiSvgIcon-root': {
-                            color: 'primary.main',
-                          },
-                        },
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <HelpOutlineIcon fontSize="small" color="action" />
-                    </IconButton>
-                  </Tooltip>
-                </Box>
-              }
-              type="number"
-              value={modelSettings.temperature}
-              onChange={(e) => setModelSettings(prev => ({ 
-                ...prev, 
-                temperature: parseFloat(e.target.value) || 0.7 
-              }))}
-              inputProps={{ min: 0.1, max: maxValues.temperature, step: 0.1 }}
-              fullWidth
-            />
-            
-            <TextField
-              label={
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                  Top-p
-                  <Tooltip title="Ядерная выборка (nucleus sampling). Контролирует разнообразие ответов, учитывая только токены с вероятностью выше порога. Значение 0.95 означает, что рассматриваются токены, сумма вероятностей которых составляет 95%." arrow>
-                    <IconButton 
-                      size="small" 
-                      sx={{ 
-                        p: 0,
-                        opacity: 0.7,
-                        '&:hover': {
-                          opacity: 1,
-                          '& .MuiSvgIcon-root': {
-                            color: 'primary.main',
-                          },
-                        },
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <HelpOutlineIcon fontSize="small" color="action" />
-                    </IconButton>
-                  </Tooltip>
-                </Box>
-              }
-              type="number"
-              value={modelSettings.top_p}
-              onChange={(e) => setModelSettings(prev => ({ 
-                ...prev, 
-                top_p: parseFloat(e.target.value) || 0.95 
-              }))}
-              inputProps={{ min: 0.1, max: maxValues.top_p, step: 0.05 }}
-              fullWidth
-            />
-            
-            <TextField
-              label={
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                  Штраф за повторения
-                  <Tooltip title="Штраф за повторение токенов. Значения выше 1.0 уменьшают вероятность повторения уже использованных слов. Значения ниже 1.0 могут увеличить повторения. Рекомендуется: 1.0-1.2." arrow>
-                    <IconButton 
-                      size="small" 
-                      sx={{ 
-                        p: 0,
-                        opacity: 0.7,
-                        '&:hover': {
-                          opacity: 1,
-                          '& .MuiSvgIcon-root': {
-                            color: 'primary.main',
-                          },
-                        },
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <HelpOutlineIcon fontSize="small" color="action" />
-                    </IconButton>
-                  </Tooltip>
-                </Box>
-              }
-              type="number"
-              value={modelSettings.repeat_penalty}
-              onChange={(e) => setModelSettings(prev => ({ 
-                ...prev, 
-                repeat_penalty: parseFloat(e.target.value) || 1.05 
-              }))}
-              inputProps={{ min: 1.0, max: maxValues.repeat_penalty, step: 0.05 }}
-              fullWidth
-            />
-          </Box>
+          {/* Тонкая настройка - аккордеон */}
+          <Accordion sx={{ mt: 2 }}>
+            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <SettingsIcon />
+                <Typography variant="subtitle1">Тонкая настройка</Typography>
+              </Box>
+            </AccordionSummary>
+            <AccordionDetails>
+              <Box display="grid" gridTemplateColumns="repeat(auto-fit, minmax(250px, 1fr))" gap={2}>
+                <TextField
+                  label={
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      Размер контекста
+                      <Tooltip title="Максимальное количество токенов, которые модель может использовать для понимания контекста. Больше значение = больше контекста, но больше потребление памяти." arrow>
+                        <IconButton 
+                          size="small" 
+                          sx={{ 
+                            p: 0,
+                            opacity: 0.7,
+                            '&:hover': {
+                              opacity: 1,
+                              '& .MuiSvgIcon-root': {
+                                color: 'primary.main',
+                              },
+                            },
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <HelpOutlineIcon fontSize="small" color="action" />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                  }
+                  type="number"
+                  value={modelSettings.context_size}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value === '') {
+                      setModelSettings(prev => ({ ...prev, context_size: 0 }));
+                    } else {
+                      const numValue = parseInt(value);
+                      if (!isNaN(numValue)) {
+                        setModelSettings(prev => ({ ...prev, context_size: numValue }));
+                      }
+                    }
+                  }}
+                  onBlur={(e) => {
+                    const strValue = e.target.value.trim();
+                    if (strValue === '') {
+                      setModelSettings(prev => ({ ...prev, context_size: 2048 }));
+                    } else {
+                      const value = parseInt(strValue);
+                      if (isNaN(value) || value < 512) {
+                        setModelSettings(prev => ({ ...prev, context_size: 2048 }));
+                      }
+                    }
+                  }}
+                  inputProps={{ min: 512, max: maxValues.context_size, step: 512 }}
+                  fullWidth
+                />
+                
+                <TextField
+                  label={
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      max_tokens
+                      <Tooltip title="Этот параметр устанавливает максимальное количество токенов, которые модель может генерировать в своем ответе. Увеличение этого ограничения позволяет модели предоставлять более длинные ответы, но также может увеличить вероятность создания бесполезного или нерелевантного контента." arrow>
+                        <IconButton 
+                          size="small" 
+                          sx={{ 
+                            p: 0,
+                            opacity: 0.7,
+                            '&:hover': {
+                              opacity: 1,
+                              '& .MuiSvgIcon-root': {
+                                color: 'primary.main',
+                              },
+                            },
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <HelpOutlineIcon fontSize="small" color="action" />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                  }
+                  type="number"
+                  value={modelSettings.output_tokens}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value === '') {
+                      setModelSettings(prev => ({ ...prev, output_tokens: 0 }));
+                    } else {
+                      const numValue = parseInt(value);
+                      if (!isNaN(numValue)) {
+                        setModelSettings(prev => ({ ...prev, output_tokens: numValue }));
+                      }
+                    }
+                  }}
+                  onBlur={(e) => {
+                    const strValue = e.target.value.trim();
+                    if (strValue === '') {
+                      setModelSettings(prev => ({ ...prev, output_tokens: 512 }));
+                    } else {
+                      const value = parseInt(strValue);
+                      if (isNaN(value) || value < 64) {
+                        setModelSettings(prev => ({ ...prev, output_tokens: 512 }));
+                      }
+                    }
+                  }}
+                  inputProps={{ min: 64, max: maxValues.output_tokens, step: 64 }}
+                  fullWidth
+                />
+                
+                <TextField
+                  label={
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      Температура
+                      <Tooltip title="Контролирует случайность генерации. Низкие значения (0.1-0.5) делают ответы более детерминированными и точными. Высокие значения (0.8-1.5) делают ответы более креативными и разнообразными." arrow>
+                        <IconButton 
+                          size="small" 
+                          sx={{ 
+                            p: 0,
+                            opacity: 0.7,
+                            '&:hover': {
+                              opacity: 1,
+                              '& .MuiSvgIcon-root': {
+                                color: 'primary.main',
+                              },
+                            },
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <HelpOutlineIcon fontSize="small" color="action" />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                  }
+                  type="number"
+                  value={modelSettings.temperature}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value === '') {
+                      setModelSettings(prev => ({ ...prev, temperature: 0 }));
+                    } else {
+                      const numValue = parseFloat(value);
+                      if (!isNaN(numValue)) {
+                        setModelSettings(prev => ({ ...prev, temperature: numValue }));
+                      }
+                    }
+                  }}
+                  onBlur={(e) => {
+                    const strValue = e.target.value.trim();
+                    if (strValue === '') {
+                      setModelSettings(prev => ({ ...prev, temperature: 0.7 }));
+                    } else {
+                      const value = parseFloat(strValue);
+                      if (isNaN(value) || value < 0.1) {
+                        setModelSettings(prev => ({ ...prev, temperature: 0.7 }));
+                      }
+                    }
+                  }}
+                  inputProps={{ min: 0.1, max: maxValues.temperature, step: 0.1 }}
+                  fullWidth
+                />
+                
+                <TextField
+                  label={
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      Top-p
+                      <Tooltip title="Работает совместно с top-k. Более высокое значение (например, 0,95) приведет к более разнообразному тексту, в то время как более низкое значение, например 0,5) приведет к созданию более сфокусированного и консервативного текста." arrow>
+                        <IconButton 
+                          size="small" 
+                          sx={{ 
+                            p: 0,
+                            opacity: 0.7,
+                            '&:hover': {
+                              opacity: 1,
+                              '& .MuiSvgIcon-root': {
+                                color: 'primary.main',
+                              },
+                            },
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <HelpOutlineIcon fontSize="small" color="action" />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                  }
+                  type="number"
+                  value={modelSettings.top_p}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value === '') {
+                      setModelSettings(prev => ({ ...prev, top_p: 0 }));
+                    } else {
+                      const numValue = parseFloat(value);
+                      if (!isNaN(numValue)) {
+                        setModelSettings(prev => ({ ...prev, top_p: numValue }));
+                      }
+                    }
+                  }}
+                  onBlur={(e) => {
+                    const strValue = e.target.value.trim();
+                    if (strValue === '') {
+                      setModelSettings(prev => ({ ...prev, top_p: 0.95 }));
+                    } else {
+                      const value = parseFloat(strValue);
+                      if (isNaN(value) || value < 0.1) {
+                        setModelSettings(prev => ({ ...prev, top_p: 0.95 }));
+                      }
+                    }
+                  }}
+                  inputProps={{ min: 0.1, max: maxValues.top_p, step: 0.05 }}
+                  fullWidth
+                />
+                
+                <TextField
+                  label={
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      Repeat penalty
+                      <Tooltip title="Применяет штраф к уже использованным токенам в текущем ответе, чтобы уменьшить вероятность их повторения. Работает ПОСЛЕ фильтрации top_p/top_k, модифицируя вероятности уже использованных слов. Значения выше 1.0 (например, 1.1-1.2) уменьшают повторения, значения ниже 1.0 могут их увеличить. Это НЕ то же самое, что top_p или top_k - они фильтруют кандидатов, а repeat_penalty наказывает уже использованные слова." arrow>
+                        <IconButton 
+                          size="small" 
+                          sx={{ 
+                            p: 0,
+                            opacity: 0.7,
+                            '&:hover': {
+                              opacity: 1,
+                              '& .MuiSvgIcon-root': {
+                                color: 'primary.main',
+                              },
+                            },
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <HelpOutlineIcon fontSize="small" color="action" />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                  }
+                  type="number"
+                  value={modelSettings.repeat_penalty}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value === '') {
+                      setModelSettings(prev => ({ ...prev, repeat_penalty: 0 }));
+                    } else {
+                      const numValue = parseFloat(value);
+                      if (!isNaN(numValue)) {
+                        setModelSettings(prev => ({ ...prev, repeat_penalty: numValue }));
+                      }
+                    }
+                  }}
+                  onBlur={(e) => {
+                    const strValue = e.target.value.trim();
+                    if (strValue === '') {
+                      setModelSettings(prev => ({ ...prev, repeat_penalty: 1.05 }));
+                    } else {
+                      const value = parseFloat(strValue);
+                      if (isNaN(value) || value < 1.0) {
+                        setModelSettings(prev => ({ ...prev, repeat_penalty: 1.05 }));
+                      }
+                    }
+                  }}
+                  inputProps={{ min: 1.0, max: maxValues.repeat_penalty, step: 0.05 }}
+                  fullWidth
+                />
+                
+                <TextField
+                  label={
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      Top-k
+                      <Tooltip title="Ограничивает выборку только k наиболее вероятными токенами. Например, top_k=40 означает, что модель будет выбирать только из 40 наиболее вероятных вариантов. Это метод фильтрации кандидатов ДО выборки следующего токена. Большее значение (100+) даст более разнообразные ответы, меньшее (10-20) - более консервативные и предсказуемые." arrow>
+                        <IconButton 
+                          size="small" 
+                          sx={{ 
+                            p: 0,
+                            opacity: 0.7,
+                            '&:hover': {
+                              opacity: 1,
+                              '& .MuiSvgIcon-root': {
+                                color: 'primary.main',
+                              },
+                            },
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <HelpOutlineIcon fontSize="small" color="action" />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                  }
+                  type="number"
+                  value={modelSettings.top_k}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value === '') {
+                      setModelSettings(prev => ({ ...prev, top_k: 0 }));
+                    } else {
+                      const numValue = parseInt(value);
+                      if (!isNaN(numValue)) {
+                        setModelSettings(prev => ({ ...prev, top_k: numValue }));
+                      }
+                    }
+                  }}
+                  onBlur={(e) => {
+                    const strValue = e.target.value.trim();
+                    if (strValue === '') {
+                      setModelSettings(prev => ({ ...prev, top_k: 40 }));
+                    } else {
+                      const value = parseInt(strValue);
+                      if (isNaN(value) || value < 1) {
+                        setModelSettings(prev => ({ ...prev, top_k: 40 }));
+                      }
+                    }
+                  }}
+                  inputProps={{ min: 1, max: maxValues.top_k, step: 1 }}
+                  fullWidth
+                />
+                
+                <TextField
+                  label={
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      Min-p
+                      <Tooltip title="Альтернатива top_p и направлена на обеспечение баланса качества и разнообразия. Параметр p представляет минимальную вероятность того, что токен будет рассмотрен по сравнению с вероятностью наиболее вероятного токена. Например при p=0,05 и наиболее вероятно значении токена, имеющем вероятность 0,9, логиты со значением менее 0,045 отфильтровываются." arrow>
+                        <IconButton 
+                          size="small" 
+                          sx={{ 
+                            p: 0,
+                            opacity: 0.7,
+                            '&:hover': {
+                              opacity: 1,
+                              '& .MuiSvgIcon-root': {
+                                color: 'primary.main',
+                              },
+                            },
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <HelpOutlineIcon fontSize="small" color="action" />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                  }
+                  type="number"
+                  value={modelSettings.min_p}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value === '') {
+                      setModelSettings(prev => ({ ...prev, min_p: 0 }));
+                    } else {
+                      const numValue = parseFloat(value);
+                      if (!isNaN(numValue)) {
+                        setModelSettings(prev => ({ ...prev, min_p: numValue }));
+                      }
+                    }
+                  }}
+                  onBlur={(e) => {
+                    const strValue = e.target.value.trim();
+                    if (strValue === '') {
+                      setModelSettings(prev => ({ ...prev, min_p: 0.05 }));
+                    } else {
+                      const value = parseFloat(strValue);
+                      if (isNaN(value)) {
+                        setModelSettings(prev => ({ ...prev, min_p: 0.05 }));
+                      }
+                    }
+                  }}
+                  inputProps={{ min: 0.0, max: maxValues.min_p, step: 0.01 }}
+                  fullWidth
+                />
+                
+                <TextField
+                  label={
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      Frequency penalty
+                      <Tooltip title="Устанавливает смещение масштабирования для токенов, чтобы наказывать за повторения, в зависимости от того, сколько раз они появились. Более высокое значение (например, 1,5) будет наказывать за повторения более строго, в то время как более низкое значение (например 0,9) будет более мягким. При значении 0 оно отключается" arrow>
+                        <IconButton 
+                          size="small" 
+                          sx={{ 
+                            p: 0,
+                            opacity: 0.7,
+                            '&:hover': {
+                              opacity: 1,
+                              '& .MuiSvgIcon-root': {
+                                color: 'primary.main',
+                              },
+                            },
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <HelpOutlineIcon fontSize="small" color="action" />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                  }
+                  type="number"
+                  value={modelSettings.frequency_penalty}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value === '') {
+                      setModelSettings(prev => ({ ...prev, frequency_penalty: 0 }));
+                    } else {
+                      const numValue = parseFloat(value);
+                      if (!isNaN(numValue)) {
+                        setModelSettings(prev => ({ ...prev, frequency_penalty: numValue }));
+                      }
+                    }
+                  }}
+                  onBlur={(e) => {
+                    const strValue = e.target.value.trim();
+                    if (strValue === '') {
+                      setModelSettings(prev => ({ ...prev, frequency_penalty: 0.0 }));
+                    } else {
+                      const value = parseFloat(strValue);
+                      if (isNaN(value)) {
+                        setModelSettings(prev => ({ ...prev, frequency_penalty: 0.0 }));
+                      }
+                    }
+                  }}
+                  inputProps={{ min: 0.0, max: maxValues.frequency_penalty, step: 0.1 }}
+                  fullWidth
+                />
+                
+                <TextField
+                  label={
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      Presence penalty
+                      <Tooltip title="Устанавливает нулевое значение для символов, которые появились хотя бы один раз. Более высокое значение (например 1,5) будет более строгим наказанием за повторения, в то время как более низкое значение (например, 0,9) будет более мягким. При значении 0 он отключается." arrow>
+                        <IconButton 
+                          size="small" 
+                          sx={{ 
+                            p: 0,
+                            opacity: 0.7,
+                            '&:hover': {
+                              opacity: 1,
+                              '& .MuiSvgIcon-root': {
+                                color: 'primary.main',
+                              },
+                            },
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <HelpOutlineIcon fontSize="small" color="action" />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                  }
+                  type="number"
+                  value={modelSettings.presence_penalty}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value === '') {
+                      setModelSettings(prev => ({ ...prev, presence_penalty: 0 }));
+                    } else {
+                      const numValue = parseFloat(value);
+                      if (!isNaN(numValue)) {
+                        setModelSettings(prev => ({ ...prev, presence_penalty: numValue }));
+                      }
+                    }
+                  }}
+                  onBlur={(e) => {
+                    const strValue = e.target.value.trim();
+                    if (strValue === '') {
+                      setModelSettings(prev => ({ ...prev, presence_penalty: 0.0 }));
+                    } else {
+                      const value = parseFloat(strValue);
+                      if (isNaN(value)) {
+                        setModelSettings(prev => ({ ...prev, presence_penalty: 0.0 }));
+                      }
+                    }
+                  }}
+                  inputProps={{ min: 0.0, max: maxValues.presence_penalty, step: 0.1 }}
+                  fullWidth
+                />
+              </Box>
+            </AccordionDetails>
+          </Accordion>
           
-          <Box mt={2}>
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={modelSettings.use_gpu}
-                  onChange={(e) => setModelSettings(prev => ({ 
-                    ...prev, 
-                    use_gpu: e.target.checked 
-                  }))}
-                />
-              }
-              label={
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                  Использовать GPU
-                  <Tooltip title="Использование графического процессора для ускорения работы модели. Требует наличие GPU с поддержкой CUDA." arrow>
-                    <IconButton 
-                      size="small" 
-                      sx={{ 
-                        p: 0,
-                        ml: 0.5,
-                        opacity: 0.7,
-                        '&:hover': {
-                          opacity: 1,
-                          '& .MuiSvgIcon-root': {
-                            color: 'primary.main',
+          {/* Слайдеры в стиле раздела "Интерфейс" */}
+          <List sx={{ mt: 2 }}>
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <ListItemText
+                primary={
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    Использовать GPU
+                    <Tooltip title="Использование графического процессора для ускорения работы модели. Требует наличие GPU с поддержкой CUDA." arrow>
+                      <IconButton 
+                        size="small" 
+                        sx={{ 
+                          p: 0,
+                          ml: 0.5,
+                          opacity: 0.7,
+                          '&:hover': {
+                            opacity: 1,
+                            '& .MuiSvgIcon-root': {
+                              color: 'primary.main',
+                            },
                           },
-                        },
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <HelpOutlineIcon fontSize="small" color="action" />
-                    </IconButton>
-                  </Tooltip>
-                </Box>
-              }
-            />
-            
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={modelSettings.streaming}
-                  onChange={(e) => setModelSettings(prev => ({ 
-                    ...prev, 
-                    streaming: e.target.checked 
-                  }))}
-                />
-              }
-              label={
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                  Потоковая генерация
-                  <Tooltip title="Показывать ответ модели по мере генерации (токен за токеном) вместо ожидания полного ответа. Улучшает восприятие скорости работы." arrow>
-                    <IconButton 
-                      size="small" 
-                      sx={{ 
-                        p: 0,
-                        ml: 0.5,
-                        opacity: 0.7,
-                        '&:hover': {
-                          opacity: 1,
-                          '& .MuiSvgIcon-root': {
-                            color: 'primary.main',
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <HelpOutlineIcon fontSize="small" color="action" />
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
+                }
+                primaryTypographyProps={{
+                  variant: 'body1',
+                  fontWeight: 500,
+                }}
+              />
+              <Switch
+                checked={modelSettings.use_gpu}
+                onChange={(e) => setModelSettings(prev => ({ 
+                  ...prev, 
+                  use_gpu: e.target.checked 
+                }))}
+              />
+            </ListItem>
+
+            <Divider />
+
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <ListItemText
+                primary={
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    Потоковая генерация
+                    <Tooltip title="Показывать ответ модели по мере генерации (токен за токеном) вместо ожидания полного ответа. Улучшает восприятие скорости работы." arrow>
+                      <IconButton 
+                        size="small" 
+                        sx={{ 
+                          p: 0,
+                          ml: 0.5,
+                          opacity: 0.7,
+                          '&:hover': {
+                            opacity: 1,
+                            '& .MuiSvgIcon-root': {
+                              color: 'primary.main',
+                            },
                           },
-                        },
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <HelpOutlineIcon fontSize="small" color="action" />
-                    </IconButton>
-                  </Tooltip>
-                </Box>
-              }
-            />
-          </Box>
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <HelpOutlineIcon fontSize="small" color="action" />
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
+                }
+                primaryTypographyProps={{
+                  variant: 'body1',
+                  fontWeight: 500,
+                }}
+              />
+              <Switch
+                checked={modelSettings.streaming}
+                onChange={(e) => setModelSettings(prev => ({ 
+                  ...prev, 
+                  streaming: e.target.checked 
+                }))}
+              />
+            </ListItem>
+          </List>
 
           <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mt: 3 }}>
             <Button

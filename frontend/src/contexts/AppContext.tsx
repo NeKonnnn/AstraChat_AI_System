@@ -45,6 +45,10 @@ export interface ModelSettings {
   temperature: number;
   top_p: number;
   repeat_penalty: number;
+  top_k: number;
+  min_p: number;
+  frequency_penalty: number;
+  presence_penalty: number;
   use_gpu: boolean;
   streaming: boolean;
   streaming_speed: number; // Скорость потоковой генерации в миллисекундах
@@ -191,6 +195,10 @@ const initialState: AppState = {
     temperature: 0.7,
     top_p: 0.95,
     repeat_penalty: 1.05,
+    top_k: 40,
+    min_p: 0.05,
+    frequency_penalty: 0.0,
+    presence_penalty: 0.0,
     use_gpu: false,
     streaming: true,
     streaming_speed: 100, // Default streaming speed

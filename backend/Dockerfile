@@ -20,6 +20,8 @@ RUN apt-get update && apt-get install -y \
     libportaudiocpp0 \
     espeak \
     libespeak-dev \
+    libldap2-dev \
+    libsasl2-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Создание символической ссыл ки для python
@@ -37,8 +39,8 @@ COPY requirements.txt .
 # Установка Python зависимостей с обновлённым резолвером
 RUN pip install --no-cache-dir --upgrade-strategy only-if-needed -r requirements.txt
 
-# Копирование исходного кода
-COPY . /app/
+# Копирование исходного кода с явным указанием прав доступа
+COPY --chown=root:root . /app/
 
 # Создание только необходимых директорий для backend
 RUN mkdir -p /app/memory /app/logs /app/uploads /tmp/memoai

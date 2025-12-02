@@ -42,6 +42,7 @@ python-ldap==3.4.4
 
 # Зависимости для TTS и распознавания речи
 sounddevice==0.5.2
+pyaudio==0.2.14
 vosk==0.3.45
 pyttsx3==2.90
 
@@ -56,3 +57,9 @@ psycopg2-binary==2.9.9  # Синхронный драйвер для PostgreSQL
 
 # Для работы с векторами
 numpy==1.26.3
+
+# MinIO для хранения файлов
+minio==7.2.3
+
+# Обновленная версия HuggingFaceEmbeddings
+langchain-huggingface==0.1.0

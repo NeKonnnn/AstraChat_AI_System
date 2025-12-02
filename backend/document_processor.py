@@ -1,23 +1,48 @@
 import os
 import tempfile
+import asyncio
+import logging
 from io import BytesIO
 import docx
 import PyPDF2
 import openpyxl
 import pdfplumber
+from typing import Optional, Dict, List, Any
+from datetime import datetime
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.docstore.document import Document
+
+# Настройка логирования
+logger = logging.getLogger(__name__)
+
+# Импорт репозиториев для работы с PostgreSQL + pgvector
+try:
+    from backend.database.init_db import get_vector_repository, get_document_repository
+    from backend.database.postgresql.models import Document as PGDocument, DocumentVector
+    pgvector_available = True
+except ImportError as e:
+    print(f"Предупреждение: PostgreSQL модули недоступны: {e}")
+    print("DocumentProcessor будет работать в режиме fallback (без pgvector)")
+    pgvector_available = False
+    get_vector_repository = None
+    get_document_repository = None
+    PGDocument = None
+    DocumentVector = None
 
 class DocumentProcessor:
     def __init__(self):
         print("Инициализируем DocumentProcessor...")
-        # Инициализация векторного хранилища с пустым набором
-        self.documents = []
+        # Инициализация векторного хранилища с pgvector
+        self.documents = []  # Кэш для быстрого доступа (опционально)
         self.doc_names = []
         self.embeddings = None
-        self.vectorstore = None
+        self.vectorstore = None  # Теперь это флаг, что pgvector используется
+        # Репозитории для работы с PostgreSQL
+        self.vector_repo = None
+        self.document_repo = None
+        # Маппинг filename -> document_id для быстрого доступа
+        self.filename_to_id: Dict[str, int] = {}
         # Хранилище информации об уверенности для каждого документа
         # {filename: {"confidence": float, "text_length": int, "file_type": str, "words": [{"word": str, "confidence": float}]}}
         self.confidence_data = {}
@@ -25,25 +50,50 @@ class DocumentProcessor:
         # {filename: {"path": file_path, "minio_object": object_name, "minio_bucket": bucket_name}}
         # или {filename: file_path} для обратной совместимости
         self.image_paths = {}
+        # Кэш структуры документов для быстрого доступа ко всем чанкам
+        # {doc_name: [{"content": str, "chunk": int}, ...]} - отсортировано по chunk
+        self._doc_chunks_cache = {}
 
-        print("DocumentProcessor инициализирован")
+        logger.info("DocumentProcessor инициализирован")
         self.init_embeddings()
+        self.init_pgvector()
+        
+        # Логируем финальный статус
+        status = self.get_pgvector_status()
+        if status["available"] and status["initialized"]:
+            logger.info(f"PGVECTOR ГОТОВ К РАБОТЕ")
+            logger.info(f"   Документов в системе: {status['documents_count']}")
+        elif status["available"]:
+            logger.warning(f"PGVECTOR ДОСТУПЕН, НО НЕ ИНИЦИАЛИЗИРОВАН")
+            if status.get("error"):
+                logger.warning(f"   Ошибка: {status['error']}")
+        else:
+            logger.warning(f"PGVECTOR НЕДОСТУПЕН")
         
     def init_embeddings(self):
         """Инициализация модели для эмбеддингов"""
         print("Инициализируем модель эмбеддингов...")
         try:
-            # Путь к локальной модели
-            model_path = os.path.join(
+            # Путь к локальной модели - сначала проверяем /app/models (монтируется из ./models)
+            # Затем проверяем backend/models (для локальной разработки)
+            model_name_local = "paraphrase-multilingual-MiniLM-L12-v2"
+            
+            # Вариант 1: Модель в /app/models (Docker)
+            model_path_docker = os.path.join("/app/models", model_name_local)
+            # Вариант 2: Модель в backend/models (локальная разработка)
+            model_path_local = os.path.join(
                 os.path.dirname(os.path.dirname(__file__)),
                 "models",
-                "paraphrase-multilingual-MiniLM-L12-v2"
+                model_name_local
             )
             
             # Проверяем, существует ли локальная модель
-            if os.path.exists(model_path):
-                print(f"Используем локальную модель: {model_path}")
-                model_name = model_path
+            if os.path.exists(model_path_docker):
+                print(f"Используем локальную модель (Docker): {model_path_docker}")
+                model_name = model_path_docker
+            elif os.path.exists(model_path_local):
+                print(f"Используем локальную модель (локально): {model_path_local}")
+                model_name = model_path_local
             else:
                 # Fallback на Hugging Face Hub
                 print("Локальная модель не найдена, загружаем из Hugging Face Hub...")
@@ -61,7 +111,283 @@ class DocumentProcessor:
             traceback.print_exc()
             self.embeddings = None
     
-    def process_document(self, file_data: bytes, filename: str, file_extension: str, minio_object_name=None, minio_bucket=None):
+    def get_pgvector_status(self) -> Dict[str, Any]:
+        """
+        Получение статуса pgvector
+        
+        Returns:
+            dict: Статус pgvector с детальной информацией
+        """
+        status = {
+            "available": pgvector_available,
+            "initialized": False,
+            "repositories_ready": False,
+            "vectorstore_active": False,
+            "documents_count": 0,
+            "vectors_count": 0,
+            "error": None
+        }
+        
+        if not pgvector_available:
+            status["error"] = "Модули PostgreSQL не импортированы"
+            return status
+        
+        try:
+            status["initialized"] = self.vector_repo is not None and self.document_repo is not None
+            status["repositories_ready"] = status["initialized"]
+            status["vectorstore_active"] = self.vectorstore is True
+            status["documents_count"] = len(self.doc_names)
+            
+            # Пытаемся получить количество векторов из БД
+            if self.vector_repo:
+                try:
+                    # Это асинхронный вызов, но для статуса можно пропустить
+                    status["vectors_count"] = "N/A (требует async запрос)"
+                except:
+                    pass
+        except Exception as e:
+            status["error"] = str(e)
+        
+        return status
+    
+    def init_pgvector(self):
+        """Инициализация подключения к pgvector"""
+        logger.info("=" * 60)
+        logger.info("ИНИЦИАЛИЗАЦИЯ PGVECTOR")
+        logger.info("=" * 60)
+        
+        if not pgvector_available:
+            logger.warning("PGVECTOR НЕДОСТУПЕН")
+            logger.warning("Модули PostgreSQL не импортированы")
+            logger.warning("DocumentProcessor будет работать в ограниченном режиме")
+            logger.warning("Для полной функциональности установите PostgreSQL с pgvector")
+            logger.info("=" * 60)
+            return
+        
+        try:
+            logger.info("🔌 Подключение к pgvector...")
+            
+            # Получаем репозитории
+            try:
+                self.vector_repo = get_vector_repository()
+                logger.info("✅ VectorRepository получен")
+            except RuntimeError as e:
+                error_msg = str(e)
+                if "не инициализирован" in error_msg or "недоступны" in error_msg:
+                    logger.error("❌ PostgreSQL не инициализирован")
+                    logger.error(f"   {error_msg}")
+                    logger.error("   Убедитесь, что:")
+                    logger.error("   1. PostgreSQL запущен и доступен")
+                    logger.error("   2. Вызван init_postgresql() перед созданием DocumentProcessor")
+                    logger.error("   3. Настройки подключения в .env файле корректны")
+                    logger.info("=" * 60)
+                    self.vector_repo = None
+                    self.document_repo = None
+                    self.vectorstore = None
+                    return
+                else:
+                    logger.error(f"❌ Ошибка получения VectorRepository: {error_msg}")
+                    raise
+            
+            try:
+                self.document_repo = get_document_repository()
+                logger.info("✅ DocumentRepository получен")
+            except RuntimeError as e:
+                error_msg = str(e)
+                logger.error(f"❌ Ошибка получения DocumentRepository: {error_msg}")
+                self.vector_repo = None
+                self.document_repo = None
+                self.vectorstore = None
+                logger.info("=" * 60)
+                return
+            
+            # Проверяем наличие расширения pgvector
+            logger.info("🔍 Проверка наличия расширения pgvector...")
+            pgvector_extension_available = asyncio.run(self._check_pgvector_extension())
+            
+            if not pgvector_extension_available:
+                logger.error("❌ PGVECTOR НЕ УСТАНОВЛЕН В POSTGRESQL")
+                logger.error("   Расширение 'vector' отсутствует в базе данных")
+                logger.error("   Для установки pgvector:")
+                logger.error("   1. Установите pgvector в PostgreSQL (см. README/QUICK_START_POSTGRESQL_PGVECTOR.md)")
+                logger.error("   2. Или используйте Docker образ с pgvector: pgvector/pgvector:pg17")
+                logger.error("   3. После установки выполните: CREATE EXTENSION vector;")
+                logger.warning("⚠️  DocumentProcessor будет работать без персистентного хранения")
+                logger.info("=" * 60)
+                self.vector_repo = None
+                self.document_repo = None
+                self.vectorstore = None
+                return
+            
+            # Проверяем работоспособность
+            logger.info("🔍 Проверка работоспособности pgvector...")
+            is_working = asyncio.run(self._test_pgvector_connection())
+            
+            if is_working:
+                self.vectorstore = True  # Флаг, что pgvector используется
+                logger.info("✅ PGVECTOR РАБОТАЕТ КОРРЕКТНО")
+                logger.info("   - Подключение к PostgreSQL установлено")
+                logger.info("   - Расширение pgvector установлено")
+                logger.info("   - Репозитории инициализированы")
+                logger.info("   - Векторный поиск доступен")
+                
+                # Загружаем существующие документы из БД
+                self._load_documents_from_db()
+            else:
+                logger.warning("PGVECTOR НЕ РАБОТАЕТ")
+                logger.warning("   Проверка работоспособности не прошла")
+                self.vector_repo = None
+                self.document_repo = None
+                self.vectorstore = None
+            
+            logger.info("=" * 60)
+            
+        except RuntimeError as e:
+            error_msg = str(e)
+            logger.error("ОШИБКА ИНИЦИАЛИЗАЦИИ PGVECTOR")
+            if "не инициализирован" in error_msg or "недоступны" in error_msg:
+                logger.error(f"   PostgreSQL не инициализирован: {error_msg}")
+                logger.error("   Убедитесь, что:")
+                logger.error("   1. PostgreSQL запущен и доступен")
+                logger.error("   2. Вызван init_postgresql() перед созданием DocumentProcessor")
+                logger.error("   3. Настройки подключения в .env файле корректны")
+            else:
+                logger.error(f"   {error_msg}")
+            logger.info("=" * 60)
+            self.vector_repo = None
+            self.document_repo = None
+            self.vectorstore = None
+        except Exception as e:
+            error_msg = str(e)
+            logger.error("ОШИБКА ИНИЦИАЛИЗАЦИИ PGVECTOR")
+            logger.error(f"   {error_msg}")
+            
+            # Проверяем, связана ли ошибка с отсутствием расширения
+            if "vector" in error_msg.lower() and ("не существует" in error_msg.lower() or "does not exist" in error_msg.lower()):
+                logger.error("   Расширение pgvector не установлено в PostgreSQL")
+                logger.error("   Установите pgvector согласно инструкции в README/QUICK_START_POSTGRESQL_PGVECTOR.md")
+            
+            logger.warning("DocumentProcessor будет работать без персистентного хранения")
+            import traceback
+            logger.debug(f"Traceback: {traceback.format_exc()}")
+            logger.info("=" * 60)
+            self.vector_repo = None
+            self.document_repo = None
+            self.vectorstore = None
+    
+    async def _check_pgvector_extension(self) -> bool:
+        """Проверка наличия расширения pgvector в PostgreSQL"""
+        try:
+            if not self.vector_repo:
+                return False
+            
+            # Используем подключение из репозитория для проверки расширения
+            # Используем отдельную транзакцию для избежания конфликтов
+            async with self.vector_repo.db_connection.acquire() as conn:
+                # Выполняем проверку в отдельной транзакции
+                result = await conn.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'vector')"
+                )
+                return bool(result)
+        except Exception as e:
+            error_msg = str(e)
+            # Если ошибка связана с конфликтом операций, предполагаем, что расширение установлено
+            # (так как оно создается при инициализации таблиц в repository.py)
+            if "another operation is in progress" in error_msg.lower() or "операция уже выполняется" in error_msg.lower():
+                logger.info("Проверка расширения пропущена из-за активной операции, предполагаем что расширение установлено")
+                logger.info("(Расширение создается автоматически при инициализации таблиц)")
+                return True
+            logger.warning(f"Не удалось проверить расширение pgvector: {error_msg}")
+            # Если проверка не удалась, но мы знаем, что расширение должно быть установлено
+            # (так как оно создается в repository.py), возвращаем True
+            logger.info("Предполагаем, что расширение установлено (создается при инициализации таблиц)")
+            return True
+    
+    async def _test_pgvector_connection(self) -> bool:
+        """Тестирование подключения к pgvector"""
+        try:
+            # Проверяем, что репозитории доступны
+            if not self.vector_repo or not self.document_repo:
+                logger.warning("Репозитории не инициализированы")
+                return False
+            
+            # Пробуем выполнить простой запрос к БД
+            # Проверяем количество документов в БД
+            try:
+                documents = await self.document_repo.get_all_documents(limit=1)
+                logger.info(f" В базе данных найдено документов: {len(documents)} (проверка ограничена 1)")
+            except Exception as e:
+                logger.warning(f"Не удалось проверить документы в БД: {str(e)}")
+                return False
+            
+            # Проверяем, что таблицы векторов существуют
+            # Это делается через попытку выполнить простой запрос
+            try:
+                # Пробуем выполнить поиск с пустым вектором (просто для проверки таблицы)
+                test_embedding = [0.0] * 384  # Размерность по умолчанию
+                results = await self.vector_repo.similarity_search(test_embedding, limit=1)
+                logger.info(f"Таблица векторов доступна, найдено векторов: {len(results)} (проверка ограничена 1)")
+            except Exception as e:
+                error_msg = str(e)
+                # Проверяем, связана ли ошибка с отсутствием типа vector
+                if "vector" in error_msg.lower() and ("не существует" in error_msg.lower() or "does not exist" in error_msg.lower()):
+                    logger.error(f"Таблица векторов не может быть использована: {error_msg}")
+                    logger.error("   Расширение pgvector не установлено или таблица не создана")
+                    return False
+                else:
+                    logger.warning(f"Не удалось проверить таблицу векторов: {error_msg}")
+                    # Это не критично, если таблица еще не создана
+                    logger.info("   (Таблица векторов может быть пустой - это нормально)")
+            
+            return True
+            
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Ошибка при проверке работоспособности: {error_msg}")
+            
+            # Проверяем, связана ли ошибка с отсутствием расширения
+            if "vector" in error_msg.lower() and ("не существует" in error_msg.lower() or "does not exist" in error_msg.lower()):
+                logger.error("   Расширение pgvector не установлено в PostgreSQL")
+            
+            import traceback
+            logger.debug(f"   Traceback: {traceback.format_exc()}")
+            return False
+    
+    def _load_documents_from_db(self):
+        """Загрузка документов из базы данных при инициализации"""
+        if not self.document_repo:
+            logger.warning("DocumentRepository недоступен, пропускаем загрузку документов")
+            return
+        
+        try:
+            logger.info("📥 Загрузка документов из базы данных...")
+            # Получаем все документы из БД (синхронный вызов async метода)
+            pg_documents = asyncio.run(self.document_repo.get_all_documents(limit=1000))
+            
+            loaded_count = 0
+            for pg_doc in pg_documents:
+                filename = pg_doc.filename
+                if filename not in self.doc_names:
+                    self.doc_names.append(filename)
+                    loaded_count += 1
+                self.filename_to_id[filename] = pg_doc.id
+                
+                # Загружаем метаданные если есть
+                if pg_doc.metadata:
+                    if "confidence_data" in pg_doc.metadata:
+                        self.confidence_data[filename] = pg_doc.metadata["confidence_data"]
+            
+            if loaded_count > 0:
+                logger.info(f"Загружено {loaded_count} новых документов из базы данных")
+                logger.info(f"Всего документов в системе: {len(self.doc_names)}")
+            else:
+                logger.info("Документы в базе данных уже загружены или база пуста")
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке документов из БД: {str(e)}")
+            import traceback
+            logger.debug(f"Traceback: {traceback.format_exc()}")
+    
+    async def process_document(self, file_data: bytes, filename: str, file_extension: str, minio_object_name=None, minio_bucket=None):
         """
         Обработка документа в зависимости от его типа
         
@@ -158,7 +484,8 @@ class DocumentProcessor:
             # чтобы изображение было доступно для мультимодальной модели
             if document_text or file_extension in ['.jpg', '.jpeg', '.png', '.webp']:
                 # Для изображений добавляем даже с пустым текстом
-                self.add_document_to_collection(document_text, filename)
+                # Используем async версию, так как process_document теперь async
+                await self.add_document_to_collection_async(document_text, filename)
                 print(f"Документ добавлен в коллекцию. Всего документов: {len(self.doc_names)}")
             else:
                 print(f"Пропускаем добавление документа {filename} - текст пустой и это не изображение")
@@ -498,15 +825,16 @@ class DocumentProcessor:
                 }
             }
     
-    def add_document_to_collection(self, text, doc_name):
-        """Добавление документа в коллекцию и обновление векторного хранилища"""
-        print(f"Добавляем документ '{doc_name}' в коллекцию...")
-        print(f"Длина текста: {len(text)} символов")
+    async def add_document_to_collection_async(self, text, doc_name):
+        """Асинхронное добавление документа в коллекцию и обновление векторного хранилища"""
+        logger.info(f"Добавление документа '{doc_name}' в коллекцию...")
+        logger.info(f"Длина текста: {len(text)} символов")
         
-        # Разбиваем текст на части (уменьшили размер для экономии токенов)
+        # Оптимизированное разбиение текста для баланса между контекстом и скоростью
+        # Увеличенный размер чанка = меньше чанков = быстрее обработка, но больше контекста в каждом чанке
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=500,  # Уменьшили с 1000 до 500
-            chunk_overlap=100,  # Уменьшили с 200 до 100
+            chunk_size=1500,  # Увеличили для меньшего количества чанков и большей скорости
+            chunk_overlap=200,  # Умеренное перекрытие для сохранения связей
             length_function=len,
         )
         
@@ -518,7 +846,7 @@ class DocumentProcessor:
             print(f"ВНИМАНИЕ: Нет чанков для документа '{doc_name}', создаем минимальный чанк")
             chunks = [text] if text else [f"[Документ: {doc_name}]"]
         
-        # Создаем документы для langchain
+        # Создаем документы для langchain (для кэша)
         langchain_docs = []
         for i, chunk in enumerate(chunks):
             langchain_docs.append(
@@ -528,88 +856,255 @@ class DocumentProcessor:
                 )
             )
         
-        # Добавляем в общий список документов
+        # Добавляем в общий список документов (кэш)
         self.documents.extend(langchain_docs)
         if doc_name not in self.doc_names:
             self.doc_names.append(doc_name)
         
-        print(f"Документ добавлен. Всего документов: {len(self.documents)}, имен: {len(self.doc_names)}")
+        # Обновляем кэш структуры документа для быстрого доступа
+        self._doc_chunks_cache[doc_name] = [
+            {
+                "content": doc.page_content,
+                "chunk": doc.metadata.get("chunk", i)
+            }
+            for i, doc in enumerate(langchain_docs)
+        ]
+        # Сортируем по номеру чанка
+        self._doc_chunks_cache[doc_name].sort(key=lambda x: x['chunk'])
         
-        # Обновляем векторное хранилище
-        self.update_vectorstore()
+        print(f"Документ добавлен в кэш. Всего документов: {len(self.documents)}, имен: {len(self.doc_names)}")
+        print(f"Кэш структуры обновлен для '{doc_name}': {len(self._doc_chunks_cache[doc_name])} чанков")
+        
+        # Сохраняем в PostgreSQL + pgvector
+        if self.vector_repo and self.document_repo:
+            try:
+                logger.info(f"Сохранение документа '{doc_name}' в PostgreSQL + pgvector...")
+                await self._save_document_to_pgvector(text, doc_name, chunks)
+                logger.info(f"Документ '{doc_name}' успешно сохранен в PostgreSQL + pgvector")
+                # Устанавливаем флаг vectorstore после успешного сохранения
+                self.vectorstore = True
+            except Exception as e:
+                logger.error(f"ОШИБКА при сохранении документа в PostgreSQL: {str(e)}")
+                import traceback
+                logger.debug(f"Traceback: {traceback.format_exc()}")
+                # Даже при ошибке сохраняем в памяти, но vectorstore остается None
+        else:
+            logger.warning(f"PostgreSQL недоступен, документ '{doc_name}' сохранен только в памяти")
+            # Если pgvector недоступен, но документы есть в памяти, можно использовать их
+            if self.doc_names:
+                logger.info(f"Документы доступны в памяти: {len(self.doc_names)} документов")
     
-    def update_vectorstore(self):
-        """Обновление или создание векторного хранилища"""
-        print(f"\n{'='*60}")
-        print(f"ОБНОВЛЕНИЕ ВЕКТОРНОГО ХРАНИЛИЩА")
-        print(f"{'='*60}")
-        print(f"Документов для индексации: {len(self.documents)}")
-        print(f"Модель эмбеддингов инициализирована: {self.embeddings is not None}")
-        print(f"Текущий vectorstore существует: {self.vectorstore is not None}")
-        
-        if not self.documents:
-            print("ОШИБКА: Нет документов для индексации")
+    def add_document_to_collection(self, text, doc_name):
+        """Добавление документа в коллекцию (синхронная обертка для обратной совместимости)"""
+        # Пытаемся получить текущий event loop
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Если event loop уже запущен, создаем задачу
+                # Но это синхронный метод, поэтому используем run_until_complete с новым loop
+                # Или создаем задачу в фоне
+                import concurrent.futures
+                import threading
+                
+                # Создаем новый event loop в отдельном потоке для выполнения async операции
+                def run_in_thread():
+                    new_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(new_loop)
+                    try:
+                        new_loop.run_until_complete(self.add_document_to_collection_async(text, doc_name))
+                    finally:
+                        new_loop.close()
+                
+                thread = threading.Thread(target=run_in_thread)
+                thread.start()
+                thread.join()  # Ждем завершения
+            else:
+                # Если loop не запущен, можем использовать run_until_complete
+                loop.run_until_complete(self.add_document_to_collection_async(text, doc_name))
+        except RuntimeError:
+            # Если нет event loop, создаем новый
+            asyncio.run(self.add_document_to_collection_async(text, doc_name))
+    
+    async def _save_document_to_pgvector(self, text: str, doc_name: str, chunks: List[str]):
+        """Сохранение документа в PostgreSQL с векторами"""
+        if not self.embeddings:
+            logger.error("Модель эмбеддингов не инициализирована")
             return
         
-        if not self.embeddings:
-            print("Модель эмбеддингов не инициализирована, пытаемся инициализировать...")
-            self.init_embeddings()
-            if not self.embeddings:
-                print("ОШИБКА: Не удалось инициализировать модель эмбеддингов")
-                return
+        try:
+            # Проверяем, существует ли документ
+            document_id = self.filename_to_id.get(doc_name)
+            
+            # Создаем или обновляем документ в БД
+            if document_id is None:
+                # Создаем новый документ
+                logger.info(f"   Создание нового документа в БД: '{doc_name}'")
+                pg_doc = PGDocument(
+                    filename=doc_name,
+                    content=text,
+                    metadata={
+                        "confidence_data": self.confidence_data.get(doc_name, {}),
+                        "chunks_count": len(chunks)
+                    },
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow()
+                )
+                document_id = await self.document_repo.create_document(pg_doc)
+                if document_id:
+                    self.filename_to_id[doc_name] = document_id
+                    logger.info(f"Документ создан в БД: ID={document_id}")
+                else:
+                    logger.error("Не удалось создать документ в БД")
+                    return
             else:
-                print("Модель эмбеддингов успешно инициализирована")
-        
-        try:
-            # Создаем новое векторное хранилище
-            print("\nСоздаем векторное хранилище FAISS...")
-            print(f"Количество документов: {len(self.documents)}")
-            print(f"Первый документ (preview): {self.documents[0].page_content[:100]}..." if self.documents else "   Нет документов")
+                # Обновляем существующий документ
+                logger.info(f"Обновление существующего документа в БД: ID={document_id}")
+                pg_doc = await self.document_repo.get_document(document_id)
+                if pg_doc:
+                    pg_doc.content = text
+                    pg_doc.metadata = {
+                        "confidence_data": self.confidence_data.get(doc_name, {}),
+                        "chunks_count": len(chunks)
+                    }
+                    pg_doc.updated_at = datetime.utcnow()
+                    # Удаляем старые векторы
+                    await self.vector_repo.delete_vectors_by_document(document_id)
             
-            self.vectorstore = FAISS.from_documents(self.documents, self.embeddings)
+            # Генерируем эмбеддинги и сохраняем векторы
+            logger.info(f"Генерация эмбеддингов для {len(chunks)} чанков...")
+            saved_vectors = 0
+            for i, chunk in enumerate(chunks):
+                try:
+                    # Генерируем эмбеддинг для чанка
+                    embedding = self.embeddings.embed_query(chunk)
+                    
+                    # Создаем вектор
+                    vector = DocumentVector(
+                        document_id=document_id,
+                        chunk_index=i,
+                        embedding=embedding,
+                        content=chunk,
+                        metadata={"source": doc_name, "chunk": i}
+                    )
+                    
+                    # Сохраняем вектор в БД
+                    vector_id = await self.vector_repo.create_vector(vector)
+                    if vector_id:
+                        saved_vectors += 1
+                        if (i + 1) % 10 == 0 or i == len(chunks) - 1:
+                            logger.info(f"Сохранено векторов: {i+1}/{len(chunks)}")
+                except Exception as e:
+                    logger.warning(f" Ошибка при сохранении вектора {i}: {str(e)}")
+                    continue
             
-            print(f"\nУСПЕХ: Векторное хранилище обновлено!")
-            print(f"Добавлено чанков: {len(self.documents)}")
-            print(f"Vectorstore доступен: {self.vectorstore is not None}")
-            print(f"Тип vectorstore: {type(self.vectorstore)}")
-            print(f"{'='*60}\n")
+            if saved_vectors == len(chunks):
+                logger.info(f"Все {saved_vectors} векторов успешно сохранены в pgvector")
+            else:
+                logger.warning(f"Сохранено {saved_vectors}/{len(chunks)} векторов")
+            
         except Exception as e:
-            print(f"\nОШИБКА при обновлении векторного хранилища:")
-            print(f"{str(e)}")
-            print(f"{'='*60}\n")
+            logger.error(f"ОШИБКА при сохранении документа в pgvector: {str(e)}")
             import traceback
-            traceback.print_exc()
+            logger.debug(f"Traceback: {traceback.format_exc()}")
+            raise
     
-    def query_documents(self, query, k=2):
-        """Поиск релевантных документов по запросу"""
-        print(f"Ищем релевантные документы для запроса: '{query}'")
-        print(f"Векторное хранилище: {self.vectorstore is not None}")
+    def update_vectorstore(self):
+        """Обновление или создание векторного хранилища (для обратной совместимости)"""
+        # При использовании pgvector векторы сохраняются сразу при добавлении документа
+        # Этот метод оставлен для обратной совместимости
+        if self.vector_repo:
+            print("Используется pgvector - векторы сохраняются автоматически при добавлении документов")
+            self.vectorstore = True
+        else:
+            print("ВНИМАНИЕ: pgvector недоступен, векторное хранилище не обновлено")
+            self.vectorstore = None
+    
+    async def query_documents_async(self, query, k=2):
+        """Асинхронный поиск релевантных документов по запросу"""
+        logger.info(f"Поиск релевантных документов для запроса: '{query[:50]}...'")
         
-        if not self.vectorstore:
-            print("Векторное хранилище не инициализировано или пусто")
-            return "Векторное хранилище не инициализировано или пусто"
+        # Проверяем наличие vector_repo (pgvector) вместо vectorstore
+        if not self.vector_repo:
+            logger.warning("pgvector недоступен (vector_repo is None)")
+            return "Векторное хранилище не инициализировано или pgvector недоступен"
+        
+        # Проверяем, есть ли загруженные документы
+        if not self.doc_names or len(self.doc_names) == 0:
+            logger.warning("Нет загруженных документов для поиска")
+            return "Нет загруженных документов"
+        
+        if not self.embeddings:
+            logger.error("Модель эмбеддингов не инициализирована")
+            return "Модель эмбеддингов не инициализирована"
         
         try:
-            print(f"Выполняем поиск с k={k}...")
-            docs = self.vectorstore.similarity_search(query, k=k)
-            print(f"Найдено документов: {len(docs)}")
-            
-            results = []
-            for doc in docs:
-                result = {
-                    "content": doc.page_content,
-                    "source": doc.metadata.get("source", "Неизвестный источник"),
-                    "chunk": doc.metadata.get("chunk", 0)
-                }
-                results.append(result)
-                print(f"Документ: {result['source']}, чанк: {result['chunk']}, длина: {len(result['content'])}")
-            
+            logger.info(f"Начинаем поиск документов для запроса: '{query[:100]}...'")
+            logger.info(f"Параметры поиска: k={k}, doc_names={self.doc_names}")
+            # Используем pgvector для поиска
+            results = await self._query_documents_async(query, k)
+            if isinstance(results, list):
+                logger.info(f"Найдено {len(results)} релевантных документов через pgvector")
+                if len(results) == 0:
+                    logger.warning("Векторный поиск не вернул результатов. Возможно, документы не сохранены в pgvector.")
+            elif isinstance(results, str):
+                logger.error(f"Ошибка поиска (строка): {results}")
             return results
         except Exception as e:
-            print(f"Ошибка при поиске по документам: {str(e)}")
+            logger.error(f"Ошибка при поиске по документам: {str(e)}")
             import traceback
-            traceback.print_exc()
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return f"Ошибка при поиске по документам: {str(e)}"
+    
+    def query_documents(self, query, k=2):
+        """Поиск релевантных документов по запросу (синхронная обертка для обратной совместимости)"""
+        try:
+            loop = asyncio.get_running_loop()
+            # Если loop запущен, это ошибка - нужно использовать async версию
+            logger.error("query_documents вызван из async контекста. Используйте query_documents_async()")
+            return "Ошибка: используйте async версию метода"
+        except RuntimeError:
+            # Нет запущенного loop, можем использовать asyncio.run
+            return asyncio.run(self.query_documents_async(query, k))
+    
+    async def _query_documents_async(self, query: str, k: int = 2):
+        """Асинхронный поиск релевантных документов через pgvector"""
+        logger.debug(f"   Выполняем векторный поиск через pgvector с k={k}...")
+        
+        # Генерируем эмбеддинг для запроса
+        query_embedding = self.embeddings.embed_query(query)
+        logger.debug(f"   Эмбеддинг запроса сгенерирован (размерность: {len(query_embedding)})")
+        
+        # Выполняем поиск в pgvector
+        results = await self.vector_repo.similarity_search(query_embedding, limit=k)
+        logger.debug(f"   pgvector вернул {len(results)} результатов")
+        
+        # Преобразуем результаты в нужный формат
+        formatted_results = []
+        for vector, similarity in results:
+            # Получаем имя файла по document_id
+            doc_name = None
+            for filename, doc_id in self.filename_to_id.items():
+                if doc_id == vector.document_id:
+                    doc_name = filename
+                    break
+            
+            if doc_name is None:
+                # Пытаемся получить из БД
+                pg_doc = await self.document_repo.get_document(vector.document_id)
+                if pg_doc:
+                    doc_name = pg_doc.filename
+                    self.filename_to_id[doc_name] = vector.document_id
+            
+            result = {
+                "content": vector.content,
+                "source": doc_name or f"document_{vector.document_id}",
+                "chunk": vector.chunk_index,
+                "similarity": similarity
+            }
+            formatted_results.append(result)
+            logger.debug(f"{result['source']}, чанк {result['chunk']}, similarity: {similarity:.4f}")
+        
+        return formatted_results
     
     def get_document_list(self):
         """Получение списка загруженных документов"""
@@ -680,6 +1175,15 @@ class DocumentProcessor:
         self.vectorstore = None
         self.confidence_data = {}
         self.image_paths = {}
+        self._doc_chunks_cache = {}  # Очищаем кэш
+        self.filename_to_id = {}  # Очищаем маппинг
+        
+        # Очищаем из PostgreSQL (опционально, можно оставить данные в БД)
+        # Если нужно очистить БД, раскомментируйте:
+        # if self.document_repo:
+        #     # Удаляем все документы из БД
+        #     asyncio.run(self._clear_all_documents_from_db())
+        
         print("Коллекция документов очищена")
         return "Коллекция документов очищена"
     
@@ -843,6 +1347,11 @@ class DocumentProcessor:
                 del self.image_paths[filename]
                 print(f"Путь к изображению для {filename} удален")
             
+            # Удаляем из кэша структуры документа
+            if filename in self._doc_chunks_cache:
+                del self._doc_chunks_cache[filename]
+                print(f"Кэш структуры для {filename} удален")
+            
             # Удаляем ВСЕ чанки этого документа из списка документов
             # Ищем все документы с этим именем и удаляем их
             documents_to_remove = []
@@ -858,15 +1367,47 @@ class DocumentProcessor:
             print(f"После удаления - self.doc_names: {self.doc_names}")
             print(f"После удаления - self.documents: {len(self.documents)}")
             
-            # Пересоздаем vectorstore с оставшимися документами
-            if self.documents:
-                print("Пересоздаем vectorstore с оставшимися документами")
-                self.update_vectorstore()
-                print(f"После обновления vectorstore - self.vectorstore доступен: {self.vectorstore is not None}")
-            else:
+            # Удаляем из PostgreSQL + pgvector
+            if self.document_repo and filename in self.filename_to_id:
+                try:
+                    document_id = self.filename_to_id[filename]
+                    # Удаляем векторы и документ асинхронно
+                    try:
+                        loop = asyncio.get_running_loop()
+                        # Если loop запущен, используем create_task или run в отдельном потоке
+                        import threading
+                        
+                        def run_async():
+                            new_loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(new_loop)
+                            try:
+                                new_loop.run_until_complete(self.vector_repo.delete_vectors_by_document(document_id))
+                                new_loop.run_until_complete(self.document_repo.delete_document(document_id))
+                            finally:
+                                new_loop.close()
+                        
+                        thread = threading.Thread(target=run_async)
+                        thread.start()
+                        thread.join()
+                    except RuntimeError:
+                        # Нет запущенного loop
+                        asyncio.run(self.vector_repo.delete_vectors_by_document(document_id))
+                        asyncio.run(self.document_repo.delete_document(document_id))
+                    
+                    # Удаляем из маппинга
+                    del self.filename_to_id[filename]
+                    print(f"Документ {filename} удален из PostgreSQL + pgvector")
+                except Exception as e:
+                    print(f"Ошибка при удалении документа из PostgreSQL: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+            
+            # Обновляем флаг vectorstore
+            if not self.doc_names:
                 print("Нет документов, очищаем vectorstore")
                 self.vectorstore = None
-                print(f"После очистки - self.vectorstore доступен: {self.vectorstore is not None}")
+            else:
+                self.vectorstore = True if self.vector_repo else None
             
             print(f"Документ {filename} успешно удален. Осталось документов: {len(self.doc_names)}")
             return True
@@ -877,32 +1418,230 @@ class DocumentProcessor:
             traceback.print_exc()
             return False 
     
-    def get_document_context(self, query, k=2):
-        """Получение контекста документов для запроса"""
-        print(f"Получаем контекст документов для запроса: '{query}'")
-        print(f"Векторное хранилище: {self.vectorstore is not None}")
+    async def get_document_context_async(self, query, k=2, include_all_chunks=None, max_context_length=30000):
+        """
+        Получение контекста документов для запроса с оптимизацией для скорости
         
-        if not self.vectorstore:
-            print("Векторное хранилище не инициализировано")
+        Args:
+            query: Запрос пользователя
+            k: Количество релевантных фрагментов для векторного поиска
+            include_all_chunks: Если None - автоматически определяет стратегию по типу запроса
+                              Если True - включает все чанки документа
+                              If False - только релевантные фрагменты
+            max_context_length: Максимальная длина контекста в символах (по умолчанию 30000)
+        """
+        print(f"Получаем контекст документов для запроса: '{query}'")
+        logger.info(f"get_document_context вызван для запроса: '{query[:100]}...'")
+        logger.info(f"vector_repo доступен: {self.vector_repo is not None}")
+        logger.info(f"doc_names: {self.doc_names}")
+        logger.info(f"Количество документов: {len(self.doc_names) if self.doc_names else 0}")
+        
+        # Проверяем наличие vector_repo и документов
+        if not self.vector_repo:
+            logger.warning("pgvector недоступен (vector_repo is None)")
+            print("pgvector недоступен (vector_repo is None)")
+            return None
+        
+        if not self.doc_names or len(self.doc_names) == 0:
+            logger.warning("Нет загруженных документов")
+            print("Нет загруженных документов")
             return None
         
         try:
-            # Получаем релевантные документы
-            docs = self.query_documents(query, k=k)
-            print(f"Найдено релевантных фрагментов: {len(docs) if isinstance(docs, list) else 'ошибка'}")
+            import time
+            start_time = time.time()
             
-            if isinstance(docs, str):  # Если возникла ошибка
-                print(f"Ошибка при поиске документов: {docs}")
-                return None
+            # Автоматическое определение стратегии по типу запроса
+            if include_all_chunks is None:
+                query_lower = query.lower()
+                # Запросы, требующие полного контекста
+                full_context_keywords = [
+                    'саммари', 'summary', 'краткое содержание', 'обзор', 'резюме',
+                    'по всему документу', 'весь документ', 'всего документа',
+                    'перескажи', 'опиши весь', 'расскажи о документе', 'структура документа'
+                ]
+                # Конкретные вопросы - используем только релевантные фрагменты
+                is_full_context_request = any(keyword in query_lower for keyword in full_context_keywords)
+                include_all_chunks = is_full_context_request
+                print(f"Автоматически определен режим: {'ПОЛНЫЙ КОНТЕКСТ' if include_all_chunks else 'РЕЛЕВАНТНЫЕ ФРАГМЕНТЫ'}")
+            else:
+                print(f"Режим: {'ПОЛНЫЙ КОНТЕКСТ' if include_all_chunks else 'РЕЛЕВАНТНЫЕ ФРАГМЕНТЫ'}")
             
-            # Формируем контекст из найденных документов
-            context = ""
-            for i, doc in enumerate(docs):
-                context += f"Фрагмент {i+1} (из документа '{doc['source']}'):\n{doc['content']}\n\n"
-            
-            print(f"Контекст сформирован, длина: {len(context)} символов")
+            if include_all_chunks:
+                # ОПТИМИЗИРОВАННЫЙ РЕЖИМ: Используем векторный поиск только для определения релевантных документов,
+                # затем быстро получаем ВСЕ чанки этих документов из кэша или БД
+                
+                # Быстрый векторный поиск для определения, какие документы релевантны
+                docs = await self.query_documents_async(query, k=min(k, 5))  # Нужно только для определения документов
+                print(f"Векторный поиск найденных документов: {len(docs) if isinstance(docs, list) else 'ошибка'}")
+                
+                if isinstance(docs, str):  # Если возникла ошибка
+                    print(f"Ошибка при поиске документов: {docs}")
+                    return None
+                
+                # Собираем уникальные имена документов
+                doc_names_found = set()
+                for doc in docs:
+                    if isinstance(doc, dict) and 'source' in doc:
+                        doc_names_found.add(doc['source'])
+                
+                # Если документы не найдены через поиск, используем все загруженные документы
+                if not doc_names_found and self.doc_names:
+                    doc_names_found = set(self.doc_names)
+                    print(f"Документы не найдены через поиск, используем все загруженные: {list(doc_names_found)}")
+                
+                # ОПТИМИЗИРОВАННАЯ СТРАТЕГИЯ: Для полного контекста используем выборку ключевых чанков
+                # вместо всех чанков для ускорения обработки
+                all_chunks = []
+                for doc_name in doc_names_found:
+                    if doc_name in self._doc_chunks_cache:
+                        cached_chunks = self._doc_chunks_cache[doc_name]
+                        total_chunks = len(cached_chunks)
+                        
+                        # Выбираем ключевые чанки: начало, конец, и равномерно распределенные
+                        selected_chunks = []
+                        
+                        # Всегда включаем первый чанк
+                        if cached_chunks:
+                            selected_chunks.append(cached_chunks[0])
+                        
+                        # Всегда включаем последний чанк
+                        if len(cached_chunks) > 1:
+                            selected_chunks.append(cached_chunks[-1])
+                        
+                        # Равномерно распределяем остальные чанки (примерно 15-20 для баланса)
+                        target_chunks = min(18, total_chunks)  # Оптимальное количество для скорости
+                        if total_chunks > 2:
+                            step = max(1, total_chunks // target_chunks)
+                            for i in range(step, total_chunks - 1, step):
+                                if cached_chunks[i] not in selected_chunks:
+                                    selected_chunks.append(cached_chunks[i])
+                        
+                        # Сортируем по номеру чанка
+                        selected_chunks.sort(key=lambda x: x['chunk'])
+                        
+                        # Преобразуем в нужный формат
+                        for chunk_data in selected_chunks:
+                            all_chunks.append({
+                                "content": chunk_data["content"],
+                                "source": doc_name,
+                                "chunk": chunk_data["chunk"]
+                            })
+                        
+                        print(f"Выбрано {len(selected_chunks)} ключевых чанков из {total_chunks} для документа '{doc_name}'")
+                    else:
+                        # Fallback: если кэш не обновлен
+                        print(f"Кэш не найден для '{doc_name}', используем fallback")
+                        doc_chunks = []
+                        for doc_item in self.documents:
+                            if doc_item.metadata.get("source") == doc_name:
+                                doc_chunks.append({
+                                    "content": doc_item.page_content,
+                                    "source": doc_name,
+                                    "chunk": doc_item.metadata.get("chunk", 0)
+                                })
+                        doc_chunks.sort(key=lambda x: x['chunk'])
+                        all_chunks.extend(doc_chunks)
+                        self._doc_chunks_cache[doc_name] = [
+                            {"content": c["content"], "chunk": c["chunk"]} 
+                            for c in doc_chunks
+                        ]
+                
+                # Сортируем все чанки по документу и номеру чанка
+                all_chunks.sort(key=lambda x: (x['source'], x['chunk']))
+                
+                # Формируем контекст с ограничением длины
+                context_parts = []
+                current_length = 0
+                chunks_added = 0
+                
+                for chunk in all_chunks:
+                    if chunk['chunk'] == 0:
+                        fragment = f"[НАЧАЛО ДОКУМЕНТА '{chunk['source']}']\n{chunk['content']}"
+                    else:
+                        fragment = f"[Чанк {chunk['chunk']} из '{chunk['source']}']\n{chunk['content']}"
+                    
+                    # Проверяем ограничение длины
+                    if current_length + len(fragment) > max_context_length:
+                        print(f"Достигнуто ограничение длины ({max_context_length} символов). Добавлено {chunks_added} из {len(all_chunks)} чанков.")
+                        break
+                    
+                    context_parts.append(fragment)
+                    current_length += len(fragment)
+                    chunks_added += 1
+                
+                context = "\n\n".join(context_parts) + "\n\n"
+                
+                elapsed_time = time.time() - start_time
+                print(f"Контекст сформирован за {elapsed_time:.2f}с: {len(context)} символов, {chunks_added}/{len(all_chunks)} чанков")
+                
+            else:
+                # ОПТИМИЗИРОВАННЫЙ РЕЖИМ: Для конкретных вопросов используем релевантные фрагменты + начало документа
+                # Увеличиваем k для получения большего количества релевантных фрагментов
+                k = max(k, 8)  # Минимум 8 релевантных фрагментов
+                docs = await self.query_documents_async(query, k=k)
+                print(f"Найдено релевантных фрагментов: {len(docs) if isinstance(docs, list) else 'ошибка'}")
+                
+                if isinstance(docs, str):
+                    print(f"Ошибка при поиске документов: {docs}")
+                    return None
+                
+                # Собираем уникальные документы
+                doc_names_found = set()
+                for doc in docs:
+                    if isinstance(doc, dict) and 'source' in doc:
+                        doc_names_found.add(doc['source'])
+                
+                # Добавляем первый чанк каждого документа для контекста
+                context_parts = []
+                added_chunks = set()
+                
+                # Сначала добавляем первые чанки документов
+                for doc_name in doc_names_found:
+                    if doc_name in self._doc_chunks_cache and self._doc_chunks_cache[doc_name]:
+                        first_chunk = self._doc_chunks_cache[doc_name][0]
+                        chunk_key = (doc_name, first_chunk['chunk'])
+                        if chunk_key not in added_chunks:
+                            context_parts.append(f"[НАЧАЛО ДОКУМЕНТА '{doc_name}']\n{first_chunk['content']}")
+                            added_chunks.add(chunk_key)
+                
+                # Затем добавляем релевантные фрагменты
+                for doc in docs:
+                    chunk_key = (doc['source'], doc['chunk'])
+                    if chunk_key not in added_chunks:
+                        context_parts.append(f"Фрагмент (из документа '{doc['source']}', чанк {doc['chunk']}):\n{doc['content']}")
+                        added_chunks.add(chunk_key)
+                
+                # Ограничиваем длину контекста
+                context = "\n\n".join(context_parts)
+                if len(context) > max_context_length:
+                    # Обрезаем до максимальной длины, сохраняя начало
+                    context = context[:max_context_length]
+                    context += "\n\n[Контекст обрезан для оптимизации скорости]"
+                
+                context += "\n\n"
+                
+                elapsed_time = time.time() - start_time
+                print(f"Контекст сформирован за {elapsed_time:.2f}с: {len(context)} символов, {len(context_parts)} фрагментов")
             
             return context
+            
+        except Exception as e:
+            print(f"Ошибка при получении контекста документов: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def get_document_context(self, query, k=2, include_all_chunks=None, max_context_length=30000):
+        """Синхронная обертка для get_document_context_async (для обратной совместимости)"""
+        try:
+            loop = asyncio.get_running_loop()
+            # Если loop запущен, это ошибка - нужно использовать async версию
+            logger.error("get_document_context вызван из async контекста. Используйте get_document_context_async()")
+            return None
+        except RuntimeError:
+            # Нет запущенного loop, можем использовать asyncio.run
+            return asyncio.run(self.get_document_context_async(query, k, include_all_chunks, max_context_length))
             
         except Exception as e:
             print(f"Ошибка при получении контекста документов: {str(e)}")

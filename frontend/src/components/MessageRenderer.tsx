@@ -742,6 +742,7 @@ const MessageRenderer: React.FC<MessageRendererProps> = ({ content, isStreaming 
      let listType: 'ordered' | 'unordered' | null = null;
      let listItems: React.ReactElement[] = [];
      let specialBlockIndex = 0;
+     let orderedListCounter = 0; // Счетчик для нумерованных списков
      
      const processedLines = lines.map((line, lineIndex) => {
       // Обрабатываем специальные блоки
@@ -783,20 +784,43 @@ const MessageRenderer: React.FC<MessageRendererProps> = ({ content, isStreaming 
       if (line.includes('<li')) {
         const listTypeMatch = line.match(/data-list-type="(ordered|unordered)"/);
         const currentListType = listTypeMatch ? (listTypeMatch[1] as 'ordered' | 'unordered') : 'unordered';
+        const listNumberMatch = line.match(/data-list-number="(\d+)"/);
+        const originalNumber = listNumberMatch ? parseInt(listNumberMatch[1], 10) : null;
         const content = line.replace(/<li[^>]*>(.*?)<\/li>/, '$1');
         
+        // Для нумерованных списков используем сохраненный номер или продолжаем счетчик
+        let listItemValue: number | undefined = undefined;
+        if (currentListType === 'ordered') {
+          if (originalNumber !== null) {
+            // Используем оригинальный номер из markdown
+            listItemValue = originalNumber;
+            orderedListCounter = originalNumber; // Обновляем счетчик для следующего элемента
+          } else {
+            // Если номера нет, продолжаем счетчик
+            orderedListCounter++;
+            listItemValue = orderedListCounter;
+          }
+        }
+        
+        const listItemProps: any = {
+          key: `${index}-${lineIndex}`,
+          component: 'li',
+          sx: {
+            ml: 2,
+            mb: 0.5,
+            '&::marker': {
+              color: 'primary.main',
+            },
+          },
+        };
+        
+        // Добавляем атрибут value для нумерованных списков
+        if (currentListType === 'ordered' && listItemValue !== undefined) {
+          listItemProps.value = listItemValue;
+        }
+        
         const listItem = (
-          <Box
-            key={`${index}-${lineIndex}`}
-            component="li"
-            sx={{
-              ml: 2,
-              mb: 0.5,
-              '&::marker': {
-                color: 'primary.main',
-              },
-            }}
-          >
+          <Box {...listItemProps}>
             {parseInlineMarkdown(content)}
           </Box>
         );
@@ -853,6 +877,7 @@ const MessageRenderer: React.FC<MessageRendererProps> = ({ content, isStreaming 
         );
         listItems = [];
         listType = null;
+        // Не сбрасываем счетчик - он может продолжиться после прерывания
         return list;
       }
 

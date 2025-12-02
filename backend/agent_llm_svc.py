@@ -51,6 +51,10 @@ class ModelSettings:
             "temperature": 0.7,
             "top_p": 0.95,
             "repeat_penalty": 1.05,
+            "top_k": 40,
+            "min_p": 0.05,
+            "frequency_penalty": 0.0,
+            "presence_penalty": 0.0,
             "use_gpu": True,
             "streaming": True,
             "legacy_api": False
@@ -109,7 +113,11 @@ class ModelSettings:
             "n_threads": 24,
             "temperature": 2.0,
             "top_p": 1.0,
-            "repeat_penalty": 2.0
+            "repeat_penalty": 2.0,
+            "top_k": 200,
+            "min_p": 1.0,
+            "frequency_penalty": 2.0,
+            "presence_penalty": 2.0
         }
     
     def get_all(self):
@@ -170,9 +178,32 @@ def update_model_settings(new_settings):
     logger.info("Настройки модели обновлены")
     return True
 
+# Глобальная переменная для хранения выбранной модели
+_selected_model_name = None
+
 def reload_model_by_path(model_path):
     """Перезагрузка модели с новым файлом модели (через llm-svc)"""
+    global _selected_model_name
+    
     if USE_LLM_SVC:
+        # Проверяем, что путь не является директорией
+        if os.path.isdir(model_path):
+            logger.warning(f"Передан путь к директории вместо файла модели: {model_path}. Пропускаем загрузку.")
+            return False
+        
+        # Проверяем, является ли путь llm-svc путем
+        if model_path.startswith("llm-svc://"):
+            # Извлекаем имя модели из пути
+            model_name = model_path.replace("llm-svc://", "")
+            _selected_model_name = model_name
+            logger.info(f"Выбрана модель из llm-svc: {model_name}. Модель будет использоваться при следующем запросе.")
+            return True
+        
+        # Если путь к локальному файлу, но мы используем llm-svc, предупреждаем
+        if os.path.exists(model_path) and model_path.endswith('.gguf'):
+            logger.warning(f"Передан путь к локальному файлу модели {model_path}, но используется llm-svc. Модель должна быть доступна через llm-svc.")
+            return True
+        
         logger.info(f"Перезагрузка модели через llm-svc: {model_path}")
         # В llm-svc перезагрузка модели происходит через конфигурацию
         # Здесь мы можем обновить настройки или перезапустить сервис
@@ -185,29 +216,54 @@ def reload_model_by_path(model_path):
 
 def get_model_info():
     """Получение информации о текущей модели (через llm-svc)"""
+    global _selected_model_name
+    
     if USE_LLM_SVC:
         try:
             import asyncio
-            loop = asyncio.get_event_loop()
+            
+            async def _get_model_info_async():
+                """Вспомогательная асинхронная функция для получения информации о модели"""
+                service = await get_llm_service()
+                health = await service.client.health_check()
+                return service, health
+            
+            # Получаем event loop
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            
+            # Выполняем асинхронную функцию
             if loop.is_running():
+                # Если loop уже запущен, используем ThreadPoolExecutor
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, get_llm_service())
-                    service = future.result()
+                    future = executor.submit(asyncio.run, _get_model_info_async())
+                    service, health = future.result()
             else:
-                service = loop.run_until_complete(get_llm_service())
+                # Если loop не запущен, используем run_until_complete
+                service, health = loop.run_until_complete(_get_model_info_async())
             
-            # Получаем информацию о модели через llm-svc
-            health = service.client.health_check()
-            if health.get("status") == "healthy":
+            if health and health.get("status") == "healthy":
+                # Используем выбранную модель, если она есть, иначе используем модель из health
+                if _selected_model_name:
+                    model_name = _selected_model_name
+                    model_path = f"llm-svc://{_selected_model_name}"
+                else:
+                    model_name = health.get("model_name") or getattr(service, "model_name", "Unknown")
+                    model_path = "llm-svc"
+                
                 return {
-                    "loaded": True,
+                    "loaded": health.get("model_loaded", True),
+                    "name": model_name,
                     "metadata": {
-                        "general.name": service.model_name,
+                        "general.name": model_name,
                         "general.architecture": "LLM-SVC",
                         "general.size_label": "Unknown"
                     },
-                    "path": "llm-svc",
+                    "path": model_path,
                     "n_ctx": MODEL_CONTEXT_SIZE,
                     "n_gpu_layers": 0
                 }

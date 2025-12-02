@@ -34,6 +34,15 @@ class LLMClient:
                 self.base_url = llm_svc_config.get("external_url", "http://localhost:8001").rstrip('/')
         else:
             self.base_url = base_url.rstrip('/')
+        
+        # Проверяем на опечатки в URL (1lm вместо llm)
+        if "1lm-svc" in self.base_url or "11m-svc" in self.base_url:
+            logger.error(f"ОБНАРУЖЕНА ОПЕЧАТКА В URL: {self.base_url}. Исправляем на llm-svc")
+            self.base_url = self.base_url.replace("1lm-svc", "llm-svc").replace("11m-svc", "llm-svc")
+            logger.info(f"Исправленный URL: {self.base_url}")
+        
+        # Логируем используемый URL для отладки
+        logger.info(f"LLMClient инициализирован с base_url: {self.base_url}, DOCKER_ENV: {os.getenv('DOCKER_ENV')}")
             
         self.api_key = api_key
         self.timeout = llm_svc_config.get("timeout", 300.0)
@@ -270,6 +279,28 @@ class LLMClient:
             logger.error(f"Ошибка диаризации аудио: {e}")
             raise
     
+    async def reload_whisperx_models(self) -> Dict[str, Any]:
+        """Принудительная перезагрузка моделей WhisperX"""
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    f"{self.base_url}/v1/whisperx/reload",
+                    headers={"Accept": "application/json"}
+                )
+                response.raise_for_status()
+                return response.json()
+        except httpx.ConnectError as e:
+            error_msg = f"Не удалось подключиться к llm-svc по адресу {self.base_url} для перезагрузки моделей."
+            logger.error(f"Ошибка подключения к llm-svc: {error_msg}. Детали: {e}")
+            raise Exception(error_msg) from e
+        except httpx.HTTPStatusError as e:
+            error_msg = f"Ошибка HTTP {e.response.status_code} при перезагрузке моделей: {e.response.text}"
+            logger.error(f"Ошибка HTTP при перезагрузке моделей: {error_msg}")
+            raise Exception(error_msg) from e
+        except Exception as e:
+            logger.error(f"Ошибка перезагрузки моделей WhisperX: {e}")
+            raise
+    
     async def transcribe_with_diarization(
         self,
         audio_file: bytes,
@@ -281,9 +312,7 @@ class LLMClient:
     ) -> Dict[str, Any]:
         """Комбинированная транскрибация с диаризацией"""
         try:
-            files = {
-                "file": (filename, io.BytesIO(audio_file), "audio/wav")
-            }
+            # Подготавливаем данные для запроса
             data = {
                 "language": language,
                 "min_speakers": min_speakers,
@@ -292,14 +321,50 @@ class LLMClient:
             }
             
             async with httpx.AsyncClient(timeout=300.0) as client:
+                # Создаем файл для первого запроса
+                files = {
+                    "file": (filename, io.BytesIO(audio_file), "audio/wav")
+                }
+                
                 response = await client.post(
                     f"{self.base_url}/v1/transcribe_with_diarization",
                     files=files,
                     data=data,
                     headers={"Accept": "application/json"}
                 )
+                
+                # Если получили ошибку 503 с сообщением о незагруженных моделях, пытаемся перезагрузить
+                if response.status_code == 503:
+                    response_text = response.text
+                    if "Модели WhisperX не загружены" in response_text or "WhisperX models not loaded" in response_text:
+                        logger.warning("Модели WhisperX не загружены, пытаемся перезагрузить...")
+                        try:
+                            await self.reload_whisperx_models()
+                            logger.info("Модели WhisperX перезагружены, повторяем запрос транскрибации...")
+                            # Повторяем запрос после перезагрузки (создаем новый BytesIO)
+                            files_retry = {
+                                "file": (filename, io.BytesIO(audio_file), "audio/wav")
+                            }
+                            response = await client.post(
+                                f"{self.base_url}/v1/transcribe_with_diarization",
+                                files=files_retry,
+                                data=data,
+                                headers={"Accept": "application/json"}
+                            )
+                        except Exception as reload_error:
+                            logger.error(f"Не удалось перезагрузить модели WhisperX: {reload_error}")
+                            # Продолжаем с исходной ошибкой
+                
                 response.raise_for_status()
                 return response.json()
+        except httpx.ConnectError as e:
+            error_msg = f"Не удалось подключиться к llm-svc по адресу {self.base_url}. Убедитесь, что сервис запущен и доступен."
+            logger.error(f"Ошибка подключения к llm-svc: {error_msg}. Детали: {e}")
+            raise Exception(error_msg) from e
+        except httpx.HTTPStatusError as e:
+            error_msg = f"Ошибка HTTP {e.response.status_code} от llm-svc: {e.response.text}"
+            logger.error(f"Ошибка HTTP от llm-svc: {error_msg}")
+            raise Exception(error_msg) from e
         except Exception as e:
             logger.error(f"Ошибка комбинированной обработки: {e}")
             raise
@@ -435,7 +500,8 @@ class LLMService:
         max_tokens: int = 1024,
         streaming: bool = False,
         stream_callback: Optional[Callable[[str, str], bool]] = None,
-        images: Optional[List[str]] = None
+        images: Optional[List[str]] = None,
+        model_path: Optional[str] = None
     ) -> str:
         """Генерация ответа через llm-svc"""
         
@@ -475,16 +541,24 @@ class LLMService:
                             })
                         break
             
+            # Определяем модель для использования
+            if model_path and model_path.startswith("llm-svc://"):
+                # Извлекаем имя модели из пути llm-svc://
+                model_to_use = model_path.replace("llm-svc://", "")
+            else:
+                # Используем сохраненную модель или модель по умолчанию
+                model_to_use = self.model_name
+            
             if streaming and stream_callback:
                 # Потоковая генерация
                 return await self._stream_generation(
-                    messages, temperature, max_tokens, stream_callback
+                    messages, temperature, max_tokens, stream_callback, model_to_use
                 )
             else:
                 # Обычная генерация
                 response = await self.client.chat_completion(
                     messages=messages,
-                    model=self.model_name,
+                    model=model_to_use,
                     temperature=temperature,
                     max_tokens=max_tokens,
                     stream=False
@@ -505,51 +579,53 @@ class LLMService:
         messages: List[Dict[str, str]],
         temperature: float,
         max_tokens: int,
-        stream_callback: Callable[[str, str], bool]
+        stream_callback: Callable[[str, str], bool],
+        model_name: Optional[str] = None
     ) -> str:
         """Потоковая генерация с колбэком"""
         
         accumulated_text = ""
         
         try:
-            async with self.client.client.stream(
-                "POST",
-                f"{self.client.base_url}/v1/chat/completions",
-                headers={**self.client._get_headers(), "Accept": "text/event-stream"},
-                json={
-                    "model": self.model_name,
-                    "messages": messages,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                    "stream": True
-                }
-            ) as response:
-                response.raise_for_status()
-                
-                async for line in response.aiter_lines():
-                    if line.startswith("data: "):
-                        data_str = line[6:]  # Убираем "data: "
-                        
-                        if data_str.strip() == "[DONE]":
-                            break
-                        
-                        try:
-                            data = json.loads(data_str)
-                            if "choices" in data and len(data["choices"]) > 0:
-                                delta = data["choices"][0].get("delta", {})
-                                if "content" in delta:
-                                    chunk = delta["content"]
-                                    accumulated_text += chunk
-                                    
-                                    # Вызываем колбэк
-                                    should_continue = stream_callback(chunk, accumulated_text)
-                                    if not should_continue:
-                                        logger.info("Генерация остановлена по сигналу колбэка")
-                                        return None
-                        except json.JSONDecodeError:
-                            continue
-                
-                return accumulated_text
+            async with httpx.AsyncClient(timeout=self.client.timeout) as http_client:
+                async with http_client.stream(
+                    "POST",
+                    f"{self.client.base_url}/v1/chat/completions",
+                    headers={**self.client._get_headers(), "Accept": "text/event-stream"},
+                    json={
+                        "model": model_name or self.model_name,
+                        "messages": messages,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                        "stream": True
+                    }
+                ) as response:
+                    response.raise_for_status()
+                    
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: "):
+                            data_str = line[6:]  # Убираем "data: "
+                            
+                            if data_str.strip() == "[DONE]":
+                                break
+                            
+                            try:
+                                data = json.loads(data_str)
+                                if "choices" in data and len(data["choices"]) > 0:
+                                    delta = data["choices"][0].get("delta", {})
+                                    if "content" in delta:
+                                        chunk = delta["content"]
+                                        accumulated_text += chunk
+                                        
+                                        # Вызываем колбэк
+                                        should_continue = stream_callback(chunk, accumulated_text)
+                                        if not should_continue:
+                                            logger.info("Генерация остановлена по сигналу колбэка")
+                                            return None
+                            except json.JSONDecodeError:
+                                continue
+                    
+                    return accumulated_text
                 
         except Exception as e:
             logger.error(f"Ошибка потоковой генерации: {e}")
@@ -718,6 +794,11 @@ def ask_agent_llm_svc(prompt: str, history: Optional[List[Dict[str, str]]] = Non
     
     async def _async_generate():
         service = await get_llm_service()
+        # Извлекаем имя модели из model_path, если он передан
+        model_name_for_request = None
+        if model_path and model_path.startswith("llm-svc://"):
+            model_name_for_request = model_path.replace("llm-svc://", "")
+        
         return await service.generate_response(
             prompt=prompt,
             history=history,
@@ -726,7 +807,8 @@ def ask_agent_llm_svc(prompt: str, history: Optional[List[Dict[str, str]]] = Non
             max_tokens=max_tokens or 1024,
             streaming=streaming,
             stream_callback=stream_callback,
-            images=images
+            images=images,
+            model_path=model_path if model_path and model_path.startswith("llm-svc://") else None
         )
     
     # Запускаем асинхронную функцию в новом event loop

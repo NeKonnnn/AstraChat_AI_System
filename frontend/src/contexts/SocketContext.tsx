@@ -56,6 +56,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 
     // Ошибки подключения
     newSocket.on('connect_error', (error: any) => {
+      console.error('Ошибка подключения Socket.IO:', error);
+      console.error('Тип ошибки:', error.type || 'unknown');
+      console.error('Сообщение:', error.message || 'No message');
+      console.error('Описание:', error.description || 'No description');
       setIsConnected(false);
       showNotification('error', `Ошибка подключения Socket.IO: ${error.message || 'Неизвестная ошибка'}`);
     });

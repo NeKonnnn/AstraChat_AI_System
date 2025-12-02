@@ -4,11 +4,24 @@
 
 import logging
 from typing import Optional
+import asyncio
 import asyncpg
 from asyncpg import Pool, Connection
 from asyncpg.exceptions import ConnectionDoesNotExistError, PostgresError
 
 logger = logging.getLogger(__name__)
+
+
+class _ConnectionContextManager:
+    """Обертка для context manager соединения"""
+    def __init__(self, cm):
+        self._cm = cm
+    
+    async def __aenter__(self):
+        return await self._cm.__aenter__()
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        return await self._cm.__aexit__(exc_type, exc_val, exc_tb)
 
 
 class PostgreSQLConnection:
@@ -70,11 +83,32 @@ class PostgreSQLConnection:
                 if not result:
                     logger.warning("Расширение pgvector не установлено. Пытаемся установить...")
                     try:
+                        # Пытаемся установить расширение
                         await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-                        logger.info("Расширение pgvector успешно установлено")
+                        # Проверяем, что расширение установлено
+                        check_result = await conn.fetchval(
+                            "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'vector')"
+                        )
+                        if check_result:
+                            logger.info("✅ Расширение pgvector успешно установлено")
+                        else:
+                            logger.error("❌ Расширение pgvector не установлено после попытки создания")
+                            logger.error("   Возможно, у пользователя нет прав на создание расширений")
+                            logger.error("   Выполните вручную: CREATE EXTENSION vector;")
                     except Exception as e:
-                        logger.error(f"Не удалось установить pgvector: {e}")
-                        logger.error("Для работы RAG системы необходимо установить pgvector")
+                        error_msg = str(e)
+                        logger.error(f"❌ Не удалось установить pgvector: {error_msg}")
+                        if "permission denied" in error_msg.lower() or "права" in error_msg.lower():
+                            logger.error("   У пользователя PostgreSQL нет прав на создание расширений")
+                            logger.error("   Решение:")
+                            logger.error("   1. Подключитесь к PostgreSQL как суперпользователь (postgres)")
+                            logger.error("   2. Выполните: CREATE EXTENSION vector;")
+                            logger.error("   3. Или дайте права пользователю: ALTER USER admin WITH SUPERUSER;")
+                        elif "does not exist" in error_msg.lower() or "не существует" in error_msg.lower():
+                            logger.error("   Расширение pgvector не найдено в PostgreSQL")
+                            logger.error("   Убедитесь, что используется образ pgvector/pgvector:pg17 в docker-compose.yml")
+                        else:
+                            logger.error("   Для работы RAG системы необходимо установить pgvector")
             
             logger.info(f"Успешное подключение к PostgreSQL. База данных: {self.database}")
             return True
@@ -148,11 +182,34 @@ class PostgreSQLConnection:
             logger.error(f"Ошибка при проверке здоровья PostgreSQL: {e}")
             return False
     
-    def acquire(self):
-        """Получение соединения из пула (контекстный менеджер)"""
+    async def ensure_pool(self):
+        """Обеспечивает, что пул создан в текущем event loop"""
+        try:
+            current_loop = asyncio.get_running_loop()
+            
+            # Если пул не создан или создан в другом loop, пересоздаем
+            if not self.pool or (hasattr(self.pool, '_loop') and self.pool._loop is not current_loop):
+                if self.pool:
+                    logger.info("Пул соединений создан в другом event loop, пересоздаем в текущем...")
+                    try:
+                        await self.pool.close()
+                    except:
+                        pass
+                
+                # Создаем новый пул в текущем loop
+                await self.connect()
+        except RuntimeError:
+            # Нет запущенного loop, используем существующий пул или создаем новый
+            if not self.pool:
+                await self.connect()
+    
+    async def acquire(self):
+        """Получение соединения из пула (async context manager)"""
+        # Убеждаемся, что пул создан в текущем event loop
+        await self.ensure_pool()
         if not self.pool:
-            raise RuntimeError("Пул соединений не создан. Вызовите connect() сначала.")
-        return self.pool.acquire()
+            raise RuntimeError("Пул соединений не создан. Вызовите connect() или ensure_pool() сначала.")
+        return _ConnectionContextManager(self.pool.acquire())
     
     async def release(self, conn: Connection):
         """Освобождение соединения обратно в пул"""
@@ -160,48 +217,20 @@ class PostgreSQLConnection:
     
     async def execute(self, query: str, *args):
         """Выполнение запроса"""
-        async with self.pool.acquire() as conn:
+        async with await self.acquire() as conn:
             return await conn.execute(query, *args)
     
     async def fetch(self, query: str, *args):
         """Выполнение запроса с возвратом всех строк"""
-        async with self.pool.acquire() as conn:
+        async with await self.acquire() as conn:
             return await conn.fetch(query, *args)
     
     async def fetchrow(self, query: str, *args):
         """Выполнение запроса с возвратом одной строки"""
-        async with self.pool.acquire() as conn:
+        async with await self.acquire() as conn:
             return await conn.fetchrow(query, *args)
     
     async def fetchval(self, query: str, *args):
         """Выполнение запроса с возвратом одного значения"""
-        async with self.pool.acquire() as conn:
+        async with await self.acquire() as conn:
             return await conn.fetchval(query, *args)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

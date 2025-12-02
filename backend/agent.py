@@ -28,6 +28,10 @@ class ModelSettings:
             "temperature": 0.7,        # Температура генерации
             "top_p": 0.95,             # Top-p sampling
             "repeat_penalty": 1.05,    # Штраф за повторения
+            "top_k": 40,               # Top-k sampling
+            "min_p": 0.05,             # Min-p sampling
+            "frequency_penalty": 0.0,  # Frequency penalty
+            "presence_penalty": 0.0,    # Presence penalty
             "use_gpu": True,           # Использовать GPU
             "streaming": True,         # Использовать потоковую генерацию
             "legacy_api": False        # Режим совместимости для несовместимых архитектур
@@ -86,7 +90,11 @@ class ModelSettings:
             "n_threads": 24,           # Максимум потоков (по количеству ядер)
             "temperature": 2.0,        # Максимальная температура
             "top_p": 1.0,              # Максимальный top_p
-            "repeat_penalty": 2.0      # Максимальный штраф за повторения
+            "repeat_penalty": 2.0,      # Максимальный штраф за повторения
+            "top_k": 200,              # Максимальный top_k
+            "min_p": 1.0,              # Максимальный min_p
+            "frequency_penalty": 2.0,  # Максимальный frequency_penalty
+            "presence_penalty": 2.0    # Максимальный presence_penalty
         }
     
     def get_all(self):
@@ -525,6 +533,7 @@ def ask_agent(prompt, history=None, max_tokens=None, streaming=False, stream_cal
                 temperature=model_settings.get("temperature"),
                 top_p=model_settings.get("top_p"),
                 repeat_penalty=model_settings.get("repeat_penalty"),
+                top_k=model_settings.get("top_k", 40),
                 stream=True  # Включаем потоковую генерацию
             )
             
@@ -558,7 +567,8 @@ def ask_agent(prompt, history=None, max_tokens=None, streaming=False, stream_cal
                 echo=False,                # Не возвращать входной текст
                 temperature=model_settings.get("temperature"),
                 top_p=model_settings.get("top_p"),
-                repeat_penalty=model_settings.get("repeat_penalty")
+                repeat_penalty=model_settings.get("repeat_penalty"),
+                top_k=model_settings.get("top_k", 40)
             )
             
             generated_text = output["choices"][0]["text"].strip()

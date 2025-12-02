@@ -6,7 +6,7 @@ import subprocess
 import numpy as np
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form
 from fastapi.responses import JSONResponse
-from app.dependencies.whisperx_handler import get_whisperx_handler
+from app.dependencies.whisperx_handler import get_whisperx_handler, reload_whisperx_handler
 from app.core.config import settings
 import logging
 
@@ -215,6 +215,38 @@ async def get_whisperx_info():
         "max_file_size": settings.whisperx.max_file_size,
         "batch_size": settings.whisperx.batch_size
     })
+
+
+@router.post("/whisperx/reload")
+async def reload_whisperx_models():
+    """Принудительная перезагрузка моделей WhisperX"""
+    try:
+        if not settings.whisperx.enabled:
+            raise HTTPException(status_code=503, detail="WhisperX отключен в конфигурации")
+        
+        logger.info("Запрос на перезагрузку моделей WhisperX")
+        models = await reload_whisperx_handler()
+        
+        if not models:
+            raise HTTPException(
+                status_code=503, 
+                detail="Не удалось загрузить модели WhisperX. Проверьте логи для деталей."
+            )
+        
+        return JSONResponse(content={
+            "success": True,
+            "message": "Модели WhisperX успешно перезагружены",
+            "loaded_models": list(models.keys()),
+            "total_models": len(models)
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Ошибка при перезагрузке моделей WhisperX: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Ошибка при перезагрузке моделей WhisperX: {str(e)}"
+        )
 
 
 

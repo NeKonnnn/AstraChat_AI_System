@@ -58,6 +58,7 @@ services:
       - ./memory:/app/memory
       - ./uploads:/app/uploads  # Директория для загруженных документов
       - ./backend:/app  # Полное монтирование для работы импортов
+      - ./models:/app/models:ro  # Монтирование локальных моделей (эмбеддинги и др.)
     environment:
       - PYTHONPATH=/app
       - LLM_SERVICE_URL=${LLM_SVC_INTERNAL_URL:-http://llm-svc:8000}

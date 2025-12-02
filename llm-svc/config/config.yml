@@ -111,7 +111,7 @@ whisperx:
   enabled: true
   models_dir: "/app/models/whisperx"
   device: "auto"  # auto, cpu, cuda
-  compute_type: "float16"  # float16, int8, int8_float16
+  compute_type: "int8"  # int8 для CPU, float16 для CUDA
   language: "ru"
   batch_size: 16
   max_file_size: 104857600  # 100MB

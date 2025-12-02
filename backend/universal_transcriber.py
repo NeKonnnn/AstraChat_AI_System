@@ -221,31 +221,37 @@ class UniversalTranscriber:
                 
                 # Создаем клиент и вызываем API
                 async def _transcribe():
-                    async with LLMClient() as client:
-                        if self.engine == "whisperx":
-                            # WhisperX транскрипция
-                            result = await client.transcribe_audio_whisperx(
-                                audio_data, 
-                                os.path.basename(audio_path),
-                                language="auto"
-                            )
-                        else:
-                            # Vosk транскрипция
-                            result = await client.transcribe_audio(
-                                audio_data, 
-                                os.path.basename(audio_path),
-                                language="ru"
-                            )
-                        return result
+                    client = LLMClient()
+                    if self.engine == "whisperx":
+                        # WhisperX транскрипция
+                        result = await client.transcribe_audio_whisperx(
+                            audio_data, 
+                            os.path.basename(audio_path),
+                            language="auto"
+                        )
+                    else:
+                        # Vosk транскрипция
+                        result = await client.transcribe_audio(
+                            audio_data, 
+                            os.path.basename(audio_path),
+                            language="ru"
+                        )
+                    return result
                 
                 result = asyncio.run(_transcribe())
                 
-                if result:
-                    self.logger.info(f"[LLM-SVC] Транскрипция успешна: {len(result)} символов")
-                    return True, result
+                if result and result.get("success"):
+                    text = result.get("text", "")
+                    if text:
+                        self.logger.info(f"[LLM-SVC] Транскрипция успешна: {len(text)} символов")
+                        return True, text
+                    else:
+                        self.logger.error("[LLM-SVC] Получен пустой текст в результате")
+                        return False, "Ошибка транскрипции: пустой текст"
                 else:
-                    self.logger.error("[LLM-SVC] Получен пустой результат")
-                    return False, "Ошибка транскрипции: пустой результат"
+                    error_msg = result.get("error", "Unknown error") if result else "Пустой результат"
+                    self.logger.error(f"[LLM-SVC] Ошибка транскрипции: {error_msg}")
+                    return False, f"Ошибка транскрипции через llm-svc: {error_msg}"
                     
             except Exception as e:
                 self.logger.error(f"[LLM-SVC] Ошибка транскрипции: {e}")
@@ -356,35 +362,30 @@ class UniversalTranscriber:
                 
                 # Асинхронная функция для вызова API
                 async def _diarize_async():
-                    async with LLMClient() as client:
-                        # Сначала делаем диаризацию
-                        diarization_result = await client.diarize_audio(
-                            audio_data, 
-                            os.path.basename(audio_path),
-                            min_speakers=1,
-                            max_speakers=10
-                        )
-                        
-                        if not diarization_result.get("success"):
-                            raise Exception(f"Ошибка диаризации: {diarization_result.get('error', 'Unknown')}")
-                        
-                        # Затем делаем транскрипцию с диаризацией
-                        result = await client.transcribe_with_diarization(
-                            audio_data, 
-                            os.path.basename(audio_path),
-                            language="auto"
-                        )
-                        return result
+                    client = LLMClient()
+                    # Делаем транскрипцию с диаризацией
+                    result = await client.transcribe_with_diarization(
+                        audio_data, 
+                        os.path.basename(audio_path),
+                        language="auto"
+                    )
+                    return result
                 
                 # Запускаем асинхронную функцию
                 result = asyncio.run(_diarize_async())
                 
-                if result:
-                    self.logger.info(f"[LLM-SVC] Диаризация успешна: {len(result)} символов")
-                    return True, result
+                if result and result.get("success"):
+                    text = result.get("text", "")
+                    if text:
+                        self.logger.info(f"[LLM-SVC] Диаризация успешна: {len(text)} символов")
+                        return True, text
+                    else:
+                        self.logger.error("[LLM-SVC] Получен пустой текст в результате")
+                        return False, "Ошибка диаризации: пустой текст"
                 else:
-                    self.logger.error("[LLM-SVC] Получен пустой результат диаризации")
-                    return False, "Ошибка диаризации: пустой результат"
+                    error_msg = result.get("error", "Unknown error") if result else "Пустой результат"
+                    self.logger.error(f"[LLM-SVC] Ошибка диаризации: {error_msg}")
+                    return False, f"Ошибка диаризации через llm-svc: {error_msg}"
                     
             except Exception as e:
                 self.logger.error(f"[LLM-SVC] Ошибка диаризации: {e}")

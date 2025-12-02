@@ -7,6 +7,7 @@ import numpy as np
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form
 from fastapi.responses import JSONResponse
 from app.dependencies.diarization_handler import get_diarization_handler
+from app.dependencies.whisperx_handler import get_whisperx_handler
 from app.core.config import settings
 import logging
 
@@ -213,19 +214,27 @@ async def transcribe_with_diarization(
         whisperx_models = await get_whisperx_handler()
         diarization_pipeline = await get_diarization_handler()
         
+        logger.info(f"Модели WhisperX загружены: {list(whisperx_models.keys()) if whisperx_models else 'None'}")
+        logger.info(f"Пайплайн диаризации загружен: {diarization_pipeline is not None}")
+        
         if not whisperx_models:
+            logger.error("Модели WhisperX не загружены при запросе транскрибации")
             raise HTTPException(status_code=503, detail="Модели WhisperX не загружены")
         if diarization_pipeline is None:
+            logger.error("Пайплайн диаризации не загружен при запросе транскрибации")
             raise HTTPException(status_code=503, detail="Пайплайн диаризации не загружен")
         
         # Определяем язык
         if language == "auto":
             language = "ru"
         
+        logger.info(f"Используемый язык: {language}, доступные языки: {list(whisperx_models.keys())}")
+        
         if language not in whisperx_models:
+            logger.error(f"Язык {language} не найден в загруженных моделях: {list(whisperx_models.keys())}")
             raise HTTPException(
                 status_code=400, 
-                detail=f"Неподдерживаемый язык: {language}"
+                detail=f"Неподдерживаемый язык: {language}. Доступные: {list(whisperx_models.keys())}"
             )
         
         # Создаем временный файл

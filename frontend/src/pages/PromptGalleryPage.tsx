@@ -14,6 +14,7 @@ import {
   Menu,
   MenuItem,
   FormControl,
+  FormControlLabel,
   InputLabel,
   Select,
   Pagination,
@@ -31,6 +32,12 @@ import {
   Checkbox,
   Drawer,
   Divider,
+  Tabs,
+  Tab,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
+  Slider,
 } from '@mui/material';
 import {
   Search as SearchIcon,
@@ -50,10 +57,14 @@ import {
   Menu as MenuIcon,
   VisibilityOff as VisibilityOffIcon,
   ChevronRight as ChevronRightIcon,
+  SmartToy as AgentIcon,
+  AutoAwesome as PromptIcon,
+  Settings as SettingsIcon,
 } from '@mui/icons-material';
 import { getApiUrl, API_CONFIG } from '../config/api';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '@mui/material/styles';
+import { useNavigate } from 'react-router-dom';
 
 interface Tag {
   id: number;
@@ -81,17 +92,48 @@ interface Prompt {
   is_bookmarked?: boolean;
 }
 
+interface Agent {
+  id: number;
+  name: string;
+  description?: string;
+  system_prompt: string;
+  config?: Record<string, any>;
+  tools?: string[];
+  author_id: string;
+  author_name: string;
+  created_at: string;
+  updated_at: string;
+  is_public: boolean;
+  usage_count: number;
+  views_count: number;
+  tags: Tag[];
+  average_rating: number;
+  total_votes: number;
+  user_rating?: number;
+  is_bookmarked?: boolean;
+}
+
 export default function PromptGalleryPage() {
   // Получаем токен из контекста аутентификации
   const { token } = useAuth();
   const theme = useTheme();
   const isDarkMode = theme.palette.mode === 'dark';
+  const navigate = useNavigate();
+  
+  // Состояние для вкладок
+  const [activeTab, setActiveTab] = useState(0); // 0 = промпты, 1 = агенты
   
   // Состояние для промптов
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  
+  // Состояние для агентов
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [agentsLoading, setAgentsLoading] = useState(false);
+  const [agentsPage, setAgentsPage] = useState(1);
+  const [agentsTotalPages, setAgentsTotalPages] = useState(1);
 
   // Состояние для фильтров
   const [searchQuery, setSearchQuery] = useState('');
@@ -110,6 +152,9 @@ export default function PromptGalleryPage() {
   const [editingPrompt, setEditingPrompt] = useState<Prompt | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [deletingPromptId, setDeletingPromptId] = useState<number | null>(null);
+  
+  // Состояние для диалогов агентов
+  const [showCreateAgentDialog, setShowCreateAgentDialog] = useState(false);
   const [filtersAnchorEl, setFiltersAnchorEl] = useState<null | HTMLElement>(null);
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
   const [rightSidebarHidden, setRightSidebarHidden] = useState(false);
@@ -124,14 +169,48 @@ export default function PromptGalleryPage() {
     new_tags: [] as string[],
   });
   
+  // Состояние для создания агента
+  const [agentForm, setAgentForm] = useState({
+    name: '',
+    description: '',
+    system_prompt: '',
+    config: {
+      model_path: '',
+      model_settings: {
+        context_size: 2048,
+        output_tokens: 512,
+        temperature: 0.7,
+        top_p: 0.95,
+        repeat_penalty: 1.05,
+        use_gpu: false,
+        streaming: true,
+        streaming_speed: 50,
+      },
+    } as Record<string, any>,
+    tools: [] as string[],
+    is_public: true,
+    tag_ids: [] as number[],
+    new_tags: [] as string[],
+  });
+  
+  // Состояние для доступных моделей
+  const [availableModels, setAvailableModels] = useState<Array<{
+    name: string;
+    path: string;
+    size?: number;
+    size_mb?: number;
+  }>>([]);
+  
   // Состояние для ввода нового тега
   const [newTagInput, setNewTagInput] = useState('');
+  const [newAgentTagInput, setNewAgentTagInput] = useState('');
 
   // Уведомления
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' });
 
   // Флаг для предотвращения одновременных загрузок
   const isLoadingRef = useRef(false);
+  const isAgentsLoadingRef = useRef(false);
   // Флаг для отслеживания первого рендера
   const hasLoadedRef = useRef(false);
 
@@ -246,7 +325,21 @@ export default function PromptGalleryPage() {
 
   useEffect(() => {
     loadTags();
+    loadAvailableModels();
   }, []);
+
+  // Загрузка доступных моделей
+  const loadAvailableModels = async () => {
+    try {
+      const response = await fetch(`${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../models/available`);
+      if (response.ok) {
+        const data = await response.json();
+        setAvailableModels(data.models || []);
+      }
+    } catch (error) {
+      console.error('Ошибка загрузки моделей:', error);
+    }
+  };
 
   // Сброс страницы при переключении закладок
   useEffect(() => {
@@ -612,6 +705,337 @@ export default function PromptGalleryPage() {
     setPage(1);
   };
 
+  // ===================================
+  // ФУНКЦИИ ДЛЯ РАБОТЫ С АГЕНТАМИ
+  // ===================================
+
+  // Загрузка агентов
+  const loadAgents = useCallback(async () => {
+    if (isAgentsLoadingRef.current) {
+      return;
+    }
+    
+    isAgentsLoadingRef.current = true;
+    setAgentsLoading(true);
+    try {
+      let url = `${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../agents/`;
+      
+      const params = new URLSearchParams({
+        page: agentsPage.toString(),
+        limit: '20',
+        sort_by: sortBy,
+        sort_order: sortOrder,
+      });
+      
+      if (searchQuery) params.append('search', searchQuery);
+      if (selectedTags.length > 0) params.append('tags', selectedTags.join(','));
+
+      const headers: HeadersInit = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      
+      const response = await fetch(`${url}?${params}`, { headers });
+
+      if (response.ok) {
+        const data = await response.json();
+        const agentsWithTags = (data.agents || []).map((a: any) => ({
+          ...a,
+          tags: a.tags || []
+        }));
+        
+        setAgents(agentsWithTags);
+        setAgentsTotalPages(data.pages || 1);
+      } else {
+        setAgents([]);
+        setAgentsTotalPages(0);
+      }
+    } catch (error) {
+      console.error('Ошибка загрузки агентов:', error);
+      setAgents([]);
+      setAgentsTotalPages(0);
+    } finally {
+      setAgentsLoading(false);
+      isAgentsLoadingRef.current = false;
+    }
+  }, [agentsPage, sortBy, sortOrder, searchQuery, selectedTags, token]);
+
+  // Загрузка агентов при изменении параметров
+  useEffect(() => {
+    if (activeTab === 1) { // Вкладка агентов
+      if (!searchQuery || !searchQuery.trim()) {
+        loadAgents();
+      }
+    }
+  }, [agentsPage, sortBy, sortOrder, selectedTags, activeTab, loadAgents]);
+
+  // Поиск агентов с дебаунсом
+  useEffect(() => {
+    if (activeTab !== 1 || !searchQuery || !searchQuery.trim()) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      if (agentsPage === 1) {
+        loadAgents();
+      } else {
+        setAgentsPage(1);
+      }
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery, activeTab, agentsPage, loadAgents]);
+
+  // Обработка переключения вкладок
+  const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
+    setActiveTab(newValue);
+    setPage(1);
+    setAgentsPage(1);
+    if (newValue === 0) {
+      loadPrompts();
+    } else {
+      loadAgents();
+    }
+  };
+
+  // Создание агента
+  const handleCreateAgent = async () => {
+    if (!token) {
+      showNotification('Для создания агента необходимо войти в систему', 'error');
+      return;
+    }
+    
+    // Валидация
+    if (!agentForm.name || agentForm.name.trim().length < 3) {
+      showNotification('Название агента должно содержать минимум 3 символа', 'error');
+      return;
+    }
+    
+    if (!agentForm.system_prompt || agentForm.system_prompt.trim().length < 10) {
+      showNotification('Системный промпт должен содержать минимум 10 символов', 'error');
+      return;
+    }
+    
+    try {
+      const dataToSend = {
+        name: agentForm.name.trim(),
+        description: agentForm.description?.trim() || null,
+        system_prompt: agentForm.system_prompt.trim(),
+        config: agentForm.config || {},
+        tools: agentForm.tools || [],
+        is_public: agentForm.is_public,
+        tag_ids: agentForm.tag_ids || [],
+        new_tags: agentForm.new_tags || [],
+      };
+      
+      const response = await fetch(
+        `${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../agents/`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+          body: JSON.stringify(dataToSend),
+        }
+      );
+
+      if (response.ok) {
+        showNotification('Агент успешно создан!', 'success');
+        setShowCreateAgentDialog(false);
+        resetAgentForm();
+        loadAgents();
+        loadTags(); // Перезагружаем теги, чтобы новые теги появились в списке
+      } else {
+        try {
+          const errorData = await response.json();
+          showNotification(errorData.detail || 'Ошибка создания агента', 'error');
+        } catch (e) {
+          showNotification('Ошибка создания агента', 'error');
+        }
+      }
+    } catch (error) {
+      console.error('Ошибка создания агента:', error);
+      showNotification('Ошибка создания агента', 'error');
+    }
+  };
+
+  const resetAgentForm = () => {
+    setAgentForm({
+      name: '',
+      description: '',
+      system_prompt: '',
+      config: {
+        model_path: '',
+        model_settings: {
+          context_size: 2048,
+          output_tokens: 512,
+          temperature: 0.7,
+          top_p: 0.95,
+          repeat_penalty: 1.05,
+          use_gpu: false,
+          streaming: true,
+          streaming_speed: 50,
+        },
+      },
+      tools: [],
+      is_public: true,
+      tag_ids: [],
+      new_tags: [],
+    });
+    setNewAgentTagInput('');
+  };
+
+  // Использование агента
+  const handleUseAgent = async (agent: Agent) => {
+    try {
+      // Сохраняем агента в localStorage для применения в чате
+      localStorage.setItem('selectedAgent', JSON.stringify({
+        id: agent.id,
+        name: agent.name,
+        system_prompt: agent.system_prompt,
+        config: agent.config,
+        tools: agent.tools,
+      }));
+
+      // Применяем системный промпт и настройки агента через API
+      if (token) {
+        try {
+          // Применяем системный промпт
+          const promptResponse = await fetch(
+            `${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../context-prompts/global`,
+            {
+              method: 'PUT',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`,
+              },
+              body: JSON.stringify({ prompt: agent.system_prompt }),
+            }
+          );
+
+          // Применяем настройки модели, если они указаны
+          if (agent.config?.model_settings) {
+            try {
+              await fetch(
+                `${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../models/settings`,
+                {
+                  method: 'PUT',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`,
+                  },
+                  body: JSON.stringify(agent.config.model_settings),
+                }
+              );
+            } catch (error) {
+              console.warn('Не удалось применить настройки модели:', error);
+            }
+          }
+
+          // Загружаем указанную модель, если она указана
+          if (agent.config?.model_path) {
+            try {
+              await fetch(
+                `${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../models/load`,
+                {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`,
+                  },
+                  body: JSON.stringify({ model_path: agent.config.model_path }),
+                }
+              );
+            } catch (error) {
+              console.warn('Не удалось загрузить модель:', error);
+            }
+          }
+
+          if (promptResponse.ok) {
+            showNotification(`Агент "${agent.name}" применён! Переходим в чат...`, 'success');
+            
+            // Увеличиваем счетчик использований
+            await fetch(
+              `${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../agents/${agent.id}/use`,
+              {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                },
+              }
+            );
+            
+            // Переходим в чат через небольшую задержку, чтобы пользователь увидел уведомление
+            setTimeout(() => {
+              navigate('/');
+              loadAgents(); // Обновляем список для обновления счетчиков
+            }, 1000);
+          } else {
+            // Если не удалось применить через API, просто сохраняем в localStorage
+            showNotification(`Агент "${agent.name}" сохранён! Переходим в чат...`, 'success');
+            setTimeout(() => {
+              navigate('/');
+              loadAgents();
+            }, 1000);
+          }
+        } catch (error) {
+          console.error('Ошибка применения агента:', error);
+          // В случае ошибки все равно переходим в чат
+          showNotification(`Агент "${agent.name}" сохранён! Переходим в чат...`, 'success');
+          setTimeout(() => {
+            navigate('/');
+            loadAgents();
+          }, 1000);
+        }
+      } else {
+        // Если пользователь не авторизован, просто переходим в чат
+        showNotification(`Агент "${agent.name}" сохранён! Переходим в чат...`, 'success');
+        setTimeout(() => {
+          navigate('/');
+          loadAgents();
+        }, 1000);
+      }
+    } catch (error) {
+      console.error('Ошибка использования агента:', error);
+      showNotification('Ошибка использования агента', 'error');
+    }
+  };
+
+  // Добавить/удалить закладку агента
+  const handleToggleAgentBookmark = async (agent: Agent) => {
+    if (!token) {
+      showNotification('Для работы с закладками необходимо войти в систему', 'error');
+      return;
+    }
+
+    try {
+      const method = agent.is_bookmarked ? 'DELETE' : 'POST';
+      const response = await fetch(
+        `${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../agents/${agent.id}/bookmark`,
+        {
+          method,
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        }
+      );
+
+      if (response.ok) {
+        showNotification(
+          agent.is_bookmarked ? 'Удалено из закладок' : 'Добавлено в закладки',
+          'success'
+        );
+        loadAgents(); // Обновляем список
+      } else {
+        showNotification('Ошибка при работе с закладками', 'error');
+      }
+    } catch (error) {
+      console.error('Ошибка работы с закладками:', error);
+      showNotification('Ошибка при работе с закладками', 'error');
+    }
+  };
+
   return (
     <Box sx={{ height: '100vh', display: 'flex', bgcolor: 'background.default' }}>
 
@@ -632,12 +1056,28 @@ export default function PromptGalleryPage() {
           <Container maxWidth="xl">
             <Box sx={{ textAlign: 'center' }}>
               <Typography variant="h4" fontWeight="bold" gutterBottom>
-                Галерея Промптов
+                Галерея Промптов и Агентов
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                Делитесь лучшими промптами и находите вдохновение
+                Делитесь лучшими промптами и создавайте собственных ИИ агентов
               </Typography>
             </Box>
+          </Container>
+        </Box>
+
+        {/* Вкладки */}
+        <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+          <Container maxWidth="xl">
+            <Tabs 
+              value={activeTab} 
+              onChange={handleTabChange}
+              variant="fullWidth"
+              textColor="primary"
+              indicatorColor="primary"
+            >
+              <Tab icon={<PromptIcon />} label="Промпты" iconPosition="start" />
+              <Tab icon={<AgentIcon />} label="Агенты" iconPosition="start" />
+            </Tabs>
           </Container>
         </Box>
 
@@ -648,7 +1088,7 @@ export default function PromptGalleryPage() {
               <Box sx={{ flex: '1 1 300px', minWidth: '250px' }}>
                 <TextField
                   fullWidth
-                  placeholder="Поиск промптов..."
+                  placeholder={activeTab === 0 ? "Поиск промптов..." : "Поиск агентов..."}
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   InputProps={{
@@ -664,7 +1104,7 @@ export default function PromptGalleryPage() {
           </Container>
         </Box>
 
-        {/* Список промптов */}
+        {/* Контент в зависимости от вкладки */}
         <Container 
           maxWidth="xl" 
           sx={{ 
@@ -673,43 +1113,150 @@ export default function PromptGalleryPage() {
             py: 3,
           }}
         >
-        {loading ? (
-          <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-            <CircularProgress />
-          </Box>
-        ) : prompts.length === 0 ? (
-          <Alert severity="info">
-            Промпты не найдены. Попробуйте изменить фильтры или создайте первый промпт!
-          </Alert>
-        ) : (
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)', lg: 'repeat(3, 1fr)' }, gap: 3 }}>
-            {prompts.map((prompt) => (
-              <Box key={prompt.id}>
-                <PromptCard
-                  prompt={prompt}
-                  onRate={(rating) => handleRatePrompt(prompt.id, rating)}
-                  onUse={() => handleUsePrompt(prompt)}
-                  onEdit={() => openEditDialog(prompt)}
-                  onDelete={() => openDeleteDialog(prompt.id)}
-                  onToggleBookmark={() => handleToggleBookmark(prompt)}
-                  onView={loadPrompts}
+        {activeTab === 0 ? (
+          // Вкладка промптов
+          <>
+            {loading ? (
+              <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
+                <CircularProgress />
+              </Box>
+            ) : prompts.length === 0 ? (
+              <Alert severity="info">
+                Промпты не найдены. Попробуйте изменить фильтры или создайте первый промпт!
+              </Alert>
+            ) : (
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)', lg: 'repeat(3, 1fr)' }, gap: 3 }}>
+                {prompts.map((prompt) => (
+                  <Box key={prompt.id}>
+                    <PromptCard
+                      prompt={prompt}
+                      onRate={(rating) => handleRatePrompt(prompt.id, rating)}
+                      onUse={() => handleUsePrompt(prompt)}
+                      onEdit={() => openEditDialog(prompt)}
+                      onDelete={() => openDeleteDialog(prompt.id)}
+                      onToggleBookmark={() => handleToggleBookmark(prompt)}
+                      onView={loadPrompts}
+                    />
+                  </Box>
+                ))}
+              </Box>
+            )}
+
+            {/* Пагинация для промптов */}
+            {totalPages > 1 && (
+              <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4 }}>
+                <Pagination
+                  count={totalPages}
+                  page={page}
+                  onChange={(_, value) => setPage(value)}
+                  color="primary"
+                  size="large"
                 />
               </Box>
-            ))}
-          </Box>
-        )}
+            )}
+          </>
+        ) : (
+          // Вкладка агентов
+          <>
+            {agentsLoading ? (
+              <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
+                <CircularProgress />
+              </Box>
+            ) : agents.length === 0 ? (
+              <Alert severity="info">
+                Агенты не найдены. Попробуйте изменить фильтры или создайте первого агента!
+              </Alert>
+            ) : (
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)', lg: 'repeat(3, 1fr)' }, gap: 3 }}>
+                {agents.map((agent) => (
+                  <Card key={agent.id} sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+                    <CardContent sx={{ flexGrow: 1 }}>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', mb: 2 }}>
+                        <Typography variant="h6" component="div" sx={{ fontWeight: 'bold' }}>
+                          {agent.name}
+                        </Typography>
+                        <IconButton size="small">
+                          <MoreVertIcon />
+                        </IconButton>
+                      </Box>
+                      
+                      {agent.description && (
+                        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                          {agent.description}
+                        </Typography>
+                      )}
+                      
+                      {agent.tags && agent.tags.length > 0 && (
+                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 2 }}>
+                          {agent.tags.map((tag: Tag) => (
+                            <Chip key={tag.id} label={tag.name} size="small" />
+                          ))}
+                        </Box>
+                      )}
+                      
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                        <Rating 
+                          value={agent.average_rating} 
+                          readOnly 
+                          size="small"
+                          precision={0.1}
+                        />
+                        <Typography variant="caption" color="text.secondary">
+                          ({agent.total_votes})
+                        </Typography>
+                      </Box>
+                      
+                      <Box sx={{ display: 'flex', gap: 1, mt: 2 }}>
+                        <Chip 
+                          icon={<PersonIcon />} 
+                          label={agent.author_name} 
+                          size="small" 
+                          variant="outlined"
+                        />
+                        <Chip 
+                          icon={<ViewIcon />} 
+                          label={agent.views_count} 
+                          size="small" 
+                          variant="outlined"
+                        />
+                      </Box>
+                    </CardContent>
+                    <CardActions>
+                      <Button 
+                        size="small" 
+                        startIcon={<CopyIcon />}
+                        onClick={() => handleUseAgent(agent)}
+                        fullWidth
+                        variant="contained"
+                      >
+                        Использовать
+                      </Button>
+                      <Button 
+                        size="small" 
+                        startIcon={agent.is_bookmarked ? <BookmarkIcon /> : <BookmarkBorderIcon />}
+                        onClick={() => handleToggleAgentBookmark(agent)}
+                      >
+                        {agent.is_bookmarked ? 'В закладках' : 'В закладки'}
+                      </Button>
+                    </CardActions>
+                  </Card>
+                ))}
+              </Box>
+            )}
 
-        {/* Пагинация */}
-        {totalPages > 1 && (
-          <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4 }}>
-            <Pagination
-              count={totalPages}
-              page={page}
-              onChange={(_, value) => setPage(value)}
-              color="primary"
-              size="large"
-            />
-          </Box>
+            {/* Пагинация для агентов */}
+            {agentsTotalPages > 1 && (
+              <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4 }}>
+                <Pagination
+                  count={agentsTotalPages}
+                  page={agentsPage}
+                  onChange={(_, value) => setAgentsPage(value)}
+                  color="primary"
+                  size="large"
+                />
+              </Box>
+            )}
+          </>
         )}
       </Container>
       </Box>
@@ -760,6 +1307,22 @@ export default function PromptGalleryPage() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Диалог создания агента */}
+      <AgentDialog
+        open={showCreateAgentDialog}
+        onClose={() => {
+          setShowCreateAgentDialog(false);
+          resetAgentForm();
+        }}
+        onSave={handleCreateAgent}
+        agentForm={agentForm}
+        setAgentForm={setAgentForm}
+        allTags={allTags}
+        title="Создать агента"
+        newTagInput={newAgentTagInput}
+        setNewTagInput={setNewAgentTagInput}
+      />
 
       {/* Уведомления */}
       <Snackbar
@@ -839,14 +1402,18 @@ export default function PromptGalleryPage() {
           gap: rightSidebarOpen ? 2 : 1,
           flex: 1,
         }}>
-          {/* Кнопка "Создать промпт" */}
-          <Tooltip title={rightSidebarOpen ? '' : 'Создать промпт'} placement="left">
+          {/* Кнопка "Создать промпт" или "Создать агента" */}
+          <Tooltip title={rightSidebarOpen ? '' : (activeTab === 0 ? 'Создать промпт' : 'Создать агента')} placement="left">
             <Button
               fullWidth={rightSidebarOpen}
               variant={rightSidebarOpen ? 'contained' : 'text'}
               startIcon={<AddIcon />}
               onClick={() => {
-                setShowCreateDialog(true);
+                if (activeTab === 0) {
+                  setShowCreateDialog(true);
+                } else {
+                  setShowCreateAgentDialog(true);
+                }
               }}
               sx={{
                 bgcolor: rightSidebarOpen ? 'rgba(255,255,255,0.2)' : 'transparent',
@@ -871,7 +1438,7 @@ export default function PromptGalleryPage() {
                 },
               }}
             >
-              {rightSidebarOpen && 'Создать промпт'}
+              {rightSidebarOpen && (activeTab === 0 ? 'Создать промпт' : 'Создать агента')}
             </Button>
           </Tooltip>
 
@@ -1732,6 +2299,418 @@ function PromptDialog({ open, onClose, onSave, promptForm, setPromptForm, allTag
         <Button onClick={onClose}>Отмена</Button>
         <Button onClick={onSave} variant="contained">
           Сохранить
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+// Компонент диалога создания/редактирования агента
+interface AgentDialogProps {
+  open: boolean;
+  onClose: () => void;
+  onSave: () => void;
+  agentForm: any;
+  setAgentForm: React.Dispatch<React.SetStateAction<any>>;
+  allTags: Tag[];
+  title: string;
+  newTagInput: string;
+  setNewTagInput: React.Dispatch<React.SetStateAction<string>>;
+}
+
+function AgentDialog({ open, onClose, onSave, agentForm, setAgentForm, allTags, title, newTagInput, setNewTagInput }: AgentDialogProps) {
+  const [availableModels, setAvailableModels] = useState<Array<{
+    name: string;
+    path: string;
+    size?: number;
+    size_mb?: number;
+  }>>([]);
+
+  // Загружаем модели при открытии диалога
+  useEffect(() => {
+    if (open) {
+      const loadModels = async () => {
+        try {
+          const response = await fetch(`${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../models/available`);
+          if (response.ok) {
+            const data = await response.json();
+            setAvailableModels(data.models || []);
+          }
+        } catch (error) {
+          console.error('Ошибка загрузки моделей:', error);
+        }
+      };
+      loadModels();
+    }
+  }, [open]);
+
+  const handleAddNewTag = () => {
+    const tagName = newTagInput.trim();
+    if (tagName && !agentForm.new_tags.includes(tagName)) {
+      setAgentForm({ 
+        ...agentForm, 
+        new_tags: [...agentForm.new_tags, tagName] 
+      });
+      setNewTagInput('');
+    }
+  };
+
+  const handleRemoveNewTag = (tagToRemove: string) => {
+    setAgentForm({
+      ...agentForm,
+      new_tags: agentForm.new_tags.filter((tag: string) => tag !== tagToRemove)
+    });
+  };
+
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleAddNewTag();
+    }
+  };
+
+  const handleAddTool = () => {
+    const toolInput = (document.getElementById('tool-input') as HTMLInputElement)?.value?.trim();
+    if (toolInput && !agentForm.tools.includes(toolInput)) {
+      setAgentForm({
+        ...agentForm,
+        tools: [...agentForm.tools, toolInput]
+      });
+      if (document.getElementById('tool-input')) {
+        (document.getElementById('tool-input') as HTMLInputElement).value = '';
+      }
+    }
+  };
+
+  const handleRemoveTool = (toolToRemove: string) => {
+    setAgentForm({
+      ...agentForm,
+      tools: agentForm.tools.filter((tool: string) => tool !== toolToRemove)
+    });
+  };
+
+  const updateModelSetting = (key: string, value: any) => {
+    setAgentForm({
+      ...agentForm,
+      config: {
+        ...agentForm.config,
+        model_settings: {
+          ...(agentForm.config?.model_settings || {}),
+          [key]: value,
+        },
+      },
+    });
+  };
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
+      <DialogTitle>{title}</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ mt: 1 }}>
+          <TextField
+            label="Название агента"
+            fullWidth
+            required
+            value={agentForm.name}
+            onChange={(e) => setAgentForm({ ...agentForm, name: e.target.value })}
+            helperText="Минимум 3 символа"
+          />
+          
+          <TextField
+            label="Описание"
+            fullWidth
+            multiline
+            rows={2}
+            value={agentForm.description}
+            onChange={(e) => setAgentForm({ ...agentForm, description: e.target.value })}
+            helperText="Краткое описание назначения агента"
+          />
+
+          <TextField
+            label="Системный промпт"
+            fullWidth
+            required
+            multiline
+            rows={10}
+            value={agentForm.system_prompt}
+            onChange={(e) => setAgentForm({ ...agentForm, system_prompt: e.target.value })}
+            helperText="Определяет поведение и возможности агента. Минимум 10 символов."
+          />
+
+          {/* Настройки модели */}
+          <Accordion>
+            <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <SettingsIcon />
+                <Typography variant="subtitle1">Настройки модели (опционально)</Typography>
+              </Box>
+            </AccordionSummary>
+            <AccordionDetails>
+              <Stack spacing={2}>
+                {/* Выбор модели */}
+                <FormControl fullWidth>
+                  <InputLabel>Модель</InputLabel>
+                  <Select
+                    value={agentForm.config?.model_path || ''}
+                    label="Модель"
+                    onChange={(e) => setAgentForm({
+                      ...agentForm,
+                      config: {
+                        ...agentForm.config,
+                        model_path: e.target.value,
+                      },
+                    })}
+                  >
+                    <MenuItem value="">
+                      <em>Использовать текущую модель</em>
+                    </MenuItem>
+                    {availableModels.map((model) => (
+                      <MenuItem key={model.path} value={model.path}>
+                        {model.name} {model.size_mb ? `(${model.size_mb} MB)` : ''}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+
+                {/* Гиперпараметры */}
+                <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)' }, gap: 2 }}>
+                  <TextField
+                    label="Размер контекста"
+                    type="number"
+                    value={agentForm.config?.model_settings?.context_size || 2048}
+                    onChange={(e) => updateModelSetting('context_size', parseInt(e.target.value) || 2048)}
+                    inputProps={{ min: 512, max: 32768, step: 512 }}
+                    helperText="Максимальное количество токенов контекста"
+                  />
+                  
+                  <TextField
+                    label="Макс. токенов ответа"
+                    type="number"
+                    value={agentForm.config?.model_settings?.output_tokens || 512}
+                    onChange={(e) => updateModelSetting('output_tokens', parseInt(e.target.value) || 512)}
+                    inputProps={{ min: 128, max: 8192, step: 128 }}
+                    helperText="Максимальная длина ответа"
+                  />
+                  
+                  <Box>
+                    <Typography variant="body2" gutterBottom>
+                      Температура: {agentForm.config?.model_settings?.temperature || 0.7}
+                    </Typography>
+                    <Slider
+                      value={agentForm.config?.model_settings?.temperature || 0.7}
+                      onChange={(_, value) => updateModelSetting('temperature', value)}
+                      min={0}
+                      max={2}
+                      step={0.1}
+                      marks={[
+                        { value: 0, label: '0' },
+                        { value: 1, label: '1' },
+                        { value: 2, label: '2' },
+                      ]}
+                    />
+                    <Typography variant="caption" color="text.secondary">
+                      Контролирует случайность ответов (0 = детерминированный, 2 = очень случайный)
+                    </Typography>
+                  </Box>
+                  
+                  <Box>
+                    <Typography variant="body2" gutterBottom>
+                      Top-p: {agentForm.config?.model_settings?.top_p || 0.95}
+                    </Typography>
+                    <Slider
+                      value={agentForm.config?.model_settings?.top_p || 0.95}
+                      onChange={(_, value) => updateModelSetting('top_p', value)}
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      marks={[
+                        { value: 0, label: '0' },
+                        { value: 0.5, label: '0.5' },
+                        { value: 1, label: '1' },
+                      ]}
+                    />
+                    <Typography variant="caption" color="text.secondary">
+                      Ядерная выборка: учитывает только топ токены с вероятностью p
+                    </Typography>
+                  </Box>
+                  
+                  <Box>
+                    <Typography variant="body2" gutterBottom>
+                      Штраф за повторения: {agentForm.config?.model_settings?.repeat_penalty || 1.05}
+                    </Typography>
+                    <Slider
+                      value={agentForm.config?.model_settings?.repeat_penalty || 1.05}
+                      onChange={(_, value) => updateModelSetting('repeat_penalty', value)}
+                      min={1}
+                      max={2}
+                      step={0.05}
+                      marks={[
+                        { value: 1, label: '1' },
+                        { value: 1.5, label: '1.5' },
+                        { value: 2, label: '2' },
+                      ]}
+                    />
+                    <Typography variant="caption" color="text.secondary">
+                      Штраф за повторение токенов (1 = нет штрафа, &gt;1 = штраф)
+                    </Typography>
+                  </Box>
+                  
+                  <FormControlLabel
+                    control={
+                      <Checkbox
+                        checked={agentForm.config?.model_settings?.use_gpu || false}
+                        onChange={(e) => updateModelSetting('use_gpu', e.target.checked)}
+                      />
+                    }
+                    label="Использовать GPU"
+                  />
+                  
+                  <FormControlLabel
+                    control={
+                      <Checkbox
+                        checked={agentForm.config?.model_settings?.streaming !== false}
+                        onChange={(e) => updateModelSetting('streaming', e.target.checked)}
+                      />
+                    }
+                    label="Потоковая генерация"
+                  />
+                </Box>
+              </Stack>
+            </AccordionDetails>
+          </Accordion>
+
+          {/* Инструменты */}
+          <Box>
+            <Typography variant="subtitle2" gutterBottom>
+              Инструменты (опционально)
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
+              <TextField
+                id="tool-input"
+                label="Название инструмента"
+                fullWidth
+                size="small"
+                placeholder="Например: calculator, web_search"
+                onKeyPress={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleAddTool();
+                  }
+                }}
+              />
+              <Button
+                variant="outlined"
+                onClick={handleAddTool}
+                sx={{ minWidth: 100 }}
+              >
+                Добавить
+              </Button>
+            </Box>
+            {agentForm.tools.length > 0 && (
+              <Box sx={{ mt: 1 }}>
+                <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                  {agentForm.tools.map((tool: string, index: number) => (
+                    <Chip
+                      key={index}
+                      label={tool}
+                      size="small"
+                      onDelete={() => handleRemoveTool(tool)}
+                      color="secondary"
+                      variant="outlined"
+                    />
+                  ))}
+                </Stack>
+              </Box>
+            )}
+          </Box>
+
+          <FormControl fullWidth>
+            <InputLabel>Существующие теги</InputLabel>
+            <Select
+              multiple
+              value={agentForm.tag_ids}
+              label="Существующие теги"
+              onChange={(e) => setAgentForm({ ...agentForm, tag_ids: e.target.value as number[] })}
+              renderValue={(selected) => (
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                  {(selected as number[]).map((tagId) => {
+                    const tag = allTags.find(t => t.id === tagId);
+                    return tag ? <Chip key={tagId} label={tag.name} size="small" /> : null;
+                  })}
+                </Box>
+              )}
+            >
+              {allTags.map((tag) => (
+                <MenuItem key={tag.id} value={tag.id}>
+                  {tag.name}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+
+          {/* Поле для создания новых тегов */}
+          <Box>
+            <TextField
+              label="Создать новый тег"
+              fullWidth
+              value={newTagInput}
+              onChange={(e) => setNewTagInput(e.target.value)}
+              onKeyPress={handleKeyPress}
+              placeholder="Введите название тега и нажмите Enter"
+              InputProps={{
+                endAdornment: (
+                  <Button
+                    size="small"
+                    onClick={handleAddNewTag}
+                    disabled={!newTagInput.trim()}
+                  >
+                    Добавить
+                  </Button>
+                ),
+              }}
+              helperText="Можно добавить несколько тегов, каждый новый тег - новая запись"
+            />
+
+            {/* Показываем добавленные новые теги */}
+            {agentForm.new_tags.length > 0 && (
+              <Box sx={{ mt: 1 }}>
+                <Typography variant="caption" color="text.secondary">
+                  Новые теги:
+                </Typography>
+                <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: 0.5 }}>
+                  {agentForm.new_tags.map((tag: string, index: number) => (
+                    <Chip
+                      key={index}
+                      label={tag}
+                      size="small"
+                      onDelete={() => handleRemoveNewTag(tag)}
+                      color="primary"
+                      variant="outlined"
+                    />
+                  ))}
+                </Stack>
+              </Box>
+            )}
+          </Box>
+
+          {/* Публичность */}
+          <FormControl fullWidth>
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={agentForm.is_public}
+                  onChange={(e) => setAgentForm({ ...agentForm, is_public: e.target.checked })}
+                />
+              }
+              label="Публичный агент (виден всем пользователям)"
+            />
+          </FormControl>
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Отмена</Button>
+        <Button onClick={onSave} variant="contained">
+          Создать
         </Button>
       </DialogActions>
     </Dialog>

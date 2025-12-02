@@ -3,6 +3,7 @@
 """
 
 import logging
+import json
 from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime
 import numpy as np
@@ -28,7 +29,15 @@ class DocumentRepository:
     async def create_tables(self):
         """Создание таблиц для документов и векторов"""
         try:
-            async with self.db_connection.acquire() as conn:
+            # Убеждаемся, что расширение pgvector установлено
+            async with await self.db_connection.acquire() as conn:
+                try:
+                    await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+                    logger.info("Расширение pgvector проверено/установлено")
+                except Exception as e:
+                    logger.warning(f"Не удалось создать расширение pgvector (возможно, уже установлено): {e}")
+                    # Продолжаем, так как расширение может быть уже установлено
+            async with await self.db_connection.acquire() as conn:
                 # Таблица документов
                 await conn.execute("""
                     CREATE TABLE IF NOT EXISTS documents (
@@ -69,15 +78,18 @@ class DocumentRepository:
             ID созданного документа или None в случае ошибки
         """
         try:
-            async with self.db_connection.acquire() as conn:
+            async with await self.db_connection.acquire() as conn:
+                # Сериализуем metadata в JSON строку
+                metadata_json = json.dumps(document.metadata) if document.metadata else "{}"
+                
                 result = await conn.fetchrow("""
                     INSERT INTO documents (filename, content, metadata, created_at, updated_at)
-                    VALUES ($1, $2, $3, $4, $5)
+                    VALUES ($1, $2, $3::jsonb, $4, $5)
                     RETURNING id
                 """, 
                     document.filename,
                     document.content,
-                    document.metadata,
+                    metadata_json,
                     document.created_at,
                     document.updated_at
                 )
@@ -101,7 +113,7 @@ class DocumentRepository:
             Объект документа или None
         """
         try:
-            async with self.db_connection.acquire() as conn:
+            async with await self.db_connection.acquire() as conn:
                 result = await conn.fetchrow("""
                     SELECT id, filename, content, metadata, created_at, updated_at
                     FROM documents
@@ -109,11 +121,18 @@ class DocumentRepository:
                 """, document_id)
                 
                 if result:
+                    # Десериализуем metadata из JSON
+                    metadata = result['metadata']
+                    if isinstance(metadata, str):
+                        metadata = json.loads(metadata)
+                    elif metadata is None:
+                        metadata = {}
+                    
                     return Document(
                         id=result['id'],
                         filename=result['filename'],
                         content=result['content'],
-                        metadata=result['metadata'],
+                        metadata=metadata,
                         created_at=result['created_at'],
                         updated_at=result['updated_at']
                     )
@@ -134,7 +153,7 @@ class DocumentRepository:
             Список документов
         """
         try:
-            async with self.db_connection.acquire() as conn:
+            async with await self.db_connection.acquire() as conn:
                 results = await conn.fetch("""
                     SELECT id, filename, content, metadata, created_at, updated_at
                     FROM documents
@@ -144,11 +163,18 @@ class DocumentRepository:
                 
                 documents = []
                 for result in results:
+                    # Десериализуем metadata из JSON
+                    metadata = result['metadata']
+                    if isinstance(metadata, str):
+                        metadata = json.loads(metadata)
+                    elif metadata is None:
+                        metadata = {}
+                    
                     documents.append(Document(
                         id=result['id'],
                         filename=result['filename'],
                         content=result['content'],
-                        metadata=result['metadata'],
+                        metadata=metadata,
                         created_at=result['created_at'],
                         updated_at=result['updated_at']
                     ))
@@ -170,7 +196,7 @@ class DocumentRepository:
             True если успешно, False в случае ошибки
         """
         try:
-            async with self.db_connection.acquire() as conn:
+            async with await self.db_connection.acquire() as conn:
                 await conn.execute("DELETE FROM documents WHERE id = $1", document_id)
                 logger.info(f"Удален документ: {document_id}")
                 return True
@@ -197,7 +223,15 @@ class VectorRepository:
     async def create_tables(self):
         """Создание таблицы для векторов с pgvector"""
         try:
-            async with self.db_connection.acquire() as conn:
+            # Убеждаемся, что расширение pgvector установлено
+            async with await self.db_connection.acquire() as conn:
+                try:
+                    await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+                    logger.info("Расширение pgvector проверено/установлено для векторов")
+                except Exception as e:
+                    logger.warning(f"Не удалось создать расширение pgvector (возможно, уже установлено): {e}")
+                    # Продолжаем, так как расширение может быть уже установлено
+            async with await self.db_connection.acquire() as conn:
                 # Таблица векторов
                 await conn.execute(f"""
                     CREATE TABLE IF NOT EXISTS document_vectors (
@@ -241,17 +275,20 @@ class VectorRepository:
             ID созданного вектора или None в случае ошибки
         """
         try:
-            async with self.db_connection.acquire() as conn:
+            # Сериализуем metadata в JSON строку
+            metadata_json = json.dumps(vector.metadata) if vector.metadata else "{}"
+            
+            async with await self.db_connection.acquire() as conn:
                 result = await conn.fetchrow("""
                     INSERT INTO document_vectors (document_id, chunk_index, embedding, content, metadata)
-                    VALUES ($1, $2, $3, $4, $5)
+                    VALUES ($1, $2, $3, $4, $5::jsonb)
                     RETURNING id
                 """,
                     vector.document_id,
                     vector.chunk_index,
                     str(vector.embedding),  # pgvector требует строку формата '[0.1, 0.2, ...]'
                     vector.content,
-                    vector.metadata
+                    metadata_json
                 )
                 
                 vector_id = result['id']
@@ -280,7 +317,7 @@ class VectorRepository:
             Список кортежей (вектор, similarity_score)
         """
         try:
-            async with self.db_connection.acquire() as conn:
+            async with await self.db_connection.acquire() as conn:
                 embedding_str = str(query_embedding)
                 
                 if document_id:
@@ -309,13 +346,20 @@ class VectorRepository:
                     embedding_str = result['embedding'].strip('[]')
                     embedding = [float(x.strip()) for x in embedding_str.split(',')]
                     
+                    # Десериализуем metadata из JSON
+                    metadata = result['metadata']
+                    if isinstance(metadata, str):
+                        metadata = json.loads(metadata)
+                    elif metadata is None:
+                        metadata = {}
+                    
                     vector = DocumentVector(
                         id=result['id'],
                         document_id=result['document_id'],
                         chunk_index=result['chunk_index'],
                         embedding=embedding,
                         content=result['content'],
-                        metadata=result['metadata']
+                        metadata=metadata
                     )
                     similarity = float(result['similarity'])
                     vectors.append((vector, similarity))
@@ -337,7 +381,7 @@ class VectorRepository:
             True если успешно, False в случае ошибки
         """
         try:
-            async with self.db_connection.acquire() as conn:
+            async with await self.db_connection.acquire() as conn:
                 await conn.execute("DELETE FROM document_vectors WHERE document_id = $1", document_id)
                 logger.info(f"Удалены векторы документа: {document_id}")
                 return True

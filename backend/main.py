@@ -133,6 +133,18 @@ except Exception as e:
     logger.warning(f"Ошибка при импорте prompts router: {e}")
     prompts_router = None
 
+# Импорт agents gallery router
+try:
+    logger.info("Попытка импорта agents router...")
+    from backend.api_agents import router as agents_router
+    logger.info("agents router импортирован успешно")
+except ImportError as e:
+    logger.warning(f"agents router недоступен: {e}")
+    agents_router = None
+except Exception as e:
+    logger.warning(f"Ошибка при импорте agents router: {e}")
+    agents_router = None
+
 # Проверяем, нужно ли использовать llm-svc ДО импорта (избегаем двойной загрузки модели)
 use_llm_svc = os.getenv('USE_LLM_SVC', 'false').lower() == 'true'
 
@@ -452,6 +464,13 @@ if prompts_router:
 else:
     logger.warning("Prompts gallery routes не подключены (prompts_router недоступен)")
 
+# Подключаем agents gallery routes
+if agents_router:
+    app.include_router(agents_router)
+    logger.info("Agents gallery routes подключены (/api/agents/*)")
+else:
+    logger.warning("Agents gallery routes не подключены (agents_router недоступен)")
+
 # Startup событие для инициализации агентной архитектуры и баз данных
 @app.on_event("startup")
 async def startup_event():
@@ -468,6 +487,18 @@ async def startup_event():
                 logger.info("Базы данных успешно инициализированы")
                 logger.info("  - MongoDB: готов для хранения диалогов")
                 logger.info("  - PostgreSQL + pgvector: готов для RAG системы")
+                
+                # Пересоздаем пул PostgreSQL в текущем event loop (FastAPI)
+                # Это необходимо, так как пул был создан в другом event loop при инициализации
+                try:
+                    from backend.database.init_db import postgresql_connection
+                    if postgresql_connection:
+                        logger.info("Пересоздание пула PostgreSQL в event loop FastAPI...")
+                        await postgresql_connection.ensure_pool()
+                        logger.info("Пул PostgreSQL пересоздан в event loop FastAPI")
+                except Exception as e:
+                    logger.warning(f"Не удалось пересоздать пул PostgreSQL: {e}")
+                
                 # Проверяем статус MinIO
                 if minio_client:
                     logger.info(f"  - MinIO: готов для хранения файлов (endpoint: {minio_client.endpoint})")
@@ -526,6 +557,43 @@ app.mount("/socket.io", socket_app)
 
 # Инициализация сервисов
 logger.info("=== Инициализация сервисов ===")
+
+# Инициализируем базы данных ПЕРЕД созданием DocumentProcessor
+logger.info(f"Проверка доступности init_databases: {init_databases is not None}, database_available: {database_available}")
+if init_databases and database_available:
+    try:
+        logger.info("Инициализация баз данных перед созданием DocumentProcessor...")
+        # Используем синхронный вызов, так как мы еще не в async контексте
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        logger.info("Вызываем init_databases()...")
+        success = loop.run_until_complete(init_databases())
+        if success:
+            logger.info("Базы данных успешно инициализированы перед DocumentProcessor")
+            # Проверяем, что репозитории доступны
+            if get_vector_repository:
+                try:
+                    test_repo = get_vector_repository()
+                    logger.info(f"VectorRepository доступен: {test_repo is not None}")
+                except Exception as e:
+                    logger.error(f"VectorRepository недоступен: {e}")
+        else:
+            logger.error("Не удалось инициализировать базы данных перед DocumentProcessor")
+    except Exception as e:
+        logger.error(f"Ошибка инициализации баз данных перед DocumentProcessor: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        logger.warning("DocumentProcessor будет создан без pgvector")
+else:
+    if not init_databases:
+        logger.warning("init_databases недоступен")
+    if not database_available:
+        logger.warning("database_available = False")
 
 try:
     logger.info("Импортируем DocumentProcessor...")
@@ -893,7 +961,7 @@ async def chat_message(sid, data):
                     if doc_list and len(doc_list) > 0:
                         logger.info(f"Socket.IO: Найдены документы в режиме multi-llm: {doc_list}")
                         try:
-                            doc_context = doc_processor.get_document_context(user_message)
+                            doc_context = await doc_processor.get_document_context_async(user_message)
                             logger.info(f"Socket.IO: Получен контекст документов для multi-llm, длина: {len(doc_context) if doc_context else 0} символов")
                         except Exception as e:
                             logger.error(f"Socket.IO: Ошибка при получении контекста документов: {e}")
@@ -1206,7 +1274,7 @@ async def chat_message(sid, data):
                     
                     # Получаем контекст из документов
                     try:
-                        doc_context = doc_processor.get_document_context(user_message)
+                        doc_context = await doc_processor.get_document_context_async(user_message)
                         logger.info(f"Socket.IO: получен контекст документов, длина: {len(doc_context) if doc_context else 0} символов")
                         
                         if doc_context and not images:
@@ -1331,6 +1399,10 @@ class ModelSettings(BaseModel):
     temperature: float = 0.7
     top_p: float = 0.95
     repeat_penalty: float = 1.05
+    top_k: int = 40
+    min_p: float = 0.05
+    frequency_penalty: float = 0.0
+    presence_penalty: float = 0.0
     use_gpu: bool = False
     streaming: bool = True
 
@@ -1607,7 +1679,7 @@ async def websocket_chat(websocket: WebSocket):
                         if doc_list and len(doc_list) > 0:
                             logger.info(f"WebSocket: Найдены документы в режиме multi-llm: {doc_list}")
                             try:
-                                doc_context = doc_processor.get_document_context(user_message)
+                                doc_context = await doc_processor.get_document_context_async(user_message)
                                 logger.info(f"WebSocket: Получен контекст документов для multi-llm, длина: {len(doc_context) if doc_context else 0} символов")
                             except Exception as e:
                                 logger.error(f"WebSocket: Ошибка при получении контекста документов: {e}")
@@ -1769,7 +1841,7 @@ async def websocket_chat(websocket: WebSocket):
                         
                         # Получаем контекст из документов
                         try:
-                            doc_context = doc_processor.get_document_context(user_message)
+                            doc_context = await doc_processor.get_document_context_async(user_message)
                             logger.info(f"WebSocket: получен контекст документов, длина: {len(doc_context) if doc_context else 0} символов")
                             
                             # Формируем промпт с контекстом документов
@@ -2438,12 +2510,26 @@ async def load_model(request: ModelLoadRequest):
     
     try:
         logger.info(f"Загружаю модель: {request.model_path}")
+        
+        # Проверяем, что путь не является директорией
+        if os.path.isdir(request.model_path):
+            logger.error(f"Передан путь к директории вместо файла модели: {request.model_path}")
+            return ModelLoadResponse(
+                message=f"Ошибка: передан путь к директории вместо файла модели: {request.model_path}",
+                success=False
+            )
+        
         success = reload_model_by_path(request.model_path)
         if success:
             logger.info(f"Модель успешно загружена: {request.model_path}")
             
             # Сохраняем информацию о загруженной модели
-            model_name = os.path.basename(request.model_path)
+            # Для путей llm-svc:// извлекаем имя модели из пути
+            if request.model_path.startswith("llm-svc://"):
+                model_name = request.model_path.replace("llm-svc://", "")
+            else:
+                model_name = os.path.basename(request.model_path)
+            
             save_app_settings({
                 'current_model_path': request.model_path,
                 'current_model_name': model_name,
@@ -2470,6 +2556,10 @@ async def get_model_settings():
             "temperature": 0.7,
             "top_p": 0.95,
             "repeat_penalty": 1.05,
+            "top_k": 40,
+            "min_p": 0.05,
+            "frequency_penalty": 0.0,
+            "presence_penalty": 0.0,
             "use_gpu": False,
             "streaming": True,
             "streaming_speed": 50
@@ -2487,6 +2577,10 @@ async def get_model_settings():
             "temperature": 0.7,
             "top_p": 0.95,
             "repeat_penalty": 1.05,
+            "top_k": 40,
+            "min_p": 0.05,
+            "frequency_penalty": 0.0,
+            "presence_penalty": 0.0,
             "use_gpu": False,
             "streaming": True,
             "streaming_speed": 50
@@ -2950,7 +3044,7 @@ async def upload_document(file: UploadFile = File(...)):
         
         # Обрабатываем документ напрямую из памяти (bytes)
         logger.info("Начинаем обработку документа из памяти...")
-        success, message = doc_processor.process_document(
+        success, message = await doc_processor.process_document(
             file_data=content,
             filename=file.filename or file_object_name or "unknown",
             file_extension=file_extension,
@@ -4345,13 +4439,23 @@ if __name__ == "__main__":
         settings = load_app_settings()
         saved_model_path = settings.get('current_model_path')
         
-        if saved_model_path and os.path.exists(saved_model_path) and reload_model_by_path:
-            logger.info(f"Восстанавливаю сохраненную модель: {saved_model_path}")
-            success = reload_model_by_path(saved_model_path)
-            if success:
-                logger.info(f"Модель восстановлена: {saved_model_path}")
+        # Проверяем, что путь валидный (не директория и не пустой)
+        if saved_model_path and reload_model_by_path:
+            # Если путь начинается с llm-svc://, модель уже доступна через llm-svc
+            if saved_model_path.startswith("llm-svc://"):
+                logger.info(f"Модель из llm-svc уже доступна: {saved_model_path}")
+            # Проверяем, что путь существует и не является директорией
+            elif os.path.exists(saved_model_path) and not os.path.isdir(saved_model_path):
+                logger.info(f"Восстанавливаю сохраненную модель: {saved_model_path}")
+                success = reload_model_by_path(saved_model_path)
+                if success:
+                    logger.info(f"Модель восстановлена: {saved_model_path}")
+                else:
+                    logger.warning(f"Не удалось восстановить модель: {saved_model_path}")
+            elif os.path.isdir(saved_model_path):
+                logger.warning(f"Сохраненный путь является директорией, а не файлом модели: {saved_model_path}. Пропускаем восстановление.")
             else:
-                logger.warning(f"Не удалось восстановить модель: {saved_model_path}")
+                logger.info(f"Сохраненный путь модели не существует: {saved_model_path}. Пропускаем восстановление.")
         else:
             logger.info("Нет сохраненной модели для восстановления")
     except Exception as e:

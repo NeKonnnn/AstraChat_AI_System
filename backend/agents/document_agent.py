@@ -52,21 +52,29 @@ class DocumentAgent(BaseAgent):
             if not doc_processor.vectorstore:
                 return f"Векторное хранилище не инициализировано, хотя документы загружены ({len(doc_list)} документов). Попробуйте перезагрузить документы."
             
-            # Поиск в векторном хранилище
+            # Поиск в векторном хранилище через новый API
             logger.info(f"Поиск в векторном хранилище: {message}")
-            docs = doc_processor.vectorstore.similarity_search(message, k=3)
+            docs = await doc_processor.query_documents_async(message, k=3)
             
-            if not docs:
+            # Проверяем, что результат - это список, а не строка с ошибкой
+            if isinstance(docs, str):
+                logger.error(f"Ошибка при поиске документов: {docs}")
+                return f"Ошибка при поиске в документах: {docs}"
+            
+            if not docs or len(docs) == 0:
                 return "В загруженных документах не найдено информации по вашему запросу."
             
             logger.info(f"Найдено документов: {len(docs)}")
             
             # Формируем контекст из найденных документов
+            # Новый API возвращает список словарей с ключами: content, source, chunk, similarity
             context_parts = []
             for i, doc in enumerate(docs, 1):
-                source = doc.metadata.get('source', 'Неизвестный источник')
-                content = doc.page_content
-                context_parts.append(f"Фрагмент {i} (из документа '{source}'):\n{content}\n")
+                source = doc.get('source', 'Неизвестный источник')
+                content = doc.get('content', '')
+                chunk = doc.get('chunk', 0)
+                similarity = doc.get('similarity', 0.0)
+                context_parts.append(f"Фрагмент {i} (из документа '{source}', чанк {chunk}, релевантность: {similarity:.2f}):\n{content}\n")
             
             document_context = "\n".join(context_parts)
             

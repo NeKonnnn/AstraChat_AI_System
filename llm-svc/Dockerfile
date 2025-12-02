@@ -36,6 +36,8 @@ RUN apt-get update && apt-get install -y \
     libsndfile1-dev \
     libsox-dev \
     sox \
+    libldap2-dev \
+    libsasl2-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Создание символической ссылки для python
