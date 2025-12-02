@@ -72,9 +72,11 @@ import { getApiUrl, getWsUrl, API_CONFIG } from '../config/api';
 import MessageRenderer from '../components/MessageRenderer';
 import { useNavigate } from 'react-router-dom';
 import TranscriptionModal from '../components/TranscriptionModal';
+import ModelSelector from '../components/ModelSelector';
 
 interface UnifiedChatPageProps {
   isDarkMode: boolean;
+  sidebarOpen?: boolean;
 }
 
 interface ModelWindow {
@@ -92,12 +94,29 @@ interface AgentStatus {
   orchestrator_active: boolean;
 }
 
-export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
+export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: UnifiedChatPageProps) {
   const navigate = useNavigate();
   
   // Состояние для правой панели
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
   const [rightSidebarHidden, setRightSidebarHidden] = useState(false);
+  
+  // Состояние для отображения выбора модели
+  const [showModelSelectorInSettings, setShowModelSelectorInSettings] = useState(() => {
+    const saved = localStorage.getItem('show_model_selector_in_settings');
+    return saved !== null ? saved === 'true' : false;
+  });
+  
+  // Слушаем изменения настроек
+  useEffect(() => {
+    const handleSettingsChange = () => {
+      const saved = localStorage.getItem('show_model_selector_in_settings');
+      setShowModelSelectorInSettings(saved !== null ? saved === 'true' : false);
+    };
+    
+    window.addEventListener('interfaceSettingsChanged', handleSettingsChange);
+    return () => window.removeEventListener('interfaceSettingsChanged', handleSettingsChange);
+  }, []);
   
   // Состояние для модального окна транскрибации
   const [transcriptionModalOpen, setTranscriptionModalOpen] = useState(false);
@@ -3876,8 +3895,30 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
             ? 'linear-gradient(135deg, #1e1e1e 0%, #2d2d2d 50%, #1a1a1a 100%)'
             : 'linear-gradient(135deg, #f5f5f5 0%, #ffffff 50%, #fafafa 100%)',
           color: isDarkMode ? 'white' : '#333',
+          position: 'relative',
         }}
       >
+      {/* Селектор моделей - на одном уровне с кнопкой сворачивания боковой панели */}
+      {/* Когда панель развернута - ближе к панели, когда закрыта - дальше от узкой полоски */}
+      <Box sx={{ 
+        position: 'absolute',
+        top: 16,
+        left: sidebarOpen ? 16 : 80, // Ближе к панели когда развернута, дальше от узкой полоски (64px) когда закрыта
+        zIndex: 1200,
+        transition: 'left 0.3s ease', // Плавная анимация при изменении позиции
+        display: 'flex',
+        alignItems: 'center',
+      }}>
+        {!showModelSelectorInSettings && (
+          <ModelSelector 
+            isDarkMode={isDarkMode}
+            onModelSelect={(modelPath) => {
+              console.log('Модель выбрана:', modelPath);
+            }}
+          />
+        )}
+      </Box>
+
       {/* Область сообщений */}
       <Box
         className="chat-messages-area"
@@ -3892,6 +3933,14 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
            justifyContent: messages.length === 0 ? 'center' : 'flex-start',
            alignItems: 'center',
            py: 4,
+           // Селектор моделей в правом верхнем углу
+           '&::before': {
+             content: '""',
+             position: 'absolute',
+             top: 16,
+             right: 16,
+             zIndex: 10,
+           },
            // Кастомные стили для скроллбара
            '&::-webkit-scrollbar': {
              width: '8px',
@@ -4127,6 +4176,7 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                          top: '45%',
                          left: '50%',
                          transform: 'translate(-50%, -120%)',
+                         width: '100%',
                        }}>
                          <Typography 
                            variant="h4" 
@@ -4693,13 +4743,18 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
           </Tooltip>
         </Box>
 
-        {/* Кнопка "Скрыть панель" внизу узкой панели */}
+        {/* Кнопка "Скрыть панель" - на том же расстоянии как "Показать панель" */}
         {!rightSidebarOpen && (
           <Box sx={{ 
-            p: 1, 
+            position: 'fixed',
+            right: 0,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            width: 64,
             display: 'flex', 
             justifyContent: 'center',
-            mt: 'auto',
+            alignItems: 'center',
+            zIndex: 1200,
           }}>
             <Tooltip title="Скрыть панель" placement="left">
               <IconButton
@@ -4707,6 +4762,9 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                 sx={{
                   color: 'text.primary',
                   opacity: 0.7,
+                  width: 40,
+                  height: 40,
+                  borderRadius: 1,
                   '&:hover': {
                     backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
                     opacity: 1,
@@ -4742,12 +4800,15 @@ export default function UnifiedChatPage({ isDarkMode }: UnifiedChatPageProps) {
                 setRightSidebarOpen(false);
               }}
               sx={{
-                bgcolor: 'background.paper',
+                bgcolor: 'transparent',
                 color: 'text.primary',
-                borderRadius: '8px 0 0 8px',
-                boxShadow: 2,
+                opacity: 0.7,
                 '&:hover': {
-                  bgcolor: 'action.hover',
+                  bgcolor: 'transparent',
+                  opacity: 1,
+                  '& .MuiSvgIcon-root': {
+                    color: 'primary.main',
+                  },
                 },
               }}
             >

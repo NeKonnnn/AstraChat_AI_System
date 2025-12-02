@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
-import { CssBaseline, Box, IconButton } from '@mui/material';
-import { Menu as MenuIcon } from '@mui/icons-material';
+import { CssBaseline, Box, IconButton, Tooltip } from '@mui/material';
+import { Menu as MenuIcon, ChevronRight as ChevronRightIcon } from '@mui/icons-material';
 import Sidebar from './components/Sidebar';
 import UnifiedChatPage from './pages/UnifiedChatPage';
 import VoicePage from './pages/VoicePage';
@@ -75,6 +75,7 @@ function App() {
   });
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarHidden, setSidebarHidden] = useState(false);
 
   useEffect(() => {
     localStorage.setItem('gazikii-dark-mode', JSON.stringify(isDarkMode));
@@ -108,12 +109,15 @@ function App() {
                   element={
                     <PrivateRoute>
                       <Box sx={{ display: 'flex', height: '100vh' }}>
-                        <Sidebar 
-                          open={sidebarOpen} 
-                          onToggle={toggleSidebar}
-                          isDarkMode={isDarkMode}
-                          onToggleTheme={toggleTheme}
-                        />
+                        {!sidebarHidden && (
+                          <Sidebar 
+                            open={sidebarOpen} 
+                            onToggle={toggleSidebar}
+                            isDarkMode={isDarkMode}
+                            onToggleTheme={toggleTheme}
+                            onHide={() => setSidebarHidden(true)}
+                          />
+                        )}
                         <Box 
                           component="main" 
                           sx={{ 
@@ -121,32 +125,49 @@ function App() {
                             display: 'flex',
                             flexDirection: 'column',
                             overflow: 'hidden',
-                            marginLeft: sidebarOpen ? 0 : '-280px',
+                            marginLeft: sidebarHidden ? 0 : (sidebarOpen ? 0 : '-64px'),
                             transition: 'margin-left 0.3s ease',
                             position: 'relative',
                           }}
                         >
-                          {/* Кнопка меню - видна только когда сайдбар закрыт */}
-                          {!sidebarOpen && (
+                          {/* Кнопка для показа скрытой панели */}
+                          {sidebarHidden && (
                             <Box
                               sx={{
                                 position: 'fixed',
-                                top: 16,
-                                left: 16,
+                                left: 0,
+                                top: '50%',
+                                transform: 'translateY(-50%)',
                                 zIndex: 1200,
                               }}
                             >
-                              <IconButton
-                                onClick={toggleSidebar}
-                                className="menu-button"
-                              >
-                                <MenuIcon />
-                              </IconButton>
+                              <Tooltip title="Показать панель" placement="right">
+                                <IconButton
+                                  onClick={() => {
+                                    setSidebarHidden(false);
+                                    setSidebarOpen(false);
+                                  }}
+                                  sx={{
+                                    bgcolor: 'transparent',
+                                    color: 'text.primary',
+                                    opacity: 0.7,
+                                    '&:hover': {
+                                      bgcolor: 'transparent',
+                                      opacity: 1,
+                                      '& .MuiSvgIcon-root': {
+                                        color: 'primary.main',
+                                      },
+                                    },
+                                  }}
+                                >
+                                  <ChevronRightIcon />
+                                </IconButton>
+                              </Tooltip>
                             </Box>
                           )}
                           
                           <Routes>
-                            <Route path="/" element={<UnifiedChatPage isDarkMode={isDarkMode} />} />
+                            <Route path="/" element={<UnifiedChatPage isDarkMode={isDarkMode} sidebarOpen={sidebarOpen} />} />
                             <Route path="/voice" element={<VoicePage />} />
                             <Route path="/documents" element={<DocumentsPage />} />
                             <Route path="/prompts" element={<PromptGalleryPage />} />

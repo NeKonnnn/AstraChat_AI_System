@@ -52,6 +52,7 @@ export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSe
     const savedWidescreenMode = localStorage.getItem('widescreen_mode');
     const savedShowUserName = localStorage.getItem('show_user_name');
     const savedEnableNotification = localStorage.getItem('enable_notification');
+    const savedShowModelSelectorInSettings = localStorage.getItem('show_model_selector_in_settings');
     return {
       autoGenerateTitles: savedAutoTitle !== null ? savedAutoTitle === 'true' : true,
       largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
@@ -61,6 +62,7 @@ export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSe
       widescreenMode: savedWidescreenMode !== null ? savedWidescreenMode === 'true' : false,
       showUserName: savedShowUserName !== null ? savedShowUserName === 'true' : false,
       enableNotification: savedEnableNotification !== null ? savedEnableNotification === 'true' : false,
+      showModelSelectorInSettings: savedShowModelSelectorInSettings !== null ? savedShowModelSelectorInSettings === 'true' : false,
     };
   });
   
@@ -158,6 +160,7 @@ export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSe
     localStorage.setItem('widescreen_mode', String(newSettings.widescreenMode));
     localStorage.setItem('show_user_name', String(newSettings.showUserName));
     localStorage.setItem('enable_notification', String(newSettings.enableNotification));
+    localStorage.setItem('show_model_selector_in_settings', String(newSettings.showModelSelectorInSettings));
     // Отправляем кастомное событие для обновления настроек в том же окне
     window.dispatchEvent(new Event('interfaceSettingsChanged'));
     showNotification('success', 'Настройки интерфейса сохранены');
@@ -505,6 +508,36 @@ export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSe
               <Switch
                 checked={interfaceSettings.widescreenMode}
                 onChange={(e) => handleInterfaceSettingChange('widescreenMode', e.target.checked)}
+              />
+            </ListItem>
+
+            <Divider />
+
+            {/* Отображать выбор модели в настройках */}
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <ListItemText
+                primary="Отображать выбор модели в настройках"
+                primaryTypographyProps={{
+                  variant: 'body1',
+                  fontWeight: 500,
+                }}
+                secondary="Если включено, выбор модели будет в настройках, иначе в рабочей зоне"
+                secondaryTypographyProps={{
+                  variant: 'body2',
+                  sx: { mt: 0.5 }
+                }}
+              />
+              <Switch
+                checked={interfaceSettings.showModelSelectorInSettings}
+                onChange={(e) => handleInterfaceSettingChange('showModelSelectorInSettings', e.target.checked)}
               />
             </ListItem>
           </List>

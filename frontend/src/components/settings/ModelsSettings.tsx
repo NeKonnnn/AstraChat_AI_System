@@ -42,10 +42,17 @@ import {
   ExpandMore as ExpandMoreIcon,
 } from '@mui/icons-material';
 import { useAppActions } from '../../contexts/AppContext';
+import ModelSelector from '../ModelSelector';
+import { useTheme } from '@mui/material';
 
 const API_BASE_URL = 'http://localhost:8000';
 
 export default function ModelsSettings() {
+  const [showModelSelectorInSettings, setShowModelSelectorInSettings] = useState(() => {
+    const saved = localStorage.getItem('show_model_selector_in_settings');
+    return saved !== null ? saved === 'true' : false;
+  });
+  
   const [modelSettings, setModelSettings] = useState({
     context_size: 2048,
     output_tokens: 512,
@@ -114,6 +121,15 @@ export default function ModelsSettings() {
     loadModels();
     loadCurrentModel();
     loadContextPrompts();
+    
+    // Слушаем изменения настроек
+    const handleSettingsChange = () => {
+      const saved = localStorage.getItem('show_model_selector_in_settings');
+      setShowModelSelectorInSettings(saved !== null ? saved === 'true' : false);
+    };
+    
+    window.addEventListener('interfaceSettingsChanged', handleSettingsChange);
+    return () => window.removeEventListener('interfaceSettingsChanged', handleSettingsChange);
   }, []);
 
   // Автосохранение настроек модели
@@ -363,15 +379,29 @@ export default function ModelsSettings() {
     }
   };
 
+  const theme = useTheme();
+  const isDarkMode = theme.palette.mode === 'dark';
+
   return (
     <Box sx={{ p: 3 }}>
-      {/* Выбор модели */}
+      {/* Выбор модели - показываем только если включено в настройках */}
+      {showModelSelectorInSettings && (
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <ComputerIcon color="primary" />
             Выбор модели
           </Typography>
+          
+          <Box sx={{ mb: 2 }}>
+            <ModelSelector 
+              isDarkMode={isDarkMode}
+              onModelSelect={(modelPath) => {
+                console.log('Модель выбрана:', modelPath);
+                loadCurrentModel();
+              }}
+            />
+          </Box>
           
           {/* Информация о текущей модели */}
           {currentModel?.loaded ? (
@@ -410,6 +440,7 @@ export default function ModelsSettings() {
           </Button>
         </CardContent>
       </Card>
+      )}
 
       {/* Настройки модели AstraChat */}
       <Card sx={{ mb: 3 }}>

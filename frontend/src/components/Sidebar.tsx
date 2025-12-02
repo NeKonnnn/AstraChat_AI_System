@@ -41,6 +41,7 @@ import {
   Person as PersonIcon,
   Logout as LogoutIcon,
   AutoAwesome as PromptsIcon,
+  ChevronLeft as ChevronLeftIcon,
 } from '@mui/icons-material';
 import { useAppContext, useAppActions } from '../contexts/AppContext';
 import { useSocket } from '../contexts/SocketContext';
@@ -61,11 +62,12 @@ interface SidebarProps {
   onToggle: () => void;
   isDarkMode: boolean;
   onToggleTheme: () => void;
+  onHide?: () => void;
 }
 
 const menuItems: any[] = [];
 
-export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: SidebarProps) {
+export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onHide }: SidebarProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const { state } = useAppContext();
@@ -107,6 +109,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
   const [renamingFolderName, setRenamingFolderName] = React.useState('');
   const [showDeleteFolderDialog, setShowDeleteFolderDialog] = React.useState(false);
   const [deleteWithContent, setDeleteWithContent] = React.useState(false);
+  const searchInputRef = React.useRef<HTMLInputElement>(null);
   const menuOpen = Boolean(anchorEl);
   const chatMenuOpen = Boolean(chatMenuAnchor);
   const folderMenuOpen = Boolean(folderMenuAnchor);
@@ -387,67 +390,81 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
     <Drawer
       variant="persistent"
       anchor="left"
-      open={open}
+      open={true}
       sx={{
-        width: 280,
+        width: open ? 280 : 64,
         flexShrink: 0,
+        transition: 'width 0.3s ease',
         '& .MuiDrawer-paper': {
-          width: 280,
+          width: open ? 280 : 64,
           boxSizing: 'border-box',
-          background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-          color: 'white',
-          borderRight: 'none',
+          background: open 
+            ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
+            : 'background.default',
+          color: open ? 'white' : 'text.primary',
+          borderRight: '1px solid',
+          borderColor: 'divider',
+          transition: 'width 0.3s ease, background 0.3s ease, color 0.3s ease',
+          overflowX: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
         },
       }}
     >
       {/* Заголовок */}
       <Box
         sx={{
-          p: 2,
+          p: open ? 2 : 1,
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'space-between',
-          background: 'rgba(0,0,0,0.1)',
+          justifyContent: open ? 'space-between' : 'center',
+          background: open ? 'rgba(0,0,0,0.1)' : 'transparent',
+          minHeight: 64,
         }}
       >
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-          <Box
-            sx={{
-              width: 48,
-              height: 48,
-              borderRadius: '50%',
-              overflow: 'hidden',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0,
-            }}
-          >
+        {open && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
             <Box
-              component="img"
-              src="/astra.png"
-              alt="Astra"
               sx={{
-                width: '70%',
-                height: '70%',
-                objectFit: 'cover',
-                transform: 'scale(1.2)',
+                width: 48,
+                height: 48,
+                borderRadius: '50%',
+                overflow: 'hidden',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
               }}
-            />
+            >
+              <Box
+                component="img"
+                src="/astra.png"
+                alt="Astra"
+                sx={{
+                  width: '70%',
+                  height: '70%',
+                  objectFit: 'cover',
+                  transform: 'scale(1.2)',
+                }}
+              />
+            </Box>
+            <Box>
+              <Typography variant="h6" fontWeight="bold">
+                AstraChat
+              </Typography>
+            </Box>
           </Box>
-          <Box>
-            <Typography variant="h6" fontWeight="bold">
-              AstraChat
-            </Typography>
-            
-          </Box>
-        </Box>
+        )}
         <IconButton
           onClick={onToggle}
           sx={{
-            color: 'white',
+            color: open ? 'white' : 'text.primary',
+            width: 40,
+            height: 40,
             '&:hover': {
-              backgroundColor: 'rgba(255,255,255,0.1)',
+              backgroundColor: open 
+                ? 'rgba(255,255,255,0.1)' 
+                : 'action.hover',
             },
           }}
         >
@@ -455,89 +472,234 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
         </IconButton>
       </Box>
 
-      {/* Статус соединения */}
-      <Box sx={{ px: 2, pb: 1 }}>
-        <Chip
-          size="small"
-          icon={<InfoIcon fontSize="small" />}
-          label={isConnected ? 'Подключено' : 'Отключено'}
-          color={isConnected ? 'success' : 'error'}
-          variant="outlined"
-          sx={{ 
-            color: 'white',
-            borderColor: isConnected ? 'rgba(76, 175, 80, 0.5)' : 'rgba(244, 67, 54, 0.5)',
-          }}
-        />
-      </Box>
+      {open && (
+        <>
+          {/* Статус соединения */}
+          <Box sx={{ px: 2, pb: 1 }}>
+            <Chip
+              size="small"
+              icon={<InfoIcon fontSize="small" />}
+              label={isConnected ? 'Подключено' : 'Отключено'}
+              color={isConnected ? 'success' : 'error'}
+              variant="outlined"
+              sx={{ 
+                color: 'white',
+                borderColor: isConnected ? 'rgba(76, 175, 80, 0.5)' : 'rgba(244, 67, 54, 0.5)',
+              }}
+            />
+          </Box>
 
-      {/* Кнопка создания нового чата */}
-      <Box sx={{ p: 1.5 }}>
-        <Button
-          fullWidth
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={handleCreateChat}
-          sx={{
-            backgroundColor: 'rgba(255,255,255,0.1)',
-            color: 'white',
-            '&:hover': {
-              backgroundColor: 'rgba(255,255,255,0.2)',
-            },
-            textTransform: 'none',
-            fontWeight: 500,
-            py: 1,
-            px: 2,
-            borderRadius: 2,
-            justifyContent: 'flex-start',
-            fontSize: '0.875rem',
-          }}
-        >
-          Новый чат
-        </Button>
-      </Box>
+          {/* Кнопка создания нового чата */}
+          <Box sx={{ p: 1.5 }}>
+            <Button
+              fullWidth
+              variant="contained"
+              startIcon={<AddIcon />}
+              onClick={handleCreateChat}
+              sx={{
+                backgroundColor: 'rgba(255,255,255,0.1)',
+                color: 'white',
+                '&:hover': {
+                  backgroundColor: 'rgba(255,255,255,0.2)',
+                },
+                textTransform: 'none',
+                fontWeight: 500,
+                py: 1,
+                px: 2,
+                borderRadius: 2,
+                justifyContent: 'flex-start',
+                fontSize: '0.875rem',
+              }}
+            >
+              Новый чат
+            </Button>
+          </Box>
 
-      {/* Поиск в чатах */}
-      <Box sx={{ p: 1.5 }}>
-        <TextField
-          fullWidth
-          placeholder="Поиск в чатах"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          size="small"
-          InputProps={{
-            startAdornment: <SearchIcon sx={{ color: 'rgba(255,255,255,0.7)', mr: 1, fontSize: '1rem' }} />,
-            endAdornment: (
-              <Tooltip title="Создать папку">
+          {/* Поиск в чатах */}
+          <Box sx={{ p: 1.5 }}>
+            <TextField
+              inputRef={searchInputRef}
+              fullWidth
+              placeholder="Поиск в чатах"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              size="small"
+              InputProps={{
+                startAdornment: <SearchIcon sx={{ color: 'rgba(255,255,255,0.7)', mr: 1, fontSize: '1rem' }} />,
+                endAdornment: (
+                  <Tooltip title="Создать папку">
+                    <IconButton
+                      size="small"
+                      onClick={() => setShowCreateFolderDialog(true)}
+                      sx={{ color: 'rgba(255,255,255,0.7)', p: 0.5 }}
+                    >
+                      <AddFolderIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                ),
+                sx: {
+                  backgroundColor: 'rgba(255,255,255,0.1)',
+                  borderRadius: 2,
+                  '& .MuiOutlinedInput-notchedOutline': {
+                    border: 'none',
+                  },
+                  '& .MuiInputBase-input': {
+                    color: 'white',
+                    fontSize: '0.875rem',
+                    py: 1,
+                    '&::placeholder': {
+                      color: 'rgba(255,255,255,0.7)',
+                      opacity: 1,
+                    },
+                  },
+                },
+              }}
+            />
+          </Box>
+        </>
+      )}
+
+      {/* Кнопки в свернутом состоянии */}
+      {!open && (
+        <>
+          <Box sx={{ 
+            p: 1, 
+            display: 'flex', 
+            flexDirection: 'column', 
+            gap: 1,
+          }}>
+            {/* Кнопка поиска */}
+            <Tooltip title="Поиск в чатах" placement="right">
+              <IconButton
+                onClick={() => {
+                  if (!open) {
+                    onToggle(); // Раскрываем сайдбар для показа поиска
+                    // Устанавливаем фокус на поле поиска после небольшой задержки
+                    setTimeout(() => {
+                      searchInputRef.current?.focus();
+                    }, 300);
+                  } else {
+                    // Если сайдбар уже открыт, просто фокусируемся на поиске
+                    searchInputRef.current?.focus();
+                  }
+                }}
+                sx={{
+                  color: 'text.primary',
+                  opacity: 0.7,
+                  width: 40,
+                  height: 40,
+                  borderRadius: 1,
+                  '&:hover': {
+                    backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+                    opacity: 1,
+                    '& .MuiSvgIcon-root': {
+                      color: 'primary.main',
+                    },
+                  },
+                }}
+              >
+                <SearchIcon />
+              </IconButton>
+            </Tooltip>
+
+            {/* Кнопка нового чата */}
+            <Tooltip title="Новый чат" placement="right">
+              <IconButton
+                onClick={handleCreateChat}
+                sx={{
+                  color: 'text.primary',
+                  opacity: 0.7,
+                  width: 40,
+                  height: 40,
+                  borderRadius: 1,
+                  '&:hover': {
+                    backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+                    opacity: 1,
+                    '& .MuiSvgIcon-root': {
+                      color: 'primary.main',
+                    },
+                  },
+                }}
+              >
+                <AddIcon />
+              </IconButton>
+            </Tooltip>
+          </Box>
+
+          {/* Кнопка "Скрыть панель" - на том же расстоянии как "Показать панель" */}
+          {onHide && (
+            <Box sx={{ 
+              position: 'fixed',
+              left: 0,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              width: 64,
+              display: 'flex', 
+              justifyContent: 'center', 
+              alignItems: 'center',
+              zIndex: 1200,
+            }}>
+              <Tooltip title="Скрыть панель" placement="right">
                 <IconButton
-                  size="small"
-                  onClick={() => setShowCreateFolderDialog(true)}
-                  sx={{ color: 'rgba(255,255,255,0.7)', p: 0.5 }}
+                  onClick={onHide}
+                  sx={{
+                    color: 'text.primary',
+                    opacity: 0.7,
+                    width: 40,
+                    height: 40,
+                    borderRadius: 1,
+                    '&:hover': {
+                      backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+                      opacity: 1,
+                      '& .MuiSvgIcon-root': {
+                        color: 'primary.main',
+                      },
+                    },
+                  }}
                 >
-                  <AddFolderIcon fontSize="small" />
+                  <ChevronLeftIcon />
                 </IconButton>
               </Tooltip>
-            ),
-            sx: {
-              backgroundColor: 'rgba(255,255,255,0.1)',
-              borderRadius: 2,
-              '& .MuiOutlinedInput-notchedOutline': {
-                border: 'none',
-              },
-              '& .MuiInputBase-input': {
-                color: 'white',
-                fontSize: '0.875rem',
-                py: 1,
-                '&::placeholder': {
-                  color: 'rgba(255,255,255,0.7)',
-                  opacity: 1,
-                },
-              },
-            },
-          }}
-        />
-      </Box>
+            </Box>
+          )}
+
+          {/* Кнопка пользователя внизу (как в раскрытом состоянии) */}
+          <Box sx={{ p: 1, mt: 'auto' }}>
+            <Tooltip title={user ? (user.full_name || user.username) : 'Меню'} placement="right">
+              <IconButton
+                onClick={handleMenuClick}
+                sx={{
+                  color: 'text.primary',
+                  opacity: 0.7,
+                  width: 40,
+                  height: 40,
+                  borderRadius: 1,
+                  p: 0,
+                  '&:hover': {
+                    backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+                    opacity: 1,
+                  },
+                }}
+              >
+                <Avatar
+                  sx={{
+                    width: 40,
+                    height: 40,
+                    bgcolor: 'primary.main',
+                    fontSize: 16,
+                    fontWeight: 600,
+                  }}
+                >
+                  {user ? user.username.charAt(0).toUpperCase() : 'М'}
+                </Avatar>
+              </IconButton>
+            </Tooltip>
+          </Box>
+        </>
+      )}
 
       {/* Список чатов */}
+      {open && (
       <Box sx={{ 
         flexGrow: 1, 
         overflow: 'auto',
@@ -825,8 +987,10 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
           ))}
         </Box>
       </Box>
+      )}
 
       {/* Навигационное меню */}
+      {open && (
       <List sx={{ flexGrow: 1, px: 1 }}>
         {menuItems.map((item) => {
           const Icon = item.icon;
@@ -865,8 +1029,11 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
           );
         })}
       </List>
+      )}
+
 
       {/* Кнопка пользователя внизу */}
+      {open && (
       <Box sx={{ p: 1.5, background: 'rgba(0,0,0,0.2)' }}>
         {user ? (
           <Box
@@ -926,70 +1093,72 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme }: S
             Меню
           </Button>
         )}
-        
-        <Menu
-          anchorEl={anchorEl}
-          open={menuOpen}
-          onClose={handleMenuClose}
-          anchorOrigin={{
-            vertical: 'top',
-            horizontal: 'right',
-          }}
-          transformOrigin={{
-            vertical: 'bottom',
-            horizontal: 'right',
-          }}
-          PaperProps={{
-            sx: {
-              backgroundColor: 'rgba(30, 30, 30, 0.95)',
-              backdropFilter: 'blur(10px)',
-              border: '1px solid rgba(255,255,255,0.1)',
-              borderRadius: 2,
-              minWidth: 200,
-            },
+      </Box>
+      )}
+
+      {/* Меню пользователя (доступно в обоих состояниях) */}
+      <Menu
+        anchorEl={anchorEl}
+        open={menuOpen}
+        onClose={handleMenuClose}
+        anchorOrigin={{
+          vertical: 'top',
+          horizontal: 'right',
+        }}
+        transformOrigin={{
+          vertical: 'bottom',
+          horizontal: 'right',
+        }}
+        PaperProps={{
+          sx: {
+            backgroundColor: 'rgba(30, 30, 30, 0.95)',
+            backdropFilter: 'blur(10px)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            borderRadius: 2,
+            minWidth: 200,
+          },
+        }}
+      >
+        <MenuItem 
+          onClick={() => handleMenuAction('settings')}
+          sx={{ 
+            color: 'white',
+            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
           }}
         >
-          <MenuItem 
-            onClick={() => handleMenuAction('settings')}
-            sx={{ 
-              color: 'white',
-              '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
-            }}
-          >
-            <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
-              <SettingsIcon fontSize="small" />
-            </ListItemIcon>
-            <ListItemText primary="Настройки" />
-          </MenuItem>
-          
-          
-          <MenuItem 
-            onClick={() => handleMenuAction('statistics')}
-            sx={{ 
-              color: 'white',
-              '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
-            }}
-          >
-            <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
-              <BarChartIcon fontSize="small" />
-            </ListItemIcon>
-            <ListItemText primary="Статистика" />
-          </MenuItem>
-          
-          <MenuItem 
-            onClick={() => handleMenuAction('logout')}
-            sx={{ 
-              color: 'white',
-              '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
-            }}
-          >
-            <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
-              <LogoutIcon fontSize="small" />
-            </ListItemIcon>
-            <ListItemText primary="Выйти из аккаунта" />
-          </MenuItem>
-        </Menu>
-      </Box>
+          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+            <SettingsIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText primary="Настройки" />
+        </MenuItem>
+        
+        
+        <MenuItem 
+          onClick={() => handleMenuAction('statistics')}
+          sx={{ 
+            color: 'white',
+            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+          }}
+        >
+          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+            <BarChartIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText primary="Статистика" />
+        </MenuItem>
+        
+        <MenuItem 
+          onClick={() => handleMenuAction('logout')}
+          sx={{ 
+            color: 'white',
+            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+          }}
+        >
+          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+            <LogoutIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText primary="Выйти из аккаунта" />
+        </MenuItem>
+      </Menu>
 
       {/* Диалог статистики */}
       <Dialog
