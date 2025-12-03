@@ -442,7 +442,7 @@ export default function ModelsSettings() {
       </Card>
       )}
 
-      {/* Настройки модели AstraChat */}
+      {/* Настройки модели astrachat */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>

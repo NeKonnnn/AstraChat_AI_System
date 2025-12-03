@@ -450,7 +450,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             </Box>
             <Box>
               <Typography variant="h6" fontWeight="bold">
-                AstraChat
+                astrachat
               </Typography>
             </Box>
           </Box>

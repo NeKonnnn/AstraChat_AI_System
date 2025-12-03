@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class MongoDBConnection:
     """Класс для управления подключением к MongoDB"""
     
-    def __init__(self, connection_string: str, database_name: str = "memoai"):
+    def __init__(self, connection_string: str, database_name: str = "astrachat"):
         """
         Инициализация подключения к MongoDB
         

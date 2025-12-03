@@ -90,7 +90,7 @@ def backup_old_settings():
             print(f"Ошибка создания резервной копии: {e}")
 
 if __name__ == "__main__":
-    print("=== Миграция конфигурации MemoAI Backend ===")
+    print("=== Миграция конфигурации astrachat Backend ===")
     print()
     
     # Создаем резервную копию

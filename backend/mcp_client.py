@@ -1,5 +1,5 @@
 """
-MCP (Model Context Protocol) клиент для MemoAI
+MCP (Model Context Protocol) клиент для astrachat
 Позволяет агенту подключаться к внешним инструментам и сервисам
 """
 

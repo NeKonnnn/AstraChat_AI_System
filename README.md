@@ -1,10 +1,10 @@
 ![Astra Chat Logo](assets/Astra_logo.png)
 
-# MemoAI - Интеллектуальная AI-ассистент система
+# astrachat - Интеллектуальная AI-ассистент система
 
 ## Описание проекта
 
-MemoAI - это современная интеллектуальная система с агентной архитектурой, объединяющая возможности больших языковых моделей (LLM), речевого распознавания, синтеза речи и анализа аудио. Система построена на микросервисной архитектуре с использованием Docker и поддерживает как локальные, так и облачные AI модели.
+astrachat - это современная интеллектуальная система с агентной архитектурой, объединяющая возможности больших языковых моделей (LLM), речевого распознавания, синтеза речи и анализа аудио. Система построена на микросервисной архитектуре с использованием Docker и поддерживает как локальные, так и облачные AI модели.
 
 ### Ключевые возможности
 
@@ -112,7 +112,7 @@ MemoAI - это современная интеллектуальная сист
 
 ```bash
 git clone <your-repository-url>
-cd memoai
+cd astrachat
 ```
 
 ### 2. Настройка окружения
@@ -378,7 +378,7 @@ brew install nginx
 
 #### Конфигурация Nginx для фронтенда
 
-Создайте файл `/etc/nginx/sites-available/memoai-frontend`:
+Создайте файл `/etc/nginx/sites-available/astrachat-frontend`:
 
 ```nginx
 server {
@@ -386,7 +386,7 @@ server {
     server_name yourdomain.com www.yourdomain.com;
     
     # Корневая директория фронтенда
-    root /var/www/memoai/frontend/build;
+    root /var/www/astrachat/frontend/build;
     index index.html index.htm;
     
     # Gzip сжатие
@@ -438,7 +438,7 @@ server {
 
 ```bash
 # Создание символической ссылки
-sudo ln -s /etc/nginx/sites-available/memoai-frontend /etc/nginx/sites-enabled/
+sudo ln -s /etc/nginx/sites-available/astrachat-frontend /etc/nginx/sites-enabled/
 
 # Удаление дефолтной конфигурации
 sudo rm /etc/nginx/sites-enabled/default
@@ -459,18 +459,18 @@ sudo systemctl restart nginx
 npm run build
 
 # Копирование в веб-директорию
-sudo cp -r build/* /var/www/memoai/frontend/
+sudo cp -r build/* /var/www/astrachat/frontend/
 ```
 
 #### 2. Настройка прав доступа
 
 ```bash
 # Создание директории
-sudo mkdir -p /var/www/memoai/frontend
+sudo mkdir -p /var/www/astrachat/frontend
 
 # Установка прав
-sudo chown -R www-data:www-data /var/www/memoai/frontend
-sudo chmod -R 755 /var/www/memoai/frontend
+sudo chown -R www-data:www-data /var/www/astrachat/frontend
+sudo chmod -R 755 /var/www/astrachat/frontend
 ```
 
 #### 3. SSL сертификаты
@@ -531,8 +531,8 @@ sudo systemctl restart nginx
 sudo apt install gzip
 
 # Сжатие статических файлов
-gzip -k -9 /var/www/memoai/frontend/static/css/*.css
-gzip -k -9 /var/www/memoai/frontend/static/js/*.js
+gzip -k -9 /var/www/astrachat/frontend/static/css/*.css
+gzip -k -9 /var/www/astrachat/frontend/static/js/*.js
 ```
 
 #### 2. CDN настройка
@@ -744,8 +744,8 @@ max_speakers: 5
 ```yaml
 services:
   llm-svc:          # AI Models Service (порт 8001)
-  memoai-backend:   # Backend API (порт 8000)
-  memoai-frontend:  # React UI (порт 3000)
+  astrachat-backend:   # Backend API (порт 8000)
+  astrachat-frontend:  # React UI (порт 3000)
   nginx:            # Веб-сервер (порт 80/443) - опционально
 ```
 
@@ -816,7 +816,7 @@ server {
     
     # API проксирование на backend
     location /api/ {
-        proxy_pass http://memoai-backend:8000;
+        proxy_pass http://astrachat-backend:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -825,7 +825,7 @@ server {
     
     # WebSocket проксирование
     location /ws/ {
-        proxy_pass http://memoai-backend:8000;
+        proxy_pass http://astrachat-backend:8000;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -839,7 +839,7 @@ server {
 
 ```yaml
 # В docker-compose.yml
-memoai-frontend:
+astrachat-frontend:
   environment:
     - REACT_APP_API_URL=${REACT_APP_API_URL:-http://localhost:8000}
     - REACT_APP_WS_URL=${REACT_APP_WS_URL:-ws://localhost:8000}
@@ -857,7 +857,7 @@ docker-compose up
 docker-compose -f docker-compose.prod.yml up -d
 
 # Только определенные сервисы
-docker-compose up llm-svc memoai-backend
+docker-compose up llm-svc astrachat-backend
 ```
 
 ### Управление
@@ -868,7 +868,7 @@ docker-compose ps
 
 # Просмотр логов
 docker-compose logs -f llm-svc
-docker-compose logs -f memoai-backend
+docker-compose logs -f astrachat-backend
 
 # Перезапуск сервиса
 docker-compose restart llm-svc
@@ -883,7 +883,7 @@ docker-compose down -v --rmi all
 ## Структура проекта
 
 ```
-memoai/
+astrachat/
 ├── backend/                    # Backend сервис
 │   ├── agents/                # Агентная архитектура
 │   ├── config/                # Конфигурация backend
@@ -915,24 +915,24 @@ memoai/
 
 ```bash
 # AWS S3
-aws s3 mb s3://my-memoai-models
-aws s3 cp models/ s3://my-memoai-models/models/ --recursive
-aws s3 cp silero_models/ s3://my-memoai-models/silero/ --recursive
-aws s3 cp model_small/ s3://my-memoai-models/vosk-model-small-ru-0.22/ --recursive
-aws s3 cp whisperx_models/ s3://my-memoai-models/whisperx/ --recursive
-aws s3 cp diarize_models/ s3://my-memoai-models/diarization/ --recursive
+aws s3 mb s3://my-astrachat-models
+aws s3 cp models/ s3://my-astrachat-models/models/ --recursive
+aws s3 cp silero_models/ s3://my-astrachat-models/silero/ --recursive
+aws s3 cp model_small/ s3://my-astrachat-models/vosk-model-small-ru-0.22/ --recursive
+aws s3 cp whisperx_models/ s3://my-astrachat-models/whisperx/ --recursive
+aws s3 cp diarize_models/ s3://my-astrachat-models/diarization/ --recursive
 ```
 
 ### 2. Обновление .env файла
 
 ```bash
 # .env
-LLM_MODEL_PATH=s3://my-memoai-models/models/Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf
-VOSK_MODEL_PATH=s3://my-memoai-models/vosk-model-small-ru-0.22
-SILERO_MODELS_DIR=s3://my-memoai-models/silero
-WHISPERX_MODELS_DIR=s3://my-memoai-models/whisperx
-DIARIZATION_MODELS_DIR=s3://my-memoai-models/diarization
-DIARIZATION_CONFIG_PATH=s3://my-memoai-models/diarization/pyannote_diarization_config.yaml
+LLM_MODEL_PATH=s3://my-astrachat-models/models/Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf
+VOSK_MODEL_PATH=s3://my-astrachat-models/vosk-model-small-ru-0.22
+SILERO_MODELS_DIR=s3://my-astrachat-models/silero
+WHISPERX_MODELS_DIR=s3://my-astrachat-models/whisperx
+DIARIZATION_MODELS_DIR=s3://my-astrachat-models/diarization
+DIARIZATION_CONFIG_PATH=s3://my-astrachat-models/diarization/pyannote_diarization_config.yaml
 
 # AWS настройки
 AWS_ACCESS_KEY_ID=your-access-key
@@ -990,14 +990,14 @@ server {
 
     # Frontend
     location / {
-        proxy_pass http://memoai-frontend:3000;
+        proxy_pass http://astrachat-frontend:3000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
     }
 
     # Backend API
     location /api/ {
-        proxy_pass http://memoai-backend:8000;
+        proxy_pass http://astrachat-backend:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
     }
@@ -1011,7 +1011,7 @@ server {
 
     # WebSocket
     location /ws/ {
-        proxy_pass http://memoai-backend:8000;
+        proxy_pass http://astrachat-backend:8000;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -1039,8 +1039,8 @@ docker-compose logs -f
 
 # Конкретный сервис
 docker-compose logs -f llm-svc
-docker-compose logs -f memoai-backend
-docker-compose logs -f memoai-frontend
+docker-compose logs -f astrachat-backend
+docker-compose logs -f astrachat-frontend
 
 # Последние 100 строк
 docker-compose logs --tail=100 llm-svc
@@ -1186,7 +1186,7 @@ services:
   llm-svc:
     deploy:
       replicas: 3
-  memoai-backend:
+  astrachat-backend:
     deploy:
       replicas: 2
 ```
@@ -1211,10 +1211,10 @@ services:
 ```bash
 # Python зависимости
 docker-compose exec llm-svc pip install --upgrade -r requirements.txt
-docker-compose exec memoai-backend pip install --upgrade -r requirements.txt
+docker-compose exec astrachat-backend pip install --upgrade -r requirements.txt
 
 # Node.js зависимости
-docker-compose exec memoai-frontend npm update
+docker-compose exec astrachat-frontend npm update
 ```
 
 ### Обновление моделей
@@ -1241,4 +1241,4 @@ docker-compose restart llm-svc
 
 ---
 
-**MemoAI** - Ваш интеллектуальный AI-ассистент! 
+**astrachat** - Ваш интеллектуальный AI-ассистент! 

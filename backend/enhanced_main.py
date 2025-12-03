@@ -57,7 +57,7 @@ for handler in logging.root.handlers:
         handler.stream.reconfigure(encoding='utf-8')
 logger = logging.getLogger(__name__)
 
-# Импорты оригинального MemoAI
+# Импорты оригинального astrachat
 try:
     from backend.agent import ask_agent, model_settings, update_model_settings, reload_model_by_path, get_model_info, initialize_model
     logger.info("Оригинальный agent импортирован успешно")
@@ -87,7 +87,7 @@ except ImportError as e:
 
 # Создание FastAPI приложения
 app = FastAPI(
-    title="MemoAI Enhanced",
+    title="astrachat Enhanced",
     description="Улучшенный ИИ агент с поддержкой LangGraph и MCP",
     version="2.0.0"
 )
@@ -117,7 +117,7 @@ async def startup_event():
     """Инициализация при запуске приложения"""
     global langgraph_agent, mcp_client, doc_processor
     
-    logger.info("Запуск MemoAI Enhanced...")
+    logger.info("Запуск astrachat Enhanced...")
     
     # Инициализация оригинального агента
     if ask_agent:
@@ -154,7 +154,7 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Ошибка инициализации обработчика документов: {e}")
     
-    logger.info("MemoAI Enhanced готов к работе!")
+    logger.info("astrachat Enhanced готов к работе!")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -173,7 +173,7 @@ async def shutdown_event():
 async def root():
     """Корневой эндпоинт"""
     return {
-        "message": "MemoAI Enhanced API",
+        "message": "astrachat Enhanced API",
         "version": "2.0.0",
         "features": [
             "LangGraph Agent",

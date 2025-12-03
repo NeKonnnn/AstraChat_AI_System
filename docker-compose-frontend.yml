@@ -1,0 +1,48 @@
+services:
+  # Frontend - React
+  # ВАЖНО: Backend должен быть запущен отдельно через docker-compose-backend.yml
+  # Запустите сначала: docker-compose -f docker-compose-backend.yml up -d
+  astrachat-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - REACT_APP_API_URL=${REACT_APP_API_URL:-http://localhost:8000}
+        - REACT_APP_WS_URL=${REACT_APP_WS_URL:-ws://localhost:8000}
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    networks:
+      - astrachat-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Nginx для продакшена (опционально)
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - astrachat-frontend
+    restart: unless-stopped
+    networks:
+      - astrachat-network
+    profiles:
+      - production
+
+networks:
+  astrachat-network:
+    driver: bridge
+    name: astrachat-network
+    # Для микросервисной архитектуры: если сеть создана заранее, установите external: true
+    # Сначала создайте сеть: docker network create astrachat-network
+    external: false  # Измените на true, если сеть создана заранее
+

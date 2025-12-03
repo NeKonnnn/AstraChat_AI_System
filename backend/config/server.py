@@ -1,5 +1,5 @@
 """
-Конфигурация сервера для MemoAI Backend
+Конфигурация сервера для astrachat Backend
 Настройки FastAPI, CORS, Socket.IO и других параметров
 """
 
@@ -12,17 +12,17 @@ from typing import List
 
 # Основные настройки сервера
 SERVER_CONFIG = {
-    "host": os.getenv("MEMOAI_HOST", "0.0.0.0"),
-    "port": int(os.getenv("MEMOAI_PORT", "8000")),
-    "reload": os.getenv("MEMOAI_RELOAD", "false").lower() == "true",
-    "log_level": os.getenv("MEMOAI_LOG_LEVEL", "info"),
-    "workers": int(os.getenv("MEMOAI_WORKERS", "1")),
+    "host": os.getenv("astrachat_HOST", "0.0.0.0"),
+    "port": int(os.getenv("astrachat_PORT", "8000")),
+    "reload": os.getenv("astrachat_RELOAD", "false").lower() == "true",
+    "log_level": os.getenv("astrachat_LOG_LEVEL", "info"),
+    "workers": int(os.getenv("astrachat_WORKERS", "1")),
 }
 
 # Настройки FastAPI приложения
 FASTAPI_CONFIG = {
-    "title": "MemoAI Web API",
-    "description": "Веб-интерфейс для персонального AI-ассистента MemoAI",
+    "title": "astrachat Web API",
+    "description": "Веб-интерфейс для персонального AI-ассистента astrachat",
     "version": "1.0.0",
     "docs_url": "/docs",
     "redoc_url": "/redoc",
@@ -42,8 +42,8 @@ CORS_CONFIG = {
         "http://127.0.0.1:8080",     # Альтернативный порт
         "http://localhost:8000",      # Backend
         "http://127.0.0.1:8000",     # Backend (IPv4)
-        "http://memoai-frontend:3000",  # Docker internal
-        "http://memoai-backend:8000",   # Docker internal backend
+        "http://astrachat-frontend:3000",  # Docker internal
+        "http://astrachat-backend:8000",   # Docker internal backend
     ],
     "allow_credentials": True,
     "allow_methods": ["*"],
@@ -63,8 +63,8 @@ SOCKETIO_CONFIG = {
         "http://127.0.0.1:5173",
         "http://localhost:8000",
         "http://127.0.0.1:8000",
-        "http://memoai-frontend:3000",  # Docker internal
-        "http://memoai-backend:8000",   # Docker internal backend
+        "http://astrachat-frontend:3000",  # Docker internal
+        "http://astrachat-backend:8000",   # Docker internal backend
     ],
     "ping_timeout": 120,      # ping timeout до 2 минут
     "ping_interval": 25,      # Отправляем ping каждые 25 секунд
@@ -79,10 +79,10 @@ LOGGING_CONFIG = {
     "format": "[%(asctime)s] %(levelname)s [Backend] %(message)s",
     "datefmt": "%Y-%m-%d %H:%M:%S",
     "file": {
-        "enabled": os.getenv("MEMOAI_LOG_FILE", "false").lower() == "true",
-        "path": os.getenv("MEMOAI_LOG_PATH", "logs/backend.log"),
-        "max_size": int(os.getenv("MEMOAI_LOG_MAX_SIZE", "10")),  # MB
-        "backup_count": int(os.getenv("MEMOAI_LOG_BACKUP_COUNT", "5")),
+        "enabled": os.getenv("astrachat_LOG_FILE", "false").lower() == "true",
+        "path": os.getenv("astrachat_LOG_PATH", "logs/backend.log"),
+        "max_size": int(os.getenv("astrachat_LOG_MAX_SIZE", "10")),  # MB
+        "backup_count": int(os.getenv("astrachat_LOG_BACKUP_COUNT", "5")),
     }
 }
 
@@ -102,10 +102,10 @@ STATIC_CONFIG = {
 
 # Настройки безопасности
 SECURITY_CONFIG = {
-    "rate_limit_enabled": os.getenv("MEMOAI_RATE_LIMIT", "false").lower() == "true",
-    "rate_limit_requests": int(os.getenv("MEMOAI_RATE_LIMIT_REQUESTS", "100")),
-    "rate_limit_window": int(os.getenv("MEMOAI_RATE_LIMIT_WINDOW", "60")),  # секунды
-    "max_upload_size": int(os.getenv("MEMOAI_MAX_UPLOAD_SIZE", "100")),    # MB
+    "rate_limit_enabled": os.getenv("astrachat_RATE_LIMIT", "false").lower() == "true",
+    "rate_limit_requests": int(os.getenv("astrachat_RATE_LIMIT_REQUESTS", "100")),
+    "rate_limit_window": int(os.getenv("astrachat_RATE_LIMIT_WINDOW", "60")),  # секунды
+    "max_upload_size": int(os.getenv("astrachat_MAX_UPLOAD_SIZE", "100")),    # MB
 }
 
 # Настройки моделей
@@ -146,7 +146,7 @@ def get_cors_origins() -> List[str]:
     origins = CORS_CONFIG["allow_origins"].copy()
     
     # Добавляем переменные окружения, если они есть
-    env_origins = os.getenv("MEMOAI_CORS_ORIGINS", "")
+    env_origins = os.getenv("astrachat_CORS_ORIGINS", "")
     if env_origins:
         origins.extend(env_origins.split(","))
     
@@ -157,7 +157,7 @@ def get_socketio_cors_origins() -> List[str]:
     origins = SOCKETIO_CONFIG["cors_allowed_origins"].copy()
     
     # Добавляем переменные окружения, если они есть
-    env_origins = os.getenv("MEMOAI_SOCKETIO_CORS_ORIGINS", "")
+    env_origins = os.getenv("astrachat_SOCKETIO_CORS_ORIGINS", "")
     if env_origins:
         origins.extend(env_origins.split(","))
     
@@ -168,7 +168,7 @@ def get_logging_config() -> dict:
     config = LOGGING_CONFIG.copy()
     
     # Переопределяем уровень логирования из переменных окружения
-    env_level = os.getenv("MEMOAI_LOG_LEVEL")
+    env_level = os.getenv("astrachat_LOG_LEVEL")
     if env_level:
         config["level"] = env_level.upper()
     
@@ -221,7 +221,7 @@ def validate_config() -> bool:
 def print_config_summary():
     """Вывести краткую сводку конфигурации"""
     print("=" * 50)
-    print("КОНФИГУРАЦИЯ MEMOAI BACKEND")
+    print("КОНФИГУРАЦИЯ astrachat BACKEND")
     print("=" * 50)
     print(f"Сервер: {get_server_url()}")
     print(f"WebSocket: {get_websocket_url()}")

@@ -51,7 +51,7 @@ class MinIOClient:
         self.access_key = access_key or os.getenv('MINIO_ACCESS_KEY', 'minioadmin')
         self.secret_key = secret_key or os.getenv('MINIO_SECRET_KEY', 'minioadmin')
         self.secure = secure or os.getenv('MINIO_USE_SSL', 'false').lower() == 'true'
-        self.bucket_name = bucket_name or os.getenv('MINIO_BUCKET_NAME', 'memoai-temp')
+        self.bucket_name = bucket_name or os.getenv('MINIO_BUCKET_NAME', 'astrachat-temp')
         
         # Формируем полный endpoint
         if ':' not in self.endpoint:

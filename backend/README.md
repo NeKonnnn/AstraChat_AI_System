@@ -1,6 +1,6 @@
-# MemoAI Backend
+# astrachat Backend
 
-Backend сервер для MemoAI - персонального AI ассистента.
+Backend сервер для astrachat - персонального AI ассистента.
 
 ## Настройка
 
@@ -10,34 +10,34 @@ Backend сервер для MemoAI - персонального AI ассист�
 
 ```bash
 # Основные настройки сервера
-MEMOAI_HOST=0.0.0.0
-MEMOAI_PORT=8000
-MEMOAI_RELOAD=false
-MEMOAI_LOG_LEVEL=info
-MEMOAI_WORKERS=1
+astrachat_HOST=0.0.0.0
+astrachat_PORT=8000
+astrachat_RELOAD=false
+astrachat_LOG_LEVEL=info
+astrachat_WORKERS=1
 
 # Настройки CORS
-MEMOAI_CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
-MEMOAI_SOCKETIO_CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+astrachat_CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+astrachat_SOCKETIO_CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 
 # Настройки логирования
-MEMOAI_LOG_FILE=false
-MEMOAI_LOG_PATH=logs/backend.log
-MEMOAI_LOG_MAX_SIZE=10
-MEMOAI_LOG_BACKUP_COUNT=5
+astrachat_LOG_FILE=false
+astrachat_LOG_PATH=logs/backend.log
+astrachat_LOG_MAX_SIZE=10
+astrachat_LOG_BACKUP_COUNT=5
 
 # Настройки безопасности
-MEMOAI_RATE_LIMIT=false
-MEMOAI_RATE_LIMIT_REQUESTS=100
-MEMOAI_RATE_LIMIT_WINDOW=60
-MEMOAI_MAX_UPLOAD_SIZE=100
+astrachat_RATE_LIMIT=false
+astrachat_RATE_LIMIT_REQUESTS=100
+astrachat_RATE_LIMIT_WINDOW=60
+astrachat_MAX_UPLOAD_SIZE=100
 
 # Настройки моделей
-MEMOAI_DEFAULT_ENGINE=whisperx
-MEMOAI_DEFAULT_LANGUAGE=ru
-MEMOAI_AUTO_DETECT_LANGUAGE=true
-MEMOAI_MAX_CONTEXT_SIZE=32768
-MEMOAI_MAX_OUTPUT_TOKENS=2048
+astrachat_DEFAULT_ENGINE=whisperx
+astrachat_DEFAULT_LANGUAGE=ru
+astrachat_AUTO_DETECT_LANGUAGE=true
+astrachat_MAX_CONTEXT_SIZE=32768
+astrachat_MAX_OUTPUT_TOKENS=2048
 ```
 
 ### Структура конфигурации
@@ -129,11 +129,11 @@ python config/server.py
 
 Логи настраиваются через переменные окружения:
 
-- `MEMOAI_LOG_LEVEL`: Уровень логирования (debug, info, warning, error, critical)
-- `MEMOAI_LOG_FILE`: Включить/отключить запись в файл
-- `MEMOAI_LOG_PATH`: Путь к файлу логов
-- `MEMOAI_LOG_MAX_SIZE`: Максимальный размер файла логов (MB)
-- `MEMOAI_LOG_BACKUP_COUNT`: Количество резервных копий
+- `astrachat_LOG_LEVEL`: Уровень логирования (debug, info, warning, error, critical)
+- `astrachat_LOG_FILE`: Включить/отключить запись в файл
+- `astrachat_LOG_PATH`: Путь к файлу логов
+- `astrachat_LOG_MAX_SIZE`: Максимальный размер файла логов (MB)
+- `astrachat_LOG_BACKUP_COUNT`: Количество резервных копий
 
 ## Безопасность
 
@@ -146,12 +146,12 @@ python config/server.py
 
 ### Включение автоперезагрузки
 ```bash
-MEMOAI_RELOAD=true python main.py
+astrachat_RELOAD=true python main.py
 ```
 
 ### Отладка
 ```bash
-MEMOAI_LOG_LEVEL=debug python main.py
+astrachat_LOG_LEVEL=debug python main.py
 ```
 
 ### Тестирование

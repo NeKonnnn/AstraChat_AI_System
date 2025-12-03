@@ -1,6 +1,6 @@
 """
-MemoAI Web Backend - FastAPI приложение
-Современный веб-интерфейс для MemoAI с поддержкой всех функций
+AstraChat Web Backend - FastAPI приложение
+Современный веб-интерфейс для AstraChat с поддержкой всех функций
 """
 
 # Настройка кодировки для Windows
@@ -100,7 +100,7 @@ logger.info(f"  MONGODB_PORT: {mongodb_port}")
 logger.info(f"  MONGODB_USER: '{mongodb_user}' (len={len(mongodb_user)})")
 logger.info(f"  MONGODB_PASSWORD: {'*' * len(mongodb_password) if mongodb_password else ''} (len={len(mongodb_password)})")
 if mongodb_user.startswith('#') or mongodb_password.startswith('#'):
-    logger.warning("⚠️ MONGODB_USER или MONGODB_PASSWORD начинаются с '#', будут игнорироваться")
+    logger.warning("MONGODB_USER или MONGODB_PASSWORD начинаются с '#', будут игнорироваться")
 
 # Импорт authentication router
 try:
@@ -114,7 +114,7 @@ except Exception as e:
     logger.warning(f"Ошибка при импорте auth router: {e}")
     auth_router = None
 
-# Импорты из оригинального MemoAI
+# Импорты из оригинального AstraChat
 try:
     logger.info("Попытка импорта agent...")
     from backend.agent import ask_agent, model_settings, update_model_settings, reload_model_by_path, get_model_info, initialize_model
@@ -374,8 +374,8 @@ sio = AsyncServer(
         "http://127.0.0.1:3000",
         "http://localhost:8000",
         "http://127.0.0.1:8000",
-        "http://memoai-frontend:3000",
-        "http://memoai-backend:8000",
+        "http://astrachat-frontend:3000",
+        "http://astrachat-backend:8000",
     ],
     ping_timeout=120,  # ping timeout до 2 минут
     ping_interval=25,  # Отправляем ping каждые 25 секунд
@@ -386,8 +386,8 @@ sio = AsyncServer(
 # Создание FastAPI приложения с конфигурацией
 app_config = config.get("app", {})
 app = FastAPI(
-    title=app_config.get("name", "MemoAI Web API"),
-    description=app_config.get("description", "Веб-интерфейс для персонального AI-ассистента MemoAI"),
+    title=app_config.get("name", "astrachat Web API"),
+    description=app_config.get("description", "Веб-интерфейс для персонального AI-ассистента astrachat"),
     version=app_config.get("version", "1.0.0"),
     debug=app_config.get("debug", False)
 )
@@ -405,8 +405,8 @@ app.add_middleware(
         "http://127.0.0.1:5173",
         "http://localhost:8000",
         "http://127.0.0.1:8000",
-        "http://memoai-frontend:3000",
-        "http://memoai-backend:8000",
+        "http://astrachat-frontend:3000",
+        "http://astrachat-backend:8000",
     ]),
     allow_credentials=cors_config.get("allow_credentials", True),
     allow_methods=cors_config.get("allow_methods", ["*"]),
@@ -416,9 +416,9 @@ app.add_middleware(
 # Подключаем authentication routes
 if auth_router:
     app.include_router(auth_router)
-    logger.info("✅ Auth routes подключены (/api/auth/*)")
+    logger.info("Auth routes подключены (/api/auth/*)")
 else:
-    logger.warning("⚠️ Auth routes не подключены (auth_router недоступен)")
+    logger.warning("Auth routes не подключены (auth_router недоступен)")
 
 # Startup событие для инициализации агентной архитектуры и баз данных
 @app.on_event("startup")
@@ -434,13 +434,13 @@ async def startup_event():
             success = await init_databases()
             if success:
                 logger.info("Базы данных успешно инициализированы")
-                logger.info("  - MongoDB: готов для хранения диалогов")
-                logger.info("  - PostgreSQL + pgvector: готов для RAG системы")
+                logger.info("- MongoDB: готов для хранения диалогов")
+                logger.info("- PostgreSQL + pgvector: готов для RAG системы")
                 # Проверяем статус MinIO
                 if minio_client:
-                    logger.info(f"  - MinIO: готов для хранения файлов (endpoint: {minio_client.endpoint})")
+                    logger.info(f"- MinIO: готов для хранения файлов (endpoint: {minio_client.endpoint})")
                 else:
-                    logger.warning("  - MinIO: не инициализирован, используется локальное хранение")
+                    logger.warning("- MinIO: не инициализирован, используется локальное хранение")
             else:
                 logger.warning("Не удалось инициализировать некоторые базы данных")
                 logger.warning("Приложение продолжит работу в файловом режиме")
@@ -450,10 +450,10 @@ async def startup_event():
             logger.warning("Приложение продолжит работу в файловом режиме")
     else:
         if not init_databases:
-            logger.warning("⚠️ init_databases не импортирован или недоступен")
+            logger.warning("init_databases не импортирован или недоступен")
         if not database_available:
-            logger.warning("⚠️ database_available = False")
-        logger.warning("⚠️ Базы данных не настроены, используется файловый режим")
+            logger.warning("database_available = False")
+        logger.warning("Базы данных не настроены, используется файловый режим")
     
     # Инициализируем агентную архитектуру
     if initialize_agent_orchestrator:
@@ -686,7 +686,7 @@ async def connect(sid, environ):
     logger.info(f"Socket.IO client connected: {sid}")
     # Очищаем флаг остановки при подключении
     stop_generation_flags[sid] = False
-    await sio.emit('connected', {'data': 'Connected to MemoAI'}, room=sid)
+    await sio.emit('connected', {'data': 'Connected to astrachat'}, room=sid)
 
 @sio.event
 async def disconnect(sid):
@@ -1245,7 +1245,7 @@ class ModelLoadResponse(BaseModel):
 @app.get("/")
 async def root():
     """Главная страница API"""
-    return {"message": "MemoAI Web API", "status": "active", "version": "1.0.0"}
+    return {"message": "astrachat Web API", "status": "active", "version": "1.0.0"}
 
 @app.get("/socket-test")
 async def socket_test():
@@ -1364,7 +1364,7 @@ async def chat_with_ai(message: ChatMessage):
         
         # Добавляем отладочную информацию в ответ для прямого режима
         # if not use_agent_mode:
-        #     debug_info = f"\n\n--- AstraChatЦИЯ ---\n"
+        #     debug_info = f"\n\n--- astrachatЦИЯ ---\n"
         #     debug_info += f"Режим: Прямое общение с LLM\n"
         #     debug_info += f"Модель: {get_current_model_path()}\n"
         #     debug_info += f"История диалога: {len(history)} сообщений\n"
@@ -2787,7 +2787,7 @@ async def upload_document(file: UploadFile = File(...)):
         raise HTTPException(status_code=503, detail="Document processor не доступен")
     
     file_object_name = None
-    documents_bucket = os.getenv('MINIO_DOCUMENTS_BUCKET_NAME', 'memoai-documents')
+    documents_bucket = os.getenv('MINIO_DOCUMENTS_BUCKET_NAME', 'astrachat-documents')
         
     try:
         # Читаем содержимое файла в память
@@ -2970,7 +2970,7 @@ async def delete_document(filename: str):
             raise HTTPException(status_code=404, detail=f"Документ {filename} не найден")
         
         # Удаляем файл из MinIO, если он там хранится
-        documents_bucket = os.getenv('MINIO_DOCUMENTS_BUCKET_NAME', 'memoai-documents')
+        documents_bucket = os.getenv('MINIO_DOCUMENTS_BUCKET_NAME', 'astrachat-documents')
         if minio_client:
             minio_info = doc_processor.get_image_minio_info(filename)
             if minio_info:
@@ -4133,7 +4133,7 @@ if not is_docker and os.path.exists("../frontend/build"):
             return {"message": "Frontend not built"}
 
 if __name__ == "__main__":
-    print("Запуск MemoAI Web Backend...")
+    print("Запуск astrachat Web Backend...")
     print(f"Текущая директория: {os.getcwd()}")
     print(f"Backend директория: {os.path.dirname(os.path.abspath(__file__))}")
     print(f"Корневая директория: {os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}")

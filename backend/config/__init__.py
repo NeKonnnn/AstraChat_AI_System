@@ -1,5 +1,5 @@
 """
-Конфигурация для MemoAI Backend
+Конфигурация для astrachat Backend
 """
 
 import os
@@ -69,9 +69,9 @@ def get_default_config() -> Dict[str, Any]:
     """Получение конфигурации по умолчанию"""
     return {
         "app": {
-            "name": "MemoAI Backend",
+            "name": "astrachat Backend",
             "version": "1.0.0",
-            "description": "Backend service for MemoAI",
+            "description": "Backend service for astrachat",
             "debug": False
         },
         "server": {

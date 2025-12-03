@@ -1,0 +1,158 @@
+services:
+  # Backend - FastAPI (зависит от llm-svc, MongoDB, PostgreSQL и MinIO)
+  # ВАЖНО: llm-svc должен быть запущен отдельно через docker-compose-llm-svc.yml
+  # Запустите сначала: docker-compose -f docker-compose-llm-svc.yml up -d
+  astrachat-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./memory:/app/memory
+      - ./uploads:/app/uploads  # Директория для загруженных документов
+      - ./backend:/app  # Полное монтирование для работы импортов
+      - ./models:/app/models:ro  # Монтирование локальных моделей (эмбеддинги и др.)
+    environment:
+      - PYTHONPATH=/app
+      - LLM_SERVICE_URL=${LLM_SVC_INTERNAL_URL:-http://llm-svc:8000}
+      - USE_LLM_SVC=${USE_LLM_SVC:-true}
+      - DOCKER_ENV=${DOCKER_ENV:-true}
+      - CONFIG_PATH=${CONFIG_PATH}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - DEBUG=${DEBUG:-false}
+      # MongoDB настройки
+      - MONGODB_HOST=${MONGODB_HOST:-mongodb}
+      - MONGODB_PORT=${MONGODB_PORT:-27017}
+      - MONGODB_DATABASE=${MONGODB_DATABASE:-astrachat}
+      - MONGODB_USER=${MONGODB_USER:-admin}
+      - MONGODB_PASSWORD=${MONGODB_PASSWORD:-password}
+      # PostgreSQL настройки
+      - POSTGRES_HOST=${POSTGRES_HOST:-postgresql}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_DB=${POSTGRES_DB:-astrachat}
+      - POSTGRES_USER=${POSTGRES_USER:-admin}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}
+      # MinIO настройки
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio}
+      - MINIO_PORT=${MINIO_PORT:-9000}
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
+      - MINIO_USE_SSL=${MINIO_USE_SSL:-false}
+      - MINIO_BUCKET_NAME=${MINIO_BUCKET_NAME:-astrachat-temp}
+      - MINIO_DOCUMENTS_BUCKET_NAME=${MINIO_DOCUMENTS_BUCKET_NAME:-astrachat-documents}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      postgresql:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - astrachat-network
+
+  # MongoDB - для хранения диалогов
+  mongodb:
+    image: mongo:7
+    container_name: astrachat-mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_USER:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_PASSWORD:-password}
+      MONGO_INITDB_DATABASE: ${MONGODB_DATABASE:-astrachat}
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - astrachat-network
+
+  # PostgreSQL + pgvector - для RAG системы
+  postgresql:
+    image: pgvector/pgvector:pg17
+    container_name: astrachat-postgresql
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-astrachat}
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+    volumes:
+      - postgresql_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin} -d ${POSTGRES_DB:-astrachat}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - astrachat-network
+
+  # MinIO - для хранения временных файлов (голосовые файлы, транскрибация)
+  minio:
+    image: minio/minio:latest
+    container_name: astrachat-minio
+    ports:
+      - "9000:9000"  # API порт
+      - "9001:9001"  # Console порт
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - astrachat-network
+
+  # Nginx для продакшена (опционально)
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - astrachat-backend
+    restart: unless-stopped
+    networks:
+      - astrachat-network
+    profiles:
+      - production
+
+volumes:
+  # MongoDB данные
+  mongodb_data:
+    driver: local
+  mongodb_config:
+    driver: local
+  # PostgreSQL данные
+  postgresql_data:
+    driver: local
+  # MinIO данные
+  minio_data:
+    driver: local
+
+networks:
+  astrachat-network:
+    driver: bridge
+    name: astrachat-network
+    # Для микросервисной архитектуры: если сеть создана заранее, установите external: true
+    # Сначала создайте сеть: docker network create astrachat-network
+    external: false  # Измените на true, если сеть создана заранее
+

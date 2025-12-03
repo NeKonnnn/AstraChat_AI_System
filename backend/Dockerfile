@@ -1,4 +1,4 @@
-# Dockerfile для MemoAI Backend
+# Dockerfile для AstraChat Backend
 FROM ubuntu:22.04
 
 # Установка Python и системных зависимостей
@@ -43,7 +43,7 @@ RUN pip install --no-cache-dir --upgrade-strategy only-if-needed -r requirements
 COPY --chown=root:root . /app/
 
 # Создание только необходимых директорий для backend
-RUN mkdir -p /app/memory /app/logs /app/uploads /tmp/memoai
+RUN mkdir -p /app/memory /app/logs /app/uploads /tmp/astrachat
 
 # Установка переменных окружения
 ENV PYTHONPATH=/app

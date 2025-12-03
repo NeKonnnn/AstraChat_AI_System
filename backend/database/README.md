@@ -110,14 +110,14 @@ similar_docs = await vector_repo.similarity_search(query_embedding, limit=10)
 # MongoDB
 MONGODB_HOST=mongodb
 MONGODB_PORT=27017
-MONGODB_DATABASE=memoai
+MONGODB_DATABASE=astrachat
 MONGODB_USER=admin
 MONGODB_PASSWORD=password
 
 # PostgreSQL
 POSTGRES_HOST=postgresql
 POSTGRES_PORT=5432
-POSTGRES_DB=memoai
+POSTGRES_DB=astrachat
 POSTGRES_USER=admin
 POSTGRES_PASSWORD=password
 EMBEDDING_DIM=384

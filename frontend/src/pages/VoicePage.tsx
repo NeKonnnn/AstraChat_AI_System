@@ -184,7 +184,7 @@ export default function VoicePage() {
               console.log('ОТВЕТ ОТ LLM:', data.text);
               console.log('ОТЛАДКА: LLM обработал запрос и предоставил ответ, начинаю синтез речи');
               setRecordedText(data.text);
-              showNotification('success', 'Получен ответ от AstraChat');
+              showNotification('success', 'Получен ответ от astrachat');
               break;
               
             case 'speech_error':
@@ -778,7 +778,7 @@ export default function VoicePage() {
         await synthesizeSpeech(result.response);
       } else {
         console.error('Ошибка получения ответа от LLM:', result);
-        showNotification('error', 'Ошибка получения ответа от AstraChat');
+        showNotification('error', 'Ошибка получения ответа от astrachat');
       }
     } catch (error) {
       console.error('Ошибка отправки голосового сообщения:', error);
@@ -874,7 +874,7 @@ export default function VoicePage() {
                 🎤 Голосовой чат
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                Общайтесь с AstraChat голосом
+                Общайтесь с astrachat голосом
               </Typography>
             </Box>
             
@@ -1021,7 +1021,7 @@ export default function VoicePage() {
                 {isRecording 
                   ? 'Говорите четко и ясно. Real-time распознавание каждые 2 секунды. Автоматическая остановка через 5 секунд тишины.'
                   : isProcessing || isSpeaking
-                    ? 'Микрофон заблокирован пока AstraChat обрабатывает ваш запрос...'
+                    ? 'Микрофон заблокирован пока astrachat обрабатывает ваш запрос...'
                     : 'Нажмите на микрофон и задайте свой вопрос голосом. WebSocket подключится автоматически.'
                 }
               </Typography>

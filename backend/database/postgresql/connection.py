@@ -31,8 +31,8 @@ class PostgreSQLConnection:
         self, 
         host: str = "localhost",
         port: int = 5432,
-        database: str = "memoai",
-        user: str = "memoai_user",
+        database: str = "astrachat",
+        user: str = "astrachat_user",
         password: str = "password"
     ):
         """

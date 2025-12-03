@@ -1,5 +1,5 @@
 """
-Базовый класс для всех агентов в системе MemoAI
+Базовый класс для всех агентов в системе astrachat
 """
 
 from abc import ABC, abstractmethod

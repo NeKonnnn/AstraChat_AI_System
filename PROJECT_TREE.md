@@ -178,7 +178,7 @@ memo_new_api/
 │       ├── conftest.py              # Конфигурация pytest
 │       ├── test_api.py              # Тесты API
 │       └── test_llama_handler.py    # Тесты обработчика Llama
-├── memoai.spec                      # Спецификация для PyInstaller
+├── astrachat.spec                      # Спецификация для PyInstaller
 ├── memory/                          # Директория памяти системы
 │   └── dialog_history_dialog.json   # История диалогов в JSON (Временное решение, пока не подключены БД)
 ├── model_small/                     # Маленькая Vosk модель для перевода аудио данных (голоса или аудифайла) в текст

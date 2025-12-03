@@ -118,7 +118,7 @@ async def init_mongodb() -> bool:
     
     try:
         connection_string = get_mongodb_connection_string()
-        database_name = os.getenv("MONGODB_DATABASE", "memoai")
+        database_name = os.getenv("MONGODB_DATABASE", "astrachat")
         
         logger.info(f"Инициализация MongoDB...")
         logger.info(f"  Строка подключения: {connection_string.replace(connection_string.split('@')[-1] if '@' in connection_string else connection_string, '***') if '@' in connection_string else connection_string}")
@@ -162,7 +162,7 @@ async def init_postgresql() -> bool:
         postgresql_connection = PostgreSQLConnection(
             host=os.getenv("POSTGRES_HOST", "localhost"),
             port=int(os.getenv("POSTGRES_PORT", "5432")),
-            database=os.getenv("POSTGRES_DB", "memoai"),
+            database=os.getenv("POSTGRES_DB", "astrachat"),
             user=os.getenv("POSTGRES_USER", "admin"),
             password=os.getenv("POSTGRES_PASSWORD", "password")
         )

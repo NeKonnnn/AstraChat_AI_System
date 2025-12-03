@@ -9,11 +9,11 @@ server:
   docs_url: "/docs"
   redoc_url: "/redoc"
 
-# Настройки CORS для интеграции с MemoAI
+# Настройки CORS для интеграции с astrachat
 cors:
   allowed_origins:
     - "http://localhost:3000"    # React dev server
-    - "http://localhost:8000"    # MemoAI backend
+    - "http://localhost:8000"    # astrachat backend
     - "http://127.0.0.1:3000"
     - "http://127.0.0.1:8000"
   allow_credentials: true
@@ -42,7 +42,7 @@ generation:
 
 # Настройки приложения
 app:
-  title: "MemoAI AI Models Service (Local)"
+  title: "astrachat AI Models Service (Local)"
   description: "Unified AI service for LLM, Speech Recognition and Text-to-Speech"
   version: "1.0.0"
 

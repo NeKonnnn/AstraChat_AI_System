@@ -1,4 +1,4 @@
-// Конфигурация API для MemoAI Frontend
+// Конфигурация API для astrachat Frontend
 export const API_CONFIG = {
   // Базовый URL для API
   BASE_URL: process.env.REACT_APP_API_URL || 'http://localhost:8000',

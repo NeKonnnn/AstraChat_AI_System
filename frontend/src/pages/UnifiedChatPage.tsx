@@ -1046,7 +1046,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
               console.log('ОТВЕТ ОТ LLM:', data.text);
               console.log('ОТЛАДКА: LLM обработал запрос и предоставил ответ, начинаю синтез речи');
               setRecordedText(data.text);
-              showNotification('success', 'Получен ответ от AstraChat');
+              showNotification('success', 'Получен ответ от astrachat');
               break;
               
             case 'speech_error':
@@ -1550,7 +1550,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         await synthesizeSpeech(result.response);
       } else {
         console.error('Ошибка получения ответа от LLM:', result);
-        showNotification('error', 'Ошибка получения ответа от AstraChat');
+        showNotification('error', 'Ошибка получения ответа от astrachat');
       }
     } catch (error) {
       console.error('Ошибка отправки голосового сообщения:', error);
@@ -2195,7 +2195,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
           <Typography variant="caption" sx={{ opacity: 0.8, fontSize: '0.75rem', fontWeight: 500 }}>
             {isUser 
               ? (interfaceSettings.showUserName && user?.username ? user.username : 'Вы')
-              : 'AstraChat'}
+              : 'astrachat'}
           </Typography>
           <Typography variant="caption" sx={{ ml: 'auto', opacity: 0.6, fontSize: '0.7rem' }}>
             {formatTimestamp(message.timestamp)}
@@ -4048,7 +4048,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                             }}
                           />
                           <Typography variant="caption" sx={{ opacity: 0.8, fontSize: '0.75rem', fontWeight: 500 }}>
-                            AstraChat
+                            astrachat
                           </Typography>
                           <Typography variant="caption" sx={{ ml: 'auto', opacity: 0.6, fontSize: '0.7rem' }}>
                             {new Date().toLocaleTimeString('ru-RU', {
@@ -4324,9 +4324,9 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                   !isConnected 
                     ? "Нет соединения с сервером. Запустите backend на порту 8000" 
                     : state.isLoading && !messages.some(msg => msg.isStreaming)
-                      ? "AstraChat думает..." 
+                      ? "astrachat думает..." 
                       : state.isLoading && messages.some(msg => msg.isStreaming)
-                        ? "AstraChat генерирует ответ... Нажмите ⏹️ чтобы остановить"
+                        ? "astrachat генерирует ответ... Нажмите ⏹️ чтобы остановить"
                         : "Чем я могу помочь вам сегодня?"
                 }
                 variant="outlined"

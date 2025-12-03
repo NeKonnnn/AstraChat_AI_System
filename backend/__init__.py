@@ -1,4 +1,4 @@
-# Backend package for MemoAI
+# Backend package for astrachat
 
 # Экспорт основных классов для упрощения импорта
 try:

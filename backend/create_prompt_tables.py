@@ -28,7 +28,7 @@ async def create_tables():
     # Получаем параметры подключения из переменных окружения
     host = os.getenv("POSTGRES_HOST", "localhost")
     port = int(os.getenv("POSTGRES_PORT", "5432"))
-    database = os.getenv("POSTGRES_DB", "memoai")
+    database = os.getenv("POSTGRES_DB", "astrachat")
     user = os.getenv("POSTGRES_USER", "admin")
     password = os.getenv("POSTGRES_PASSWORD", "password")
     
@@ -56,7 +56,7 @@ async def create_tables():
             logger.error("Не удалось подключиться к PostgreSQL!")
             logger.error("Проверьте:")
             logger.error("  1. PostgreSQL запущен")
-            logger.error("  2. База данных 'memoai' существует")
+            logger.error("  2. База данных 'astrachat' существует")
             logger.error("  3. Параметры подключения в .env правильные")
             return False
         

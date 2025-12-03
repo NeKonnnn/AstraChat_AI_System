@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Модели (не нужны в образе, монтируются через volumes)
+model_small/
+silero_models/
+models/
+
+# Временные файлы
+*.log
+*.tmp
+.cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Env
+.env
+.env.*
+*.env
+
+# Backend специфичное
+backend/
+backend
+**/backend
+old_fiels/
+
+# Node modules (если есть)
+node_modules/
+package-lock.json
+
+# Memory
+memory/
+
+# Другие ненужные файлы
+*.md
+README.md
+

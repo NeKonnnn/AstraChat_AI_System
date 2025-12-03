@@ -1,5 +1,5 @@
 """
-MemoAI Agent с поддержкой llm-svc
+AstraChat Agent с поддержкой llm-svc
 Модифицированная версия agent.py для работы через llm-svc API
 """
 

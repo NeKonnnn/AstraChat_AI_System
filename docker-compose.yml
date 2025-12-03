@@ -39,7 +39,7 @@ services:
       - DIARIZATION_CONFIG_PATH=${DIARIZATION_CONFIG_PATH}
     restart: unless-stopped
     networks:
-      - memoai-network
+      - astrachat-network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health"]
       interval: 30s
@@ -48,7 +48,7 @@ services:
       start_period: 60s  # Увеличиваем время запуска для загрузки моделей
 
   # Backend - FastAPI (теперь зависит от llm-svc, MongoDB и PostgreSQL)
-  memoai-backend:
+  astrachat-backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -70,13 +70,13 @@ services:
       # MongoDB настройки
       - MONGODB_HOST=${MONGODB_HOST:-mongodb}
       - MONGODB_PORT=${MONGODB_PORT:-27017}
-      - MONGODB_DATABASE=${MONGODB_DATABASE:-memoai}
+      - MONGODB_DATABASE=${MONGODB_DATABASE:-astrachat}
       - MONGODB_USER=${MONGODB_USER:-admin}
       - MONGODB_PASSWORD=${MONGODB_PASSWORD:-password}
       # PostgreSQL настройки
       - POSTGRES_HOST=${POSTGRES_HOST:-postgresql}
       - POSTGRES_PORT=${POSTGRES_PORT:-5432}
-      - POSTGRES_DB=${POSTGRES_DB:-memoai}
+      - POSTGRES_DB=${POSTGRES_DB:-astrachat}
       - POSTGRES_USER=${POSTGRES_USER:-admin}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}
       # MinIO настройки
@@ -85,8 +85,8 @@ services:
       - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
       - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
       - MINIO_USE_SSL=${MINIO_USE_SSL:-false}
-      - MINIO_BUCKET_NAME=${MINIO_BUCKET_NAME:-memoai-temp}
-      - MINIO_DOCUMENTS_BUCKET_NAME=${MINIO_DOCUMENTS_BUCKET_NAME:-memoai-documents}
+      - MINIO_BUCKET_NAME=${MINIO_BUCKET_NAME:-astrachat-temp}
+      - MINIO_DOCUMENTS_BUCKET_NAME=${MINIO_DOCUMENTS_BUCKET_NAME:-astrachat-documents}
     depends_on:
       llm-svc:
         condition: service_started
@@ -98,10 +98,10 @@ services:
         condition: service_healthy
     restart: unless-stopped
     networks:
-      - memoai-network
+      - astrachat-network
 
   # Frontend - React
-  memoai-frontend:
+  astrachat-frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -111,11 +111,11 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      memoai-backend:
+      astrachat-backend:
         condition: service_started
     restart: unless-stopped
     networks:
-      - memoai-network
+      - astrachat-network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000"]
       interval: 30s
@@ -126,13 +126,13 @@ services:
   # MongoDB - для хранения диалогов
   mongodb:
     image: mongo:7
-    container_name: memoai-mongodb
+    container_name: astrachat-mongodb
     ports:
       - "27017:27017"
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGODB_USER:-admin}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_PASSWORD:-password}
-      MONGO_INITDB_DATABASE: ${MONGODB_DATABASE:-memoai}
+      MONGO_INITDB_DATABASE: ${MONGODB_DATABASE:-astrachat}
     volumes:
       - mongodb_data:/data/db
       - mongodb_config:/data/configdb
@@ -143,34 +143,34 @@ services:
       retries: 5
     restart: unless-stopped
     networks:
-      - memoai-network
+      - astrachat-network
 
   # PostgreSQL + pgvector - для RAG системы
   postgresql:
     image: pgvector/pgvector:pg17
-    container_name: memoai-postgresql
+    container_name: astrachat-postgresql
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-memoai}
+      POSTGRES_DB: ${POSTGRES_DB:-astrachat}
       POSTGRES_USER: ${POSTGRES_USER:-admin}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
       POSTGRES_INITDB_ARGS: "-E UTF8"
     volumes:
       - postgresql_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin} -d ${POSTGRES_DB:-memoai}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin} -d ${POSTGRES_DB:-astrachat}"]
       interval: 10s
       timeout: 5s
       retries: 5
     restart: unless-stopped
     networks:
-      - memoai-network
+      - astrachat-network
 
   # MinIO - для хранения временных файлов (голосовые файлы, транскрибация)
   minio:
     image: minio/minio:latest
-    container_name: memoai-minio
+    container_name: astrachat-minio
     ports:
       - "9000:9000"  # API порт
       - "9001:9001"  # Console порт
@@ -187,7 +187,7 @@ services:
       retries: 3
     restart: unless-stopped
     networks:
-      - memoai-network
+      - astrachat-network
 
   # Redis удален - не используется в проекте
 
@@ -201,11 +201,11 @@ services:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./ssl:/etc/nginx/ssl:ro
     depends_on:
-      - memoai-backend
-      - memoai-frontend
+      - astrachat-backend
+      - astrachat-frontend
     restart: unless-stopped
     networks:
-      - memoai-network
+      - astrachat-network
     profiles:
       - production
 
@@ -231,5 +231,5 @@ volumes:
     driver: local
 
 networks:
-  memoai-network:
+  astrachat-network:
     driver: bridge

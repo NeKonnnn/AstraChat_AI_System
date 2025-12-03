@@ -117,7 +117,7 @@ export default function PromptGalleryPage() {
   // Уведомления
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' });
 
-  // AstraChat
+  // astrachat
   const loadPrompts = useCallback(async () => {
     setLoading(true);
     try {

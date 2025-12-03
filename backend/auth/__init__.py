@@ -1,5 +1,5 @@
 """
-Модуль аутентификации для MemoAI Backend
+Модуль аутентификации для astrachat Backend
 """
 
 

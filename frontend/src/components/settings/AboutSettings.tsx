@@ -120,7 +120,7 @@ export default function AboutSettings() {
                 Название
               </Typography>
               <Typography variant="body1" sx={{ mb: 2 }}>
-                AstraChat - Голосовой ассистент
+                astrachat - Голосовой ассистент
               </Typography>
               
               <Typography variant="subtitle1" fontWeight="600" gutterBottom>

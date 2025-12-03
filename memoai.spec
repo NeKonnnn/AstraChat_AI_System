@@ -63,7 +63,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='MemoAI',
+    name='astrachat',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -85,5 +85,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='MemoAI',
+    name='astrachat',
 ) 

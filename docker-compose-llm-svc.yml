@@ -1,0 +1,62 @@
+services:
+  # AI Models Service - llm-svc (расширенный с Vosk и Silero)
+  llm-svc:
+    build:
+      context: ./llm-svc
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8000"  # llm-svc на порту 8001
+    
+    # Увеличиваем память для большой модели (30GB)
+    # ЭТО НЕОБХОДИМО ДЛЯ ЗАПУСКА БОЛЬШОЙ МОДЕЛИ QWEN (30GB) ЛОКАЛЬНО!!!! Эту часть можно будет удалить если запустим модель на облаке.
+    deploy:
+      resources:
+        limits:
+          memory: 50G  # Ограничение памяти для контейнера
+        reservations:
+          memory: 32G  # Резервируем память
+    
+    volumes:
+      # Монтируем конфигурацию
+      - ./llm-svc/config:/app/config:ro
+      # LLM модели монтируются в отдельную директорию
+      - ./models:/app/models/llm:ro
+      # Голосовые модели для распознавания и синтеза речи
+      - ./model_small:/app/models/vosk:ro
+      - ./silero_models:/app/models/silero:ro
+      - ./whisperx_models:/app/models/whisperx:ro
+      - ./diarize_models:/app/models/diarization:ro
+    environment:
+      - CONFIG_PATH=${CONFIG_PATH}
+      - PYTHONPATH=/app
+      # Пути к моделям (все значения из .env файла, если он есть)
+      - LLM_MODEL_PATH=${LLM_MODEL_PATH}
+      - LLM_MODEL_NAME=${LLM_MODEL_NAME}
+      - VOSK_MODEL_PATH=${VOSK_MODEL_PATH}
+      - SILERO_MODELS_DIR=${SILERO_MODELS_DIR}
+      - WHISPERX_MODELS_DIR=${WHISPERX_MODELS_DIR}
+      - DIARIZATION_MODELS_DIR=${DIARIZATION_MODELS_DIR}
+      - DIARIZATION_CONFIG_PATH=${DIARIZATION_CONFIG_PATH}
+    restart: unless-stopped
+    networks:
+      - astrachat-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s  # Увеличиваем время запуска для загрузки моделей
+
+volumes:
+  # Кэш для моделей (загружаемых из облака)
+  llm_models_cache:
+    driver: local
+
+networks:
+  astrachat-network:
+    driver: bridge
+    name: astrachat-network
+    # Для микросервисной архитектуры: если сеть создана заранее, установите external: true
+    # Сначала создайте сеть: docker network create astrachat-network
+    external: false  # Измените на true, если сеть создана заранее
+

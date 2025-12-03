@@ -1,12 +1,12 @@
 @echo off
 chcp 65001 >nul 2>&1
-title MemoAI with LLM-SVC Integration
+title astrachat with LLM-SVC Integration
 
 REM Переходим в директорию, где находится батник
 cd /d %~dp0
 
 echo ========================================
-echo    MemoAI with llm-svc integration
+echo    astrachat with llm-svc integration
 echo    (Background launch)
 echo ========================================
 echo.
@@ -42,10 +42,10 @@ echo Starting llm-svc service in background...
 start /B "LLM-SVC" cmd /c "chcp 65001 >nul 2>&1 && cd /d %~dp0 && cd llm-svc && ..\venv_312\Scripts\python.exe -m app.main"
 
 echo Starting Backend server in background (with llm-svc)...
-start /B "MemoAI Backend" cmd /c "chcp 65001 >nul 2>&1 && cd /d %~dp0 && set USE_LLM_SVC=true && venv_312\Scripts\python.exe backend\main.py"
+start /B "astrachat Backend" cmd /c "chcp 65001 >nul 2>&1 && cd /d %~dp0 && set USE_LLM_SVC=true && venv_312\Scripts\python.exe backend\main.py"
 
 echo Starting Frontend server in background...
-start /B "MemoAI Frontend" cmd /c "chcp 65001 >nul 2>&1 && cd frontend && npm start"
+start /B "astrachat Frontend" cmd /c "chcp 65001 >nul 2>&1 && cd frontend && npm start"
 
 echo.
 echo Waiting for servers to start (15 seconds)...

@@ -1,7 +1,7 @@
 {
-  "name": "memoai-web",
+  "name": "astrachat-web",
   "version": "1.0.0",
-  "description": "MemoAI Web Interface - Full stack application",
+  "description": "AstraChat Web Interface - Full stack application",
   "scripts": {
     "start": "concurrently \"npm run start:backend\" \"npm run start:frontend\"",
     "start:backend": "cd .. && .\\myvenv\\Scripts\\activate && python main.py",
@@ -18,13 +18,13 @@
     "rimraf": "^5.0.0"
   },
   "keywords": [
-    "memoai",
+    "astrachat",
     "ai",
     "chatbot",
     "react",
     "fastapi",
     "typescript"
   ],
-  "author": "MemoAI Team",
+  "author": "astrachat Team",
   "license": "MIT"
 }

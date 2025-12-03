@@ -1,6 +1,6 @@
-# MemoAI Frontend
+# astrachat Frontend
 
-Frontend приложение для MemoAI - персонального AI ассистента.
+Frontend приложение для astrachat - персонального AI ассистента.
 
 ## Системные требования
 
