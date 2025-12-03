@@ -1,16 +1,12 @@
-# AstraChat 👋
-
-![Astra Chat Logo](assets/Astra_logo.png)
+# AstraChat
 
 [![GitHub Stars](https://img.shields.io/github/stars/NeKonnnn/AstraChat_AI_System?style=social&label=Stars)](https://github.com/NeKonnnn/AstraChat_AI_System) [![GitHub Forks](https://img.shields.io/github/forks/NeKonnnn/AstraChat_AI_System?style=social&label=Forks)](https://github.com/NeKonnnn/AstraChat_AI_System) [![GitHub Watchers](https://img.shields.io/github/watchers/NeKonnnn/AstraChat_AI_System?style=social&label=Watchers)](https://github.com/NeKonnnn/AstraChat_AI_System) [![Repo Size](https://img.shields.io/github/repo-size/NeKonnnn/AstraChat_AI_System?label=repo%20size)](https://github.com/NeKonnnn/AstraChat_AI_System) [![Languages](https://img.shields.io/github/languages/count/NeKonnnn/AstraChat_AI_System?label=languages)](https://github.com/NeKonnnn/AstraChat_AI_System) [![Python](https://img.shields.io/github/languages/top/NeKonnnn/AstraChat_AI_System?label=python)](https://github.com/NeKonnnn/AstraChat_AI_System) [![Last Commit](https://img.shields.io/github/last-commit/NeKonnnn/AstraChat_AI_System?label=last%20commit)](https://github.com/NeKonnnn/AstraChat_AI_System)
 
-[![Discord](https://img.shields.io/discord/your-discord-id?label=Discord&logo=discord)](https://discord.gg/your-invite) [![Sponsor](https://img.shields.io/github/sponsors/NeKonnnn?label=Sponsor&logo=github&logoColor=ea4aaa)](https://github.com/sponsors/NeKonnnn)
-
-AstraChat — это современная AI-платформа с микросервисной архитектурой, объединяющая приватность локальных моделей, масштабируемость облачных решений и интеллект агентной архитектуры для корпоративного использования.
+![Astra Chat Logo](assets/Astra_logo.png)
 
 ## Что такое AstraChat?
 
-AstraChat — это интеллектуальный AI-ассистент с расширенными возможностями для работы с документами, голосовым взаимодействием и автоматизацией задач. Платформа построена на основе микросервисной архитектуры и использует передовые технологии машинного обучения.
+AstraChat — это AI-платформа с микросервисной архитектурой, объединяющая приватность локальных моделей, масштабируемость облачных решений и интеллект агентной архитектуры для корпоративного использования. Платформа представляет собой интеллектуальный AI-ассистент с расширенными возможностями для работы с документами, голосовым взаимодействием и автоматизацией задач, построенный на основе передовых технологий машинного обучения.
 
 ## Основной функционал
 
