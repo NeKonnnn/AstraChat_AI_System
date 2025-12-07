@@ -7,10 +7,13 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - REACT_APP_API_URL=${REACT_APP_API_URL:-http://localhost:8000}
-        - REACT_APP_WS_URL=${REACT_APP_WS_URL:-ws://localhost:8000}
+        - REACT_APP_API_URL=http://localhost:8000
+        - REACT_APP_WS_URL=ws://localhost:8000
     ports:
       - "3000:3000"
+    depends_on:
+      astrachat-backend:
+        condition: service_started
     restart: unless-stopped
     networks:
       - astrachat-network
@@ -41,8 +44,4 @@ services:
 networks:
   astrachat-network:
     driver: bridge
-    name: astrachat-network
-    # Для микросервисной архитектуры: если сеть создана заранее, установите external: true
-    # Сначала создайте сеть: docker network create astrachat-network
-    external: false  # Измените на true, если сеть создана заранее
 

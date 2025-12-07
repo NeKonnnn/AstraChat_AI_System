@@ -129,6 +129,7 @@ services:
       - ./ssl:/etc/nginx/ssl:ro
     depends_on:
       - astrachat-backend
+      - astrachat-frontend
     restart: unless-stopped
     networks:
       - astrachat-network
@@ -151,8 +152,4 @@ volumes:
 networks:
   astrachat-network:
     driver: bridge
-    name: astrachat-network
-    # Для микросервисной архитектуры: если сеть создана заранее, установите external: true
-    # Сначала создайте сеть: docker network create astrachat-network
-    external: false  # Измените на true, если сеть создана заранее
 
