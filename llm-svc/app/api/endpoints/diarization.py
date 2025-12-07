@@ -142,7 +142,8 @@ async def diarize_audio(
                 if duration < min_duration:
                     continue
                 
-                speaker_id = f"SPEAKER_{speaker:02d}"
+                # speaker уже строка от pyannote, используем как есть
+                speaker_id = f"SPEAKER_{speaker}"
                 
                 # Добавляем сегмент
                 segment = {
@@ -293,7 +294,8 @@ async def transcribe_with_diarization(
                     speaker = "UNKNOWN"
                     for turn, _, speaker_id in diarization.itertracks(yield_label=True):
                         if turn.start <= start_time <= turn.end:
-                            speaker = f"SPEAKER_{speaker_id:02d}"
+                            # speaker_id уже строка от pyannote
+                            speaker = f"SPEAKER_{speaker_id}"
                             break
                     
                     segments.append({
