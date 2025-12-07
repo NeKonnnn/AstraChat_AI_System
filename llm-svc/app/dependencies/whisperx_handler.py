@@ -55,12 +55,13 @@ async def get_whisperx_handler() -> Dict[str, Any]:
                     continue
                     
                 try:
-                    # Загружаем модель WhisperX
+                    # Загружаем модель WhisperX с указанием папки для кэша
                     model = whisperx.load_model(
-                        "large-v3",  # Используем большую модель для лучшего качества
+                        "medium",  # Используем среднюю модель для лучшего качества
                         device=device,
                         compute_type=compute_type,
-                        language=lang
+                        language=lang,
+                        download_root=settings.whisperx.models_dir  # Папка для кэша моделей
                     )
                     
                     whisperx_models[lang] = {

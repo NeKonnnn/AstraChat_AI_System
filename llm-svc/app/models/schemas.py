@@ -68,3 +68,15 @@ class HealthResponse(BaseModel):
 class ModelsListResponse(BaseModel):
     data: List[Dict[str, Any]]
     object: str = "list"
+
+class ModelInfoResponse(BaseModel):
+    """Детальная информация о загруженной модели"""
+    model_name: Optional[str] = None
+    model_path: Optional[str] = None
+    is_loaded: bool = False
+    context_size: Optional[int] = None
+    gpu_layers: Optional[int] = None
+    file_size: Optional[int] = None
+    file_size_mb: Optional[float] = None
+    file_exists: bool = False
+    config_name: Optional[str] = None  # Имя модели из конфига

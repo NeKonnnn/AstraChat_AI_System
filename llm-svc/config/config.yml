@@ -80,7 +80,7 @@ security:
 # Настройки Vosk (распознавание речи)
 vosk:
   enabled: true
-  model_path: "/app/models/vosk-model-small-ru-0.22"  # Монтируется из ./model_small
+  model_path: "/app/models/vosk"  # Монтируется из ./model_small
   sample_rate: 16000
   max_file_size: 52428800  # 50MB
   supported_languages:
@@ -108,8 +108,8 @@ silero:
 
 # Настройки WhisperX (продвинутая транскрипция)
 whisperx:
-  enabled: false
-  models_dir: "/app/models/whisperx"
+  enabled: true # false
+  models_dir: "/app/models/whisperx_models"
   device: "auto"  # auto, cpu, cuda
   compute_type: "int8"  # int8 для CPU, float16 для CUDA
   language: "ru"
@@ -122,9 +122,9 @@ whisperx:
 
 # Настройки диаризации (разделение по спикерам)
 diarization:
-  enabled: false
-  models_dir: "/app/models/diarization"
-  config_path: "/app/models/diarization/pyannote_diarization_config.yaml"
+  enabled: true # false
+  models_dir: "/app/models/diarize_models"
+  config_path: "/app/models/diarize_models/pyannote_diarization_config.yaml"
   device: "auto"  # auto, cpu, cuda
   min_speakers: 1
   max_speakers: 10

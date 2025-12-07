@@ -22,10 +22,11 @@ services:
       # LLM модели монтируются в отдельную директорию
       - ./models:/app/models/llm:ro
       # Голосовые модели для распознавания и синтеза речи
-      - ./model_small:/app/models/vosk:ro
-      - ./silero_models:/app/models/silero:ro
-      - ./whisperx_models:/app/models/whisperx:ro
-      - ./diarize_models:/app/models/diarization:ro
+      # Монтируем директории для моделей (они будут скачиваться автоматически при первом запуске)
+      - ./model_small:/app/models/vosk
+      - ./silero_models:/app/models/silero
+      - ./whisperx_models:/app/models/whisperx_models
+      - ./diarize_models:/app/models/diarize_models
     environment:
       - CONFIG_PATH=${CONFIG_PATH}
       - PYTHONPATH=/app

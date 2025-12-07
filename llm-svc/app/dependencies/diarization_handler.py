@@ -35,10 +35,6 @@ async def get_diarization_handler() -> Optional[Any]:
                 logger.error(f"Файл конфигурации диаризации не найден: {settings.diarization.config_path}")
                 return None
             
-            # Загружаем конфигурацию
-            with open(settings.diarization.config_path, 'r', encoding='utf-8') as f:
-                config = yaml.safe_load(f)
-            
             # Определяем устройство
             device = settings.diarization.device
             if device == "auto":
@@ -46,36 +42,89 @@ async def get_diarization_handler() -> Optional[Any]:
             
             logger.info(f"Используется устройство для диаризации: {device}")
             
-            # Создаем пайплайн диаризации
+            # Сначала пытаемся загрузить из локальной конфигурации
+            logger.info("Попытка загрузки пайплайна из локальной конфигурации...")
             try:
-                diarization_pipeline = Pipeline.from_pretrained(
-                    "pyannote/speaker-diarization-3.1",
-                    use_auth_token=True  # Может потребоваться токен HuggingFace
-                )
+                # Загружаем конфигурацию и исправляем пути
+                with open(settings.diarization.config_path, 'r', encoding='utf-8') as f:
+                    config_content = f.read()
+                    config = yaml.safe_load(config_content)
+                
+                # Исправляем пути на пути внутри контейнера
+                models_dir = settings.diarization.models_dir
+                if 'pipeline' in config and 'params' in config['pipeline']:
+                    params = config['pipeline']['params']
+                    # Исправляем путь к embedding модели
+                    if 'embedding' in params and isinstance(params['embedding'], str):
+                        embedding_path = params['embedding']
+                        # Если это абсолютный путь Windows или путь с диском - заменяем
+                        if os.path.isabs(embedding_path) or ':' in embedding_path:
+                            embedding_file = os.path.basename(embedding_path)
+                            params['embedding'] = os.path.join(models_dir, "models", embedding_file)
+                            logger.info(f"Исправлен путь embedding: {params['embedding']}")
+                        # Если это относительный путь - делаем абсолютным относительно models_dir
+                        elif not os.path.isabs(embedding_path):
+                            params['embedding'] = os.path.join(models_dir, embedding_path)
+                            logger.info(f"Преобразован относительный путь embedding: {params['embedding']}")
+                    
+                    # Исправляем путь к segmentation модели
+                    if 'segmentation' in params and isinstance(params['segmentation'], str):
+                        segmentation_path = params['segmentation']
+                        # Если это абсолютный путь Windows или путь с диском - заменяем
+                        if os.path.isabs(segmentation_path) or ':' in segmentation_path:
+                            segmentation_file = os.path.basename(segmentation_path)
+                            params['segmentation'] = os.path.join(models_dir, "models", segmentation_file)
+                            logger.info(f"Исправлен путь segmentation: {params['segmentation']}")
+                        # Если это относительный путь - делаем абсолютным относительно models_dir
+                        elif not os.path.isabs(segmentation_path):
+                            params['segmentation'] = os.path.join(models_dir, segmentation_path)
+                            logger.info(f"Преобразован относительный путь segmentation: {params['segmentation']}")
+                
+                # Сохраняем исправленную конфигурацию во временный файл
+                import tempfile
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as temp_config:
+                    yaml.dump(config, temp_config, default_flow_style=False)
+                    temp_config_path = temp_config.name
+                
+                # Загружаем пайплайн из исправленного конфига
+                diarization_pipeline = Pipeline.from_pretrained(temp_config_path)
+                
+                # Удаляем временный файл
+                try:
+                    os.unlink(temp_config_path)
+                except:
+                    pass
                 
                 # Перемещаем на нужное устройство
                 if device == "cuda" and torch.cuda.is_available():
                     diarization_pipeline = diarization_pipeline.to(torch.device("cuda"))
                 
-                logger.info("Пайплайн диаризации успешно загружен")
+                logger.info("Пайплайн диаризации успешно загружен из локальной конфигурации")
                 
             except Exception as e:
-                logger.error(f"Ошибка загрузки пайплайна диаризации: {str(e)}")
-                logger.info("Попытка загрузки с локальной конфигурацией...")
+                logger.error(f"Ошибка загрузки с локальной конфигурацией: {str(e)}")
+                logger.info("Попытка загрузки из HuggingFace...")
                 
-                # Пытаемся загрузить с локальной конфигурацией
+                # Пытаемся загрузить из HuggingFace
                 try:
+                    # Получаем токен HuggingFace из переменных окружения
+                    hf_token = os.getenv("HUGGINGFACE_TOKEN") or os.getenv("HF_TOKEN")
+                    
                     diarization_pipeline = Pipeline.from_pretrained(
-                        settings.diarization.config_path
+                        "pyannote/speaker-diarization-3.1",
+                        use_auth_token=hf_token if hf_token else None
                     )
                     
+                    # Перемещаем на нужное устройство
                     if device == "cuda" and torch.cuda.is_available():
                         diarization_pipeline = diarization_pipeline.to(torch.device("cuda"))
                     
-                    logger.info("Пайплайн диаризации загружен с локальной конфигурацией")
+                    logger.info("Пайплайн диаризации успешно загружен из HuggingFace")
                     
                 except Exception as e2:
-                    logger.error(f"Ошибка загрузки с локальной конфигурацией: {str(e2)}")
+                    logger.error(f"Ошибка загрузки из HuggingFace: {str(e2)}")
+                    if not hf_token:
+                        logger.error("Токен HuggingFace не найден. Установите HUGGINGFACE_TOKEN или HF_TOKEN")
                     return None
             
         except Exception as e:

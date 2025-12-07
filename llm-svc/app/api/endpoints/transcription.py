@@ -17,18 +17,30 @@ router = APIRouter()
 
 
 def convert_audio_to_wav(input_file_path: str, output_file_path: str) -> bool:
-    """Конвертирует аудио файл в WAV формат 16kHz моно"""
+    """Конвертирует аудио/видео файл в WAV формат 16kHz моно"""
     try:
+        # Определяем, является ли файл видео
+        video_extensions = ('.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv', '.m4v')
+        is_video = input_file_path.lower().endswith(video_extensions)
+        
         # Используем ffmpeg для конвертации
         command = [
             "ffmpeg", 
             "-y",  # Перезаписывать существующие файлы
             "-i", input_file_path,  # Входной файл
+        ]
+        
+        # Если это видео, добавляем флаг для извлечения только аудио
+        if is_video:
+            command.append("-vn")  # Без видео (только аудио)
+        
+        # Добавляем параметры аудио
+        command.extend([
             "-ar", str(settings.vosk.sample_rate),  # Частота дискретизации
             "-ac", "1",      # Моно
             "-bits_per_raw_sample", "16",  # 16 бит
             output_file_path  # Выходной файл
-        ]
+        ])
         
         logger.info(f"Выполняем команду: {' '.join(command)}")
         result = subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
