@@ -390,3 +390,40 @@ async def search_conversations(query: str, user_id: Optional[str] = None, limit:
         logger.error(f"Ошибка при поиске диалогов: {e}")
         return []
 
+
+async def remove_last_user_message(conversation_id: Optional[str] = None) -> bool:
+    """
+    Удаление последнего сообщения пользователя из диалога
+    Используется при остановке генерации в обычном (не streaming) режиме
+    
+    Args:
+        conversation_id: ID диалога (если None, используется текущий)
+        
+    Returns:
+        True если успешно, False в случае ошибки
+    """
+    # Проверяем реальную доступность MongoDB
+    if not _check_mongodb_available():
+        logger.warning("MongoDB недоступен! Невозможно удалить сообщение.")
+        return False
+    
+    try:
+        global conversation_repo
+        if conversation_repo is None:
+            conversation_repo = get_conversation_repository()
+        
+        if conversation_id is None:
+            conversation_id = get_or_create_conversation_id()
+        
+        success = await conversation_repo.remove_last_message(conversation_id, role="user")
+        if success:
+            logger.info(f"Последнее сообщение пользователя удалено из диалога {conversation_id}")
+        return success
+        
+    except RuntimeError as e:
+        logger.warning(f"MongoDB не инициализирован: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Ошибка при удалении последнего сообщения пользователя: {e}")
+        return False
+

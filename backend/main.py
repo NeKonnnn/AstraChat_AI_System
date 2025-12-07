@@ -222,7 +222,8 @@ try:
         clear_dialog_history, 
         get_recent_dialog_history,
         reset_conversation,
-        get_or_create_conversation_id
+        get_or_create_conversation_id,
+        remove_last_user_message
     )
     logger.info("memory_service (MongoDB) импортирован успешно")
     logger.info(f"save_dialog_entry импортирован: {save_dialog_entry is not None}, type: {type(save_dialog_entry)}")
@@ -239,6 +240,7 @@ except ImportError as e:
         logger.warning("Используется старый memory модуль (JSON)")
         reset_conversation = None
         get_or_create_conversation_id = None
+        remove_last_user_message = None
     except:
         logger.error("Ни один модуль памяти не доступен!")
         save_dialog_entry = None
@@ -248,6 +250,7 @@ except ImportError as e:
         get_recent_dialog_history = None
         reset_conversation = None
         get_or_create_conversation_id = None
+        remove_last_user_message = None
 except Exception as e:
     logger.error(f"Неожиданная ошибка при импорте memory: {e}")
     import traceback
@@ -259,6 +262,7 @@ except Exception as e:
     get_recent_dialog_history = None
     reset_conversation = None
     get_or_create_conversation_id = None
+    remove_last_user_message = None
     
 try:
     logger.info("Попытка импорта voice...")
@@ -1392,8 +1396,14 @@ async def chat_message(sid, data):
                 logger.info(f"Socket.IO: получен потоковый ответ, длина: {len(response) if response else 0} символов")
                 
                 # Проверяем, не была ли генерация остановлена
-                if response is None:
-                    logger.info(f"Socket.IO: потоковая генерация была остановлена для {sid}")
+                # Проверяем как response is None (ранняя остановка), так и флаг (поздняя остановка)
+                if response is None or stop_generation_flags.get(sid, False):
+                    logger.info(f"Socket.IO: потоковая генерация была остановлена для {sid} (response is None: {response is None}, flag: {stop_generation_flags.get(sid, False)})")
+                    # Очищаем флаг остановки
+                    stop_generation_flags[sid] = False
+                    # В streaming режиме НЕ удаляем сообщение пользователя,
+                    # т.к. клиент управляет отображением и уже показал частичный ответ
+                    # Просто не сохраняем и не отправляем полный ответ
                     # Отправляем событие остановки, чтобы frontend сбросил состояние загрузки
                     await sio.emit('generation_stopped', {
                         'message': 'Генерация остановлена'
@@ -1422,6 +1432,11 @@ async def chat_message(sid, data):
                 logger.info(f"Socket.IO: генерация была остановлена для {sid}, отправляем generation_stopped")
                 # Очищаем флаг остановки
                 stop_generation_flags[sid] = False
+                
+                # НЕ удаляем сообщение пользователя - оно должно остаться в истории
+                # Просто не сохраняем ответ ассистента и не отправляем его клиенту
+                logger.info(f"Ответ ассистента не будет сохранен и отправлен из-за остановки")
+                
                 # Отправляем событие остановки, чтобы frontend сбросил состояние загрузки
                 await sio.emit('generation_stopped', {
                     'message': 'Генерация остановлена'

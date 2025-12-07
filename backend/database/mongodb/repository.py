@@ -348,6 +348,66 @@ class ConversationRepository:
         except Exception as e:
             logger.error(f"Ошибка при установке TTL: {e}")
             return False
+    
+    async def remove_last_message(self, conversation_id: str, role: Optional[str] = None) -> bool:
+        """
+        Удаление последнего сообщения из диалога
+        
+        Args:
+            conversation_id: ID диалога
+            role: Если указано, удаляет последнее сообщение с этой ролью (user, assistant)
+            
+        Returns:
+            True если успешно, False в случае ошибки
+        """
+        try:
+            collection = self._get_collection()
+            
+            # Получаем текущий разговор
+            conversation = await self.get_conversation(conversation_id)
+            if not conversation or not conversation.messages:
+                logger.warning(f"Диалог {conversation_id} не найден или пуст")
+                return False
+            
+            # Если указана роль, ищем последнее сообщение с этой ролью
+            if role:
+                # Находим индекс последнего сообщения с указанной ролью
+                last_index = -1
+                for i in range(len(conversation.messages) - 1, -1, -1):
+                    if conversation.messages[i].role == role:
+                        last_index = i
+                        break
+                
+                if last_index == -1:
+                    logger.warning(f"Сообщение с ролью '{role}' не найдено в диалоге {conversation_id}")
+                    return False
+                
+                # Удаляем сообщение по индексу
+                message_to_remove = conversation.messages[last_index]
+                await collection.update_one(
+                    {"conversation_id": conversation_id},
+                    {
+                        "$pull": {"messages": {"message_id": message_to_remove.message_id}},
+                        "$set": {"updated_at": datetime.utcnow()}
+                    }
+                )
+                logger.info(f"Удалено последнее сообщение с ролью '{role}' из диалога {conversation_id}")
+            else:
+                # Удаляем последнее сообщение независимо от роли
+                await collection.update_one(
+                    {"conversation_id": conversation_id},
+                    {
+                        "$pop": {"messages": 1},
+                        "$set": {"updated_at": datetime.utcnow()}
+                    }
+                )
+                logger.info(f"Удалено последнее сообщение из диалога {conversation_id}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Ошибка при удалении последнего сообщения: {e}")
+            return False
 
 
 
