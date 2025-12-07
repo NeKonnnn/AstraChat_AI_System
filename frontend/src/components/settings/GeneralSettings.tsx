@@ -27,13 +27,14 @@ import {
   Computer as ComputerIcon,
 } from '@mui/icons-material';
 import { useAppContext, useAppActions } from '../../contexts/AppContext';
+import { API_CONFIG } from '../../config/api';
 
 interface GeneralSettingsProps {
   isDarkMode: boolean;
   onToggleTheme: () => void;
 }
 
-const API_BASE_URL = 'http://localhost:8000';
+const API_BASE_URL = API_CONFIG.BASE_URL;
 
 export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSettingsProps) {
   

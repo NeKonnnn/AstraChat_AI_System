@@ -6,6 +6,7 @@ import { API_CONFIG } from '../config/api';
 interface SocketContextType {
   socket: Socket | null;
   isConnected: boolean;
+  isConnecting: boolean;
   sendMessage: (message: string, chatId: string, streaming?: boolean) => void;
   regenerateResponse: (userMessage: string, assistantMessageId: string, chatId: string, alternativeResponses: string[], currentIndex: number, streaming?: boolean) => void;
   stopGeneration: () => void;
@@ -19,8 +20,9 @@ const SocketContext = createContext<SocketContextType | null>(null);
 export function SocketProvider({ children }: { children: ReactNode }) {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
 
-  const { addMessage, updateMessage, setLoading, showNotification, getCurrentChat } = useAppActions();
+  const { addMessage, updateMessage, setLoading, showNotification, getCurrentChat, getChatById } = useAppActions();
   const currentMessageRef = useRef<string | null>(null);
   const currentChatIdRef = useRef<string | null>(null);
   
@@ -32,36 +34,52 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   } | null>(null);
 
   const connectSocket = () => {
+    console.log('[SocketContext/connectSocket] ======== СОЗДАНИЕ НОВОГО SOCKET.IO СОЕДИНЕНИЯ ========');
+    console.log('[SocketContext/connectSocket] URL:', API_CONFIG.BASE_URL);
+    
+    // Устанавливаем флаг подключения
+    setIsConnecting(true);
+    
     const newSocket = io(API_CONFIG.BASE_URL, {
       transports: ['websocket', 'polling'], // Добавляем fallback на polling
       autoConnect: false,
-      timeout: 60000, // Увеличиваем timeout до 60 секунд
+      timeout: 10000, // Уменьшаем timeout для более быстрой реакции
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
-      reconnectionAttempts: 5,
+      reconnectionAttempts: 10, // Увеличиваем количество попыток
       forceNew: true, // Принудительно создаем новое соединение
     });
+    console.log('[SocketContext/connectSocket] Socket.IO клиент создан, ID:', newSocket.id);
 
     // Подключение
     newSocket.on('connect', () => {
+      console.log('[SocketContext/connect] ✓ СОЕДИНЕНИЕ УСТАНОВЛЕНО, Socket ID:', newSocket.id);
       setIsConnected(true);
+      setIsConnecting(false);
       showNotification('success', 'Соединение с сервером установлено');
     });
 
     // Отключение
     newSocket.on('disconnect', (reason) => {
+      console.log('[SocketContext/disconnect] ✗ СОЕДИНЕНИЕ ПОТЕРЯНО, причина:', reason);
       setIsConnected(false);
       showNotification('warning', 'Соединение с сервером потеряно');
     });
 
     // Ошибки подключения
     newSocket.on('connect_error', (error: any) => {
-      console.error('Ошибка подключения Socket.IO:', error);
-      console.error('Тип ошибки:', error.type || 'unknown');
-      console.error('Сообщение:', error.message || 'No message');
-      console.error('Описание:', error.description || 'No description');
+      console.error('[SocketContext/connect_error] ✗ ОШИБКА ПОДКЛЮЧЕНИЯ Socket.IO:');
+      console.error('[SocketContext/connect_error]   - Тип:', error.type || 'unknown');
+      console.error('[SocketContext/connect_error]   - Сообщение:', error.message || 'No message');
+      console.error('[SocketContext/connect_error]   - Описание:', error.description || 'No description');
+      console.error('[SocketContext/connect_error]   - URL:', API_CONFIG.BASE_URL);
+      console.error('[SocketContext/connect_error]   - Transport:', newSocket.io?.engine?.transport?.name || 'unknown');
       setIsConnected(false);
-      showNotification('error', `Ошибка подключения Socket.IO: ${error.message || 'Неизвестная ошибка'}`);
+      setIsConnecting(false);
+      // Не показываем уведомление при каждой ошибке - только при критических
+      if (error.message && !error.message.includes('xhr poll error')) {
+        showNotification('error', `Ошибка подключения: ${error.message || 'Неизвестная ошибка'}`);
+      }
     });
 
     // Дополнительные события для отладки
@@ -71,16 +89,24 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     });
 
     newSocket.on('reconnect', (attemptNumber) => {
+      console.log('[SocketContext/reconnect] ✓ ПЕРЕПОДКЛЮЧЕНИЕ УСПЕШНО, попытка:', attemptNumber);
       setIsConnected(true);
+      setIsConnecting(false);
       showNotification('success', 'Соединение восстановлено');
     });
 
     newSocket.on('reconnect_error', (error) => {
-      console.error('Ошибка переподключения Socket.IO:', error);
+      console.error('[SocketContext/reconnect_error] Ошибка переподключения Socket.IO:', error);
+    });
+
+    // ОТЛАДКА: Логируем ВСЕ события Socket.IO
+    newSocket.onAny((eventName, ...args) => {
+      console.log(`[SocketContext/onAny] <<<< Получено событие: ${eventName}`, args);
     });
 
     // Обработка событий Socket.IO
     newSocket.on('chat_thinking', (data) => {
+      console.log('[SocketContext/chat_thinking] Обработка события chat_thinking');
       handleServerMessage({ type: 'thinking', ...data });
     });
 
@@ -89,6 +115,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     });
 
     newSocket.on('chat_complete', (data) => {
+      console.log('[SocketContext] ПОЛУЧЕНО СОБЫТИЕ chat_complete:', data);
       handleServerMessage({ type: 'complete', ...data });
     });
 
@@ -114,7 +141,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     });
 
     setSocket(newSocket);
+    console.log('[SocketContext/connectSocket] Вызываем newSocket.connect()...');
     newSocket.connect();
+    console.log('[SocketContext/connectSocket] newSocket.connect() вызван');
   };
 
   // Реф для хранения multi-llm сообщения
@@ -235,8 +264,11 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         const receivedCount = multiLLMResponsesRef.current.size;
         const expectedCount = expectedModelsCountRef.current;
         
+        console.log('[SocketContext/multi_llm_complete] Получено ответов:', receivedCount, 'из', expectedCount);
+        
         if (expectedCount > 0 && receivedCount >= expectedCount) {
           // Все модели ответили
+          console.log('[SocketContext/multi_llm_complete] ВСЕ МОДЕЛИ ЗАВЕРШИЛИ - сбрасываем loading');
           setLoading(false);
           // Финализируем сообщение - убираем флаг стриминга
           const finalResponses = Array.from(multiLLMResponsesRef.current.values());
@@ -247,15 +279,23 @@ export function SocketProvider({ children }: { children: ReactNode }) {
             false,
             finalResponses
           );
-          // Не очищаем рефы сразу, так как сообщение может быть просмотрено позже
-          // Очистим их при следующем сообщении
+          // Очищаем рефы после завершения всех моделей
+          multiLLMMessageRef.current = null;
+          multiLLMResponsesRef.current.clear();
+          expectedModelsCountRef.current = 0;
+          currentMessageRef.current = null;
+          // НЕ очищаем currentChatIdRef - он нужен для следующих запросов
+          // currentChatIdRef.current = null; // УДАЛЕНО
         }
         
         break;
 
       case 'chunk':
         // Потоковая генерация - обновляем существующее сообщение
-        if (!currentChatIdRef.current) return;
+        if (!currentChatIdRef.current) {
+          console.log('[SocketContext/chunk] ОШИБКА: currentChatIdRef.current === null, не можем обработать chunk!');
+          return;
+        }
         
         if (currentMessageRef.current) {
           // Проверяем, находимся ли мы в режиме перегенерации (используем ref вместо getCurrentChat)
@@ -290,6 +330,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
           }
         } else {
           // Создаем новое сообщение для стриминга
+          console.log('[SocketContext/chunk] Создаём новое сообщение для стриминга, chatId:', currentChatIdRef.current);
           const messageId = addMessage(currentChatIdRef.current, {
             role: 'assistant',
             content: data.accumulated || data.chunk,
@@ -297,91 +338,174 @@ export function SocketProvider({ children }: { children: ReactNode }) {
             isStreaming: true,
           });
           currentMessageRef.current = messageId;
+          console.log('[SocketContext/chunk] Новое сообщение создано, messageId:', messageId);
         }
         break;
 
       case 'complete':
         // Генерация завершена
-        if (!currentChatIdRef.current) {
-          setLoading(false);
+        console.log('[SocketContext/complete] ============ ПОЛУЧЕНО СОБЫТИЕ chat_complete ============');
+        console.log('[SocketContext/complete] data:', data);
+        console.log('[SocketContext/complete] currentChatIdRef:', currentChatIdRef.current);
+        console.log('[SocketContext/complete] currentMessageRef:', currentMessageRef.current);
+        
+        // КРИТИЧЕСКИ ВАЖНО: ВСЕГДА сбрасываем состояние загрузки В ПЕРВУЮ ОЧЕРЕДЬ
+        setLoading(false);
+        console.log('[SocketContext/complete] ✓ setLoading(false) вызван - индикатор загрузки должен исчезнуть');
+        
+        // ВАЖНО: Сначала пробуем получить chatId из ref, затем используем getCurrentChat
+        const chatId = currentChatIdRef.current || getCurrentChat()?.id;
+        console.log('[SocketContext] chatId из ref или getCurrentChat:', chatId);
+        
+        if (!chatId) {
+          console.log('[SocketContext] Нет chatId, выходим');
+          // Даже если нет chatId, пытаемся сбросить currentMessageRef
+          if (currentMessageRef.current) {
+            currentMessageRef.current = null;
+          }
           return;
         }
         
+        // КРИТИЧЕСКИ ВАЖНО: Сбрасываем isStreaming у currentMessageRef СРАЗУ
+        // НЕЗАВИСИМО от того, найден ли чат в getChatById
         if (currentMessageRef.current) {
-          // Обновляем сообщение и ЯВНО убираем флаг стриминга
-          
-          // Проверяем, находимся ли мы в режиме перегенерации (используем ref вместо getCurrentChat)
-          if (regenerationStateRef.current && regenerationStateRef.current.isRegenerating) {
-            // Это перегенерация - используем данные из ref
-            const updatedAlternatives = [...regenerationStateRef.current.alternativeResponses];
-            const currentIndex = regenerationStateRef.current.currentIndex;
-            
-            // Обновляем или добавляем ответ по текущему индексу
-            if (currentIndex < updatedAlternatives.length) {
-              updatedAlternatives[currentIndex] = data.response;
-            } else {
-              updatedAlternatives.push(data.response);
-            }
-            
-            updateMessage(
-              currentChatIdRef.current,
-              currentMessageRef.current,
-              data.response, // Обновляем message.content, чтобы он соответствовал текущему индексу
-              false,
-              undefined,
-              updatedAlternatives,
-              currentIndex
-            );
-            
-            // Очищаем состояние перегенерации
-            regenerationStateRef.current = null;
-          } else {
-            // Обычное обновление
-            updateMessage(currentChatIdRef.current, currentMessageRef.current, data.response, false);
-          }
-          
+          console.log('[SocketContext] ПРИОРИТЕТНЫЙ сброс isStreaming для currentMessageRef:', currentMessageRef.current);
+          console.log('[SocketContext] Параметры updateMessage:', {
+            chatId,
+            messageId: currentMessageRef.current,
+            content: data.response ? `${data.response.substring(0, 30)}...` : 'undefined',
+            isStreaming: false
+          });
+          updateMessage(chatId, currentMessageRef.current, data.response || undefined, false);
+          console.log('[SocketContext] updateMessage вызван с isStreaming=false, ожидаем обновление UI');
           currentMessageRef.current = null;
         } else {
-          // Если нет текущего сообщения, но есть ответ, пытаемся найти сообщение со стримингом
-          if (data.response) {
-            // Пытаемся найти последнее сообщение с isStreaming: true в текущем чате
-            const currentChat = getCurrentChat();
-            if (currentChat && currentChat.id === currentChatIdRef.current) {
-              const streamingMessages = currentChat.messages.filter(msg => msg.isStreaming && msg.role === 'assistant');
-              if (streamingMessages.length > 0) {
-                // Обновляем последнее сообщение со стримингом
-                const lastStreamingMessage = streamingMessages[streamingMessages.length - 1];
-                updateMessage(currentChatIdRef.current, lastStreamingMessage.id, data.response, false);
+          console.log('[SocketContext] ВНИМАНИЕ: currentMessageRef.current === null, не можем сбросить isStreaming!');
+        }
+        
+        // Получаем чат - пробуем сначала getChatById, затем getCurrentChat
+        let currentChat = getChatById(chatId);
+        if (!currentChat) {
+          // FALLBACK: Если getChatById не нашёл чат, пробуем getCurrentChat
+          const fallbackChat = getCurrentChat();
+          if (fallbackChat?.id === chatId) {
+            currentChat = fallbackChat;
+            console.log('[SocketContext] FALLBACK: используем getCurrentChat');
+          } else {
+            console.log('[SocketContext] ПРОБЛЕМА: чат не найден ни через getChatById, ни через getCurrentChat');
+            console.log('[SocketContext] chatId который ищем:', chatId);
+            console.log('[SocketContext] getCurrentChat().id:', fallbackChat?.id);
+          }
+        }
+        
+        console.log('[SocketContext] currentChat найден:', !!currentChat, 'messages:', currentChat?.messages?.length);
+        
+        let messageUpdated = false;
+        const wasStreaming = data.was_streaming || false;
+        
+        console.log('[SocketContext] data.response:', data.response ? `есть (${data.response.length} символов)` : 'НЕТ!');
+        console.log('[SocketContext] currentChat:', currentChat ? 'есть' : 'НЕТ');
+        console.log('[SocketContext] chatId:', chatId);
+        
+        if (currentChat && chatId && data.response) {
+          // Ищем последнее сообщение со стримингом
+          const streamingMessages = currentChat.messages.filter(msg => msg.isStreaming && msg.role === 'assistant');
+          console.log('[SocketContext] Сообщений со стримингом:', streamingMessages.length);
+          
+          if (streamingMessages.length > 0) {
+            // Обновляем последнее сообщение со стримингом - просто убираем флаг стриминга
+            // Текст уже был обновлен через chat_chunk
+            const lastStreamingMessage = streamingMessages[streamingMessages.length - 1];
+            // Если был стриминг, используем текущий контент сообщения (он уже обновлен через чанки)
+            // Иначе обновляем полным ответом
+            const finalContent = wasStreaming ? lastStreamingMessage.content : data.response;
+            console.log('[SocketContext] Обновляем сообщение:', lastStreamingMessage.id, 'isStreaming: false');
+            updateMessage(chatId, lastStreamingMessage.id, finalContent, false);
+            messageUpdated = true;
+            // Очищаем ref, так как сообщение уже обновлено
+            if (currentMessageRef.current === lastStreamingMessage.id) {
+              currentMessageRef.current = null;
+            }
+          } else if (currentMessageRef.current && chatId) {
+            // Если есть currentMessageRef, обновляем его
+            // Проверяем, находимся ли мы в режиме перегенерации
+            if (regenerationStateRef.current && regenerationStateRef.current.isRegenerating) {
+              // Это перегенерация - используем данные из ref
+              const updatedAlternatives = [...regenerationStateRef.current.alternativeResponses];
+              const currentIndex = regenerationStateRef.current.currentIndex;
+              
+              // Обновляем или добавляем ответ по текущему индексу
+              if (currentIndex < updatedAlternatives.length) {
+                updatedAlternatives[currentIndex] = data.response;
               } else {
-                // Создаем новое сообщение (например, в агентном режиме без потоковой генерации)
-                addMessage(currentChatIdRef.current, {
-                  role: 'assistant',
-                  content: data.response,
-                  timestamp: data.timestamp || new Date().toISOString(),
-                  isStreaming: false,
-                });
+                updatedAlternatives.push(data.response);
               }
+              
+              updateMessage(
+                chatId,
+                currentMessageRef.current,
+                data.response,
+                false,
+                undefined,
+                updatedAlternatives,
+                currentIndex
+              );
+              
+              // Очищаем состояние перегенерации
+              regenerationStateRef.current = null;
             } else {
-              // Создаем новое сообщение, если не удалось найти чат
-              addMessage(currentChatIdRef.current, {
+              // Обычное обновление
+              updateMessage(chatId, currentMessageRef.current, data.response, false);
+            }
+            messageUpdated = true;
+            currentMessageRef.current = null;
+          } else {
+            // Проверяем, нет ли уже сообщения с таким же содержимым (защита от дублирования)
+            const existingMessage = currentChat.messages.find(
+              msg => msg.role === 'assistant' && msg.content === data.response && !msg.isStreaming
+            );
+            console.log('[SocketContext] existingMessage:', existingMessage ? 'найдено' : 'НЕТ');
+            if (!existingMessage && chatId) {
+              // Создаем новое сообщение только если его еще нет
+              console.log('[SocketContext] СОЗДАЕМ НОВОЕ СООБЩЕНИЕ с контентом:', data.response.substring(0, 50));
+              addMessage(chatId, {
                 role: 'assistant',
                 content: data.response,
                 timestamp: data.timestamp || new Date().toISOString(),
                 isStreaming: false,
               });
-            }
-          } else {
-            // Если нет ответа, просто сбрасываем флаги стриминга у всех сообщений в чате
-            const currentChat = getCurrentChat();
-            if (currentChat && currentChat.id === currentChatIdRef.current) {
-              const streamingMessages = currentChat.messages.filter(msg => msg.isStreaming && msg.role === 'assistant');
-              streamingMessages.forEach(msg => {
-                updateMessage(currentChatIdRef.current!, msg.id, undefined, false);
-              });
+              messageUpdated = true;
             }
           }
+        } else {
+          console.log('[SocketContext] НЕ ВЫПОЛНЕНО условие для обработки response!');
+          console.log('[SocketContext] currentChat:', !!currentChat, 'chatId:', !!chatId, 'data.response:', !!data.response);
         }
-        setLoading(false);
+        
+        // КРИТИЧЕСКИ ВАЖНО: ВСЕГДА сбрасываем флаги стриминга у ВСЕХ сообщений
+        // независимо от того, было ли обновлено сообщение выше
+        if (currentChat && chatId) {
+          const allStreamingMessages = currentChat.messages.filter(msg => msg.isStreaming);
+          console.log('[SocketContext] ГАРАНТИРОВАННЫЙ сброс ВСЕХ флагов стриминга. Найдено:', allStreamingMessages.length);
+          if (allStreamingMessages.length > 0) {
+            allStreamingMessages.forEach(msg => {
+              console.log('[SocketContext] ГАРАНТИРОВАННЫЙ сброс isStreaming для:', msg.id, 'role:', msg.role);
+              updateMessage(chatId, msg.id, undefined, false);
+            });
+          } else {
+            console.log('[SocketContext] Нет сообщений со стримингом для сброса');
+          }
+        } else {
+          console.log('[SocketContext] ПРЕДУПРЕЖДЕНИЕ: currentChat не найден через getChatById');
+          console.log('[SocketContext] НО loading уже сброшен в false, так что кнопка должна исчезнуть');
+        }
+        
+        // ДОПОЛНИТЕЛЬНАЯ ГАРАНТИЯ: НЕ ОЧИЩАЕМ currentChatIdRef здесь!
+        // Он нужен для следующих сообщений
+        // currentChatIdRef.current = null; // УДАЛЕНО - не очищаем
+        
+        console.log('[SocketContext] Обработка complete завершена, loading должен быть false');
+        console.log('[SocketContext] currentChatIdRef после complete:', currentChatIdRef.current);
         break;
 
       case 'error':
@@ -395,7 +519,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         }
         
         currentMessageRef.current = null;
-        currentChatIdRef.current = null; // Очищаем при ошибке
+        // НЕ очищаем currentChatIdRef при ошибке - он нужен для следующих запросов
+        // currentChatIdRef.current = null; // УДАЛЕНО
         multiLLMMessageRef.current = null;
         multiLLMResponsesRef.current.clear();
         break;
@@ -412,7 +537,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
           multiLLMMessageRef.current = null;
           multiLLMResponsesRef.current.clear();
         }
-        currentChatIdRef.current = null; // Очищаем при остановке
+        // НЕ очищаем currentChatIdRef при остановке - он нужен для следующих запросов
+        // currentChatIdRef.current = null; // УДАЛЕНО
         break;
 
       default:
@@ -421,13 +547,22 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   };
 
   const sendMessage = (message: string, chatId: string, streaming: boolean = true) => {
+    console.log('[SocketContext/sendMessage] ==== НАЧАЛО ОТПРАВКИ СООБЩЕНИЯ ====');
+    console.log('[SocketContext/sendMessage] Сообщение:', message.substring(0, 100) + (message.length > 100 ? '...' : ''));
+    console.log('[SocketContext/sendMessage] Chat ID:', chatId);
+    console.log('[SocketContext/sendMessage] Streaming:', streaming);
+    console.log('[SocketContext/sendMessage] Socket:', socket ? 'есть' : 'НЕТ');
+    console.log('[SocketContext/sendMessage] isConnected:', isConnected);
+    
     if (!socket || !isConnected) {
+      console.error('[SocketContext/sendMessage] ✗ НЕТ СОЕДИНЕНИЯ С СЕРВЕРОМ');
       showNotification('error', 'Нет соединения с сервером');
       return;
     }
     
     // Сохраняем chatId для обработки ответов
     currentChatIdRef.current = chatId;
+    console.log('[SocketContext/sendMessage] ✓ currentChatIdRef.current установлен:', currentChatIdRef.current);
     
     // Сбрасываем состояние для multi-llm режима
     multiLLMMessageRef.current = null;
@@ -444,6 +579,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     // Устанавливаем состояние загрузки
     setLoading(true);
     currentMessageRef.current = null;
+    console.log('[SocketContext/sendMessage] Состояние: loading=true, currentMessageRef=null');
 
     // Отправляем сообщение через Socket.IO
     const messageData = {
@@ -454,27 +590,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       conversation_id: chatId,     // Передаем ID диалога
     };
 
+    console.log('[SocketContext/sendMessage] >>>> Отправка события chat_message:', messageData);
     socket.emit('chat_message', messageData);
-    
-    // Для режима multi-llm устанавливаем таймаут для завершения загрузки
-    // если все модели не ответят в течение разумного времени
-    setTimeout(() => {
-      if (multiLLMMessageRef.current && currentChatIdRef.current) {
-        // Если есть хотя бы один ответ от модели, завершаем загрузку
-        if (multiLLMResponsesRef.current.size > 0) {
-          setLoading(false);
-          // Финализируем сообщение - убираем флаг стриминга
-          const allResponses = Array.from(multiLLMResponsesRef.current.values());
-          updateMessage(
-            currentChatIdRef.current,
-            multiLLMMessageRef.current,
-            undefined,
-            false,
-            allResponses
-          );
-        }
-      }
-    }, 30000); // 30 секунд таймаут
+    console.log('[SocketContext/sendMessage] ✓ Событие chat_message отправлено в Socket.IO');
+    console.log('[SocketContext/sendMessage] ==== КОНЕЦ ОТПРАВКИ СООБЩЕНИЯ ====');
   };
 
   const regenerateResponse = (
@@ -542,7 +661,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       updateMessage(currentChatIdRef.current, currentMessageRef.current, undefined, false);
       currentMessageRef.current = null;
     }
-    currentChatIdRef.current = null; // Очищаем при остановке
+    // НЕ очищаем currentChatIdRef при остановке - он нужен для следующих запросов
+    // currentChatIdRef.current = null; // УДАЛЕНО
     
     showNotification('info', 'Генерация остановлена');
   };
@@ -579,6 +699,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   const contextValue: SocketContextType = {
     socket,
     isConnected,
+    isConnecting,
     sendMessage,
     regenerateResponse,
     stopGeneration,

@@ -79,7 +79,7 @@ class DocumentAgent(BaseAgent):
             document_context = "\n".join(context_parts)
             
             # Используем LLM для формирования ответа на основе контекста
-            from backend.agent import ask_agent
+            from backend.agent_llm_svc import ask_agent
             
             prompt = f"""На основе предоставленного контекста из документов ответь на вопрос пользователя.
 Если информации в контексте недостаточно, укажи это.

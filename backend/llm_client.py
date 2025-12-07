@@ -104,29 +104,50 @@ class LLMClient:
             "stream": stream
         }
         
+        logger.info(f"[LLMClient/chat_completion] Отправка запроса к {self.base_url}/v1/chat/completions")
+        logger.info(f"[LLMClient/chat_completion] Модель: {model}, max_tokens: {max_tokens}, stream: {stream}")
+        logger.info(f"[LLMClient/chat_completion] Timeout: {self.timeout} секунд")
+        logger.info(f"[LLMClient/chat_completion] Количество сообщений: {len(messages)}")
+        
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            # Увеличиваем timeout для агентного режима (планирование может занять больше времени)
+            request_timeout = httpx.Timeout(self.timeout, connect=10.0, read=self.timeout, write=10.0)
+            async with httpx.AsyncClient(timeout=request_timeout) as client:
                 if stream:
                     # Потоковый запрос
+                    logger.info(f"[LLMClient/chat_completion] Потоковый запрос...")
                     async with client.stream(
                         "POST",
                         f"{self.base_url}/v1/chat/completions",
                         headers={**self._get_headers(), "Accept": "text/event-stream"},
                         json=payload
                     ) as response:
+                        logger.info(f"[LLMClient/chat_completion] Получен ответ, status: {response.status_code}")
                         response.raise_for_status()
                         return response
                 else:
                     # Обычный запрос
+                    logger.info(f"[LLMClient/chat_completion] Обычный запрос (не потоковый)...")
                     response = await client.post(
                         f"{self.base_url}/v1/chat/completions",
                         headers=self._get_headers(),
                         json=payload
                     )
+                    logger.info(f"[LLMClient/chat_completion] Получен ответ, status: {response.status_code}")
                     response.raise_for_status()
-                    return response.json()
+                    result = response.json()
+                    logger.info(f"[LLMClient/chat_completion] Ответ распарсен, keys: {list(result.keys()) if isinstance(result, dict) else 'не dict'}")
+                    return result
+        except httpx.TimeoutException as e:
+            logger.error(f"[LLMClient/chat_completion] TIMEOUT при запросе к llm-svc (timeout={self.timeout}): {e}")
+            raise
+        except httpx.HTTPStatusError as e:
+            logger.error(f"[LLMClient/chat_completion] HTTP ошибка {e.response.status_code}: {e.response.text}")
+            raise
         except Exception as e:
-            logger.error(f"Ошибка запроса к llm-svc: {e}")
+            logger.error(f"[LLMClient/chat_completion] Ошибка запроса к llm-svc: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             raise
     
     async def transcribe_audio(
@@ -508,19 +529,19 @@ class LLMService:
         try:
             # Логируем информацию об истории
             if history:
-                logger.info(f"📚 История диалога: {len(history)} сообщений передается в LLM")
+                logger.info(f"История диалога: {len(history)} сообщений передается в LLM")
                 # Подсчитываем примерное количество токенов (грубая оценка: ~1 токен = 4 символа для русского)
                 total_chars = sum(len(msg.get("content", "")) for msg in history)
                 estimated_tokens = total_chars // 4
-                logger.info(f"📊 Примерное количество токенов в истории: {estimated_tokens}")
+                logger.info(f"Примерное количество токенов в истории: {estimated_tokens}")
             else:
-                logger.info("⚠️ История диалога пуста или не передана")
+                logger.info("История диалога пуста или не передана")
             
             # Подготавливаем сообщения
             messages = self.prepare_messages(prompt, history, system_prompt)
             
             # Логируем общее количество сообщений, отправляемых в LLM
-            logger.info(f"💬 Всего сообщений для LLM: {len(messages)} (включая system prompt и текущий запрос)")
+            logger.info(f"Всего сообщений для LLM: {len(messages)} (включая system prompt и текущий запрос)")
             
             # Если есть изображения, добавляем их к последнему сообщению пользователя
             if images:
@@ -556,19 +577,34 @@ class LLMService:
                 )
             else:
                 # Обычная генерация
-                response = await self.client.chat_completion(
-                    messages=messages,
-                    model=model_to_use,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    stream=False
-                )
+                logger.info(f"[generate_response] Отправляем запрос к llm-svc, модель: {model_to_use}, max_tokens: {max_tokens}")
+                logger.info(f"[generate_response] Количество сообщений: {len(messages)}")
                 
-                if "choices" in response and len(response["choices"]) > 0:
-                    return response["choices"][0]["message"]["content"]
-                else:
-                    logger.error("Неожиданный формат ответа от llm-svc")
-                    return "Ошибка генерации ответа"
+                try:
+                    response = await self.client.chat_completion(
+                        messages=messages,
+                        model=model_to_use,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        stream=False
+                    )
+                    logger.info(f"[generate_response] Получен ответ от llm-svc, keys: {list(response.keys()) if isinstance(response, dict) else 'не dict'}")
+                    
+                    if "choices" in response and len(response["choices"]) > 0:
+                        content = response["choices"][0]["message"]["content"]
+                        logger.info(f"[generate_response] Извлечен контент, длина: {len(content)} символов")
+                        return content
+                    else:
+                        logger.error(f"[generate_response] Неожиданный формат ответа от llm-svc: {response}")
+                        return "Ошибка генерации ответа"
+                except asyncio.TimeoutError as e:
+                    logger.error(f"[generate_response] TimeoutError при запросе к llm-svc: {e}")
+                    raise
+                except Exception as e:
+                    logger.error(f"[generate_response] Исключение при запросе к llm-svc: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    raise
                     
         except Exception as e:
             logger.error(f"Ошибка генерации ответа: {e}")
@@ -587,7 +623,14 @@ class LLMService:
         accumulated_text = ""
         
         try:
-            async with httpx.AsyncClient(timeout=self.client.timeout) as http_client:
+            logger.info(f"[_stream_generation] Начало потоковой генерации, model={model_name or self.model_name}")
+            logger.info(f"[_stream_generation] Отправка запроса на {self.client.base_url}/v1/chat/completions")
+            
+            # Увеличиваем таймаут для потоковой генерации (особенно для агентного режима)
+            stream_timeout = httpx.Timeout(120.0, connect=10.0, read=120.0, write=10.0)
+            
+            async with httpx.AsyncClient(timeout=stream_timeout) as http_client:
+                logger.info(f"[_stream_generation] HTTP клиент создан, отправляем POST запрос...")
                 async with http_client.stream(
                     "POST",
                     f"{self.client.base_url}/v1/chat/completions",
@@ -600,6 +643,7 @@ class LLMService:
                         "stream": True
                     }
                 ) as response:
+                    logger.info(f"[_stream_generation] Получен ответ, status={response.status_code}")
                     response.raise_for_status()
                     
                     async for line in response.aiter_lines():
@@ -618,17 +662,34 @@ class LLMService:
                                         accumulated_text += chunk
                                         
                                         # Вызываем колбэк
-                                        should_continue = stream_callback(chunk, accumulated_text)
-                                        if not should_continue:
-                                            logger.info("Генерация остановлена по сигналу колбэка")
-                                            return None
+                                        try:
+                                            # logger.info(f"[_stream_generation] Вызываем stream_callback: chunk_len={len(chunk)}, acc_len={len(accumulated_text)}")
+                                            should_continue = stream_callback(chunk, accumulated_text)
+                                            # logger.info(f"[_stream_generation] stream_callback вернул: {should_continue}")
+                                            if should_continue is False:  # Явная проверка на False
+                                                # logger.info("[_stream_generation] Генерация остановлена по сигналу колбэка")
+                                                return None  # Возвращаем None при отмене
+                                        except Exception as callback_error:
+                                            logger.error(f"[_stream_generation] Ошибка в stream_callback: {callback_error}")
+                                            import traceback
+                                            logger.error(traceback.format_exc())
+                                            # Продолжаем генерацию при ошибке в callback
                             except json.JSONDecodeError:
                                 continue
                     
+                    logger.info(f"[_stream_generation] Генерация завершена, получено {len(accumulated_text)} символов")
                     return accumulated_text
                 
+        except httpx.ConnectError as e:
+            logger.error(f"[_stream_generation] Ошибка подключения к llm-svc: {e}")
+            return "Ошибка: не удалось подключиться к сервису LLM. Проверьте, что llm-svc запущен."
+        except httpx.TimeoutException as e:
+            logger.error(f"[_stream_generation] Timeout при подключении к llm-svc: {e}")
+            return "Ошибка: превышено время ожидания ответа от llm-svc. Модель может быть занята или не загружена."
         except Exception as e:
-            logger.error(f"Ошибка потоковой генерации: {e}")
+            logger.error(f"[_stream_generation] Ошибка потоковой генерации: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return f"Ошибка потоковой генерации: {str(e)}"
     
     async def transcribe_audio(
@@ -799,32 +860,66 @@ def ask_agent_llm_svc(prompt: str, history: Optional[List[Dict[str, str]]] = Non
         if model_path and model_path.startswith("llm-svc://"):
             model_name_for_request = model_path.replace("llm-svc://", "")
         
-        return await service.generate_response(
-            prompt=prompt,
-            history=history,
-            system_prompt=None,  # Можно добавить поддержку custom_prompt_id
-            temperature=0.7,
-            max_tokens=max_tokens or 1024,
-            streaming=streaming,
-            stream_callback=stream_callback,
-            images=images,
-            model_path=model_path if model_path and model_path.startswith("llm-svc://") else None
-        )
+        logger.info(f"[ask_agent_llm_svc] Вызов service.generate_response со стримингом: {streaming}")
+        logger.info(f"[ask_agent_llm_svc] stream_callback: {'есть' if stream_callback else 'НЕТ'}")
+        logger.info(f"[ask_agent_llm_svc] prompt длина: {len(prompt)} символов")
+        logger.info(f"[ask_agent_llm_svc] max_tokens: {max_tokens or 1024}")
+        
+        try:
+            logger.info(f"[ask_agent_llm_svc] Начинаем вызов service.generate_response...")
+            result = await service.generate_response(
+                prompt=prompt,
+                history=history,
+                system_prompt=None,  # Можно добавить поддержку custom_prompt_id
+                temperature=0.7,
+                max_tokens=max_tokens or 1024,
+                streaming=streaming,
+                stream_callback=stream_callback,
+                images=images,
+                model_path=model_path if model_path and model_path.startswith("llm-svc://") else None
+            )
+            logger.info(f"[ask_agent_llm_svc] service.generate_response завершён, результат: {len(result) if result else 0} символов")
+            return result
+        except asyncio.TimeoutError as e:
+            logger.error(f"[ask_agent_llm_svc] TimeoutError в generate_response: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"[ask_agent_llm_svc] Исключение в generate_response: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            raise
     
-    # Запускаем асинхронную функцию в новом event loop
+    # ИСПРАВЛЕНИЕ: Проверяем, есть ли запущенный loop в текущем потоке
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Если loop уже запущен, создаем новый в отдельном потоке
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(asyncio.run, _async_generate())
-                return future.result()
-        else:
-            return loop.run_until_complete(_async_generate())
+        # Пытаемся получить текущий запущенный loop
+        loop = asyncio.get_running_loop()
+        # Если получили - значит мы в async контексте, но ask_agent_llm_svc - синхронная функция
+        # Значит вызываем через run_coroutine_threadsafe из другого потока
+        logger.info("[ask_agent_llm_svc] Обнаружен запущенный loop, используем run_coroutine_threadsafe")
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(lambda: asyncio.run(_async_generate()))
+            try:
+                return future.result(timeout=120)
+            except concurrent.futures.TimeoutError:
+                logger.error(f"[ask_agent_llm_svc] TIMEOUT при ожидании ответа от llm-svc (120 сек)")
+                future.cancel()
+                return "Извините, превышено время ожидания ответа от модели."
+            except concurrent.futures.CancelledError:
+                logger.warning(f"[ask_agent_llm_svc] Генерация была отменена")
+                return None
     except RuntimeError:
-        # Если нет event loop, создаем новый
+        # Нет запущенного loop - можем использовать asyncio.run напрямую
+        logger.info("[ask_agent_llm_svc] Нет запущенного loop, используем asyncio.run")
         return asyncio.run(_async_generate())
+    except asyncio.CancelledError:
+        logger.warning(f"[ask_agent_llm_svc] Генерация была отменена (asyncio.CancelledError)")
+        return None  # Возвращаем None при отмене
+    except Exception as e:
+        logger.error(f"[ask_agent_llm_svc] Критическая ошибка: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return f"Произошла ошибка при обращении к модели: {str(e)}"
 
 # Синхронные обертки для аудио функций
 def transcribe_audio_llm_svc(audio_file: bytes, filename: str = "audio.wav", language: str = "ru") -> str:

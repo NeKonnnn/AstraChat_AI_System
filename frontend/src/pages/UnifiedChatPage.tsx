@@ -225,7 +225,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     updateChatTitle,
     updateChatMessages
   } = useAppActions();
-  const { sendMessage, regenerateResponse, isConnected, reconnect, stopGeneration, socket, onMultiLLMEvent, offMultiLLMEvent } = useSocket();
+  const { sendMessage, regenerateResponse, isConnected, isConnecting, reconnect, stopGeneration, socket, onMultiLLMEvent, offMultiLLMEvent } = useSocket();
 
   // Получаем текущий чат и сообщения
   const currentChat = getCurrentChat();
@@ -436,6 +436,71 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       loadAvailableModels();
     }
   }, [agentStatus?.mode]);
+
+  // Подписка на событие остановки генерации и завершения генерации
+  useEffect(() => {
+    console.log('[UnifiedChatPage/useEffect] Проверка socket:', !!socket);
+    if (!socket) return;
+    
+    console.log('[UnifiedChatPage/useEffect] Подписываемся на события chat_complete и generation_stopped');
+    
+    const handleGenerationStopped = () => {
+      console.log('[UnifiedChatPage] generation_stopped получен, сбрасываем isStreaming');
+      // Обновляем состояние всех окон моделей - останавливаем стриминг
+      setModelWindows(prev => prev.map(w => ({ ...w, isStreaming: false })));
+      
+      // Также обновляем состояние сообщений в истории
+      setConversationHistory(prev => {
+        if (prev.length === 0) return prev;
+        const updated = [...prev];
+        const lastIndex = updated.length - 1;
+        if (updated[lastIndex]) {
+          updated[lastIndex] = {
+            ...updated[lastIndex],
+            responses: updated[lastIndex].responses.map(r => ({ ...r, isStreaming: false }))
+          };
+        }
+        return updated;
+      });
+    };
+    
+    const handleChatComplete = (data: any) => {
+      // Когда генерация завершена, обновляем состояние всех окон моделей
+      console.log('[UnifiedChatPage] chat_complete получен, обновляем состояние стриминга');
+      console.log('[UnifiedChatPage] modelWindows before:', modelWindows.map(w => ({ id: w.id, isStreaming: w.isStreaming })));
+      setModelWindows(prev => {
+        const updated = prev.map(w => ({ ...w, isStreaming: false }));
+        console.log('[UnifiedChatPage] modelWindows обновлены, isStreaming установлен в false');
+        console.log('[UnifiedChatPage] modelWindows after:', updated.map(w => ({ id: w.id, isStreaming: w.isStreaming })));
+        return updated;
+      });
+      
+      // Также обновляем состояние сообщений в истории
+      setConversationHistory(prev => {
+        if (prev.length === 0) return prev;
+        const updated = [...prev];
+        const lastIndex = updated.length - 1;
+        if (updated[lastIndex]) {
+          updated[lastIndex] = {
+            ...updated[lastIndex],
+            responses: updated[lastIndex].responses.map(r => ({ ...r, isStreaming: false }))
+          };
+        }
+        return updated;
+      });
+    };
+    
+    socket.on('generation_stopped', handleGenerationStopped);
+    socket.on('chat_complete', handleChatComplete);
+    
+    console.log('[UnifiedChatPage/useEffect] Подписки установлены');
+    
+    return () => {
+      console.log('[UnifiedChatPage/useEffect] Отписываемся от событий');
+      socket.off('generation_stopped', handleGenerationStopped);
+      socket.off('chat_complete', handleChatComplete);
+    };
+  }, [socket]);
 
   // Подписка на события Socket.IO для режима multi-llm
   useEffect(() => {
@@ -2164,6 +2229,24 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   const handleStopGeneration = (): void => {
     // Останавливаем генерацию через WebSocket
     stopGeneration();
+    
+    // Обновляем состояние всех окон моделей - останавливаем стриминг
+    setModelWindows(prev => prev.map(w => ({ ...w, isStreaming: false })));
+    
+    // Также обновляем состояние сообщений в истории
+    setConversationHistory(prev => {
+      if (prev.length === 0) return prev;
+      const updated = [...prev];
+      const lastIndex = updated.length - 1;
+      if (updated[lastIndex]) {
+        updated[lastIndex] = {
+          ...updated[lastIndex],
+          responses: updated[lastIndex].responses.map(r => ({ ...r, isStreaming: false }))
+        };
+      }
+      return updated;
+    });
+    
     showNotification('info', 'Генерация остановлена');
   };
 
@@ -3704,8 +3787,10 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
               onKeyPress={handleKeyPress}
               onPaste={handlePaste}
               placeholder={
-                !isConnected 
+                !isConnected && !isConnecting
                   ? "Нет соединения с сервером. Запустите backend на порту 8000" 
+                  : isConnecting
+                    ? "Подключение к серверу..."
                   : modelWindows.some(w => w.isStreaming)
                     ? "Модели генерируют ответ... Нажмите ⏹️ чтобы остановить"
                     : !modelWindows.some(w => w.selectedModel)
@@ -3823,7 +3908,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
               {/* Правая группа кнопок */}
               <Box sx={{ display: 'flex', gap: 0.5 }}>
                 {/* Кнопка отправки/остановки генерации */}
-                {modelWindows.some(w => w.isStreaming) ? (
+                {(state.isLoading || modelWindows.some(w => w.isStreaming)) ? (
                   <Tooltip title="Прервать генерацию">
                     <IconButton
                       onClick={handleStopGeneration}
@@ -4321,12 +4406,14 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                 onKeyPress={handleKeyPress}
                 onPaste={handlePaste}
                 placeholder={
-                  !isConnected 
+                  !isConnected && !isConnecting
                     ? "Нет соединения с сервером. Запустите backend на порту 8000" 
-                    : state.isLoading && !messages.some(msg => msg.isStreaming)
-                      ? "astrachat думает..." 
-                      : state.isLoading && messages.some(msg => msg.isStreaming)
-                        ? "astrachat генерирует ответ... Нажмите ⏹️ чтобы остановить"
+                    : isConnecting
+                      ? "Подключение к серверу..."
+                      : state.isLoading && !messages.some(msg => msg.isStreaming)
+                        ? "astrachat думает..." 
+                        : state.isLoading && messages.some(msg => msg.isStreaming)
+                          ? "astrachat генерирует ответ... Нажмите ⏹️ чтобы остановить"
                         : "Чем я могу помочь вам сегодня?"
                 }
                 variant="outlined"
@@ -4427,32 +4514,32 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                     </Tooltip>
                  </Box>
 
-                                 {/* Правая группа кнопок */}
-                 <Box sx={{ display: 'flex', gap: 0.5 }}>
-                   {/* Кнопка отправки/остановки генерации */}
-                   {messages.some(msg => msg.isStreaming) ? (
-                     <Tooltip title="Прервать генерацию">
-                       <IconButton
-                         onClick={handleStopGeneration}
-                         color="error"
-                         sx={{
-                           bgcolor: 'error.main',
-                           color: 'white',
-                           '&:hover': {
-                             bgcolor: 'error.dark',
-                           },
-                           animation: 'pulse 2s ease-in-out infinite',
-                           '@keyframes pulse': {
-                             '0%': { opacity: 1 },
-                             '50%': { opacity: 0.7 },
-                             '100%': { opacity: 1 },
-                           },
-                         }}
-                       >
-                         <SquareIcon sx={{ fontSize: '1.2rem' }} />
-                       </IconButton>
-                     </Tooltip>
-                   ) : (
+                                {/* Правая группа кнопок */}
+                <Box sx={{ display: 'flex', gap: 0.5 }}>
+                  {/* Кнопка отправки/остановки генерации */}
+                  {(state.isLoading || messages.some(msg => msg.isStreaming)) ? (
+                    <Tooltip title="Прервать генерацию">
+                      <IconButton
+                        onClick={handleStopGeneration}
+                        color="error"
+                        sx={{
+                          bgcolor: 'error.main',
+                          color: 'white',
+                          '&:hover': {
+                            bgcolor: 'error.dark',
+                          },
+                          animation: 'pulse 2s ease-in-out infinite',
+                          '@keyframes pulse': {
+                            '0%': { opacity: 1 },
+                            '50%': { opacity: 0.7 },
+                            '100%': { opacity: 1 },
+                          },
+                        }}
+                      >
+                        <SquareIcon sx={{ fontSize: '1.2rem' }} />
+                      </IconButton>
+                    </Tooltip>
+                  ) : (
                      <Tooltip title="Отправить">
                        <span>
                          <IconButton

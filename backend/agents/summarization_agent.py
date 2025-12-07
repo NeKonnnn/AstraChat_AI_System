@@ -135,9 +135,14 @@ class SummarizationAgent:
 Требования пользователя: {message}"""
 
         # Вызываем LLM со стримингом
-        streaming = context.get('streaming', False)
-        stream_callback = context.get('stream_callback')
-        selected_model = context.get('selected_model') if context else None
+        # Получаем параметры стриминга из tool_context (приоритет) или из context (fallback)
+        streaming = tool_context.get('streaming', context.get('streaming', False)) if tool_context else context.get('streaming', False)
+        stream_callback = tool_context.get('stream_callback', context.get('stream_callback')) if tool_context else context.get('stream_callback')
+        selected_model = tool_context.get('selected_model', context.get('selected_model')) if tool_context else context.get('selected_model')
+        
+        logger.info(f"[{self.name}] Стриминг: {'включен' if streaming else 'выключен'}")
+        if streaming and stream_callback:
+            logger.info(f"[{self.name}] Stream callback доступен: {type(stream_callback)}")
         
         # Объединяем system_prompt и user_prompt в один prompt
         full_prompt = f"{system_prompt}\n\n{user_prompt}"
@@ -194,9 +199,20 @@ class SummarizationAgent:
 Требования: {message}"""
 
         # Вызываем LLM со стримингом
-        streaming = context.get('streaming', False)
-        stream_callback = context.get('stream_callback')
-        selected_model = context.get('selected_model') if context else None
+        # Получаем параметры стриминга из tool_context (приоритет) или из context (fallback)
+        try:
+            from backend.tools.prompt_tools import get_tool_context
+        except ModuleNotFoundError:
+            from tools.prompt_tools import get_tool_context
+        
+        tool_context = get_tool_context()
+        streaming = tool_context.get('streaming', context.get('streaming', False)) if tool_context else context.get('streaming', False)
+        stream_callback = tool_context.get('stream_callback', context.get('stream_callback')) if tool_context else context.get('stream_callback')
+        selected_model = tool_context.get('selected_model', context.get('selected_model')) if tool_context else context.get('selected_model')
+        
+        logger.info(f"[{self.name}] Стриминг: {'включен' if streaming else 'выключен'}")
+        if streaming and stream_callback:
+            logger.info(f"[{self.name}] Stream callback доступен: {type(stream_callback)}")
         
         # Объединяем system_prompt и user_prompt в один prompt
         full_prompt = f"{system_prompt}\n\n{user_prompt}"
@@ -263,9 +279,20 @@ class SummarizationAgent:
 Дополнительные требования: {message}"""
 
         # Вызываем LLM со стримингом
-        streaming = context.get('streaming', False)
-        stream_callback = context.get('stream_callback')
-        selected_model = context.get('selected_model') if context else None
+        # Получаем параметры стриминга из tool_context (приоритет) или из context (fallback)
+        try:
+            from backend.tools.prompt_tools import get_tool_context
+        except ModuleNotFoundError:
+            from tools.prompt_tools import get_tool_context
+        
+        tool_context = get_tool_context()
+        streaming = tool_context.get('streaming', context.get('streaming', False)) if tool_context else context.get('streaming', False)
+        stream_callback = tool_context.get('stream_callback', context.get('stream_callback')) if tool_context else context.get('stream_callback')
+        selected_model = tool_context.get('selected_model', context.get('selected_model')) if tool_context else context.get('selected_model')
+        
+        logger.info(f"[{self.name}] Стриминг: {'включен' if streaming else 'выключен'}")
+        if streaming and stream_callback:
+            logger.info(f"[{self.name}] Stream callback доступен: {type(stream_callback)}")
         
         # Объединяем system_prompt и user_prompt в один prompt
         full_prompt = f"{system_prompt}\n\n{user_prompt}"
@@ -330,9 +357,20 @@ class SummarizationAgent:
 Требования: {message}"""
 
         # Вызываем LLM со стримингом
-        streaming = context.get('streaming', False)
-        stream_callback = context.get('stream_callback')
-        selected_model = context.get('selected_model') if context else None
+        # Получаем параметры стриминга из tool_context (приоритет) или из context (fallback)
+        try:
+            from backend.tools.prompt_tools import get_tool_context
+        except ModuleNotFoundError:
+            from tools.prompt_tools import get_tool_context
+        
+        tool_context = get_tool_context()
+        streaming = tool_context.get('streaming', context.get('streaming', False)) if tool_context else context.get('streaming', False)
+        stream_callback = tool_context.get('stream_callback', context.get('stream_callback')) if tool_context else context.get('stream_callback')
+        selected_model = tool_context.get('selected_model', context.get('selected_model')) if tool_context else context.get('selected_model')
+        
+        logger.info(f"[{self.name}] Стриминг: {'включен' if streaming else 'выключен'}")
+        if streaming and stream_callback:
+            logger.info(f"[{self.name}] Stream callback доступен: {type(stream_callback)}")
         
         # Объединяем system_prompt и user_prompt в один prompt
         full_prompt = f"{system_prompt}\n\n{user_prompt}"
@@ -399,9 +437,20 @@ class SummarizationAgent:
 Запрос пользователя: {message}"""
 
         # Вызываем LLM со стримингом
-        streaming = context.get('streaming', False)
-        stream_callback = context.get('stream_callback')
-        selected_model = context.get('selected_model') if context else None
+        # Получаем параметры стриминга из tool_context (приоритет) или из context (fallback)
+        try:
+            from backend.tools.prompt_tools import get_tool_context
+        except ModuleNotFoundError:
+            from tools.prompt_tools import get_tool_context
+        
+        tool_context = get_tool_context()
+        streaming = tool_context.get('streaming', context.get('streaming', False)) if tool_context else context.get('streaming', False)
+        stream_callback = tool_context.get('stream_callback', context.get('stream_callback')) if tool_context else context.get('stream_callback')
+        selected_model = tool_context.get('selected_model', context.get('selected_model')) if tool_context else context.get('selected_model')
+        
+        logger.info(f"[{self.name}] Стриминг: {'включен' if streaming else 'выключен'}")
+        if streaming and stream_callback:
+            logger.info(f"[{self.name}] Stream callback доступен: {type(stream_callback)}")
         
         # Объединяем system_prompt и user_prompt в один prompt
         full_prompt = f"{system_prompt}\n\n{user_prompt}"

@@ -44,8 +44,9 @@ import {
 import { useAppActions } from '../../contexts/AppContext';
 import ModelSelector from '../ModelSelector';
 import { useTheme } from '@mui/material';
+import { API_CONFIG } from '../../config/api';
 
-const API_BASE_URL = 'http://localhost:8000';
+const API_BASE_URL = API_CONFIG.BASE_URL;
 
 export default function ModelsSettings() {
   const [showModelSelectorInSettings, setShowModelSelectorInSettings] = useState(() => {

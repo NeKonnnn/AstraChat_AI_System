@@ -31,28 +31,15 @@ logger = logging.getLogger(__name__)
 
 def _get_ask_agent():
     """
-    Получить правильную версию ask_agent в зависимости от конфигурации.
-    Использует agent_llm_svc если USE_LLM_SVC=true, иначе agent.
+    Получить ask_agent_llm_svc для работы через llm-svc без загрузки модели
     """
-    import os
-    use_llm_svc = os.getenv('USE_LLM_SVC', 'false').lower() == 'true'
-    
-    if use_llm_svc:
-        try:
-            from backend.agent_llm_svc import ask_agent
-            logger.debug("[LangGraph] Используется ask_agent из agent_llm_svc")
-            return ask_agent
-        except (ImportError, ModuleNotFoundError) as e:
-            logger.warning(f"[LangGraph] Не удалось импортировать agent_llm_svc: {e}, используем agent.py")
-    
-    # Fallback на оригинальный agent
     try:
-        from backend.agent import ask_agent
-        logger.debug("[LangGraph] Используется ask_agent из agent")
+        from backend.agent_llm_svc import ask_agent
+        logger.debug("[LangGraph] Используется ask_agent из agent_llm_svc")
         return ask_agent
     except ModuleNotFoundError:
-        from agent import ask_agent
-        logger.debug("[LangGraph] Используется ask_agent (относительный импорт)")
+        from agent_llm_svc import ask_agent
+        logger.debug("[LangGraph] Используется ask_agent_llm_svc (относительный импорт)")
         return ask_agent
 
 # ============================================================================
@@ -190,6 +177,10 @@ class LangGraphOrchestrator:
             
             tools_description = self._get_active_tools_description()
             
+            # Логируем доступные инструменты для отладки
+            logger.info(f"[PLANNER] Описание инструментов (длина: {len(tools_description)} символов):")
+            logger.debug(f"[PLANNER] Полное описание инструментов:\n{tools_description}")
+            
             # Формируем контекстную информацию о документах
             docs_context = ""
             if available_docs:
@@ -201,9 +192,21 @@ class LangGraphOrchestrator:
 ВАЖНО: Если запрос касается анализа документов, поиска информации в файлах или подсчета элементов в документах, используй инструмент 'search_documents' с соответствующим поисковым запросом.
 """
             
-            planning_prompt = f"""Ты - система планирования задач AI-ассистента. Проанализируй запрос пользователя и определи:
-1. Нужны ли специальные инструменты для выполнения задачи?
-2. Если да, какие инструменты и в каком порядке нужно использовать?
+            planning_prompt = f"""Ты - система планирования задач AI-ассистента. Твоя задача - определить, какие инструменты нужны для выполнения запроса пользователя.
+
+ВАЖНЫЕ ПРАВИЛА:
+1. ВСЕГДА используй инструменты, если запрос требует:
+   - Поиска информации (в документах, в интернете)
+   - Вычислений или расчетов
+   - Создания, улучшения или анализа промптов
+   - Работы с файлами или документами
+   - Сохранения информации в память
+   - Любых специальных действий, которые выходят за рамки простого разговора
+
+2. Используй прямой ответ БЕЗ инструментов ТОЛЬКО для:
+   - Простых приветствий ("Привет", "Как дела?")
+   - Общих вопросов о том, как работает система
+   - Простых разговорных фраз без конкретной задачи
 
 {docs_context}
 
@@ -211,6 +214,10 @@ class LangGraphOrchestrator:
 {tools_description}
 
 Запрос пользователя: "{user_query}"
+
+Проанализируй запрос и определи:
+1. Нужны ли специальные инструменты для выполнения задачи?
+2. Если да, какие инструменты и в каком порядке нужно использовать?
 
 Ответь СТРОГО в формате JSON:
 {{
@@ -267,6 +274,26 @@ class LangGraphOrchestrator:
     "reasoning": "Простой разговорный запрос, не требует инструментов"
 }}
 
+6. Запрос: "Напиши мне промпт для создания статьи"
+{{
+    "needs_tools": true,
+    "plan": [
+        {{"tool": "enhance_prompt", "input": "создание статьи"}}
+    ],
+    "reasoning": "Нужно создать промпт - используем инструмент enhance_prompt"
+}}
+
+7. Запрос: "Создай промпт для анализа данных"
+{{
+    "needs_tools": true,
+    "plan": [
+        {{"tool": "enhance_prompt", "input": "анализ данных"}}
+    ],
+    "reasoning": "Запрос на создание промпта требует использования инструмента"
+}}
+
+ПОМНИ: Если запрос содержит слова "промпт", "создай", "напиши промпт", "улучши промпт" - ВСЕГДА используй инструменты!
+
 Твой ответ (ТОЛЬКО JSON):"""
             
             # Логируем запрос
@@ -284,8 +311,27 @@ class LangGraphOrchestrator:
                 model_path=state.get("context", {}).get("selected_model")
             )
             
-            logger.info(f"[PLANNER] Получен ответ от LLM (длина: {len(response)} символов)")
+            logger.info(f"[PLANNER] Получен ответ от LLM (длина: {len(response) if response else 0} символов)")
             logger.debug(f"[PLANNER] Полный ответ LLM: {response}")
+            
+            # Проверяем, что ответ не пустой и не является ошибкой
+            if not response or response is None:
+                logger.error(f"[PLANNER] Ответ LLM пустой или None")
+                state["plan"] = []
+                state["current_step"] = 0
+                state["tool_results"] = []
+                state["context"] = context
+                return state
+            
+            # Проверяем, не является ли ответ сообщением об ошибке
+            if "Извините" in response or "Ошибка" in response or "превышено время" in response:
+                logger.error(f"[PLANNER] LLM вернул ошибку: {response[:200]}")
+                state["plan"] = []
+                state["current_step"] = 0
+                state["tool_results"] = []
+                state["context"] = context
+                state["error"] = response
+                return state
             
             # Парсим JSON ответ
             try:
@@ -306,20 +352,69 @@ class LangGraphOrchestrator:
                 plan = plan_data.get("plan", [])
                 reasoning = plan_data.get("reasoning", "")
                 
-                logger.info(f"[PLANNER] План успешно создан:")
-                logger.info(f"[PLANNER]   - Нужны инструменты: {needs_tools}")
-                logger.info(f"[PLANNER]   - Шагов в плане: {len(plan)}")
-                logger.info(f"[PLANNER]   - Обоснование: {reasoning}")
+                # ВАЛИДАЦИЯ: Если есть план, но needs_tools=False - исправляем
+                if plan and len(plan) > 0 and not needs_tools:
+                    logger.warning(f"[PLANNER] ОШИБКА ЛОГИКИ: есть план из {len(plan)} инструментов, но needs_tools=False. Исправляем на True.")
+                    needs_tools = True
+                
+                # ВАЛИДАЦИЯ: Если needs_tools=True, но план пустой - исправляем
+                if needs_tools and (not plan or len(plan) == 0):
+                    logger.warning(f"[PLANNER] ОШИБКА ЛОГИКИ: needs_tools=True, но план пустой. Исправляем на False.")
+                    needs_tools = False
+                    reasoning = "План пустой, используем прямой ответ"
+                
+                logger.info(f"[PLANNER] После валидации: needs_tools={needs_tools}, plan_length={len(plan) if plan else 0}")
+                
+                # Подробное логирование выбора агента/инструмента
+                logger.info(f"\n{'='*70}")
+                logger.info(f"╔═══════════════════════════════════════════════════════════╗")
+                logger.info(f"║  ОРКЕСТРАТОР: РЕШЕНИЕ ПРИНЯТО                           ║")
+                logger.info(f"╠═══════════════════════════════════════════════════════════╣")
+                logger.info(f"║  Запрос пользователя: {user_query[:60]:<60}               ║")
+                logger.info(f"╠═══════════════════════════════════════════════════════════╣")
+                logger.info(f"║  РЕШЕНИЕ: {'Использовать инструменты' if needs_tools else 'Прямой ответ без инструментов':<50} ║")
+                logger.info(f"║  ОБОСНОВАНИЕ: {reasoning[:50]:<50} ║")
+                logger.info(f"╠═══════════════════════════════════════════════════════════╣")
                 
                 if plan:
-                    logger.info(f"[PLANNER] Детали плана:")
+                    logger.info(f"║  ВЫБРАННЫЕ ИНСТРУМЕНТЫ/АГЕНТЫ: {len(plan)} шт.                      ║")
+                    logger.info(f"╠═══════════════════════════════════════════════════════════╣")
                     for i, step in enumerate(plan, 1):
-                        tool_name = step.get('tool', 'UNKNOWN')
-                        tool_input = step.get('input', '')[:80]
-                        logger.info(f"[PLANNER]   {i}. Инструмент: '{tool_name}'")
-                        logger.info(f"[PLANNER]      Входные данные: {tool_input}...")
+                        if not step:
+                            logger.warning(f"║  Шаг {i}: ПУСТОЙ (None)                                    ║")
+                            continue
+                        tool_name = step.get('tool', 'UNKNOWN') if isinstance(step, dict) else 'UNKNOWN'
+                        tool_input = step.get('input', '') if isinstance(step, dict) else ''
+                        tool_input_str = str(tool_input)[:50] if tool_input else 'пусто'
+                        
+                        # Определяем тип агента по имени инструмента
+                        agent_type = "Неизвестный"
+                        if 'summarize' in tool_name.lower() or 'extract_key' in tool_name.lower() or 'bullet' in tool_name.lower():
+                            agent_type = "SummarizationAgent (Агент суммаризации)"
+                        elif 'prompt' in tool_name.lower() or 'enhance' in tool_name.lower() or 'analyze' in tool_name.lower():
+                            agent_type = "PromptEnhancementAgent (Агент улучшения промптов)"
+                        elif 'document' in tool_name.lower() or 'search_documents' in tool_name.lower():
+                            agent_type = "DocumentAgent (Агент работы с документами)"
+                        elif 'web_search' in tool_name.lower() or 'search_web' in tool_name.lower():
+                            agent_type = "WebSearchAgent (Агент веб-поиска)"
+                        elif 'calculate' in tool_name.lower():
+                            agent_type = "CalculationAgent (Агент вычислений)"
+                        elif 'memory' in tool_name.lower() or 'save_memory' in tool_name.lower():
+                            agent_type = "MemoryAgent (Агент памяти)"
+                        elif 'mcp' in tool_name.lower():
+                            agent_type = "🔌 MCPAgent (MCP агент)"
+                        
+                        logger.info(f"║  {i}. {agent_type:<55} ║")
+                        logger.info(f"║     └─ 🔧 Инструмент: '{tool_name}'")
+                        logger.info(f"║     └─ 📥 Входные данные: {tool_input_str}...")
+                        if i < len(plan):
+                            logger.info(f"║")
                 else:
-                    logger.info(f"[PLANNER] План пуст - инструменты не требуются")
+                    logger.info(f"║  РЕЖИМ: Прямой ответ LLM (без агентов)                    ║")
+                    logger.info(f"║  ПРИЧИНА: {reasoning[:50]:<50} ║")
+                
+                logger.info(f"╚═══════════════════════════════════════════════════════════╝")
+                logger.info(f"{'='*70}\n")
                 
                 state["plan"] = plan if needs_tools else []
                 state["current_step"] = 0
@@ -398,19 +493,53 @@ class LangGraphOrchestrator:
             logger.info(f"{'='*70}")
             
             for i, step in enumerate(plan, 1):
-                tool_name = step.get("tool")
-                tool_input = step.get("input")
+                tool_name = step.get("tool") if step else None
+                tool_input = step.get("input") if step else ""
                 
-                logger.info(f"\n[EXECUTOR] Шаг {i}/{len(plan)}: {tool_name}")
-                logger.info(f"[EXECUTOR] Вход: {tool_input[:100]}...")
+                # Проверяем, что step не None
+                if not step or not tool_name:
+                    logger.error(f"[EXECUTOR] Шаг {i} некорректен: step={step}")
+                    tool_results.append({
+                        "tool": "unknown",
+                        "input": "",
+                        "output": f"Ошибка: некорректный шаг плана {i}",
+                        "success": False
+                    })
+                    continue
+                
+                # Определяем тип агента по имени инструмента
+                agent_type = "Неизвестный агент"
+                if 'summarize' in tool_name.lower() or 'extract_key' in tool_name.lower() or 'bullet' in tool_name.lower():
+                    agent_type = "SummarizationAgent (Агент суммаризации)"
+                elif 'prompt' in tool_name.lower() or 'enhance' in tool_name.lower() or 'analyze' in tool_name.lower():
+                    agent_type = "PromptEnhancementAgent (Агент улучшения промптов)"
+                elif 'document' in tool_name.lower() or 'search_documents' in tool_name.lower():
+                    agent_type = "DocumentAgent (Агент работы с документами)"
+                elif 'web_search' in tool_name.lower() or 'search_web' in tool_name.lower():
+                    agent_type = "WebSearchAgent (Агент веб-поиска)"
+                elif 'calculate' in tool_name.lower():
+                    agent_type = "CalculationAgent (Агент вычислений)"
+                elif 'memory' in tool_name.lower() or 'save_memory' in tool_name.lower():
+                    agent_type = "MemoryAgent (Агент памяти)"
+                elif 'mcp' in tool_name.lower():
+                    agent_type = "MCPAgent (MCP агент)"
+                
+                logger.info(f"\n{'='*70}")
+                logger.info(f"╔═══════════════════════════════════════════════════════════╗")
+                logger.info(f"║  ВЫПОЛНЕНИЕ: Шаг {i}/{len(plan)}                                        ║")
+                logger.info(f"╠═══════════════════════════════════════════════════════════╣")
+                logger.info(f"║  АГЕНТ: {agent_type:<50} ║")
+                logger.info(f"║  ИНСТРУМЕНТ: '{tool_name}'")
+                logger.info(f"║  ВХОДНЫЕ ДАННЫЕ: {str(tool_input)[:50] if tool_input else 'пусто'}...")
+                logger.info(f"╚═══════════════════════════════════════════════════════════╝")
+                logger.info(f"{'='*70}")
                 
                 # Отправляем heartbeat для каждого инструмента
+                # ВАЖНО: Не используем asyncio.create_task в синхронном контексте
+                # Вместо этого логируем - события будут отправлены из async контекста в main.py
                 if sio and socket_id:
-                    import asyncio
-                    asyncio.create_task(sio.emit('chat_thinking', {
-                        'status': 'executing',
-                        'message': f'Выполняю инструмент {tool_name} ({i}/{len(plan)})...'
-                    }, room=socket_id))
+                    logger.info(f"[EXECUTOR] Heartbeat: Выполняю инструмент {tool_name} ({i}/{len(plan)})...")
+                    # События отправляются из async контекста в main.py через chat_thinking
                 
                 # Проверяем что инструмент активен
                 logger.debug(f"[EXECUTOR] Проверка статуса инструмента '{tool_name}'...")
@@ -463,6 +592,11 @@ class LangGraphOrchestrator:
                         "success": True
                     })
                     
+                    logger.info(f"╔═══════════════════════════════════════════════════════════╗")
+                    logger.info(f"║  ШАГ {i}/{len(plan)} ЗАВЕРШЕН УСПЕШНО                        ║")
+                    logger.info(f"║  Результат: {len(str(result))} символов")
+                    logger.info(f"╚═══════════════════════════════════════════════════════════╝\n")
+                    
                 except Exception as e:
                     logger.error(f"[EXECUTOR] Ошибка выполнения '{tool_name}': {e}")
                     tool_results.append({
@@ -514,12 +648,10 @@ class LangGraphOrchestrator:
             logger.info(f"{'='*70}")
             
             # Отправляем heartbeat если есть socket
+            # ВАЖНО: Не используем asyncio.create_task в синхронном контексте
             if sio and socket_id:
-                import asyncio
-                asyncio.create_task(sio.emit('chat_thinking', {
-                    'status': 'aggregating',
-                    'message': 'Формирую финальный ответ...'
-                }, room=socket_id))
+                logger.info(f"[AGGREGATOR] Heartbeat: Формирую финальный ответ...")
+                # События отправляются из async контекста в main.py через chat_thinking
             
             ask_agent = _get_ask_agent()
             
@@ -527,15 +659,30 @@ class LangGraphOrchestrator:
             stream_callback_sync = None
             if streaming and stream_callback_async:
                 import asyncio
-                loop = asyncio.get_event_loop()
                 
                 def sync_wrapper(chunk: str, accumulated: str):
                     try:
-                        asyncio.run_coroutine_threadsafe(
-                            stream_callback_async(chunk, accumulated),
-                            loop
-                        )
+                        # Получаем текущий event loop
+                        try:
+                            loop = asyncio.get_event_loop()
+                        except RuntimeError:
+                            logger.warning("Нет активного event loop для stream callback")
+                            return True
+                        
+                        if loop.is_running():
+                            # Если loop запущен, используем run_coroutine_threadsafe
+                            future = asyncio.run_coroutine_threadsafe(
+                                stream_callback_async(chunk, accumulated),
+                                loop
+                            )
+                            # Не ждем результат - просто запускаем в фоне
+                        else:
+                            # Если loop не запущен, используем run_until_complete
+                            loop.run_until_complete(stream_callback_async(chunk, accumulated))
                         return True
+                    except asyncio.CancelledError:
+                        logger.warning("Stream callback был отменен")
+                        return False  # Прекращаем генерацию
                     except Exception as e:
                         logger.error(f"Ошибка в stream callback: {e}")
                         return True
@@ -544,14 +691,19 @@ class LangGraphOrchestrator:
             
             # Если инструменты не использовались, даем прямой ответ
             if not tool_results:
-                logger.info(f"[AGGREGATOR] Инструменты не использовались, прямой ответ")
+                logger.info(f"\n{'='*70}")
+                logger.info(f"╔═══════════════════════════════════════════════════════════╗")
+                logger.info(f"║  ФИНАЛЬНОЕ РЕШЕНИЕ ОРКЕСТРАТОРА                       ║")
+                logger.info(f"╠═══════════════════════════════════════════════════════════╣")
+                logger.info(f"║  ИСПОЛЬЗОВАН: Прямой ответ LLM (без агентов)          ║")
+                logger.info(f"║  РЕШЕНИЕ: Инструменты не требуются, отвечаю напрямую")
+                logger.info(f"║  СТРИМИНГ: {'включен' if streaming else 'выключен'}")
+                logger.info(f"╚═══════════════════════════════════════════════════════════╝")
+                logger.info(f"{'='*70}\n")
                 
                 if sio and socket_id:
-                    import asyncio
-                    asyncio.create_task(sio.emit('chat_thinking', {
-                        'status': 'generating',
-                        'message': 'Генерирую ответ...'
-                    }, room=socket_id))
+                    logger.info(f"[AGGREGATOR] Heartbeat: Генерирую ответ...")
+                    # События отправляются из async контекста в main.py через chat_thinking
                 
                 final_answer = ask_agent(
                     user_query,
@@ -561,8 +713,18 @@ class LangGraphOrchestrator:
                     model_path=context.get("selected_model")
                 )
                 
+                # Проверяем, не была ли генерация отменена
+                if final_answer is None:
+                    logger.warning(f"[AGGREGATOR] Генерация была отменена пользователем")
+                    state["final_answer"] = ""  # Пустой ответ при отмене
+                    state["error"] = "Генерация была отменена пользователем"
+                    return state
+                
                 state["final_answer"] = final_answer
                 logger.info(f"[AGGREGATOR] Ответ сформирован: {len(final_answer)} символов")
+                logger.info(f"╔═══════════════════════════════════════════════════════════╗")
+                logger.info(f"║  ГЕНЕРАЦИЯ ЗАВЕРШЕНА: {len(final_answer)} символов")
+                logger.info(f"╚═══════════════════════════════════════════════════════════╝\n")
                 return state
             
             # Проверяем, являются ли результаты инструментов уже готовыми финальными ответами
@@ -587,8 +749,24 @@ class LangGraphOrchestrator:
                 
                 # Проверяем, является ли это инструментом, который возвращает готовый ответ
                 if tool_name in final_answer_tools and len(output) > 50:
-                    logger.info(f"[AGGREGATOR] Инструмент '{tool_name}' вернул готовый ответ, используем его напрямую")
-                    logger.info(f"[AGGREGATOR] Длина ответа: {len(output)} символов")
+                    # Определяем тип агента
+                    agent_type = "Неизвестный агент"
+                    if 'summarize' in tool_name.lower() or 'extract_key' in tool_name.lower() or 'bullet' in tool_name.lower():
+                        agent_type = "SummarizationAgent"
+                    elif 'prompt' in tool_name.lower() or 'enhance' in tool_name.lower() or 'analyze' in tool_name.lower():
+                        agent_type = "PromptEnhancementAgent"
+                    
+                    logger.info(f"\n{'='*70}")
+                    logger.info(f"╔═══════════════════════════════════════════════════════════╗")
+                    logger.info(f"║  ФИНАЛЬНОЕ РЕШЕНИЕ ОРКЕСТРАТОРА                       ║")
+                    logger.info(f"╠═══════════════════════════════════════════════════════════╣")
+                    logger.info(f"║  ИСПОЛЬЗОВАН: {agent_type:<50} ║")
+                    logger.info(f"║  ИНСТРУМЕНТ: '{tool_name}'")
+                    logger.info(f"║  РЕЗУЛЬТАТ: {len(output)} символов")
+                    logger.info(f"║  РЕШЕНИЕ: Агент вернул готовый ответ, используем его напрямую")
+                    logger.info(f"╚═══════════════════════════════════════════════════════════╝")
+                    logger.info(f"{'='*70}\n")
+                    
                     state["final_answer"] = output
                     return state
             
@@ -618,11 +796,19 @@ class LangGraphOrchestrator:
 Твой ответ:"""
             
             if sio and socket_id:
-                import asyncio
-                asyncio.create_task(sio.emit('chat_thinking', {
-                    'status': 'generating',
-                    'message': 'Генерирую финальный ответ на основе результатов...'
-                }, room=socket_id))
+                logger.info(f"[AGGREGATOR] Heartbeat: Генерирую финальный ответ на основе результатов...")
+                # События отправляются из async контекста в main.py через chat_thinking
+            
+            logger.info(f"\n{'='*70}")
+            logger.info(f"╔═══════════════════════════════════════════════════════════╗")
+            logger.info(f"║  ФИНАЛЬНОЕ РЕШЕНИЕ ОРКЕСТРАТОРА                       ║")
+            logger.info(f"╠═══════════════════════════════════════════════════════════╣")
+            logger.info(f"║  ИСПОЛЬЗОВАН: LangGraph Aggregator (Агрегатор)        ║")
+            logger.info(f"║  РЕЗУЛЬТАТОВ ИНСТРУМЕНТОВ: {len(tool_results)}")
+            logger.info(f"║  РЕШЕНИЕ: Агрегирую результаты всех инструментов")
+            logger.info(f"║  СТРИМИНГ: {'включен' if streaming else 'выключен'}")
+            logger.info(f"╚═══════════════════════════════════════════════════════════╝")
+            logger.info(f"{'='*70}\n")
             
             final_answer = ask_agent(
                 aggregation_prompt,
@@ -632,8 +818,18 @@ class LangGraphOrchestrator:
                 model_path=context.get("selected_model")
             )
             
+            # Проверяем, не была ли генерация отменена
+            if final_answer is None:
+                logger.warning(f"[AGGREGATOR] Генерация была отменена пользователем")
+                state["final_answer"] = ""  # Пустой ответ при отмене
+                state["error"] = "Генерация была отменена пользователем"
+                return state
+            
             state["final_answer"] = final_answer
             logger.info(f"[AGGREGATOR] Финальный ответ сформирован: {len(final_answer)} символов")
+            logger.info(f"╔═══════════════════════════════════════════════════════════╗")
+            logger.info(f"║  АГРЕГАЦИЯ ЗАВЕРШЕНА: {len(final_answer)} символов")
+            logger.info(f"╚═══════════════════════════════════════════════════════════╝\n")
             
             return state
             
@@ -662,16 +858,27 @@ class LangGraphOrchestrator:
             Ответ системы
         """
         try:
-            logger.info(f"\n{'#'*70}")
-            logger.info(f"# LangGraph Orchestrator - Обработка запроса")
-            logger.info(f"# Запрос: {message[:100]}...")
-            logger.info(f"# Получен context: streaming={context.get('streaming', False) if context else False}, has_callback={'stream_callback' in context if context else False}")
-            logger.info(f"{'#'*70}\n")
+            logger.info("="*70)
+            logger.info("╔═══════════════════════════════════════════════════════════╗")
+            logger.info("║  LANGGRAPH ORCHESTRATOR - НАЧАЛО ОБРАБОТКИ            ║")
+            logger.info("╠═══════════════════════════════════════════════════════════╣")
+            logger.info(f"║  Запрос пользователя: {message[:60]:<60} ║")
+            logger.info(f"║  История: {len(history) if history else 0} сообщений")
+            streaming_status = 'включен' if (context and context.get('streaming', False)) else 'выключен'
+            logger.info(f"║  Стриминг: {streaming_status}")
+            logger.info("╠═══════════════════════════════════════════════════════════╣")
+            logger.info("║  ОРКЕСТРАТОР АНАЛИЗИРУЕТ ЗАПРОС И ВЫБИРАЕТ АГЕНТОВ   ║")
+            logger.info("╚═══════════════════════════════════════════════════════════╝")
+            logger.info("="*70)
             
             # Компилируем граф если еще не скомпилирован
+            logger.info("[process_message] Проверка compiled_graph...")
             if self.compiled_graph is None:
+                logger.info("[process_message] Граф не скомпилирован, начинаем компиляцию...")
                 self.compiled_graph = self.graph.compile(checkpointer=self.checkpointer)
-                logger.info("Граф скомпилирован")
+                logger.info("[process_message] Граф скомпилирован успешно")
+            else:
+                logger.info("[process_message] Граф уже скомпилирован, используем существующий")
             
             # Начальное состояние
             initial_state = {
@@ -686,24 +893,92 @@ class LangGraphOrchestrator:
             }
             
             # Запускаем граф
+            logger.info("[process_message] Подготовка конфигурации для запуска графа...")
             config = {"configurable": {"thread_id": "default"}}
-            final_state = self.compiled_graph.invoke(initial_state, config)
+            logger.info("[process_message] Запуск compiled_graph.invoke...")
+            
+            # ВАЖНО: invoke - синхронный метод, но внутри вызываются асинхронные функции
+            # Нужно создать event loop в отдельном потоке для асинхронных операций
+            import asyncio
+            import concurrent.futures
+            import threading
+            
+            def run_invoke_with_loop():
+                """Запускает invoke в новом event loop в отдельном потоке"""
+                # ИСПРАВЛЕНИЕ: Не создаем новый loop - invoke синхронный и не нужен loop
+                try:
+                    logger.info("[process_message/Thread] Запуск invoke (синхронный метод)...")
+                    logger.info("[process_message/Thread] initial_state keys: " + str(list(initial_state.keys())))
+                    logger.info("[process_message/Thread] user_query: " + str(initial_state.get("user_query", "")[:100]))
+                    
+                    # Запускаем invoke - это синхронный метод LangGraph
+                    result = self.compiled_graph.invoke(initial_state, config)
+                    
+                    logger.info("[process_message/Thread] ✓ invoke завершен успешно")
+                    logger.info("[process_message/Thread] result keys: " + str(list(result.keys()) if isinstance(result, dict) else "не dict"))
+                    logger.info("[process_message/Thread] final_answer длина: " + str(len(result.get("final_answer", "")) if isinstance(result, dict) else 0))
+                    
+                    return result
+                except Exception as e:
+                    logger.error(f"[process_message/Thread] Ошибка в invoke: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    # Возвращаем состояние с ошибкой вместо raise
+                    return {
+                        "error": str(e),
+                        "final_answer": None,
+                        "user_query": initial_state.get("user_query", ""),
+                        "context": initial_state.get("context", {})
+                    }
+            
+            # Запускаем в отдельном потоке с новым event loop
+            loop = asyncio.get_event_loop()
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                logger.info("[process_message] Запуск invoke в ThreadPoolExecutor с новым event loop...")
+                try:
+                    # ИСПРАВЛЕНИЕ: Добавляем таймаут для предотвращения зависания
+                    future = loop.run_in_executor(executor, run_invoke_with_loop)
+                    final_state = await asyncio.wait_for(future, timeout=300.0)  # 5 минут таймаут
+                    logger.info("[process_message] compiled_graph.invoke завершен, получен final_state")
+                except asyncio.TimeoutError:
+                    logger.error("[process_message] TIMEOUT: Граф не завершился за 300 секунд")
+                    return "Извините, обработка запроса заняла слишком много времени. Попробуйте упростить запрос."
+                except Exception as e:
+                    logger.error(f"[process_message] Ошибка при выполнении графа: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    return f"Произошла ошибка при обработке запроса: {str(e)}"
             
             # Проверяем результат
+            logger.info("[process_message] Проверка результата графа...")
+            logger.info(f"[process_message] final_state type: {type(final_state)}")
+            logger.info(f"[process_message] final_state keys: {list(final_state.keys()) if isinstance(final_state, dict) else 'не dict'}")
+            
             if final_state.get("error"):
                 error_msg = final_state["error"]
-                logger.error(f"Ошибка выполнения: {error_msg}")
+                logger.error(f"[process_message] Ошибка выполнения: {error_msg}")
                 return f"Произошла ошибка: {error_msg}"
             
             final_answer = final_state.get("final_answer")
+            logger.info(f"[process_message] final_answer: {'есть' if final_answer else 'НЕТ'}, длина: {len(final_answer) if final_answer else 0}")
+            
             if final_answer:
-                logger.info(f"\n{'#'*70}")
-                logger.info(f"# Задача успешно выполнена")
-                logger.info(f"# Ответ: {len(final_answer)} символов")
-                logger.info(f"{'#'*70}\n")
+                logger.info("="*70)
+                logger.info("╔═══════════════════════════════════════════════════════════╗")
+                logger.info("║ЗАДАЧА УСПЕШНО ВЫПОЛНЕНА                            ║")
+                logger.info(f"║Ответ: {len(final_answer)} символов")
+                logger.info(f"║Первые 200 символов: {final_answer[:200]}...")
+                logger.info("╚═══════════════════════════════════════════════════════════╝")
+                logger.info("="*70)
                 return final_answer
             else:
-                logger.warning("Финальный ответ не сформирован")
+                logger.warning("="*70)
+                logger.warning("╔═══════════════════════════════════════════════════════════╗")
+                logger.warning("║ФИНАЛЬНЫЙ ОТВЕТ НЕ СФОРМИРОВАН                    ║")
+                logger.warning(f"║  final_state keys: {list(final_state.keys())}")
+                logger.warning(f"║  tool_results: {len(final_state.get('tool_results', []))}")
+                logger.warning("╚═══════════════════════════════════════════════════════════╝")
+                logger.warning("="*70)
                 return "Не удалось получить ответ на ваш запрос."
                 
         except Exception as e:

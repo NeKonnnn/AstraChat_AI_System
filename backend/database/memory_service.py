@@ -248,18 +248,19 @@ async def load_dialog_history() -> List[Dict[str, Any]]:
         return []
 
 
-async def get_recent_dialog_history_mongodb(max_entries: Optional[int] = None) -> List[Dict[str, Any]]:
+async def get_recent_dialog_history_mongodb(max_entries: Optional[int] = None, conversation_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Получение последних N сообщений из MongoDB
     
     Args:
         max_entries: Максимальное количество сообщений
+        conversation_id: ID диалога (если None, используется текущий)
         
     Returns:
         Список последних сообщений
     """
     try:
-        history = await load_dialog_history_mongodb()
+        history = await load_dialog_history_mongodb(conversation_id)
         
         if max_entries is None:
             max_entries = int(os.getenv("MEMORY_MAX_HISTORY_LENGTH", "20"))
@@ -271,9 +272,13 @@ async def get_recent_dialog_history_mongodb(max_entries: Optional[int] = None) -
         return []
 
 
-async def get_recent_dialog_history(max_entries: Optional[int] = None) -> List[Dict[str, Any]]:
+async def get_recent_dialog_history(max_entries: Optional[int] = None, conversation_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Получение последних сообщений из MongoDB (файловый режим отключен)
+    
+    Args:
+        max_entries: Максимальное количество сообщений
+        conversation_id: ID диалога (если None, используется текущий)
     """
     # Проверяем реальную доступность MongoDB
     if not _check_mongodb_available():
@@ -281,7 +286,11 @@ async def get_recent_dialog_history(max_entries: Optional[int] = None) -> List[D
         return []
     
     try:
-        return await get_recent_dialog_history_mongodb(max_entries)
+        # Если conversation_id не передан, используем текущий
+        if conversation_id is None:
+            conversation_id = get_or_create_conversation_id()
+        
+        return await get_recent_dialog_history_mongodb(max_entries, conversation_id)
     except Exception as e:
         logger.error(f"Ошибка при получении последних сообщений: {e}")
         return []

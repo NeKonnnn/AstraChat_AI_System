@@ -27,14 +27,14 @@ def get_ask_agent():
         return ask_agent
     except (ImportError, ModuleNotFoundError) as e:
         logger.warning(f"[BaseAgent] Не удалось импортировать agent_llm_svc: {e}, пробуем agent.py как fallback")
-        # Fallback на оригинальный agent только если agent_llm_svc недоступен
+        # Используем agent_llm_svc (работает через llm-svc без загрузки модели)
         try:
-            from backend.agent import ask_agent
-            logger.debug("[BaseAgent] Используется ask_agent из agent (fallback)")
+            from backend.agent_llm_svc import ask_agent
+            logger.debug("[BaseAgent] Используется ask_agent из agent_llm_svc")
             return ask_agent
         except ModuleNotFoundError:
-            from agent import ask_agent
-            logger.debug("[BaseAgent] Используется ask_agent (относительный импорт, fallback)")
+            from agent_llm_svc import ask_agent
+            logger.debug("[BaseAgent] Используется ask_agent_llm_svc (относительный импорт)")
             return ask_agent
 
 class BaseAgent(ABC):

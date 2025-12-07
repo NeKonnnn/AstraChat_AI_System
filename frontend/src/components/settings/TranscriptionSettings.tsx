@@ -24,8 +24,9 @@ import {
   Restore as RestoreIcon,
 } from '@mui/icons-material';
 import { useAppActions } from '../../contexts/AppContext';
+import { API_CONFIG } from '../../config/api';
 
-const API_BASE_URL = 'http://localhost:8000';
+const API_BASE_URL = API_CONFIG.BASE_URL;
 
 export default function TranscriptionSettings() {
   const [transcriptionSettings, setTranscriptionSettings] = useState({

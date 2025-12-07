@@ -108,7 +108,7 @@ silero:
 
 # Настройки WhisperX (продвинутая транскрипция)
 whisperx:
-  enabled: true
+  enabled: false
   models_dir: "/app/models/whisperx"
   device: "auto"  # auto, cpu, cuda
   compute_type: "int8"  # int8 для CPU, float16 для CUDA
@@ -122,7 +122,7 @@ whisperx:
 
 # Настройки диаризации (разделение по спикерам)
 diarization:
-  enabled: true
+  enabled: false
   models_dir: "/app/models/diarization"
   config_path: "/app/models/diarization/pyannote_diarization_config.yaml"
   device: "auto"  # auto, cpu, cuda
@@ -133,7 +133,7 @@ diarization:
 
 # Настройки Surya OCR (распознавание текста с изображений)
 surya:
-  enabled: true
+  enabled: false
   models_dir: "/app/models/surya"  # Веса должны находиться в models/surya
   device: "auto"  # auto, cpu, cuda
   max_file_size: 52428800  # 50MB

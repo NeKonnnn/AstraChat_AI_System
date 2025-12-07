@@ -90,57 +90,49 @@ def _run_in_new_loop(agent_class, message: str, context: Dict[str, Any] = None):
     logger.info(f"[_run_in_new_loop] Контекст: streaming={context.get('streaming') if context else False}, has_sio={context.get('sio') is not None if context else False}, has_socket_id={context.get('socket_id') is not None if context else False}, has_callback={original_callback is not None}")
     logger.info(f"[_run_in_new_loop] Main loop: {'доступен' if main_loop and not main_loop.is_closed() else 'НЕДОСТУПЕН'}")
     
+    # Получаем sio и socket_id для прямого emit (нужны всегда, даже без callback)
+    sio = context.get('sio') if context else None
+    socket_id = context.get('socket_id') if context else None
+    
+    logger.info(f"[_run_in_new_loop] sio={'есть' if sio else 'НЕТ'}, socket_id={socket_id if socket_id else 'НЕТ'}")
+    
     if original_callback:
         logger.info(f"[_run_in_new_loop] Обнаружен stream_callback, создаем wrapper")
-        
-        # Получаем sio и socket_id для прямого emit
-        sio = context.get('sio') if context else None
-        socket_id = context.get('socket_id') if context else None
-        
-        logger.info(f"[_run_in_new_loop] sio={'есть' if sio else 'НЕТ'}, socket_id={socket_id if socket_id else 'НЕТ'}")
         
         if sio and socket_id:
             logger.info(f"[_run_in_new_loop] Используем прямой синхронный emit через Socket.IO (thread-safe)")
             
-            # Создаем синхронный wrapper для прямого emit (Socket.IO поддерживает вызовы из разных потоков)
+            # Создаем синхронный wrapper для async emit через Socket.IO
             def sync_callback_wrapper(chunk: str, accumulated: str):
                 try:
-                    logger.info(f"[sync_callback_wrapper] Вызван! chunk_len={len(chunk)}, накоплено={len(accumulated)}")
+                    # logger.info(f"[sync_callback_wrapper] Вызван! chunk_len={len(chunk)}, накоплено={len(accumulated)}")
                     
-                    # ПРЯМОЙ СИНХРОННЫЙ EMIT из worker thread
-                    # Socket.IO thread-safe и обработает emit в своем внутреннем event loop
-                    import threading
-                    import asyncio
-                    
-                    # ИСПОЛЬЗУЕМ ТЕКУЩИЙ LOOP для немедленного выполнения
-                    # Main loop заблокирован ожиданием завершения агента, поэтому
-                    # планирование через run_coroutine_threadsafe не сработает в реальном времени
-                    
-                    logger.info(f"[sync_callback_wrapper] Выполняем emit НЕМЕДЛЕННО в текущем потоке")
-                    
-                    # Получаем или создаем event loop для этого потока
-                    try:
-                        thread_loop = asyncio.get_event_loop()
-                        logger.info(f"[sync_callback_wrapper] Используем существующий loop в потоке {threading.current_thread().name}")
-                    except RuntimeError:
-                        thread_loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(thread_loop)
-                        logger.info(f"[sync_callback_wrapper] Создан новый loop в потоке {threading.current_thread().name}")
-                    
-                    # Выполняем emit СИНХРОННО в текущем потоке
-                    thread_loop.run_until_complete(
-                        sio.emit('chat_chunk', {
-                            'chunk': chunk,
-                            'accumulated': accumulated
-                        }, room=socket_id)
-                    )
-                    
-                    logger.info(f"[sync_callback_wrapper] ✓ Chunk ОТПРАВЛЕН немедленно!")
+                    if sio and socket_id and main_loop and not main_loop.is_closed():
+                        # ИСПРАВЛЕНИЕ: sio.emit() - это АСИНХРОННЫЙ метод в AsyncServer!
+                        # Используем run_coroutine_threadsafe для отправки в основной event loop
+                        try:
+                            import asyncio
+                            future = asyncio.run_coroutine_threadsafe(
+                                sio.emit('chat_chunk', {
+                                    'chunk': chunk,
+                                    'accumulated': accumulated
+                                }, room=socket_id),
+                                main_loop
+                            )
+                            # Не ждем результат - просто запускаем в фоне
+                            # logger.info(f"[sync_callback_wrapper] ✓ Chunk ОТПРАВЛЕН через Socket.IO!")
+                        except Exception as e:
+                            logger.error(f"[sync_callback_wrapper] Ошибка при отправке через Socket.IO: {e}")
+                            import traceback
+                            logger.error(traceback.format_exc())
+                    else:
+                        # logger.warning(f"[sync_callback_wrapper] sio, socket_id или main_loop отсутствуют")
+                        pass
                     
                     return True
                         
                 except Exception as e:
-                    logger.error(f"[sync_callback_wrapper] Ошибка: {e}")
+                    logger.error(f"[sync_callback_wrapper] Критическая ошибка: {e}")
                     import traceback
                     logger.error(traceback.format_exc())
                     return True
@@ -155,8 +147,13 @@ def _run_in_new_loop(agent_class, message: str, context: Dict[str, Any] = None):
     
     async def _async_wrapper():
         agent = agent_class()
+        # ВАЖНО: Используем context с обновленным stream_callback (sync wrapper)
         agent_context = context if context is not None else {"history": []}
-        logger.info(f"[_run_in_new_loop] Запуск агента с контекстом: streaming={agent_context.get('streaming', False)}")
+        logger.info(f"[_run_in_new_loop] Запуск агента с контекстом: streaming={agent_context.get('streaming', False)}, has_callback={agent_context.get('stream_callback') is not None}")
+        # Обновляем tool_context с обновленным stream_callback, чтобы агенты могли его получить
+        if context and 'stream_callback' in context:
+            set_tool_context(context)
+            logger.info(f"[_run_in_new_loop] Обновлен tool_context с stream_callback для агента")
         return await agent.process_message(message, agent_context)
     
     # nest_asyncio уже применен в начале функции, повторно не нужно

@@ -23,8 +23,9 @@ import {
   Refresh as RefreshIcon,
   Download as DownloadIcon,
 } from '@mui/icons-material';
+import { API_CONFIG } from '../../config/api';
 
-const API_BASE_URL = 'http://localhost:8000';
+const API_BASE_URL = API_CONFIG.BASE_URL;
 
 interface SystemInfo {
   version: string;

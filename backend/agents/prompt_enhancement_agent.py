@@ -32,9 +32,9 @@ class PromptEnhancementAgent(BaseAgent):
             
             # Получаем ask_agent из контекста или импортируем
             try:
-                from backend.agent import ask_agent
+                from backend.agent_llm_svc import ask_agent
             except ModuleNotFoundError:
-                from agent import ask_agent
+                from agent_llm_svc import ask_agent
             
             # Определяем тип запроса
             message_lower = message.lower()
@@ -107,14 +107,20 @@ class PromptEnhancementAgent(BaseAgent):
         # Получаем историю из контекста
         history = context.get("history", []) if context else []
         
-        # Получаем выбранную модель
-        selected_model = context.get("selected_model") if context else None
+        # Получаем параметры стриминга из tool_context (приоритет) или из context (fallback)
+        try:
+            from backend.tools.prompt_tools import get_tool_context
+        except ModuleNotFoundError:
+            from tools.prompt_tools import get_tool_context
         
-        # Получаем параметры стриминга из контекста
-        streaming = context.get("streaming", False) if context else False
-        stream_callback = context.get("stream_callback") if context else None
+        tool_context = get_tool_context()
+        streaming = tool_context.get('streaming', context.get("streaming", False)) if tool_context else (context.get("streaming", False) if context else False)
+        stream_callback = tool_context.get('stream_callback', context.get("stream_callback")) if tool_context else (context.get("stream_callback") if context else None)
+        selected_model = tool_context.get('selected_model', context.get("selected_model")) if tool_context else (context.get("selected_model") if context else None)
         
         logger.info(f"[PromptEnhancementAgent] Стриминг: {'включен' if streaming else 'выключен'}")
+        if streaming and stream_callback:
+            logger.info(f"[PromptEnhancementAgent] Stream callback доступен: {type(stream_callback)}")
         
         # Включаем системный промпт в основной промпт
         full_prompt = f"{system_prompt}\n\n{user_prompt}"

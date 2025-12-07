@@ -22,6 +22,7 @@ except ImportError:
 
 import json
 import logging
+import asyncio
 from typing import List, Dict, Any, Optional, Callable
 from backend.config.config import MODEL_PATH
 from backend.context_prompts import context_prompt_manager
@@ -344,8 +345,16 @@ def ask_agent(prompt, history=None, max_tokens=None, streaming=False, stream_cal
                 images=images
             )
             
+            # Проверяем, не была ли генерация отменена
+            if response is None:
+                logger.warning("Генерация была отменена пользователем")
+                return None  # Возвращаем None при отмене
+            
             return response
             
+        except asyncio.CancelledError:
+            logger.warning("Генерация была отменена (asyncio.CancelledError)")
+            return None  # Возвращаем None при отмене
         except Exception as e:
             logger.error(f"Ошибка генерации через llm-svc: {e}")
             return f"Извините, произошла ошибка при генерации ответа: {str(e)}"

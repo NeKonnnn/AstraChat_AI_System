@@ -416,8 +416,8 @@ sio = AsyncServer(
     ],
     ping_timeout=300,  # ping timeout до 5 минут (для долгих генераций)
     ping_interval=15,  # Отправляем ping каждые 15 секунд
-    logger=False,  # Отключаем логирование Socket.IO
-    engineio_logger=False  # Отключаем логирование engine.io
+    logger=False,  # Отключено логирование Socket.IO (мешает в консоли)
+    engineio_logger=False  # Отключено логирование engine.io (мешает в консоли)
 )
 
 # Создание FastAPI приложения с конфигурацией
@@ -863,12 +863,23 @@ async def chat_message(sid, data):
         # Сбрасываем флаг остановки для нового сообщения
         stop_generation_flags[sid] = False
         
+        # Получаем message_id и conversation_id из данных, если они переданы
+        user_message_id = data.get("message_id", None)
+        conversation_id = data.get("conversation_id", None)
+        
+        # Устанавливаем conversation_id для загрузки истории
+        if conversation_id:
+            # Импортируем модуль для установки conversation_id
+            import backend.database.memory_service as memory_service_module
+            memory_service_module.current_conversation_id = conversation_id
+            logger.info(f"Установлен conversation_id для загрузки истории: {conversation_id}")
+        
         # Получаем историю
         logger.info(f"DEBUG: get_recent_dialog_history = {get_recent_dialog_history}")
         logger.info(f"DEBUG: type = {type(get_recent_dialog_history)}")
         if get_recent_dialog_history:
             logger.info("DEBUG: Вызываем get_recent_dialog_history...")
-            history = await get_recent_dialog_history(max_entries=memory_max_messages)
+            history = await get_recent_dialog_history(max_entries=memory_max_messages, conversation_id=conversation_id)
             logger.info(f"DEBUG: История получена, длина = {len(history)}")
         else:
             logger.info("DEBUG: get_recent_dialog_history недоступен, используем пустую историю")
@@ -876,9 +887,6 @@ async def chat_message(sid, data):
         
         # Сохраняем сообщение пользователя
         try:
-            # Получаем message_id и conversation_id из данных, если они переданы
-            user_message_id = data.get("message_id", None)
-            conversation_id = data.get("conversation_id", None)
             await save_dialog_entry("user", user_message, None, user_message_id, conversation_id)
         except RuntimeError as e:
             # Ошибка MongoDB - продолжаем работу, но логируем
@@ -898,10 +906,15 @@ async def chat_message(sid, data):
         use_agent_mode = orchestrator and orchestrator.get_mode() == "agent"
         use_multi_llm_mode = orchestrator and orchestrator.get_mode() == "multi-llm"
         
-        logger.info(f"Socket.IO DEBUG: orchestrator = {orchestrator is not None}")
+        logger.info("="*70)
+        logger.info("🔍 ПРОВЕРКА РЕЖИМА ОРКЕСТРАТОРА")
+        logger.info(f"   orchestrator существует: {orchestrator is not None}")
         if orchestrator:
-            logger.info(f"Socket.IO DEBUG: orchestrator.get_mode() = '{orchestrator.get_mode()}'")
-        logger.info(f"Socket.IO DEBUG: use_agent_mode = {use_agent_mode}, use_multi_llm_mode = {use_multi_llm_mode}")
+            logger.info(f"   режим оркестратора: '{orchestrator.get_mode()}'")
+            logger.info(f"   инициализирован: {orchestrator.is_initialized}")
+        logger.info(f"   use_agent_mode: {use_agent_mode}")
+        logger.info(f"   use_multi_llm_mode: {use_multi_llm_mode}")
+        logger.info("="*70)
         
         # Функция для отправки частей ответа
         async def async_stream_callback(chunk: str, accumulated_text: str):
@@ -1142,16 +1155,23 @@ async def chat_message(sid, data):
                 # Создаем callback для стриминга в агентном режиме
                 async def agent_stream_callback(chunk: str, accumulated_text: str):
                     try:
+                        # Проверяем флаг остановки генерации
+                        if stop_generation_flags.get(sid, False):
+                            logger.info(f"[agent_stream_callback] Обнаружен флаг остановки для {sid}, прерываем генерацию")
+                            return False  # Возвращаем False для остановки генерации
+                        
                         logger.info(f"[agent_stream_callback] ВЫЗВАН! chunk_len={len(chunk)}, acc_len={len(accumulated_text)}")
                         await sio.emit('chat_chunk', {
                             'chunk': chunk,
                             'accumulated': accumulated_text
                         }, room=sid)
                         logger.info(f"[agent_stream_callback] chat_chunk ОТПРАВЛЕН в комнату {sid}")
+                        return True  # Возвращаем True для продолжения генерации
                     except Exception as e:
                         logger.error(f"[agent_stream_callback] Ошибка отправки chunk: {e}")
                         import traceback
                         logger.error(traceback.format_exc())
+                        return True  # При ошибке продолжаем генерацию
                 
                 # Используем агентную архитектуру
                 # ВАЖНО: Не передаем объекты которые не сериализуются (doc_processor, sio, stream_callback)
@@ -1159,7 +1179,7 @@ async def chat_message(sid, data):
                 context = {
                     "history": history,
                     "user_message": user_message,
-                    "doc_processor_id": id(doc_processor) if doc_processor else None,  # ID вместо объекта
+                    "selected_model": None,  # ИСПРАВЛЕНИЕ: Добавляем selected_model для планировщика
                     "socket_id": sid,  # Передаем socket ID для heartbeat
                     "streaming": streaming,  # Передаем флаг стриминга
                     # НЕ передаем stream_callback в state - он не сериализуется!
@@ -1173,10 +1193,12 @@ async def chat_message(sid, data):
                 
                 # Расширенный контекст с несериализуемыми объектами для инструментов
                 extended_context = context.copy()
-                extended_context["doc_processor"] = doc_processor
+                extended_context["doc_processor"] = doc_processor  # ИСПРАВЛЕНИЕ: Добавляем doc_processor
                 extended_context["sio"] = sio
                 extended_context["socket_id"] = sid  # Добавляем socket_id для прямого emit из worker threads
                 extended_context["stream_callback"] = agent_stream_callback if streaming else None
+                # ИСПРАВЛЕНИЕ: Сохраняем ссылку на текущий event loop для stream_callback
+                extended_context["_main_event_loop"] = asyncio.get_running_loop()
                 set_tool_context(extended_context)
                 logger.info(f"[Socket.IO] Установлен extended_context с stream_callback: {agent_stream_callback is not None if streaming else False}")
                 logger.info(f"[Socket.IO] doc_processor ID в контексте: {id(doc_processor)}")
@@ -1184,35 +1206,85 @@ async def chat_message(sid, data):
                 logger.info(f"[Socket.IO] Стриминг: {'включен' if streaming else 'выключен'}")
                 logger.info(f"[Socket.IO] Передаем в orchestrator context с streaming={context.get('streaming', False)}")
                 
-                response = await orchestrator.process_message(user_message, history=history, context=context)
-                logger.info(f"Socket.IO: АГЕНТНАЯ АРХИТЕКТУРА: Получен ответ, длина: {len(response)} символов")
-                
-                # Отправляем ответ через Socket.IO (только если не было стриминга)
-                if not streaming:
-                    logger.info(f"Socket.IO: Отправка chat_complete, длина ответа: {len(response)} символов")
-                    logger.info(f"Socket.IO: Первые 200 символов ответа: {response[:200]}...")
-                    try:
-                        await sio.emit('chat_complete', {
-                            'response': response,
-                            'timestamp': datetime.now().isoformat()
+                try:
+                    logger.info(f"[Socket.IO] ВЫЗОВ orchestrator.process_message...")
+                    logger.info(f"[Socket.IO] user_message: {user_message[:100]}")
+                    logger.info(f"[Socket.IO] history length: {len(history) if history else 0}")
+                    logger.info(f"[Socket.IO] context keys: {list(context.keys()) if context else 'None'}")
+                    response = await orchestrator.process_message(user_message, history=history, context=context)
+                    logger.info(f"[Socket.IO] orchestrator.process_message ЗАВЕРШЕН")
+                    logger.info(f"Socket.IO: АГЕНТНАЯ АРХИТЕКТУРА: Получен ответ, длина: {len(response) if response else 0} символов")
+                    logger.info(f"Socket.IO: Тип ответа: {type(response)}, ответ не пустой: {bool(response)}")
+                    if response:
+                        logger.info(f"Socket.IO: Первые 200 символов ответа: {response[:200]}...")
+                    else:
+                        logger.warning(f"Socket.IO: ⚠️ ОТВЕТ ПУСТОЙ ИЛИ None!")
+                    
+                    # Проверяем, не была ли запрошена остановка или генерация отменена
+                    if stop_generation_flags.get(sid, False):
+                        logger.info(f"Socket.IO: генерация была остановлена для {sid}, отправляем generation_stopped")
+                        # Очищаем флаг остановки
+                        stop_generation_flags[sid] = False
+                        # Отправляем событие остановки, чтобы frontend сбросил состояние загрузки
+                        await sio.emit('generation_stopped', {
+                            'message': 'Генерация остановлена'
                         }, room=sid)
-                        logger.info(f"Socket.IO: Событие chat_complete успешно отправлено в комнату {sid}")
+                        return
+                    
+                    # ИСПРАВЛЕНИЕ: Проверяем ответ отдельно
+                    if response is None:
+                        logger.warning(f"Socket.IO: ⚠️ Ответ от оркестратора = None, отправляем ошибку")
+                        await sio.emit('chat_error', {
+                            'error': 'Не удалось получить ответ от агента'
+                        }, room=sid)
+                        return
+                    
+                    if isinstance(response, str) and "отменена пользователем" in response:
+                        logger.info(f"Socket.IO: генерация была отменена, отправляем generation_stopped")
+                        await sio.emit('generation_stopped', {
+                            'message': 'Генерация была отменена'
+                        }, room=sid)
+                        return
+                    
+                    # Проверяем, является ли ответ ошибкой
+                    if response and response.startswith("Произошла ошибка:"):
+                        logger.error(f"Socket.IO: Оркестратор вернул ошибку: {response}")
+                        await sio.emit('chat_error', {
+                            'error': response
+                        }, room=sid)
+                        # Не возвращаемся, а отправляем chat_complete с ошибкой
+                        # чтобы frontend мог корректно завершить обработку
+                    
+                    # ИСПРАВЛЕНИЕ: Всегда отправляем chat_complete с полным ответом
+                    # Это критически важно для отображения ответа в UI!
+                    logger.info(f"Socket.IO: Отправка chat_complete, длина ответа: {len(response) if response else 0} символов")
+                    logger.info(f"Socket.IO: Стриминг был: {streaming}, отправляем финальное событие")
+                    logger.info(f"Socket.IO: Ответ (первые 100 символов): {response[:100] if response else 'None'}...")
+                    try:
+                        # ВАЖНО: Всегда отправляем полный ответ, даже если был стриминг
+                        # Фронтенд может не получить все чанки или нужен финальный ответ для отображения
+                        await sio.emit('chat_complete', {
+                            'response': response if response else "",  # Полный ответ ВСЕГДА
+                            'timestamp': datetime.now().isoformat(),
+                            'was_streaming': streaming  # Флаг, что был стриминг
+                        }, room=sid)
+                        logger.info(f"Socket.IO: ✓ Событие chat_complete успешно отправлено в комнату {sid}")
+                        logger.info(f"Socket.IO: ✓ Ответ отправлен: {len(response) if response else 0} символов")
                     except Exception as emit_error:
-                        logger.error(f"Socket.IO: Ошибка при отправке chat_complete: {emit_error}")
+                        logger.error(f"Socket.IO: ❌ Ошибка при отправке chat_complete: {emit_error}")
                         import traceback
                         logger.error(traceback.format_exc())
-                else:
-                    # При стриминге отправляем событие завершения
-                    try:
-                        await sio.emit('chat_complete', {
-                            'response': response,
-                            'timestamp': datetime.now().isoformat()
-                        }, room=sid)
-                        logger.info(f"Socket.IO: Стриминг завершен, отправлен chat_complete")
-                    except Exception as emit_error:
-                        logger.error(f"Socket.IO: Ошибка при отправке chat_complete: {emit_error}")
-                        import traceback
-                        logger.error(traceback.format_exc())
+                except Exception as orchestrator_error:
+                    logger.error(f"Socket.IO: Ошибка в оркестраторе: {orchestrator_error}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    await sio.emit('chat_error', {
+                        'error': f"Ошибка выполнения: {str(orchestrator_error)}"
+                    }, room=sid)
+                    # Очищаем флаг остановки
+                    if sid in stop_generation_flags:
+                        stop_generation_flags[sid] = False
+                    return
                 
                 # Сохраняем ответ в память
                 try:
@@ -1317,11 +1389,15 @@ async def chat_message(sid, data):
                         None,   # custom_prompt_id
                         images  # images для мультимодальной модели
                     )
-                logger.info(f"Socket.IO: получен потоковый ответ, длина: {len(response)} символов")
+                logger.info(f"Socket.IO: получен потоковый ответ, длина: {len(response) if response else 0} символов")
                 
                 # Проверяем, не была ли генерация остановлена
                 if response is None:
                     logger.info(f"Socket.IO: потоковая генерация была остановлена для {sid}")
+                    # Отправляем событие остановки, чтобы frontend сбросил состояние загрузки
+                    await sio.emit('generation_stopped', {
+                        'message': 'Генерация остановлена'
+                    }, room=sid)
                     return
             else:
                 # Обычная генерация в отдельном потоке
@@ -1343,9 +1419,13 @@ async def chat_message(sid, data):
             
             # Проверяем, не была ли запрошена остановка
             if stop_generation_flags.get(sid, False):
-                logger.info(f"Socket.IO: генерация была остановлена для {sid}, не отправляем финальное сообщение")
+                logger.info(f"Socket.IO: генерация была остановлена для {sid}, отправляем generation_stopped")
                 # Очищаем флаг остановки
                 stop_generation_flags[sid] = False
+                # Отправляем событие остановки, чтобы frontend сбросил состояние загрузки
+                await sio.emit('generation_stopped', {
+                    'message': 'Генерация остановлена'
+                }, room=sid)
                 return
             
             # Сохраняем ответ
@@ -1367,24 +1447,37 @@ async def chat_message(sid, data):
             # Отправляем финальное сообщение
             await sio.emit('chat_complete', {
                 'response': response,
-                'timestamp': datetime.now().isoformat()
+                'timestamp': datetime.now().isoformat(),
+                'was_streaming': streaming  # Указываем, был ли стриминг
             }, room=sid)
-            logger.info("Socket.IO: финальное сообщение отправлено")
+            logger.info(f"Socket.IO: финальное сообщение отправлено (streaming={streaming}, response_len={len(response) if response else 0})")
             
         except Exception as e:
             logger.error(f"Ошибка генерации: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             await sio.emit('chat_error', {
                 'error': str(e)
             }, room=sid)
+        finally:
+            # Гарантированно очищаем флаг остановки
+            if sid in stop_generation_flags:
+                stop_generation_flags[sid] = False
             
     except Exception as e:
         logger.error(f"Socket.IO chat error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         try:
             await sio.emit('chat_error', {
                 'error': str(e)
             }, room=sid)
         except:
             logger.error("Не удалось отправить сообщение об ошибке клиенту")
+        finally:
+            # Гарантированно очищаем флаг остановки
+            if sid in stop_generation_flags:
+                stop_generation_flags[sid] = False
 
 # Модели данных
 from pydantic import BaseModel

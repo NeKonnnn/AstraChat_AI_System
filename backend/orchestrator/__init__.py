@@ -63,23 +63,37 @@ class AgentOrchestrator:
         context: Dict[str, Any] = None
     ) -> str:
         """Обработка сообщения через агентную архитектуру"""
+        logger.info("="*70)
+        logger.info("🔄 AgentOrchestrator.process_message ВЫЗВАН")
+        logger.info(f"📝 Запрос: {message[:100]}...")
+        logger.info(f"🔧 Текущий режим: {self.mode}")
+        logger.info(f"✅ Инициализирован: {self.is_initialized}")
+        logger.info("="*70)
+        
         if not self.is_initialized and self.mode != "multi-llm":
+            logger.info("⚠️ Оркестратор не инициализирован, выполняем инициализацию...")
             await self.initialize()
         
         try:
             if self.mode == "agent":
                 # Используем агентную архитектуру (LangGraph)
-                logger.info(f"АГЕНТНЫЙ РЕЖИМ: Обработка через LangGraph Orchestrator")
+                logger.info("="*70)
+                logger.info("✅ АГЕНТНЫЙ РЕЖИМ АКТИВИРОВАН")
+                logger.info("🤖 Передаем запрос в LangGraph Orchestrator")
+                logger.info("="*70)
                 
                 if not self.langgraph_orchestrator:
-                    logger.error("LangGraph Orchestrator не инициализирован")
+                    logger.error("❌ LangGraph Orchestrator не инициализирован")
                     return "Ошибка: агентная архитектура не инициализирована"
                 
-                return await self.langgraph_orchestrator.process_message(
+                logger.info("🚀 Вызов langgraph_orchestrator.process_message...")
+                result = await self.langgraph_orchestrator.process_message(
                     message,
                     history=history or [],
                     context=context or {}
                 )
+                logger.info(f"✅ LangGraph Orchestrator вернул ответ: {len(result) if result else 0} символов")
+                return result
             elif self.mode == "multi-llm":
                 # Режим с несколькими LLM - возвращаем специальный маркер
                 # Фактическая обработка происходит в WebSocket обработчике
