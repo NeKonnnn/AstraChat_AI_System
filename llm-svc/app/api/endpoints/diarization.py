@@ -269,11 +269,20 @@ async def transcribe_with_diarization(
             import whisperx
             
             # Загружаем аудио
+            logger.info(f"Загружаем аудио файл: {wav_file_path}")
             audio = whisperx.load_audio(wav_file_path)
+            logger.info(f"Аудио загружено, длина: {len(audio)} сэмплов, длительность: {len(audio)/16000:.2f} сек")
             
             # Транскрибируем
             model_info = whisperx_models[language]
+            logger.info(f"Используем модель WhisperX для языка '{language}', device={model_info.get('device')}, compute_type={model_info.get('compute_type')}")
+            logger.info(f"Начинаем транскрибацию аудио длиной {len(audio)/16000:.2f} сек...")
             result = model_info["model"].transcribe(audio, language=language)
+            logger.info(f"Транскрибация завершена")
+            
+            # Логируем результат транскрипции
+            logger.info(f"Результат транскрипции WhisperX: text='{result.get('text', '')}', segments={len(result.get('segments', []))}")
+            logger.debug(f"Полный результат WhisperX: {result}")
             
             # Диаризация
             diarization = diarization_pipeline(

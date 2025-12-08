@@ -24,8 +24,6 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
-  Checkbox,
-  FormGroup,
   Tooltip,
 } from '@mui/material';
 import {
@@ -98,8 +96,10 @@ export default function AgentsSettings() {
   const [agentsExpanded, setAgentsExpanded] = useState(true);
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
   const [pendingOrchestratorAction, setPendingOrchestratorAction] = useState<boolean | null>(null);
-  const [availableModels, setAvailableModels] = useState<Model[]>([]);
-  const [selectedMultiLLMModels, setSelectedMultiLLMModels] = useState<string[]>([]);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [, setAvailableModels] = useState<Model[]>([]);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [, setSelectedMultiLLMModels] = useState<string[]>([]);
 
   useEffect(() => {
     loadAgentStatus();
@@ -331,24 +331,6 @@ export default function AgentsSettings() {
       }
     } catch (err) {
       // Ошибка загрузки выбранных моделей
-    }
-  };
-
-  const saveMultiLLMModels = async () => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/agent/multi-llm/models`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ models: selectedMultiLLMModels }),
-      });
-
-      if (response.ok) {
-        setSuccess(`Выбрано моделей: ${selectedMultiLLMModels.length}`);
-      } else {
-        throw new Error('Не удалось сохранить выбранные модели');
-      }
-    } catch (err) {
-      setError(`Ошибка сохранения моделей: ${err}`);
     }
   };
 

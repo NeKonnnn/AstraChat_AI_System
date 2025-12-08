@@ -23,9 +23,6 @@ import {
   Refresh as RefreshIcon,
   Download as DownloadIcon,
 } from '@mui/icons-material';
-import { API_CONFIG } from '../../config/api';
-
-const API_BASE_URL = API_CONFIG.BASE_URL;
 
 interface SystemInfo {
   version: string;
@@ -40,7 +37,7 @@ interface SystemInfo {
 }
 
 export default function AboutSettings() {
-  const [systemInfo, setSystemInfo] = useState<SystemInfo>({
+  const [systemInfo] = useState<SystemInfo>({
     version: 'Web Interface v1.0.3',
     platform: navigator.platform || 'Неизвестно',
     browser: navigator.userAgent.split(' ')[0] || 'Неизвестно',

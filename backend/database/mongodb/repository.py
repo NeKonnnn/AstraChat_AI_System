@@ -348,7 +348,7 @@ class ConversationRepository:
         except Exception as e:
             logger.error(f"Ошибка при установке TTL: {e}")
             return False
-    
+
     async def remove_last_message(self, conversation_id: str, role: Optional[str] = None) -> bool:
         """
         Удаление последнего сообщения из диалога

@@ -55,7 +55,6 @@ import {
   Close as CloseIcon,
   FilterList as FilterListIcon,
   Menu as MenuIcon,
-  VisibilityOff as VisibilityOffIcon,
   ChevronRight as ChevronRightIcon,
   SmartToy as AgentIcon,
   AutoAwesome as PromptIcon,
@@ -144,6 +143,7 @@ export default function PromptGalleryPage() {
 
   // Состояние для тегов
   const [allTags, setAllTags] = useState<Tag[]>([]);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [popularTags, setPopularTags] = useState<Array<{ tag: Tag; count: number }>>([]);
 
   // Состояние для диалогов
@@ -194,6 +194,7 @@ export default function PromptGalleryPage() {
   });
   
   // Состояние для доступных моделей
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [availableModels, setAvailableModels] = useState<Array<{
     name: string;
     path: string;
@@ -212,6 +213,7 @@ export default function PromptGalleryPage() {
   const isLoadingRef = useRef(false);
   const isAgentsLoadingRef = useRef(false);
   // Флаг для отслеживания первого рендера
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const hasLoadedRef = useRef(false);
 
   // Загрузка промптов
@@ -698,6 +700,7 @@ export default function PromptGalleryPage() {
     setShowDeleteDialog(true);
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const toggleTagFilter = (tagId: number) => {
     setSelectedTags(prev =>
       prev.includes(tagId) ? prev.filter(id => id !== tagId) : [...prev, tagId]

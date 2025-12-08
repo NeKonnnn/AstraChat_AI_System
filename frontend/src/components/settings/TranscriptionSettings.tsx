@@ -10,16 +10,13 @@ import {
   Select,
   MenuItem,
   Switch,
-  Alert,
   Button,
-  Divider,
   IconButton,
   Tooltip,
 } from '@mui/material';
 import {
   Mic as MicIcon,
   Refresh as RefreshIcon,
-  Save as SaveIcon,
   HelpOutline as HelpOutlineIcon,
   Restore as RestoreIcon,
 } from '@mui/icons-material';
@@ -35,8 +32,6 @@ export default function TranscriptionSettings() {
     auto_detect: true,
   });
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
   
   const { showNotification } = useAppActions();
 
@@ -55,6 +50,7 @@ export default function TranscriptionSettings() {
 
   const loadTranscriptionSettings = async () => {
     try {
+      setIsLoading(true);
       const response = await fetch(`${API_BASE_URL}/api/transcription/settings`);
       if (response.ok) {
         const data = await response.json();
@@ -62,6 +58,8 @@ export default function TranscriptionSettings() {
       }
     } catch (error) {
       console.error('Ошибка загрузки настроек транскрибации:', error);
+    } finally {
+      setIsLoading(false);
     }
   };
 

@@ -1,18 +1,14 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Box,
-  Paper,
   TextField,
   IconButton,
   Typography,
-  Container,
   Card,
   CardContent,
   Avatar,
   Chip,
-  Fab,
   Tooltip,
-  LinearProgress,
   Alert,
   Snackbar,
   Dialog,
@@ -26,15 +22,10 @@ import {
   MenuItem,
   Slider,
   CircularProgress,
-  Fade,
-  List,
-  ListItem,
-  ListItemIcon,
-  ListItemText,
-  Divider,
   Menu,
   Collapse,
   Drawer,
+  Divider,
 } from '@mui/material';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -53,15 +44,12 @@ import {
   Description as DocumentIcon,
   PictureAsPdf as PdfIcon,
   TableChart as ExcelIcon,
-  Delete as DeleteIcon,
-  GetApp as DownloadIcon,
   Settings as SettingsIcon,
   Square as SquareIcon,
   ChevronLeft as ChevronLeftIcon,
   ChevronRight as ChevronRightIcon,
   Add as AddIcon,
   Assessment as AssessmentIcon,
-  Description as DescriptionIcon,
   Menu as MenuIcon,
   Transcribe as TranscribeIcon,
   AutoAwesome as PromptsIcon,
@@ -178,8 +166,11 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   // Состояние для документов
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [query, setQuery] = useState('');
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [isQuerying, setIsQuerying] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [queryResponse, setQueryResponse] = useState('');
   const [uploadedFiles, setUploadedFiles] = useState<Array<{
     name: string;
@@ -215,15 +206,12 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     showNotification, 
     setSpeaking, 
     setRecording, 
-    addMessage, 
     updateMessage, 
-    appendChunk, 
     getCurrentMessages, 
     getCurrentChat,
     createChat,
     setCurrentChat,
     updateChatTitle,
-    updateChatMessages
   } = useAppActions();
   const { sendMessage, regenerateResponse, isConnected, isConnecting, reconnect, stopGeneration, socket, onMultiLLMEvent, offMultiLLMEvent } = useSocket();
 
@@ -350,7 +338,6 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       oscillator.start(audioContext.currentTime);
       oscillator.stop(audioContext.currentTime + 0.3);
     } catch (error) {
-      console.warn('Не удалось воспроизвести звуковое оповещение:', error);
     }
   }, [interfaceSettings.enableNotification]);
 
@@ -384,7 +371,6 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
           setAgentStatus(data);
         }
       } catch (error) {
-        console.error('Ошибка загрузки статуса агента:', error);
       }
     };
 
@@ -396,7 +382,6 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
           setAvailableModels(data.models || []);
         }
       } catch (error) {
-        console.error('Ошибка загрузки моделей:', error);
       }
     };
 
@@ -423,13 +408,11 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
           const response = await fetch(`${getApiUrl('/api/models/available')}`);
           if (response.ok) {
             const data = await response.json();
-            console.log('Загружены модели:', data.models);
             setAvailableModels(data.models || []);
           } else {
-            console.error('Ошибка загрузки моделей: статус', response.status);
+            
           }
         } catch (error) {
-          console.error('Ошибка загрузки моделей:', error);
         }
       };
       
@@ -439,13 +422,9 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
 
   // Подписка на событие остановки генерации и завершения генерации
   useEffect(() => {
-    console.log('[UnifiedChatPage/useEffect] Проверка socket:', !!socket);
     if (!socket) return;
     
-    console.log('[UnifiedChatPage/useEffect] Подписываемся на события chat_complete и generation_stopped');
-    
     const handleGenerationStopped = () => {
-      console.log('[UnifiedChatPage] generation_stopped получен, сбрасываем isStreaming');
       // Обновляем состояние всех окон моделей - останавливаем стриминг
       setModelWindows(prev => prev.map(w => ({ ...w, isStreaming: false })));
       
@@ -466,12 +445,10 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     
     const handleChatComplete = (data: any) => {
       // Когда генерация завершена, обновляем состояние всех окон моделей
-      console.log('[UnifiedChatPage] chat_complete получен, обновляем состояние стриминга');
-      console.log('[UnifiedChatPage] modelWindows before:', modelWindows.map(w => ({ id: w.id, isStreaming: w.isStreaming })));
+      
       setModelWindows(prev => {
         const updated = prev.map(w => ({ ...w, isStreaming: false }));
-        console.log('[UnifiedChatPage] modelWindows обновлены, isStreaming установлен в false');
-        console.log('[UnifiedChatPage] modelWindows after:', updated.map(w => ({ id: w.id, isStreaming: w.isStreaming })));
+        
         return updated;
       });
       
@@ -493,10 +470,10 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     socket.on('generation_stopped', handleGenerationStopped);
     socket.on('chat_complete', handleChatComplete);
     
-    console.log('[UnifiedChatPage/useEffect] Подписки установлены');
+    
     
     return () => {
-      console.log('[UnifiedChatPage/useEffect] Отписываемся от событий');
+      
       socket.off('generation_stopped', handleGenerationStopped);
       socket.off('chat_complete', handleChatComplete);
     };
@@ -507,7 +484,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     if (agentStatus?.mode !== 'multi-llm' || !socket || !onMultiLLMEvent || !offMultiLLMEvent) return;
     
     const handleMultiLLMStart = (data: any) => {
-      console.log('multi_llm_start получен:', data);
+      
       currentMultiLLMRequestRef.current = new Date().toISOString();
       
       // Устанавливаем isStreaming: true для соответствующей модели
@@ -522,7 +499,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     };
 
     const handleMultiLLMChunk = (data: any) => {
-      console.log('multi_llm_chunk получен:', data);
+      
       const modelName = data.model || 'unknown';
       const accumulated = data.accumulated || '';
       
@@ -557,7 +534,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     };
 
     const handleMultiLLMComplete = (data: any) => {
-      console.log('multi_llm_complete получен:', data);
+      
       const modelName = data.model || 'unknown';
       const response = data.response || '';
       const hasError = data.error || false;
@@ -628,7 +605,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
           }
         }
       } catch (error) {
-        console.error('Ошибка при загрузке списка документов:', error);
+        
       }
     };
 
@@ -760,7 +737,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       
       setInputMessage('');
     } catch (error) {
-      console.error('Ошибка отправки сообщения:', error);
+      
       showNotification('error', 'Ошибка отправки сообщения');
     }
   };
@@ -830,7 +807,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         
         showNotification('success', 'Большой текст вставлен как файл');
       } catch (error) {
-        console.error('Ошибка при создании файла из вставленного текста:', error);
+        
         showNotification('error', 'Ошибка при создании файла из вставленного текста');
         // В случае ошибки разрешаем стандартную вставку
       }
@@ -962,7 +939,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       
       showNotification('success', 'Сообщение обновлено и сохранено в базе данных');
     } catch (error) {
-      console.error('Ошибка при сохранении сообщения в БД:', error);
+      
       showNotification('warning', 'Сообщение обновлено локально, но не сохранено в базе данных');
     }
     
@@ -1006,7 +983,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         throw new Error(errorData.detail || 'Ошибка при сохранении сообщения');
       }
     } catch (error) {
-      console.error('Ошибка при сохранении сообщения в БД:', error);
+      
       showNotification('warning', 'Сообщение обновлено локально, но не сохранено в базе данных');
     }
     
@@ -1083,69 +1060,66 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     ws.onopen = () => {
       setIsVoiceConnected(true);
       showNotification('success', 'Голосовой чат подключен');
-      console.log('Voice WebSocket подключен');
+      
     };
     
     ws.onmessage = (event) => {
       try {
         if (typeof event.data === 'string') {
           const data = JSON.parse(event.data);
-          console.log('Получено сообщение от WebSocket:', data);
+          
           
           switch (data.type) {
             case 'listening_started':
               showNotification('success', 'Готов к приему голоса');
-              console.log('WebSocket: Подтверждение начала прослушивания получено');
               break;
               
             case 'speech_recognized':
               // Обновляем real-time текст
-              console.log('РАСПОЗНАННЫЙ ТЕКСТ:', data.text);
-              console.log('ОТЛАДКА: Распознанный текст будет отправлен в LLM для обработки');
+              
               setRealtimeText(prev => prev + ' ' + data.text);
               showNotification('success', 'Речь распознана в реальном времени');
               break;
               
             case 'ai_response':
               // Получаем ответ от AI
-              console.log('ОТВЕТ ОТ LLM:', data.text);
-              console.log('ОТЛАДКА: LLM обработал запрос и предоставил ответ, начинаю синтез речи');
+              
               setRecordedText(data.text);
               showNotification('success', 'Получен ответ от astrachat');
               break;
               
             case 'speech_error':
-              console.error('WebSocket: Ошибка распознавания речи:', data.error);
+              
               showNotification('warning', data.error || 'Ошибка распознавания речи');
               break;
               
             case 'tts_error':
-              console.error('WebSocket: Ошибка синтеза речи:', data.error);
+              
               showNotification('error', data.error || 'Ошибка синтеза речи');
               break;
               
             case 'error':
-              console.error('WebSocket: Общая ошибка:', data.error);
+              
               showNotification('error', data.error || 'Ошибка WebSocket');
               break;
               
             default:
-              console.log('WebSocket: Неизвестный тип сообщения:', data.type);
+              
           }
         } else if (event.data instanceof Blob) {
           // Получены аудио данные для воспроизведения
-          console.log('WebSocket: Получены аудио данные для воспроизведения размером:', event.data.size, 'байт');
+          
           playAudioResponse(event.data);
         }
       } catch (error) {
-        console.error('Ошибка обработки WebSocket сообщения:', error);
+        
       }
     };
     
     ws.onerror = (error) => {
       setIsVoiceConnected(false);
       showNotification('error', 'Ошибка подключения к голосовому чату');
-      console.error('WebSocket error:', error);
+      
       
       // Автоматически переподключаемся через 5 секунд, только если разрешено
       setTimeout(() => {
@@ -1169,48 +1143,48 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
           }
         }, 3000);
       } else {
-        console.log('WebSocket закрыт нормально или переподключение отключено');
+        
       }
     };
   };
 
   // Функция очистки всех ресурсов
   const cleanupVoiceResources = () => {
-    console.log('🔧 cleanupVoiceResources вызвана');
+    
     
     // Останавливаем таймер тишины
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
-      console.log('🔧 Таймер тишины остановлен');
+      
     }
     
     // Останавливаем анимацию
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = null;
-      console.log('🔧 Анимация остановлена');
+      
     }
     
     // Останавливаем запись
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
       mediaRecorderRef.current = null;
-      console.log('🔧 Запись остановлена');
+      
     }
     
     // Останавливаем медиа поток
     if (currentStreamRef.current) {
       currentStreamRef.current.getTracks().forEach(track => track.stop());
       currentStreamRef.current = null;
-      console.log('🔧 Медиа поток остановлен');
+      
     }
     
     // Закрываем аудио контекст
     if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
       audioContextRef.current.close();
       audioContextRef.current = null;
-      console.log('🔧 Аудио контекст закрыт');
+      
     }
     
     // Останавливаем воспроизведение
@@ -1218,14 +1192,14 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       currentAudioRef.current.pause();
       currentAudioRef.current.src = '';
       currentAudioRef.current = null;
-      console.log('🔧 Воспроизведение остановлено');
+      
     }
     
     // Закрываем WebSocket соединение
     if (voiceSocket && voiceSocket.readyState === WebSocket.OPEN) {
       voiceSocket.close();
       setVoiceSocket(null);
-      console.log('🔧 WebSocket соединение закрыто');
+      
     }
     
     // Сбрасываем локальные состояния
@@ -1240,7 +1214,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     setRecording(false);
     setSpeaking(false);
     
-    console.log('Все состояния сброшены');
+    
     showNotification('info', 'Все процессы остановлены');
   };
 
@@ -1250,7 +1224,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       // Если уровень звука ниже порога, запускаем таймер
       if (!silenceTimerRef.current) {
         silenceTimerRef.current = setTimeout(() => {
-          console.log('Автоматическая остановка из-за тишины');
+          
           stopRecording();
           showNotification('info', 'Автоматическая остановка: не обнаружена речь');
         }, silenceTimeout);
@@ -1267,7 +1241,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   // Функция воспроизведения аудио ответа
   const playAudioResponse = async (audioBlob: Blob) => {
     try {
-      console.log('Воспроизведение аудио ответа размером:', audioBlob.size, 'байт');
+      
       const audioUrl = URL.createObjectURL(audioBlob);
       const audio = new Audio(audioUrl);
       currentAudioRef.current = audio;
@@ -1277,7 +1251,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         setIsProcessing(false);
         URL.revokeObjectURL(audioUrl);
         currentAudioRef.current = null;
-        console.log('Аудио ответ воспроизведен полностью');
+        
         showNotification('success', 'Готов к следующему запросу');
       };
       
@@ -1287,14 +1261,14 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         showNotification('error', 'Ошибка воспроизведения речи');
         URL.revokeObjectURL(audioUrl);
         currentAudioRef.current = null;
-        console.error('Ошибка воспроизведения аудио ответа');
+        
       };
       
       setIsSpeaking(true);
       await audio.play();
-      console.log('Начато воспроизведение аудио ответа');
+      
     } catch (error) {
-      console.error('Ошибка воспроизведения аудио:', error);
+      
       setIsSpeaking(false);
       setIsProcessing(false);
       showNotification('error', 'Ошибка воспроизведения речи');
@@ -1307,14 +1281,14 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       try {
         // Берем последний чанк для real-time распознавания
         const lastChunk = audioChunksRef.current[audioChunksRef.current.length - 1];
-        console.log(`Отправляю real-time чанк размером: ${lastChunk.size} байт`);
+        
         
         // Отправляем через WebSocket для быстрого распознавания
         voiceSocket.send(lastChunk);
-        console.log('Real-time чанк отправлен через WebSocket');
+        
         
       } catch (error) {
-        console.error('Ошибка real-time распознавания:', error);
+        
       }
     }
   };
@@ -1358,6 +1332,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       
       analyserRef.current.fftSize = 256;
       const bufferLength = analyserRef.current.frequencyBinCount;
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const dataArray = new Uint8Array(bufferLength);
       
       // Настройка MediaRecorder - пытаемся выбрать лучший формат для распознавания речи
@@ -1390,22 +1365,20 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
 
       mediaRecorderRef.current.ondataavailable = (event) => {
         if (event.data.size > 0) {
-          console.log(`Получен аудио чанк размером: ${event.data.size} байт`);
+          
           audioChunksRef.current.push(event.data);
         }
       };
 
       mediaRecorderRef.current.onstop = async () => {
-        console.log('Запись остановлена, обрабатываю аудио...');
-        console.log(`Количество чанков: ${audioChunksRef.current.length}`);
-        console.log(`Общий размер чанков: ${audioChunksRef.current.reduce((sum, chunk) => sum + chunk.size, 0)} байт`);
+        
         
         setIsProcessing(true);
         
         try {
           // Создаем Blob из записанных чанков
           const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
-          console.log(`Создан Blob размером: ${audioBlob.size} байт, тип: ${audioBlob.type}`);
+          
           
           // Проверяем размер аудио данных
           if (audioBlob.size < 100) {
@@ -1416,18 +1389,18 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
           
           // Отправляем аудио через WebSocket для real-time обработки
           if (voiceSocket && voiceSocket.readyState === WebSocket.OPEN) {
-            console.log(`Отправляю аудио через WebSocket размером: ${audioBlob.size} байт`);
+            
             voiceSocket.send(audioBlob);
             showNotification('info', 'Отправляю голос на обработку...');
           } else {
             // Fallback на старый метод, если WebSocket не работает
-            console.log('WebSocket не подключен, использую fallback...');
+            
             showNotification('warning', 'WebSocket не подключен, использую fallback...');
             await processAudio(audioBlob);
             setIsProcessing(false);
           }
         } catch (error) {
-          console.error('Ошибка обработки аудио:', error);
+          
           showNotification('error', 'Ошибка обработки аудио');
           setIsProcessing(false);
         }
@@ -1439,7 +1412,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       };
 
       mediaRecorderRef.current.start(1000); // Записываем по 1 секунде
-      console.log('Запись началась, MediaRecorder запущен');
+      
       setIsRecording(true);
       
       // Запускаем отслеживание аудио уровня и тишины
@@ -1461,7 +1434,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   };
 
   const stopRecording = (): void => {
-    console.log('Остановка записи...');
+    
     
     // Отключаем автопереподключение WebSocket
     setShouldReconnect(false);
@@ -1469,14 +1442,14 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     if (mediaRecorderRef.current && isRecording) {
       mediaRecorderRef.current.stop();
       mediaRecorderRef.current = null;
-      console.log('📱 MediaRecorder остановлен');
+      
     }
     
     // Останавливаем медиа поток
     if (currentStreamRef.current) {
       currentStreamRef.current.getTracks().forEach(track => {
         track.stop();
-        console.log('Аудио трек остановлен:', track.kind, track.label);
+        
       });
       currentStreamRef.current = null;
     }
@@ -1485,21 +1458,21 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = null;
-      console.log('Анимация остановлена');
+      
     }
     
     // Закрываем аудио контекст
     if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
       audioContextRef.current.close();
       audioContextRef.current = null;
-      console.log('Аудио контекст закрыт');
+      
     }
     
     // Останавливаем таймер тишины
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
-      console.log('Таймер тишины остановлен');
+      
     }
     
     setIsRecording(false);
@@ -1507,7 +1480,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     setRealtimeText('');
     setRecordingTime(0);
     
-    console.log('Запись полностью остановлена');
+    
     showNotification('info', 'Прослушивание остановлено');
     
     // WebSocket остается активным для следующего использования, но переподключение отключено
@@ -1539,7 +1512,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       return;
     }
 
-    console.log('Fallback: Обрабатываю аудио через HTTP API');
+    
     setIsProcessing(true);
     
     try {
@@ -1547,7 +1520,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       const formData = new FormData();
       formData.append('audio_file', audioBlob, 'recording.wav');
 
-      console.log('Fallback: Отправляю аудио на сервер для распознавания');
+      
       const response = await fetch('http://localhost:8000/api/voice/recognize', {
         method: 'POST',
         body: formData,
@@ -1555,23 +1528,22 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('Fallback: Ошибка распознавания:', response.status, errorText);
+        
         showNotification('error', `Ошибка распознавания: ${response.status}`);
         return;
       }
 
       const result = await response.json();
-      console.log('Fallback: Результат распознавания:', result);
+      
       
       if (result.success) {
         const recognizedText = result.text;
-        console.log('РАСПОЗНАННЫЙ ТЕКСТ (Fallback):', recognizedText);
-        console.log('ОТЛАДКА: Используется fallback метод, распознанный текст будет отправлен в LLM');
+        
         setRecordedText(recognizedText);
         
         if (recognizedText && recognizedText.trim()) {
           showNotification('success', 'Речь распознана');
-          console.log('ОТПРАВЛЯЮ В LLM (Fallback):', recognizedText);
+          
           // Автоматически отправляем распознанный текст на обработку
           await sendVoiceMessage(recognizedText);
         } else {
@@ -1581,7 +1553,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         showNotification('error', 'Ошибка распознавания речи');
       }
     } catch (error) {
-      console.error('Fallback: Ошибка обработки аудио:', error);
+      
       showNotification('error', 'Ошибка подключения к серверу распознавания');
     } finally {
       setIsProcessing(false);
@@ -1590,8 +1562,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
 
   const sendVoiceMessage = async (text: string) => {
     try {
-      console.log('ОТПРАВЛЯЮ В LLM:', text);
-      console.log('ОТЛАДКА: Данные для LLM - сообщение:', text);
+      
       
       // Отправляем текст в чат
       const response = await fetch('http://localhost:8000/api/chat', {
@@ -1606,19 +1577,18 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       });
 
       const result = await response.json();
-      console.log('ОТВЕТ ОТ LLM:', result.response);
-      console.log('ОТЛАДКА: LLM вернул результат, начинаю синтез речи');
+      
       
       if (result.success) {
-        console.log('Ответ LLM успешно получен, синтезирую речь');
+        
         // Синтезируем речь из ответа
         await synthesizeSpeech(result.response);
       } else {
-        console.error('Ошибка получения ответа от LLM:', result);
+        
         showNotification('error', 'Ошибка получения ответа от astrachat');
       }
     } catch (error) {
-      console.error('Ошибка отправки голосового сообщения:', error);
+      
       showNotification('error', 'Ошибка отправки сообщения');
     }
   };
@@ -1626,9 +1596,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   const synthesizeSpeech = async (text: string) => {
     if (!text.trim()) return;
 
-    console.log('synthesizeSpeech вызвана с текстом:', text);
-    console.log('Текущие настройки голоса:', voiceSettings);
-    console.log('Значение speech_rate:', voiceSettings.speech_rate, 'тип:', typeof voiceSettings.speech_rate);
+  
 
     // Останавливаем предыдущее воспроизведение
     if (currentAudioRef.current) {
@@ -1647,8 +1615,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         speech_rate: voiceSettings.speech_rate
       };
       
-      console.log('Отправляю запрос на синтез речи:', requestBody);
-      console.log('Проверяю speech_rate в requestBody:', requestBody.speech_rate, 'тип:', typeof requestBody.speech_rate);
+      
       
       const response = await fetch(getApiUrl(API_CONFIG.ENDPOINTS.VOICE_SYNTHESIZE), {
         method: 'POST',
@@ -1660,7 +1627,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
 
       if (response.ok) {
         const audioBlob = await response.blob();
-        console.log('Получен аудио ответ размером:', audioBlob.size, 'байт');
+        
         
         const audioUrl = URL.createObjectURL(audioBlob);
         const audio = new Audio(audioUrl);
@@ -1671,7 +1638,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
           setIsSpeaking(false);
           URL.revokeObjectURL(audioUrl);
           currentAudioRef.current = null;
-          console.log('Синтезированная речь воспроизведена полностью');
+          
         };
         
         audio.onerror = () => {
@@ -1679,18 +1646,18 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
           showNotification('error', 'Ошибка воспроизведения речи');
           URL.revokeObjectURL(audioUrl);
           currentAudioRef.current = null;
-          console.error('Ошибка воспроизведения синтезированной речи');
+          
         };
         
         await audio.play();
-        console.log('Начато воспроизведение синтезированной речи');
+        
       } else {
         const errorText = await response.text();
-        console.error('Ошибка синтеза речи:', response.status, errorText);
+        
         throw new Error(`HTTP ${response.status}: ${errorText}`);
       }
     } catch (error) {
-      console.error('Ошибка синтеза речи:', error);
+      
       showNotification('error', 'Ошибка синтеза речи');
       setIsSpeaking(false);
     }
@@ -1705,12 +1672,11 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
 
   // Функция для сохранения настроек голоса в localStorage
   const saveVoiceSettings = (settings: typeof voiceSettings) => {
-    console.log('Сохраняю настройки голоса в localStorage:', settings);
+    
     localStorage.setItem('voice_speaker', settings.voice_speaker);
     localStorage.setItem('voice_id', settings.voice_id);
     localStorage.setItem('speech_rate', settings.speech_rate.toString());
-    console.log('Настройки голоса сохранены в localStorage:', settings);
-    console.log('Проверяю сохраненное значение speech_rate:', localStorage.getItem('speech_rate'));
+    
   };
 
   // Функция для переключения голоса
@@ -1741,16 +1707,14 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     const newSettings = { ...voiceSettings, voice_speaker: newVoice };
     setVoiceSettings(newSettings);
     saveVoiceSettings(newSettings); // Сохраняем в localStorage
-    console.log('Переключение голоса: newIndex =', newIndex, 'newVoice =', newVoice);
+    
     testVoice(newVoice);
   };
 
   // Функция тестирования голоса
   const testVoice = async (voiceName: string) => {
     try {
-      console.log('testVoice вызвана для голоса:', voiceName);
-      console.log('Текущие настройки голоса:', voiceSettings);
-      console.log('Значение speech_rate:', voiceSettings.speech_rate, 'тип:', typeof voiceSettings.speech_rate);
+      
       
       // Останавливаем предыдущее воспроизведение
       if (currentAudioRef.current) {
@@ -1772,8 +1736,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         speech_rate: voiceSettings.speech_rate
       };
       
-      console.log('Отправляю тестовый запрос на синтез речи:', requestBody);
-      console.log('Проверяю speech_rate в тестовом requestBody:', requestBody.speech_rate, 'тип:', typeof requestBody.speech_rate);
+      
       
       const response = await fetch('http://localhost:8000/api/voice/synthesize', {
         method: 'POST',
@@ -1788,17 +1751,17 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         const audioUrl = URL.createObjectURL(audioBlob);
         const audio = new Audio(audioUrl);
         
-        console.log('Воспроизведение тестового аудио...');
+        
         
         audio.onended = () => {
-          console.log('Тестирование голоса завершено');
+          
           setCurrentTestVoice(null);
           // НЕ устанавливаем setIsSpeaking(false) для тестирования
           URL.revokeObjectURL(audioUrl);
         };
         
         audio.onerror = () => {
-          console.error('Ошибка воспроизведения тестового голоса');
+          
           setCurrentTestVoice(null);
           // НЕ устанавливаем setIsSpeaking(false) для тестирования
           showNotification('error', 'Ошибка воспроизведения тестового голоса');
@@ -1810,23 +1773,23 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         
         try {
           await audio.play();
-          console.log('Тестовое аудио успешно запущено');
+          
           // НЕ устанавливаем setIsSpeaking(true) для тестирования
           showNotification('success', `Тестирую голос ${voiceName}...`);
         } catch (playError) {
-          console.error('Ошибка запуска воспроизведения:', playError);
+          
           showNotification('error', 'Ошибка запуска воспроизведения тестового голоса');
           setCurrentTestVoice(null);
         }
       } else {
         const errorText = await response.text();
-        console.error('Ошибка тестирования голоса:', response.status, errorText);
+        
         setCurrentTestVoice(null);
         // НЕ устанавливаем setIsSpeaking(false) для тестирования
         throw new Error(`HTTP ${response.status}: ${errorText}`);
       }
     } catch (error) {
-      console.error('Ошибка тестирования голоса:', error);
+      
       setCurrentTestVoice(null);
       // НЕ устанавливаем setIsSpeaking(false) для тестирования
       showNotification('error', `Ошибка тестирования голоса: ${error instanceof Error ? error.message : 'Неизвестная ошибка'}`);
@@ -2000,7 +1963,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       });
       
       if (response.ok) {
-        const result: any = await response.json();
+        await response.json();
         showNotification('success', `Документ "${file.name}" успешно загружен. Теперь вы можете задать вопрос по нему в чате.`);
         
         // Обновляем список документов с бэкенда (это основной источник истины)
@@ -2016,7 +1979,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                 uploadDate: new Date().toISOString(),
               }));
               setUploadedFiles(files);
-              console.log('Список документов обновлен:', files);
+              
             } else {
               // Если список пустой, добавляем загруженный файл
               setUploadedFiles(prev => {
@@ -2048,7 +2011,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
             });
           }
         } catch (error) {
-          console.error('Ошибка при обновлении списка документов:', error);
+          
           // Fallback: добавляем файл в список, если произошла ошибка
           setUploadedFiles(prev => {
             const exists = prev.some(f => f.name === file.name);
@@ -2077,7 +2040,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         showNotification('error', error.detail || 'Ошибка при загрузке документа');
       }
     } catch (error) {
-      console.error('Ошибка при загрузке файла:', error);
+      
       showNotification('error', 'Ошибка при загрузке файла');
             } finally {
       setIsUploading(false);
@@ -2116,7 +2079,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         showNotification('error', error.detail || 'Ошибка при удалении документа');
       }
     } catch (error) {
-      console.error('Ошибка при удалении файла:', error);
+      
       showNotification('error', 'Ошибка при удалении файла');
     }
   };
@@ -2201,7 +2164,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         showNotification('error', error.detail || 'Ошибка при генерации отчета');
       }
     } catch (error) {
-      console.error('Ошибка при генерации отчета:', error);
+      
       showNotification('error', 'Ошибка при генерации отчета');
     }
   };
@@ -2863,7 +2826,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                         const newSettings = { ...voiceSettings, voice_speaker: voiceKey };
                         setVoiceSettings(newSettings);
                         saveVoiceSettings(newSettings); // Сохраняем в localStorage
-                        console.log('Клик по кружку: index =', index, 'voiceKey =', voiceKey);
+                        
                         testVoice(voiceKey);
                       }}
                     >
@@ -3031,7 +2994,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                     });
                     setVoiceSettings(newSettings);
                     saveVoiceSettings(newSettings);
-                    console.log('Новые настройки установлены:', newSettings);
+                    
                   }}
                   min={0.5}
                   max={2.0}
@@ -3423,10 +3386,6 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         {/* Основная область с окнами моделей */}
         <Box sx={{ flex: 1, display: 'grid', gridTemplateColumns: `repeat(${modelWindows.length}, 1fr)`, gap: 2, p: 2, overflow: 'hidden' }}>
           {modelWindows.map((window) => {
-            // Находим текущий ответ для этой модели (последний запрос)
-            const currentResponse = conversationHistory.length > 0 
-              ? conversationHistory[conversationHistory.length - 1].responses.find(r => r.model === window.selectedModel)
-              : null;
             const isStreaming = modelWindows.find(w => w.id === window.id)?.isStreaming || false;
             
             return (
@@ -3836,7 +3795,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                         if (fileInputRef.current) {
                           fileInputRef.current.click();
                         } else {
-                          console.error('fileInputRef.current is null');
+                          
                         }
                       }, 0);
                     }}
@@ -3998,7 +3957,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
           <ModelSelector 
             isDarkMode={isDarkMode}
             onModelSelect={(modelPath) => {
-              console.log('Модель выбрана:', modelPath);
+              
             }}
           />
         )}

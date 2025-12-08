@@ -19,7 +19,6 @@ import {
   FormControl,
 } from '@mui/material';
 import {
-  Chat as ChatIcon,
   Delete as DeleteIcon,
   Warning as WarningIcon,
   Upload as UploadIcon,
@@ -54,6 +53,7 @@ export default function ChatSettings() {
     showNotification('success', 'Размер шрифта изменен');
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const getFontSizeLabel = (size: FontSize): string => {
     switch (size) {
       case 'small':

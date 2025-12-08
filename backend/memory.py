@@ -83,23 +83,16 @@ async def clear_dialog_history():
     return "История диалога очищена"
 
 async def get_recent_dialog_history(max_entries=None):
-    """Возвращает последние N сообщений из истории диалога"""
-    if max_entries is None:
-        # Используем значение по умолчанию из настроек backend
-        try:
-            import os
-            import json
-            
-            # Пытаемся загрузить настройки из файла
-            settings_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "settings.json")
-            if os.path.exists(settings_file):
-                with open(settings_file, 'r', encoding='utf-8') as f:
-                    settings = json.load(f)
-                    max_entries = settings.get('memory_max_messages', 20)
-            else:
-                max_entries = 20  # Значение по умолчанию
-        except:
-            max_entries = 20  # Fallback значение
+    """Возвращает последние N сообщений из истории диалога
     
+    Args:
+        max_entries: Максимальное количество сообщений. Если None, возвращает всю историю (неограниченная память)
+    """
     history = await load_dialog_history()
+    
+    # Если max_entries не указан, возвращаем всю историю (неограниченная память)
+    if max_entries is None:
+        return history
+    
+    # Ограничиваем количество сообщений
     return history[-max_entries:] if len(history) > max_entries else history

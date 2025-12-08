@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import { CssBaseline, Box, IconButton, Tooltip } from '@mui/material';
-import { Menu as MenuIcon, ChevronRight as ChevronRightIcon } from '@mui/icons-material';
+import { ChevronRight as ChevronRightIcon } from '@mui/icons-material';
 import Sidebar from './components/Sidebar';
 import UnifiedChatPage from './pages/UnifiedChatPage';
 import VoicePage from './pages/VoicePage';

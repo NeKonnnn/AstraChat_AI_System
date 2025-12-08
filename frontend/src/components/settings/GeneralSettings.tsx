@@ -26,7 +26,7 @@ import {
   Restore as RestoreIcon,
   Computer as ComputerIcon,
 } from '@mui/icons-material';
-import { useAppContext, useAppActions } from '../../contexts/AppContext';
+import { useAppActions } from '../../contexts/AppContext';
 import { API_CONFIG } from '../../config/api';
 
 interface GeneralSettingsProps {
@@ -42,6 +42,7 @@ export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSe
     max_messages: 20,
     include_system_prompts: true,
     clear_on_restart: false,
+    unlimited_memory: false,
   });
   
   const [interfaceSettings, setInterfaceSettings] = useState(() => {
@@ -112,38 +113,12 @@ export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSe
     await saveMemorySettings(newSettings);
   };
 
-  const clearMemory = async () => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/memory/clear`, {
-        method: 'POST',
-      });
-      if (response.ok) {
-        showNotification('success', 'Память ассистента очищена');
-      } else {
-        showNotification('error', 'Не удалось очистить память');
-      }
-    } catch (error) {
-      showNotification('error', 'Ошибка при очистке памяти');
-    }
-  };
-
-  const getMemoryStatus = async () => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/memory/status`);
-      if (response.ok) {
-        const data = await response.json();
-        showNotification('info', `В памяти: ${data.message_count || 0} сообщений`);
-      }
-    } catch (error) {
-      showNotification('error', 'Не удалось получить статус памяти');
-    }
-  };
-
   const resetMemorySettings = () => {
     const defaultSettings = {
       max_messages: 20,
       include_system_prompts: true,
       clear_on_restart: false,
+      unlimited_memory: false,
     };
     setMemorySettings(defaultSettings);
     saveMemorySettings(defaultSettings);
@@ -231,60 +206,154 @@ export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSe
             </Tooltip>
           </Typography>
           
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Управление контекстом и памятью ассистента для более эффективного общения
-          </Typography>
-
-          <Box display="grid" gridTemplateColumns="repeat(auto-fit, minmax(250px, 1fr))" gap={2} sx={{ mb: 2 }}>
-            <TextField
-              label="Максимум сообщений в контексте"
-              type="number"
-              value={memorySettings.max_messages}
-              onChange={(e) => {
-                const value = parseInt(e.target.value);
-                if (value >= 5 && value <= 100) {
-                  handleMemorySettingChange('max_messages', value);
-                }
+          <List>
+            {/* Неограниченная память */}
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
               }}
-              inputProps={{ min: 5, max: 100, step: 5 }}
-              fullWidth
-              helperText="Количество последних сообщений, которые ассистент запоминает (5-100)"
-              error={memorySettings.max_messages < 5 || memorySettings.max_messages > 100}
-            />
-            
-            <TextField
-              label="Размер контекста (токены)"
-              type="number"
-              value={Math.round(memorySettings.max_messages * 150)}
-              disabled
-              fullWidth
-              helperText="Примерный размер контекста в токенах (только для чтения)"
-            />
-          </Box>
+            >
+              <ListItemText
+                primary={
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    Неограниченная память
+                    <Tooltip 
+                      title="Неограниченная память включена: Ассистент будет запоминать все сообщения в диалоге. Это может значительно увеличить потребление памяти при длинных диалогах." 
+                      arrow
+                    >
+                      <IconButton 
+                        size="small" 
+                        sx={{ 
+                          p: 0,
+                          ml: 0.5,
+                          opacity: 0.7,
+                          '&:hover': {
+                            opacity: 1,
+                            '& .MuiSvgIcon-root': {
+                              color: 'primary.main',
+                            },
+                          },
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <HelpOutlineIcon fontSize="small" color="action" />
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
+                }
+                primaryTypographyProps={{
+                  variant: 'body1',
+                  fontWeight: 500,
+                }}
+              />
+              <Switch
+                checked={memorySettings.unlimited_memory}
+                onChange={(e) => handleMemorySettingChange('unlimited_memory', e.target.checked)}
+              />
+            </ListItem>
 
-          <Box sx={{ mb: 2 }}>
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={memorySettings.include_system_prompts}
-                  onChange={(e) => handleMemorySettingChange('include_system_prompts', e.target.checked)}
-                />
-              }
-              label="Включать системные промпты в контекст"
-            />
-            
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={memorySettings.clear_on_restart}
-                  onChange={(e) => handleMemorySettingChange('clear_on_restart', e.target.checked)}
-                />
-              }
-              label="Очищать память при перезапуске"
-            />
-          </Box>
+            <Divider />
 
-          {memorySettings.max_messages > 50 && (
+            {/* Максимум сообщений в контексте - показывается только если неограниченная память выключена */}
+            {!memorySettings.unlimited_memory && (
+              <>
+                <ListItem
+                  sx={{
+                    px: 0,
+                    py: 2,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'stretch',
+                  }}
+                >
+                  <Box sx={{ mb: 2 }}>
+                    <TextField
+                      label="Максимум сообщений в контексте"
+                      type="number"
+                      value={memorySettings.max_messages}
+                      onChange={(e) => {
+                        const value = parseInt(e.target.value);
+                        if (value >= 5 && value <= 100) {
+                          handleMemorySettingChange('max_messages', value);
+                        }
+                      }}
+                      inputProps={{ min: 5, max: 100, step: 5 }}
+                      fullWidth
+                      helperText="Количество последних сообщений, которые ассистент запоминает (5-100)"
+                      error={memorySettings.max_messages < 5 || memorySettings.max_messages > 100}
+                    />
+                  </Box>
+                  
+                  <Box>
+                    <TextField
+                      label="Размер контекста (токены)"
+                      type="number"
+                      value={Math.round(memorySettings.max_messages * 150)}
+                      disabled
+                      fullWidth
+                      helperText="Примерный размер контекста в токенах (только для чтения)"
+                    />
+                  </Box>
+                </ListItem>
+
+                <Divider />
+              </>
+            )}
+
+            {/* Включать системные промпты в контекст */}
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <ListItemText
+                primary="Включать системные промпты в контекст"
+                primaryTypographyProps={{
+                  variant: 'body1',
+                  fontWeight: 500,
+                }}
+              />
+              <Switch
+                checked={memorySettings.include_system_prompts}
+                onChange={(e) => handleMemorySettingChange('include_system_prompts', e.target.checked)}
+              />
+            </ListItem>
+
+            <Divider />
+
+            {/* Очищать память при перезапуске */}
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <ListItemText
+                primary="Очищать память при перезапуске"
+                primaryTypographyProps={{
+                  variant: 'body1',
+                  fontWeight: 500,
+                }}
+              />
+              <Switch
+                checked={memorySettings.clear_on_restart}
+                onChange={(e) => handleMemorySettingChange('clear_on_restart', e.target.checked)}
+              />
+            </ListItem>
+          </List>
+
+          {!memorySettings.unlimited_memory && memorySettings.max_messages > 50 && (
             <Alert severity="warning" sx={{ mb: 2 }}>
               <Typography variant="body2">
                 <strong>Внимание:</strong> Установлено большое количество сообщений ({memorySettings.max_messages}). 

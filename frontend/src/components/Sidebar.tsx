@@ -25,7 +25,6 @@ import {
 } from '@mui/material';
 import {
   Chat as ChatIcon,
-  Transcribe as TranscribeIcon,
   Settings as SettingsIcon,
   Info as InfoIcon,
   Add as AddIcon,
@@ -38,9 +37,7 @@ import {
   Folder as FolderIcon,
   CreateNewFolder as AddFolderIcon,
   Menu as MenuIcon,
-  Person as PersonIcon,
   Logout as LogoutIcon,
-  AutoAwesome as PromptsIcon,
   ChevronLeft as ChevronLeftIcon,
 } from '@mui/icons-material';
 import { useAppContext, useAppActions } from '../contexts/AppContext';
@@ -239,38 +236,6 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
       setShowDeleteDialog(false);
       setSelectedChatId(null);
     }
-  };
-
-  // Функция для группировки чатов по времени
-  const groupChatsByTime = (chats: any[]) => {
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-    const weekAgo = new Date(today);
-    weekAgo.setDate(weekAgo.getDate() - 7);
-
-    const groups = {
-      today: [] as any[],
-      yesterday: [] as any[],
-      week: [] as any[],
-      older: [] as any[]
-    };
-
-    chats.forEach(chat => {
-      const chatDate = new Date(chat.updatedAt);
-      if (chatDate >= today) {
-        groups.today.push(chat);
-      } else if (chatDate >= yesterday) {
-        groups.yesterday.push(chat);
-      } else if (chatDate >= weekAgo) {
-        groups.week.push(chat);
-      } else {
-        groups.older.push(chat);
-      }
-    });
-
-    return groups;
   };
 
   // Функция для фильтрации чатов по поисковому запросу

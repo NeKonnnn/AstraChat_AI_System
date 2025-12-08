@@ -253,7 +253,7 @@ async def get_recent_dialog_history_mongodb(max_entries: Optional[int] = None, c
     Получение последних N сообщений из MongoDB
     
     Args:
-        max_entries: Максимальное количество сообщений
+        max_entries: Максимальное количество сообщений. Если None, возвращает всю историю (неограниченная память)
         conversation_id: ID диалога (если None, используется текущий)
         
     Returns:
@@ -262,9 +262,11 @@ async def get_recent_dialog_history_mongodb(max_entries: Optional[int] = None, c
     try:
         history = await load_dialog_history_mongodb(conversation_id)
         
+        # Если max_entries не указан, возвращаем всю историю (неограниченная память)
         if max_entries is None:
-            max_entries = int(os.getenv("MEMORY_MAX_HISTORY_LENGTH", "20"))
+            return history
         
+        # Ограничиваем количество сообщений
         return history[-max_entries:] if len(history) > max_entries else history
         
     except Exception as e:

@@ -131,10 +131,40 @@ llm = None
 def initialize_model():
     """Инициализация модели с текущими настройками"""
     global llm
+    import sys
+    
+    # Перенаправляем stderr в stdout для видимости логов llama-cpp-python в Docker
+    # Это нужно, чтобы все логи загрузки модели были видны в docker logs
+    original_stderr = sys.stderr
+    try:
+        # Создаем обертку, которая дублирует вывод stderr в stdout
+        class StderrToStdout:
+            def __init__(self, original):
+                self.original = original
+                self.stdout = sys.stdout
+            
+            def write(self, text):
+                # Записываем в оригинальный stderr
+                self.original.write(text)
+                # И дублируем в stdout для Docker
+                self.stdout.write(text)
+                self.stdout.flush()
+            
+            def flush(self):
+                self.original.flush()
+                self.stdout.flush()
+            
+            def __getattr__(self, name):
+                return getattr(self.original, name)
+        
+        sys.stderr = StderrToStdout(original_stderr)
+    except Exception as e:
+        print(f"Не удалось настроить перенаправление stderr: {e}")
     
     # Проверяем доступность llama_cpp
     if not LLAMA_CPP_AVAILABLE:
         print("ПРЕДУПРЕЖДЕНИЕ: llama_cpp недоступен. Используйте llm-svc для работы с моделями.")
+        sys.stderr = original_stderr
         return False
     
     # Освобождаем ресурсы, если модель уже была загружена
@@ -250,6 +280,20 @@ def initialize_model():
                 import torch
                 n_gpu_layers = -1 if (use_gpu and torch.cuda.is_available()) else 0  # Использовать все слои на GPU
                 
+                print("=" * 80)
+                print("НАЧАЛО ЗАГРУЗКИ МОДЕЛИ LLAMA-CPP-PYTHON")
+                print("=" * 80)
+                print(f"Путь к модели: {model_to_use}")
+                print(f"Контекст: {model_settings.get('context_size')} токенов")
+                print(f"Batch size: {model_settings.get('batch_size')}")
+                print(f"GPU слои: {n_gpu_layers}")
+                print(f"Устройство: {device_type}")
+                print(f"Verbose: {model_settings.get('verbose')}")
+                print(f"Legacy API: {use_legacy_api}")
+                print("=" * 80)
+                print("Вывод llama-cpp-python (stderr -> stdout):")
+                print("-" * 80)
+                
                 llm = Llama(
                     model_path=model_to_use,
                     n_ctx=model_settings.get("context_size"),
@@ -263,15 +307,28 @@ def initialize_model():
                     use_gpu=use_gpu,
                     legacy_api=use_legacy_api         # Режим совместимости для несовместимых архитектур
                 )
+                
+                print("-" * 80)
+                print("=" * 80)
                 print(f"Модель успешно загружена на {device_type} с контекстным окном {model_settings.get('context_size')} токенов!")
+                print("=" * 80)
+                
+                # Восстанавливаем stderr
+                sys.stderr = original_stderr
                 return True
             except Exception as e:
                 print(f"ОШИБКА: Не удалось загрузить модель: {str(e)}")
+                import traceback
+                print(traceback.format_exc())
+                # Восстанавливаем stderr
+                sys.stderr = original_stderr
                 
                 # Если ошибка связана с архитектурой и мы не используем режим совместимости,
                 # попробуем еще раз с включенным режимом
                 if not use_legacy_api and "unknown model architecture" in str(e):
                     print("Обнаружена несовместимая архитектура. Повторная попытка с режимом совместимости...")
+                    print("Вывод llama-cpp-python (stderr -> stdout):")
+                    print("-" * 80)
                     try:
                         # Обновляем n_gpu_layers для повторной попытки
                         n_gpu_layers = -1 if (use_gpu and torch.cuda.is_available()) else 0
@@ -289,21 +346,37 @@ def initialize_model():
                             use_gpu=use_gpu,
                             legacy_api=True    # Принудительно включаем режим совместимости
                         )
+                        print("-" * 80)
                         print(f"Модель успешно загружена в режиме совместимости на {device_type}!")
+                        # Восстанавливаем stderr
+                        sys.stderr = original_stderr
                         return True
                     except Exception as e2:
                         print(f"ОШИБКА при повторной попытке с режимом совместимости: {str(e2)}")
+                        import traceback
+                        print(traceback.format_exc())
+                        # Восстанавливаем stderr
+                        sys.stderr = original_stderr
                 
                 # Сбрасываем глобальную переменную, если произошла ошибка во время загрузки
                 llm = None
                 # Принудительно вызываем сборщик мусора
                 gc.collect()
+                # Восстанавливаем stderr перед raise
+                sys.stderr = original_stderr
                 raise
         else:
             print("ОШИБКА: Не удалось найти подходящую модель.")
+            # Восстанавливаем stderr
+            sys.stderr = original_stderr
             raise ValueError("Модель не найдена")
     except Exception as e:
         print(f"ОШИБКА при загрузке модели: {str(e)}")
+        # Восстанавливаем stderr в случае любой ошибки
+        try:
+            sys.stderr = original_stderr
+        except:
+            pass
         raise
 
 if LLAMA_CPP_AVAILABLE:

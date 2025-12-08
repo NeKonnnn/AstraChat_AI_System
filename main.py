@@ -588,13 +588,14 @@ current_transcription_language = "ru"
 memory_max_messages = 20
 memory_include_system_prompts = True
 memory_clear_on_restart = False
+memory_unlimited_memory = False
 
 # Путь к файлу настроек
 SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "..", "settings.json")
 
 def load_app_settings():
     """Загрузить настройки приложения из файла"""
-    global current_transcription_engine, current_transcription_language, memory_max_messages, memory_include_system_prompts, memory_clear_on_restart
+    global current_transcription_engine, current_transcription_language, memory_max_messages, memory_include_system_prompts, memory_clear_on_restart, memory_unlimited_memory
     
     try:
         if os.path.exists(SETTINGS_FILE):
@@ -608,8 +609,9 @@ def load_app_settings():
             memory_max_messages = settings.get('memory_max_messages', 20)
             memory_include_system_prompts = settings.get('memory_include_system_prompts', True)
             memory_clear_on_restart = settings.get('memory_clear_on_restart', False)
+            memory_unlimited_memory = settings.get('memory_unlimited_memory', False)
             
-            logger.info(f"Настройки загружены: engine={current_transcription_engine}, language={current_transcription_language}, memory_max_messages={memory_max_messages}")
+            logger.info(f"Настройки загружены: engine={current_transcription_engine}, language={current_transcription_language}, memory_max_messages={memory_max_messages}, unlimited_memory={memory_unlimited_memory}")
             return settings
     except Exception as e:
         logger.error(f"Ошибка загрузки настроек: {e}")
@@ -621,6 +623,7 @@ def load_app_settings():
         'memory_max_messages': memory_max_messages,
         'memory_include_system_prompts': memory_include_system_prompts,
         'memory_clear_on_restart': memory_clear_on_restart,
+        'memory_unlimited_memory': memory_unlimited_memory,
         'current_model_path': None
     }
 
@@ -755,7 +758,8 @@ async def chat_message(sid, data):
         logger.info(f"DEBUG: type = {type(get_recent_dialog_history)}")
         if get_recent_dialog_history:
             logger.info("DEBUG: Вызываем get_recent_dialog_history...")
-            history = await get_recent_dialog_history(max_entries=memory_max_messages)
+            max_entries = None if memory_unlimited_memory else memory_max_messages
+            history = await get_recent_dialog_history(max_entries=max_entries)
             logger.info(f"DEBUG: История получена, длина = {len(history)}")
         else:
             logger.info("DEBUG: get_recent_dialog_history недоступен, используем пустую историю")
@@ -1245,6 +1249,7 @@ class MemorySettings(BaseModel):
     max_messages: int = 20
     include_system_prompts: bool = True
     clear_on_restart: bool = False
+    unlimited_memory: bool = False
 
 class ModelLoadRequest(BaseModel):
     model_path: str
@@ -1314,7 +1319,8 @@ async def chat_with_ai(message: ChatMessage):
         
         # Получаем историю диалога
         if get_recent_dialog_history:
-            history = await get_recent_dialog_history(max_entries=memory_max_messages)
+            max_entries = None if memory_unlimited_memory else memory_max_messages
+            history = await get_recent_dialog_history(max_entries=max_entries)
         else:
             history = []
         
@@ -1453,7 +1459,8 @@ async def websocket_chat(websocket: WebSocket):
             
             # Получаем историю
             if get_recent_dialog_history:
-                history = await get_recent_dialog_history(max_entries=memory_max_messages)
+                max_entries = None if memory_unlimited_memory else memory_max_messages
+                history = await get_recent_dialog_history(max_entries=max_entries)
             else:
                 history = []
             
@@ -1868,7 +1875,8 @@ async def process_audio_data(websocket: WebSocket, data: bytes):
                 return
                 
             if get_recent_dialog_history:
-                history = await get_recent_dialog_history(max_entries=memory_max_messages)
+                max_entries = None if memory_unlimited_memory else memory_max_messages
+                history = await get_recent_dialog_history(max_entries=max_entries)
             else:
                 history = []
             logger.info(f"ОТПРАВЛЯЮ В LLM: текст='{recognized_text}', история={len(history)} записей")
@@ -2110,7 +2118,10 @@ async def get_chat_history(limit: int = None):
     """Получить историю диалогов"""
     # Если лимит не указан, используем настройку памяти
     if limit is None:
-        limit = memory_max_messages if 'memory_max_messages' in globals() else 20
+        if memory_unlimited_memory if 'memory_unlimited_memory' in globals() else False:
+            limit = None
+        else:
+            limit = memory_max_messages if 'memory_max_messages' in globals() else 20
     """Получить историю диалогов"""
     if not get_recent_dialog_history:
         # Попытка прямого чтения файла если модуль memory недоступен
@@ -2124,9 +2135,13 @@ async def get_chat_history(limit: int = None):
             if os.path.exists(dialog_file):
                 with open(dialog_file, "r", encoding="utf-8") as f:
                     history = json.load(f)
-                    # Ограничиваем количество записей настройкой памяти
-                    max_entries = memory_max_messages if 'memory_max_messages' in globals() else 20
-                    limited_history = history[-max_entries:] if len(history) > max_entries else history
+                    # Ограничиваем количество записей настройкой памяти (если не включена неограниченная память)
+                    if memory_unlimited_memory if 'memory_unlimited_memory' in globals() else False:
+                        limited_history = history
+                        max_entries = None
+                    else:
+                        max_entries = memory_max_messages if 'memory_max_messages' in globals() else 20
+                        limited_history = history[-max_entries:] if len(history) > max_entries else history
                     logger.info(f"Загружено {len(limited_history)} записей истории из файла (модуль memory недоступен, лимит: {max_entries})")
                     return {
                         "history": limited_history,
@@ -2137,20 +2152,22 @@ async def get_chat_history(limit: int = None):
                     }
             else:
                 logger.warning(f"Файл истории не найден: {dialog_file}")
+                max_messages_value = None if (memory_unlimited_memory if 'memory_unlimited_memory' in globals() else False) else (memory_max_messages if 'memory_max_messages' in globals() else 20)
                 return {
                     "history": [],
                     "count": 0,
-                    "max_messages": memory_max_messages if 'memory_max_messages' in globals() else 20,
+                    "max_messages": max_messages_value,
                     "timestamp": datetime.now().isoformat(),
                     "source": "file_fallback",
                     "message": "Файл истории не найден"
                 }
         except Exception as e:
             logger.error(f"Ошибка чтения истории из файла: {e}")
+            max_messages_value = None if (memory_unlimited_memory if 'memory_unlimited_memory' in globals() else False) else (memory_max_messages if 'memory_max_messages' in globals() else 20)
             return {
                 "history": [],
                 "count": 0,
-                "max_messages": memory_max_messages if 'memory_max_messages' in globals() else 20,
+                "max_messages": max_messages_value,
                 "timestamp": datetime.now().isoformat(),
                 "source": "fallback_error",
                 "error": str(e)
@@ -2159,10 +2176,11 @@ async def get_chat_history(limit: int = None):
     try:
         history = await get_recent_dialog_history(max_entries=limit)
         logger.info(f"Загружено {len(history)} записей истории через модуль memory")
+        max_messages_value = None if (memory_unlimited_memory if 'memory_unlimited_memory' in globals() else False) else (memory_max_messages if 'memory_max_messages' in globals() else 20)
         return {
             "history": history,
             "count": len(history),
-            "max_messages": memory_max_messages,
+            "max_messages": max_messages_value,
             "timestamp": datetime.now().isoformat(),
             "source": "memory_module"
         }
@@ -2704,32 +2722,35 @@ async def update_transcription_settings(settings: TranscriptionSettings):
 @app.get("/api/memory/settings")
 async def get_memory_settings():
     """Получить настройки памяти"""
-    global memory_max_messages, memory_include_system_prompts, memory_clear_on_restart
+    global memory_max_messages, memory_include_system_prompts, memory_clear_on_restart, memory_unlimited_memory
     
     return {
         "max_messages": memory_max_messages,
         "include_system_prompts": memory_include_system_prompts,
-        "clear_on_restart": memory_clear_on_restart
+        "clear_on_restart": memory_clear_on_restart,
+        "unlimited_memory": memory_unlimited_memory
     }
 
 @app.put("/api/memory/settings")
 async def update_memory_settings(settings: MemorySettings):
     """Обновить настройки памяти"""
-    global memory_max_messages, memory_include_system_prompts, memory_clear_on_restart
+    global memory_max_messages, memory_include_system_prompts, memory_clear_on_restart, memory_unlimited_memory
     
     try:
         # Обновляем глобальные настройки
         memory_max_messages = settings.max_messages
         memory_include_system_prompts = settings.include_system_prompts
         memory_clear_on_restart = settings.clear_on_restart
+        memory_unlimited_memory = settings.unlimited_memory
         
-        logger.info(f"Настройки памяти обновлены: max_messages={memory_max_messages}, include_system_prompts={memory_include_system_prompts}, clear_on_restart={memory_clear_on_restart}")
+        logger.info(f"Настройки памяти обновлены: max_messages={memory_max_messages}, include_system_prompts={memory_include_system_prompts}, clear_on_restart={memory_clear_on_restart}, unlimited_memory={memory_unlimited_memory}")
         
         # Сохраняем настройки в файл
         save_app_settings({
             'memory_max_messages': memory_max_messages,
             'memory_include_system_prompts': memory_include_system_prompts,
-            'memory_clear_on_restart': memory_clear_on_restart
+            'memory_clear_on_restart': memory_clear_on_restart,
+            'memory_unlimited_memory': memory_unlimited_memory
         })
         
         return {
@@ -2738,7 +2759,8 @@ async def update_memory_settings(settings: MemorySettings):
             "settings": {
                 "max_messages": memory_max_messages,
                 "include_system_prompts": memory_include_system_prompts,
-                "clear_on_restart": memory_clear_on_restart
+                "clear_on_restart": memory_clear_on_restart,
+                "unlimited_memory": memory_unlimited_memory
             }
         }
         
@@ -2754,13 +2776,15 @@ async def get_memory_status():
             raise HTTPException(status_code=503, detail="Memory module не доступен")
         
         # Получаем текущую историю
-        history = await get_recent_dialog_history(max_entries=memory_max_messages)
+        max_entries = None if memory_unlimited_memory else memory_max_messages
+        history = await get_recent_dialog_history(max_entries=max_entries)
         
         return {
             "message_count": len(history),
-            "max_messages": memory_max_messages,
+            "max_messages": None if memory_unlimited_memory else memory_max_messages,
             "include_system_prompts": memory_include_system_prompts,
             "clear_on_restart": memory_clear_on_restart,
+            "unlimited_memory": memory_unlimited_memory,
             "success": True
         }
         

@@ -183,7 +183,9 @@ export default function TranscriptionModal({
         // Если статус 499 (Client Closed Request) - транскрибация была остановлена
         if (response.status === 499) {
           const errorData = await response.json().catch(() => ({ detail: 'Транскрибация была остановлена' }));
-          throw { status: 499, message: errorData.detail || 'Транскрибация была остановлена' };
+          const error = new Error(errorData.detail || 'Транскрибация была остановлена') as Error & { status: number };
+          error.status = 499;
+          throw error;
         }
         // Для других ошибок
         const errorData = await response.json().catch(() => ({ detail: 'Ошибка при транскрибации' }));

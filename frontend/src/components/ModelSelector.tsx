@@ -5,15 +5,11 @@ import {
   Button,
   Menu,
   MenuItem,
-  IconButton,
-  Tooltip,
   CircularProgress,
-  Divider,
 } from '@mui/material';
 import {
   Computer as ComputerIcon,
   KeyboardArrowDown as KeyboardArrowDownIcon,
-  Info as InfoIcon,
 } from '@mui/icons-material';
 import { useAppActions } from '../contexts/AppContext';
 import { API_CONFIG } from '../config/api';
@@ -93,7 +89,7 @@ export default function ModelSelector({ isDarkMode, onModelSelect }: ModelSelect
         setAvailableModels(data.models || []);
       }
     } catch (err) {
-      console.error('Ошибка загрузки моделей:', err);
+      
     } finally {
       setIsLoading(false);
     }
@@ -104,12 +100,12 @@ export default function ModelSelector({ isDarkMode, onModelSelect }: ModelSelect
       const response = await fetch(`${API_BASE_URL}/api/models/current`);
       if (response.ok) {
         const data = await response.json();
-        console.log('Текущая модель:', data); // Для отладки
+        
         setCurrentModel(data);
         setSelectedModelPath(data.path || '');
       }
     } catch (err) {
-      console.warn('Не удалось загрузить текущую модель:', err);
+      
     }
   };
 

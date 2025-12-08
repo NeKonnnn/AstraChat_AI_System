@@ -308,24 +308,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
     case 'UPDATE_MESSAGE': {
       const { chatId, messageId, content, isStreaming, multiLLMResponses, alternativeResponses, currentResponseIndex } = action.payload;
       
-      console.log('[AppContext/UPDATE_MESSAGE] ВЫЗВАН:', {
-        chatId,
-        messageId,
-        content: content?.substring(0, 50),
-        isStreaming,
-        multiLLMResponses: multiLLMResponses?.length,
-        alternativeResponses: alternativeResponses?.length,
-        currentResponseIndex
-      });
-      
       const currentChat = state.chats.find(chat => chat.id === chatId);
       const updatedMessage = currentChat?.messages.find(msg => msg.id === messageId);
-      
-      console.log('[AppContext/UPDATE_MESSAGE] Текущее сообщение до обновления:', {
-        id: updatedMessage?.id,
-        isStreaming: updatedMessage?.isStreaming,
-        content: updatedMessage?.content?.substring(0, 50)
-      });
       
       const newState = {
         ...state,
@@ -355,14 +339,6 @@ function appReducer(state: AppState, action: AppAction): AppState {
           totalTokens: state.stats.totalTokens - estimateTokens(updatedMessage?.content || '') + estimateTokens(content || ''),
         },
       };
-      
-      const updatedChat = newState.chats.find(chat => chat.id === chatId);
-      const finalMessage = updatedChat?.messages.find(msg => msg.id === messageId);
-      console.log('[AppContext/UPDATE_MESSAGE] Сообщение после обновления:', {
-        id: finalMessage?.id,
-        isStreaming: finalMessage?.isStreaming,
-        content: finalMessage?.content?.substring(0, 50)
-      });
       
       return newState;
     }

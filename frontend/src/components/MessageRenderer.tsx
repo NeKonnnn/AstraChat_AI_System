@@ -999,7 +999,6 @@ const MessageRenderer: React.FC<MessageRendererProps> = ({ content, isStreaming 
     const parseWithNestedTags = (str: string): React.ReactNode[] => {
       const parts: React.ReactNode[] = [];
       let lastIndex = 0;
-      const supportedTags = ['strong', 'em', 'u', 'del', 'sup', 'sub', 'code', 'a'];
       
       // Сначала обрабатываем самозакрывающиеся теги (img)
       const imgRegex = /<img\s+([^>]+)\/>/gi;
