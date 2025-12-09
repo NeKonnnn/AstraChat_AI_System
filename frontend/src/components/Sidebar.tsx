@@ -39,11 +39,14 @@ import {
   Menu as MenuIcon,
   Logout as LogoutIcon,
   ChevronLeft as ChevronLeftIcon,
+  Archive as ArchiveIcon,
+  PushPin as PushPinIcon,
 } from '@mui/icons-material';
 import { useAppContext, useAppActions } from '../contexts/AppContext';
 import { useSocket } from '../contexts/SocketContext';
 import { useAuth } from '../contexts/AuthContext';
 import SettingsModal from './SettingsModal';
+import ArchiveModal from './ArchiveModal';
 
 // Функция для оценки количества токенов в тексте (дублируем из AppContext)
 function estimateTokens(text: string): number {
@@ -80,12 +83,19 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
     deleteFolder,
     moveChatToFolder,
     toggleFolder,
-    getFolders
+    getFolders,
+    archiveChat,
+    archiveFolder
   } = useAppActions();
   const { isConnected } = useSocket();
   
-  // Получаем папки из состояния
-  const folders = getFolders();
+  // Получаем папки из состояния и сортируем (папка "Закреплено" должна быть первой)
+  const allFolders = getFolders();
+  const folders = React.useMemo(() => {
+    const pinnedFolder = allFolders.find(f => f.name === 'Закреплено');
+    const otherFolders = allFolders.filter(f => f.name !== 'Закреплено');
+    return pinnedFolder ? [pinnedFolder, ...otherFolders] : otherFolders;
+  }, [allFolders]);
   
   const [editingChatId, setEditingChatId] = React.useState<string | null>(null);
   const [editingTitle, setEditingTitle] = React.useState('');
@@ -96,6 +106,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
   const [showDeleteDialog, setShowDeleteDialog] = React.useState(false);
   const [chatsExpanded, setChatsExpanded] = React.useState(true);
   const [showSettingsModal, setShowSettingsModal] = React.useState(false);
+  const [showArchiveModal, setShowArchiveModal] = React.useState(false);
   const [searchQuery, setSearchQuery] = React.useState('');
   const [showCreateFolderDialog, setShowCreateFolderDialog] = React.useState(false);
   const [newFolderName, setNewFolderName] = React.useState('');
@@ -134,11 +145,13 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
     }
     setEditingChatId(null);
     setEditingTitle('');
+    setSelectedChatId(null); // Сбрасываем selectedChatId после завершения редактирования
   };
 
   const handleCancelEdit = () => {
     setEditingChatId(null);
     setEditingTitle('');
+    setSelectedChatId(null); // Сбрасываем selectedChatId после отмены редактирования
   };
 
   const handleKeyPress = (event: React.KeyboardEvent) => {
@@ -156,6 +169,28 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
     return folders.find(folder => folder.chatIds.includes(chatId));
   };
 
+  // Функция для закрепления/открепления чата
+  const handleTogglePin = (chatId: string) => {
+    const pinnedFolder = folders.find(f => f.name === 'Закреплено');
+    const currentFolder = getChatFolder(chatId);
+    
+    if (currentFolder?.name === 'Закреплено') {
+      // Открепляем чат - убираем из папки "Закреплено"
+      // Папка автоматически удалится в reducer, если станет пустой
+      moveChatToFolder(chatId, null);
+    } else {
+      // Закрепляем чат - перемещаем в папку "Закреплено"
+      if (!pinnedFolder) {
+        // Создаем папку "Закреплено" если её нет
+        const pinnedFolderId = createFolder('Закреплено');
+        moveChatToFolder(chatId, pinnedFolderId);
+      } else {
+        moveChatToFolder(chatId, pinnedFolder.id);
+      }
+    }
+    handleChatMenuClose();
+  };
+
   const handleMenuClick = (event: React.MouseEvent<HTMLElement>) => {
     setAnchorEl(event.currentTarget);
   };
@@ -169,6 +204,9 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
     switch (action) {
       case 'settings':
         setShowSettingsModal(true);
+        break;
+      case 'archive':
+        setShowArchiveModal(true);
         break;
       case 'prompts':
         navigate('/prompts');
@@ -192,7 +230,8 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
 
   const handleChatMenuClose = () => {
     setChatMenuAnchor(null);
-    setSelectedChatId(null);
+    // Не сбрасываем selectedChatId сразу, чтобы не потерять его при редактировании
+    // Он будет сброшен после завершения редактирования
   };
 
   const handleChatMenuAction = (action: string) => {
@@ -204,11 +243,23 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
     const chatIdToAction = selectedChatId;
     
     switch (action) {
+      case 'pin':
+        handleTogglePin(chatIdToAction);
+        break;
       case 'edit':
         const chatToEdit = state.chats.find(chat => chat.id === chatIdToAction);
+        if (chatToEdit) {
+          handleChatMenuClose();
+          // Используем requestAnimationFrame для гарантированного обновления после закрытия меню
+          requestAnimationFrame(() => {
+            setEditingChatId(chatIdToAction);
+            setEditingTitle(chatToEdit.title);
+          });
+        }
+        break;
+      case 'archive':
         handleChatMenuClose();
-        setEditingChatId(chatIdToAction);
-        setEditingTitle(chatToEdit?.title || '');
+        archiveChat(chatIdToAction);
         break;
       case 'delete':
         handleChatMenuClose();
@@ -240,9 +291,11 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
 
   // Функция для фильтрации чатов по поисковому запросу
   const filteredChats = React.useMemo(() => {
-    // Исключаем чаты, которые уже находятся в папках
+    // Исключаем чаты, которые уже находятся в папках, и архивированные чаты
     const chatsInFolders = new Set(folders.flatMap(folder => folder.chatIds));
-    const availableChats = state.chats.filter(chat => !chatsInFolders.has(chat.id));
+    const availableChats = state.chats.filter(chat => 
+      !chatsInFolders.has(chat.id) && !chat.isArchived
+    );
     
     if (!searchQuery.trim()) {
       return availableChats;
@@ -307,6 +360,9 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         setRenamingFolderName(folder.name);
         setShowRenameFolderDialog(true);
       }
+    } else if (action === 'archive') {
+      handleFolderMenuClose();
+      archiveFolder(folderIdToAction);
     } else if (action === 'delete') {
       setShowDeleteFolderDialog(true);
     }
@@ -688,6 +744,173 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         scrollbarColor: 'rgba(118, 75, 162, 0.6) rgba(102, 126, 234, 0.3)',
       }}>
         <Box sx={{ p: 1 }}>
+          {/* Отображение папки "Закреплено" первой, если она существует */}
+          {folders.find(f => f.name === 'Закреплено') && (() => {
+            const pinnedFolder = folders.find(f => f.name === 'Закреплено');
+            if (!pinnedFolder) return null;
+            return (
+              <Box key={pinnedFolder.id} sx={{ mb: 1 }}>
+                <Box
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    px: 2,
+                    py: 1,
+                    borderRadius: 1,
+                    '&:hover': {
+                      backgroundColor: 'rgba(255,255,255,0.05)',
+                    },
+                    transition: 'background-color 0.2s ease',
+                  }}
+                >
+                  <Box
+                    onClick={() => handleToggleFolder(pinnedFolder.id)}
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      flex: 1,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <Typography variant="subtitle2" sx={{ opacity: 0.8, fontSize: '0.75rem' }}>
+                      {pinnedFolder.name}
+                    </Typography>
+                    <ExpandMoreIcon
+                      sx={{
+                        fontSize: '1rem',
+                        opacity: 0.8,
+                        transform: pinnedFolder.expanded ? 'rotate(0deg)' : 'rotate(-90deg)',
+                        transition: 'transform 0.2s ease',
+                        ml: 1,
+                      }}
+                    />
+                  </Box>
+                  <IconButton
+                    size="small"
+                    onClick={(e) => handleFolderMenuClick(e, pinnedFolder.id)}
+                    sx={{ color: 'rgba(255,255,255,0.7)', p: 0.5 }}
+                  >
+                    <MoreVertIcon fontSize="small" />
+                  </IconButton>
+                </Box>
+                {pinnedFolder.expanded && (
+                  <List sx={{ py: 0 }}>
+                    {(() => {
+                      const filteredFolderChats = pinnedFolder.chatIds
+                        .map(chatId => ({ chatId, chat: state.chats.find(c => c.id === chatId) }))
+                        .filter(({ chat }) => {
+                          if (!chat) return false;
+                          if (chat.isArchived) return false;
+                          if (!searchQuery.trim()) return true;
+                          return chat.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                                 chat.messages.some(msg => 
+                                   msg.content.toLowerCase().includes(searchQuery.toLowerCase())
+                                 );
+                        });
+                      
+                      if (filteredFolderChats.length === 0 && searchQuery.trim()) {
+                        return (
+                          <Typography variant="body2" sx={{ px: 2, py: 2, opacity: 0.6, textAlign: 'center', fontSize: '0.8rem' }}>
+                            Ничего не найдено
+                          </Typography>
+                        );
+                      }
+                      
+                      return filteredFolderChats.map(({ chatId, chat }) => {
+                        if (!chat) return null;
+                        return (
+                        <ListItem key={chatId} disablePadding sx={{ mb: 0.5 }}>
+                          <ListItemButton
+                            onClick={(e) => {
+                              if (editingChatId === chatId) {
+                                e.stopPropagation();
+                                return;
+                              }
+                              handleSelectChat(chatId);
+                            }}
+                            sx={{
+                              borderRadius: 2,
+                              backgroundColor: state.currentChatId === chatId ? 'rgba(255,255,255,0.15)' : 'transparent',
+                              '&:hover': {
+                                backgroundColor: state.currentChatId === chatId ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.08)',
+                              },
+                              transition: 'all 0.2s ease',
+                              py: 1,
+                              px: 2,
+                            }}
+                          >
+                            <ListItemIcon sx={{ color: 'white', minWidth: 28 }}>
+                              <ChatIcon fontSize="small" />
+                            </ListItemIcon>
+                            <ListItemText
+                              primary={
+                                editingChatId === chatId ? (
+                                  <TextField
+                                    value={editingTitle}
+                                    onChange={(e) => setEditingTitle(e.target.value)}
+                                    onBlur={handleSaveEdit}
+                                    onKeyDown={handleKeyPress}
+                                    onClick={(e) => e.stopPropagation()}
+                                    autoFocus
+                                    size="small"
+                                    fullWidth
+                                    sx={{
+                                      '& .MuiInputBase-input': {
+                                        color: 'white',
+                                        fontSize: '0.8rem',
+                                        py: 0.5,
+                                      },
+                                      '& .MuiOutlinedInput-notchedOutline': {
+                                        borderColor: 'rgba(255,255,255,0.3)',
+                                      },
+                                      '&:hover .MuiOutlinedInput-notchedOutline': {
+                                        borderColor: 'rgba(255,255,255,0.5)',
+                                      },
+                                      '& .MuiOutlinedInput-root': {
+                                        '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+                                          borderColor: 'rgba(255,255,255,0.7)',
+                                        },
+                                      },
+                                    }}
+                                  />
+                                ) : (
+                                  <Typography
+                                    variant="body2"
+                                    sx={{
+                                      color: 'white',
+                                      fontWeight: state.currentChatId === chatId ? 600 : 400,
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap',
+                                      fontSize: '0.8rem',
+                                    }}
+                                  >
+                                    {chat.title}
+                                  </Typography>
+                                )
+                              }
+                            />
+                            {!editingChatId && (
+                              <IconButton
+                                size="small"
+                                onClick={(e) => handleChatMenuClick(e, chatId)}
+                                sx={{ color: 'rgba(255,255,255,0.7)', p: 0.5 }}
+                              >
+                                <MoreVertIcon fontSize="small" />
+                              </IconButton>
+                            )}
+                          </ListItemButton>
+                        </ListItem>
+                        );
+                      });
+                    })()}
+                  </List>
+                )}
+              </Box>
+            );
+          })()}
+
           <Box
             onClick={() => setChatsExpanded(!chatsExpanded)}
             sx={{
@@ -727,7 +950,14 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                   {filteredChats.map((chat) => (
                 <ListItem key={chat.id} disablePadding sx={{ mb: 0.5 }}>
                   <ListItemButton
-                    onClick={() => handleSelectChat(chat.id)}
+                    onClick={(e) => {
+                      // Не открываем чат, если идет редактирование
+                      if (editingChatId === chat.id) {
+                        e.stopPropagation();
+                        return;
+                      }
+                      handleSelectChat(chat.id);
+                    }}
                     sx={{
                       borderRadius: 2,
                       backgroundColor: state.currentChatId === chat.id ? 'rgba(255,255,255,0.15)' : 'transparent',
@@ -750,8 +980,10 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                             onChange={(e) => setEditingTitle(e.target.value)}
                             onBlur={handleSaveEdit}
                             onKeyDown={handleKeyPress}
+                            onClick={(e) => e.stopPropagation()}
                             autoFocus
                             size="small"
+                            fullWidth
                             sx={{
                               '& .MuiInputBase-input': {
                                 color: 'white',
@@ -763,6 +995,11 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                               },
                               '&:hover .MuiOutlinedInput-notchedOutline': {
                                 borderColor: 'rgba(255,255,255,0.5)',
+                              },
+                              '& .MuiOutlinedInput-root': {
+                                '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+                                  borderColor: 'rgba(255,255,255,0.7)',
+                                },
                               },
                             }}
                           />
@@ -799,8 +1036,8 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             </>
           )}
 
-          {/* Отображение папок как отдельных разделов */}
-          {folders.map((folder) => (
+          {/* Отображение остальных папок (кроме "Закреплено") */}
+          {folders.filter(f => f.name !== 'Закреплено').map((folder) => (
             <Box key={folder.id} sx={{ mb: 1 }}>
               <Box
                 sx={{
@@ -853,6 +1090,8 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                       .map(chatId => ({ chatId, chat: state.chats.find(c => c.id === chatId) }))
                       .filter(({ chat }) => {
                         if (!chat) return false;
+                        // Исключаем архивированные чаты
+                        if (chat.isArchived) return false;
                         if (!searchQuery.trim()) return true;
                         return chat.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
                                chat.messages.some(msg => 
@@ -873,7 +1112,14 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                       return (
                       <ListItem key={chatId} disablePadding sx={{ mb: 0.5 }}>
                         <ListItemButton
-                          onClick={() => handleSelectChat(chatId)}
+                          onClick={(e) => {
+                            // Не открываем чат, если идет редактирование
+                            if (editingChatId === chatId) {
+                              e.stopPropagation();
+                              return;
+                            }
+                            handleSelectChat(chatId);
+                          }}
                           sx={{
                             borderRadius: 2,
                             backgroundColor: state.currentChatId === chatId ? 'rgba(255,255,255,0.15)' : 'transparent',
@@ -896,8 +1142,10 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                                   onChange={(e) => setEditingTitle(e.target.value)}
                                   onBlur={handleSaveEdit}
                                   onKeyDown={handleKeyPress}
+                                  onClick={(e) => e.stopPropagation()}
                                   autoFocus
                                   size="small"
+                                  fullWidth
                                   sx={{
                                     '& .MuiInputBase-input': {
                                       color: 'white',
@@ -910,8 +1158,10 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                                     '&:hover .MuiOutlinedInput-notchedOutline': {
                                       borderColor: 'rgba(255,255,255,0.5)',
                                     },
-                                    '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
-                                      borderColor: 'white',
+                                    '& .MuiOutlinedInput-root': {
+                                      '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+                                        borderColor: 'rgba(255,255,255,0.7)',
+                                      },
                                     },
                                   }}
                                 />
@@ -1097,6 +1347,18 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           <ListItemText primary="Настройки" />
         </MenuItem>
         
+        <MenuItem 
+          onClick={() => handleMenuAction('archive')}
+          sx={{ 
+            color: 'white',
+            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+          }}
+        >
+          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+            <ArchiveIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText primary="Архив" />
+        </MenuItem>
         
         <MenuItem 
           onClick={() => handleMenuAction('statistics')}
@@ -1271,6 +1533,19 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         }}
       >
         <MenuItem
+          onClick={() => handleChatMenuAction('pin')}
+          sx={{
+            color: 'white',
+            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+          }}
+        >
+          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+            <PushPinIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText primary={getChatFolder(selectedChatId || '')?.name === 'Закреплено' ? 'Открепить' : 'Пин'} />
+        </MenuItem>
+        
+        <MenuItem
           onClick={() => handleChatMenuAction('edit')}
               sx={{
                   color: 'white',
@@ -1280,7 +1555,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
             <EditIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary="Редактировать" />
+          <ListItemText primary="Переименовать" />
         </MenuItem>
         
         <MenuItem
@@ -1294,6 +1569,19 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             <FolderIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Переместить в папку" />
+        </MenuItem>
+        
+        <MenuItem
+          onClick={() => handleChatMenuAction('archive')}
+          sx={{
+            color: 'white',
+            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+          }}
+        >
+          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+            <ArchiveIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText primary="Архив" />
         </MenuItem>
         
         <MenuItem
@@ -1543,6 +1831,19 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         </MenuItem>
         
         <MenuItem
+          onClick={() => handleFolderMenuAction('archive')}
+          sx={{
+            color: 'white',
+            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+          }}
+        >
+          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+            <ArchiveIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText primary="Архив" />
+        </MenuItem>
+        
+        <MenuItem
           onClick={() => handleFolderMenuAction('delete')}
           sx={{
             color: 'white',
@@ -1738,6 +2039,13 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         onClose={() => setShowSettingsModal(false)}
         isDarkMode={isDarkMode}
         onToggleTheme={onToggleTheme}
+      />
+
+      {/* Модальное окно архива */}
+      <ArchiveModal
+        open={showArchiveModal}
+        onClose={() => setShowArchiveModal(false)}
+        isDarkMode={isDarkMode}
       />
     </Drawer>
   );

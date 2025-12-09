@@ -196,16 +196,26 @@ class WhisperXTranscriber:
     def _load_local_diarization_pipeline(self):
         """Загружает локальный пайплайн диаризации"""
         try:
+            print("=" * 80)
+            print("ЗАГРУЗКА МОДЕЛИ ДИАРИЗАЦИИ")
+            print("=" * 80)
+            
             from pyannote.audio import Pipeline
+            import yaml
             
             # Путь к локальному конфигу
             config_path = os.path.join(self.diarize_model_path, "pyannote_diarization_config.yaml")
             
+            print(f"Путь к конфигу: {config_path}")
+            print(f"Путь к моделям диаризации: {self.diarize_model_path}")
+            
             if not os.path.exists(config_path):
-                print(f"Конфиг файл не найден: {config_path}")
+                print(f"❌ ОШИБКА: Конфиг файл не найден!")
+                print(f"   Ожидаемый путь: {config_path}")
+                print(f"   Проверьте наличие файла pyannote_diarization_config.yaml")
                 return None
             
-            print(f"Конфиг файл: {config_path}")
+            print(f"✅ Конфиг файл найден: {config_path}")
             
             # Проверяем наличие .bin файлов
             models_dir = os.path.join(self.diarize_model_path, "models")
@@ -214,26 +224,72 @@ class WhisperXTranscriber:
                 "pyannote_model_wespeaker-voxceleb-resnet34-LM.bin"
             ]
             
-            print(f"   🔍 Проверяем наличие .bin файлов в {models_dir}...")
+            print(f"🔍 Проверяем наличие .bin файлов в {models_dir}...")
             
+            missing_files = []
             for file_name in required_files:
                 file_path = os.path.join(models_dir, file_name)
                 if os.path.exists(file_path):
                     size = os.path.getsize(file_path) / 1024 / 1024
-                    print(f"{file_name}: {size:.1f} МБ")
+                    print(f"   ✅ {file_name}: {size:.1f} МБ")
                 else:
-                    print(f"{file_name}: НЕ НАЙДЕН")
-                    return None
+                    print(f"   ❌ {file_name}: НЕ НАЙДЕН")
+                    missing_files.append(file_name)
             
-            # Загружаем пайплайн из локального конфига
-            print(f"Загружаем локальный пайплайн...")
-            pipeline = Pipeline.from_pretrained(config_path)
+            if missing_files:
+                print(f"❌ ОШИБКА: Отсутствуют файлы моделей: {', '.join(missing_files)}")
+                print(f"   Директория моделей: {models_dir}")
+                return None
             
-            print("Локальный пайплайн диаризации загружен успешно!")
+            # Читаем конфиг и заменяем относительные пути на абсолютные
+            print(f"📖 Читаем конфиг и преобразуем пути в абсолютные...")
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config_data = yaml.safe_load(f)
+            
+            # Заменяем относительные пути на абсолютные в конфиге
+            if 'pipeline' in config_data and 'params' in config_data['pipeline']:
+                params = config_data['pipeline']['params']
+                
+                if 'embedding' in params and isinstance(params['embedding'], str):
+                    if not params['embedding'].startswith('/') and not '://' in params['embedding']:
+                        # Это относительный путь - делаем абсолютным
+                        params['embedding'] = os.path.abspath(os.path.join(self.diarize_model_path, params['embedding']))
+                        print(f"   📍 Embedding путь: {params['embedding']}")
+                
+                if 'segmentation' in params and isinstance(params['segmentation'], str):
+                    if not params['segmentation'].startswith('/') and not '://' in params['segmentation']:
+                        # Это относительный путь - делаем абсолютным
+                        params['segmentation'] = os.path.abspath(os.path.join(self.diarize_model_path, params['segmentation']))
+                        print(f"   📍 Segmentation путь: {params['segmentation']}")
+            
+            # Создаем временный конфиг с абсолютными путями
+            import tempfile
+            temp_config_path = os.path.join(tempfile.gettempdir(), "pyannote_diarization_temp.yaml")
+            with open(temp_config_path, 'w', encoding='utf-8') as f:
+                yaml.dump(config_data, f)
+            
+            print(f"💾 Временный конфиг создан: {temp_config_path}")
+            
+            # Загружаем пайплайн из временного конфига с абсолютными путями
+            print(f"📦 Загружаем локальный пайплайн...")
+            pipeline = Pipeline.from_pretrained(temp_config_path)
+            
+            # Удаляем временный файл
+            try:
+                os.remove(temp_config_path)
+            except:
+                pass
+            
+            print("✅ Локальный пайплайн диаризации загружен успешно!")
+            print("=" * 80)
             return pipeline
             
         except Exception as e:
-            print(f"Ошибка загрузки пайплайна: {e}")
+            print("=" * 80)
+            print(f"❌ ОШИБКА ЗАГРУЗКИ ПАЙПЛАЙНА: {e}")
+            import traceback
+            traceback.print_exc()
+            print("=" * 80)
             return None
 
     def _check_ffmpeg_availability(self) -> bool:
@@ -409,15 +465,17 @@ class WhisperXTranscriber:
                                 # Кэшируем модель для следующего использования
                                 self._cached_diarize_model = diarize_model
                             else:
-                                print("Не удалось загрузить локальный пайплайн диаризации")
-                                print("Используем простую транскрипцию без диаризации")
-                                transcript = self._format_simple_transcript(result)
-                                return True, transcript
+                                error_msg = "Не удалось загрузить локальный пайплайн диаризации. Проверьте наличие моделей диаризации в папке diarize_models."
+                                print(f"ОШИБКА: {error_msg}")
+                                print("Транскрипция БЕЗ диаризации невозможна - требуется модель диаризации!")
+                                return False, error_msg
                         except Exception as diarize_load_error:
-                            print(f"Ошибка загрузки диаризации: {diarize_load_error}")
-                            print("Используем простую транскрипцию без диаризации")
-                            transcript = self._format_simple_transcript(result)
-                            return True, transcript
+                            error_msg = f"Ошибка загрузки диаризации: {diarize_load_error}"
+                            print(f"ОШИБКА: {error_msg}")
+                            print("Транскрипция БЕЗ диаризации невозможна - требуется модель диаризации!")
+                            import traceback
+                            traceback.print_exc()
+                            return False, error_msg
                     
                     self._update_progress(80)
                     
@@ -508,11 +566,20 @@ class WhisperXTranscriber:
                                 # Проверяем, что у сегментов есть информация о спикерах
                                 has_speakers = any('speaker' in segment for segment in result_with_speakers['segments'])
                                 
+                                print(f"=" * 80)
+                                print(f"ПРОВЕРКА РЕЗУЛЬТАТОВ ДИАРИЗАЦИИ")
+                                print(f"=" * 80)
+                                print(f"Всего сегментов: {len(result_with_speakers['segments'])}")
+                                print(f"Сегментов со спикерами: {sum(1 for s in result_with_speakers['segments'] if 'speaker' in s)}")
+                                print(f"has_speakers: {has_speakers}")
+                                
                                 if has_speakers:
                                     result = result_with_speakers
                                     # Форматируем результат с диаризацией
                                     transcript = self._format_transcript_with_speakers(result)
-                                    print("Диаризация завершена успешно")
+                                    print("✅ ДИАРИЗАЦИЯ ЗАВЕРШЕНА УСПЕШНО!")
+                                    print(f"Первые 200 символов: {transcript[:200]}")
+                                    print("=" * 80)
                                 else:
                                     print("Диаризация не добавила информацию о спикерах")
                                     print("Пробуем альтернативный способ...")
@@ -524,8 +591,10 @@ class WhisperXTranscriber:
                                         # Форматируем результат в строку
                                         transcript = self._format_transcript_with_speakers(manual_result)
                                     else:
-                                        print("Альтернативная диаризация не удалась, используем простую транскрипцию")
-                                        transcript = self._format_simple_transcript(result)
+                                        error_msg = "Альтернативная диаризация не удалась. Не удалось добавить информацию о спикерах."
+                                        print(f"ОШИБКА: {error_msg}")
+                                        print("Транскрипция БЕЗ диаризации невозможна!")
+                                        return False, error_msg
                                         
                         except Exception as assign_error:
                             print(f"Ошибка объединения диаризации: {assign_error}")
@@ -546,14 +615,19 @@ class WhisperXTranscriber:
                         transcript = self._format_simple_transcript(result)
                 
                 else:
-                    print("Локальный пайплайн диаризации недоступен")
-                    print("Используем простую транскрипцию без диаризации")
-                    transcript = self._format_simple_transcript(result)
+                    error_msg = "Локальный пайплайн диаризации недоступен. LOCAL_DIARIZATION_AVAILABLE = False"
+                    print(f"ОШИБКА: {error_msg}")
+                    print("Проверьте, что модели диаризации установлены и доступны.")
+                    print("Транскрипция БЕЗ диаризации невозможна!")
+                    return False, error_msg
             
             except Exception as diarize_error:
-                print(f"Ошибка диаризации: {diarize_error}")
-                print("Используем простую транскрипцию без диаризации")
-                transcript = self._format_simple_transcript(result)
+                error_msg = f"Критическая ошибка диаризации: {diarize_error}"
+                print(f"ОШИБКА: {error_msg}")
+                print("Транскрипция БЕЗ диаризации невозможна!")
+                import traceback
+                traceback.print_exc()
+                return False, error_msg
             
             self._update_progress(100)
             

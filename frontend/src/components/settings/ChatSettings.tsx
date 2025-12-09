@@ -327,7 +327,7 @@ export default function ChatSettings() {
         <DialogContent>
           <Alert severity="info" sx={{ mb: 2 }}>
             <Typography variant="body2">
-              Все чаты будут перемещены в папку "Архив". Вы сможете найти их там позже.
+              Все чаты будут архивированы. Вы сможете найти их в меню "Архив".
             </Typography>
           </Alert>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>

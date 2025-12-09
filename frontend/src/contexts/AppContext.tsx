@@ -25,6 +25,7 @@ export interface Chat {
   messages: Message[];
   createdAt: string;
   updatedAt: string;
+  isArchived?: boolean;
 }
 
 export interface ModelInfo {
@@ -138,6 +139,10 @@ type AppAction =
   | { type: 'MOVE_CHAT_TO_FOLDER'; payload: { chatId: string; folderId: string | null } }
   | { type: 'TOGGLE_FOLDER'; payload: string }
   | { type: 'ARCHIVE_ALL_CHATS' }
+  | { type: 'ARCHIVE_CHAT'; payload: string }
+  | { type: 'ARCHIVE_FOLDER'; payload: string }
+  | { type: 'UNARCHIVE_CHAT'; payload: string }
+  | { type: 'UNARCHIVE_ALL_CHATS' }
   | { type: 'UPDATE_STATS'; payload: Partial<AppState['stats']> }
   | { type: 'SET_INITIALIZED'; payload: boolean };
 
@@ -499,16 +504,26 @@ function appReducer(state: AppState, action: AppAction): AppState {
         folders: state.folders.filter(folder => folder.id !== action.payload),
       };
       
-    case 'MOVE_CHAT_TO_FOLDER':
+    case 'MOVE_CHAT_TO_FOLDER': {
+      // Обновляем папки
+      const updatedFolders = state.folders.map(folder => ({
+        ...folder,
+        chatIds: folder.id === action.payload.folderId
+          ? [...folder.chatIds, action.payload.chatId]
+          : folder.chatIds.filter(id => id !== action.payload.chatId)
+      }));
+      
+      // Удаляем папку "Закреплено" если она стала пустой
+      const pinnedFolder = updatedFolders.find(f => f.name === 'Закреплено');
+      const finalFolders = pinnedFolder && pinnedFolder.chatIds.length === 0
+        ? updatedFolders.filter(f => f.id !== pinnedFolder.id)
+        : updatedFolders;
+      
       return {
         ...state,
-        folders: state.folders.map(folder => ({
-          ...folder,
-          chatIds: folder.id === action.payload.folderId
-            ? [...folder.chatIds, action.payload.chatId]
-            : folder.chatIds.filter(id => id !== action.payload.chatId)
-        })),
+        folders: finalFolders,
       };
+    }
       
     case 'TOGGLE_FOLDER':
       return {
@@ -521,39 +536,76 @@ function appReducer(state: AppState, action: AppAction): AppState {
       };
       
     case 'ARCHIVE_ALL_CHATS': {
-      // Находим или создаем папку "Архив"
-      let archiveFolder = state.folders.find(f => f.name === 'Архив');
-      const allChatIds = state.chats.map(chat => chat.id);
-      
-      if (!archiveFolder) {
-        // Создаем папку "Архив" если её нет
-        const archiveFolderId = Date.now().toString() + Math.random().toString(36).substr(2, 9);
-        archiveFolder = {
-          id: archiveFolderId,
-          name: 'Архив',
-          chatIds: allChatIds,
-          expanded: false,
-        };
-        // Удаляем все чаты из других папок
-        const updatedFolders = state.folders.map(folder => ({
-          ...folder,
-          chatIds: folder.chatIds.filter(id => !allChatIds.includes(id))
-        }));
-        return {
-          ...state,
-          folders: [...updatedFolders, archiveFolder],
-        };
-      } else {
-        // Добавляем все чаты в существующую папку "Архив" и удаляем из других папок
-        return {
-          ...state,
-          folders: state.folders.map(folder =>
-            folder.id === archiveFolder!.id
-              ? { ...folder, chatIds: Array.from(new Set([...folder.chatIds, ...allChatIds])) }
-              : { ...folder, chatIds: folder.chatIds.filter(id => !allChatIds.includes(id)) }
-          ),
-        };
+      // Помечаем все неархивированные чаты как архивированные
+      // Если текущий чат архивируется, сбрасываем currentChatId
+      return {
+        ...state,
+        chats: state.chats.map(chat => ({
+          ...chat,
+          isArchived: true,
+        })),
+        currentChatId: null, // Сбрасываем текущий чат, так как все архивируются
+      };
+    }
+    
+    case 'ARCHIVE_CHAT': {
+      // Помечаем конкретный чат как архивированный
+      // Если архивируется текущий чат, сбрасываем currentChatId
+      return {
+        ...state,
+        chats: state.chats.map(chat =>
+          chat.id === action.payload
+            ? { ...chat, isArchived: true }
+            : chat
+        ),
+        currentChatId: state.currentChatId === action.payload ? null : state.currentChatId,
+      };
+    }
+    
+    case 'ARCHIVE_FOLDER': {
+      // Архивируем все чаты в папке
+      const folder = state.folders.find(f => f.id === action.payload);
+      if (!folder) {
+        return state;
       }
+      
+      const chatIdsToArchive = folder.chatIds;
+      const newCurrentChatId = chatIdsToArchive.includes(state.currentChatId || '') 
+        ? null 
+        : state.currentChatId;
+      
+      return {
+        ...state,
+        chats: state.chats.map(chat =>
+          chatIdsToArchive.includes(chat.id)
+            ? { ...chat, isArchived: true }
+            : chat
+        ),
+        currentChatId: newCurrentChatId,
+      };
+    }
+    
+    case 'UNARCHIVE_CHAT': {
+      // Убираем пометку архивирования у конкретного чата
+      return {
+        ...state,
+        chats: state.chats.map(chat =>
+          chat.id === action.payload
+            ? { ...chat, isArchived: false }
+            : chat
+        ),
+      };
+    }
+    
+    case 'UNARCHIVE_ALL_CHATS': {
+      // Убираем пометку архивирования у всех чатов
+      return {
+        ...state,
+        chats: state.chats.map(chat => ({
+          ...chat,
+          isArchived: false,
+        })),
+      };
     }
       
     case 'SET_INITIALIZED':
@@ -861,8 +913,28 @@ export function useAppActions() {
       dispatch({ type: 'ARCHIVE_ALL_CHATS' });
     },
     
+    archiveChat: (chatId: string) => {
+      dispatch({ type: 'ARCHIVE_CHAT', payload: chatId });
+    },
+    
+    archiveFolder: (folderId: string) => {
+      dispatch({ type: 'ARCHIVE_FOLDER', payload: folderId });
+    },
+    
+    unarchiveChat: (chatId: string) => {
+      dispatch({ type: 'UNARCHIVE_CHAT', payload: chatId });
+    },
+    
+    unarchiveAllChats: () => {
+      dispatch({ type: 'UNARCHIVE_ALL_CHATS' });
+    },
+    
     getChatById: (chatId: string) => {
       return state.chats.find(chat => chat.id === chatId) || null;
+    },
+    
+    getArchivedChats: () => {
+      return state.chats.filter(chat => chat.isArchived === true);
     },
   };
 }

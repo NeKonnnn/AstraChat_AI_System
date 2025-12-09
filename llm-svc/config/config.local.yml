@@ -31,7 +31,7 @@ model:
   name: "qvikhr-1.5b"
   name: "qwen-coder-30b"
   ctx_size: 4096
-  gpu_layers: 0  # Установите -1 для использования всех слоев на GPU
+  gpu_layers: -1  # Используются все слои на GPU
   verbose: false
 
 # Настройки генерации

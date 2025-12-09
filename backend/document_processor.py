@@ -53,10 +53,17 @@ class DocumentProcessor:
         # Кэш структуры документов для быстрого доступа ко всем чанкам
         # {doc_name: [{"content": str, "chunk": int}, ...]} - отсортировано по chunk
         self._doc_chunks_cache = {}
+        
+        # НОВОЕ: Система иерархического индексирования для больших документов
+        self.use_hierarchical_indexing = True  # Флаг для включения/выключения
+        self.hierarchical_threshold = 10000  # Документы больше 10000 символов используют иерархию
+        self.summarizer = None  # Инициализируется позже
+        self.optimized_index = None  # Инициализируется позже
 
         logger.info("DocumentProcessor инициализирован")
         self.init_embeddings()
         self.init_pgvector()
+        self.init_hierarchical_system()
         
         # Логируем финальный статус
         status = self.get_pgvector_status()
@@ -69,6 +76,13 @@ class DocumentProcessor:
                 logger.warning(f"   Ошибка: {status['error']}")
         else:
             logger.warning(f"PGVECTOR НЕДОСТУПЕН")
+        
+        # Логируем статус иерархической системы
+        if self.use_hierarchical_indexing and self.summarizer:
+            logger.info(f"ИЕРАРХИЧЕСКОЕ ИНДЕКСИРОВАНИЕ АКТИВНО")
+            logger.info(f"   Порог активации: {self.hierarchical_threshold} символов")
+        else:
+            logger.info(f"Иерархическое индексирование отключено")
         
     def init_embeddings(self):
         """Инициализация модели для эмбеддингов"""
@@ -352,6 +366,47 @@ class DocumentProcessor:
             import traceback
             logger.debug(f"   Traceback: {traceback.format_exc()}")
             return False
+    
+    def init_hierarchical_system(self):
+        """Инициализация системы иерархического индексирования"""
+        if not self.use_hierarchical_indexing:
+            logger.info("Иерархическое индексирование отключено")
+            return
+        
+        if not self.embeddings or not self.vector_repo:
+            logger.warning("Не удается инициализировать иерархическую систему - отсутствуют зависимости")
+            self.use_hierarchical_indexing = False
+            return
+        
+        try:
+            from backend.document_summarizer import DocumentSummarizer, OptimizedDocumentIndex
+            
+            # Инициализируем суммаризатор
+            # LLM функцию передадим позже, когда она понадобится
+            self.summarizer = DocumentSummarizer(
+                llm_function=None,  # Будет установлена при необходимости
+                max_chunk_size=1500,
+                intermediate_summary_chunks=8
+            )
+            
+            # Инициализируем оптимизированный индекс
+            self.optimized_index = OptimizedDocumentIndex(
+                embeddings_model=self.embeddings,
+                vector_repo=self.vector_repo
+            )
+            
+            logger.info("✅ Система иерархического индексирования инициализирована")
+            logger.info(f"   Порог активации: {self.hierarchical_threshold} символов")
+            logger.info(f"   Размер чанка: 1500 символов")
+            logger.info(f"   Промежуточных суммаризаций: каждые 8 чанков")
+            
+        except Exception as e:
+            logger.error(f"Ошибка при инициализации иерархической системы: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+            self.use_hierarchical_indexing = False
+            self.summarizer = None
+            self.optimized_index = None
     
     def _load_documents_from_db(self):
         """Загрузка документов из базы данных при инициализации"""
@@ -944,7 +999,8 @@ class DocumentProcessor:
                     content=text,
                     metadata={
                         "confidence_data": self.confidence_data.get(doc_name, {}),
-                        "chunks_count": len(chunks)
+                        "chunks_count": len(chunks),
+                        "uses_hierarchy": self.use_hierarchical_indexing and len(text) > self.hierarchical_threshold
                     },
                     created_at=datetime.utcnow(),
                     updated_at=datetime.utcnow()
@@ -964,43 +1020,77 @@ class DocumentProcessor:
                     pg_doc.content = text
                     pg_doc.metadata = {
                         "confidence_data": self.confidence_data.get(doc_name, {}),
-                        "chunks_count": len(chunks)
+                        "chunks_count": len(chunks),
+                        "uses_hierarchy": self.use_hierarchical_indexing and len(text) > self.hierarchical_threshold
                     }
                     pg_doc.updated_at = datetime.utcnow()
                     # Удаляем старые векторы
                     await self.vector_repo.delete_vectors_by_document(document_id)
             
-            # Генерируем эмбеддинги и сохраняем векторы
-            logger.info(f"Генерация эмбеддингов для {len(chunks)} чанков...")
-            saved_vectors = 0
-            for i, chunk in enumerate(chunks):
-                try:
-                    # Генерируем эмбеддинг для чанка
-                    embedding = self.embeddings.embed_query(chunk)
-                    
-                    # Создаем вектор
-                    vector = DocumentVector(
-                        document_id=document_id,
-                        chunk_index=i,
-                        embedding=embedding,
-                        content=chunk,
-                        metadata={"source": doc_name, "chunk": i}
-                    )
-                    
-                    # Сохраняем вектор в БД
-                    vector_id = await self.vector_repo.create_vector(vector)
-                    if vector_id:
-                        saved_vectors += 1
-                        if (i + 1) % 10 == 0 or i == len(chunks) - 1:
-                            logger.info(f"Сохранено векторов: {i+1}/{len(chunks)}")
-                except Exception as e:
-                    logger.warning(f" Ошибка при сохранении вектора {i}: {str(e)}")
-                    continue
+            # НОВОЕ: Проверяем, нужно ли использовать иерархическое индексирование
+            use_hierarchy = (
+                self.use_hierarchical_indexing 
+                and self.summarizer 
+                and self.optimized_index
+                and len(text) > self.hierarchical_threshold
+            )
             
-            if saved_vectors == len(chunks):
-                logger.info(f"Все {saved_vectors} векторов успешно сохранены в pgvector")
-            else:
-                logger.warning(f"Сохранено {saved_vectors}/{len(chunks)} векторов")
+            if use_hierarchy:
+                logger.info(f"🔥 ИСПОЛЬЗУЕМ ИЕРАРХИЧЕСКОЕ ИНДЕКСИРОВАНИЕ для '{doc_name}'")
+                logger.info(f"   Размер документа: {len(text)} символов > {self.hierarchical_threshold}")
+                logger.info(f"   Обычных векторов было бы: {len(chunks)}")
+                
+                # Создаем иерархическую структуру
+                hierarchical_doc = await self.summarizer.create_hierarchical_summary_async(
+                    text=text,
+                    doc_name=doc_name,
+                    create_full_summary=False  # Суммаризацию через LLM делаем опционально
+                )
+                
+                # Индексируем с использованием оптимизированного подхода
+                success = await self.optimized_index.index_document_hierarchical_async(
+                    hierarchical_doc=hierarchical_doc,
+                    document_id=document_id
+                )
+                
+                if success:
+                    logger.info(f"✅ Иерархическое индексирование завершено успешно")
+                else:
+                    logger.warning(f"⚠️ Ошибка иерархического индексирования, используем стандартный подход")
+                    use_hierarchy = False
+            
+            # Стандартный подход (для небольших документов или если иерархия недоступна)
+            if not use_hierarchy:
+                logger.info(f"Стандартное индексирование: генерация эмбеддингов для {len(chunks)} чанков...")
+                saved_vectors = 0
+                for i, chunk in enumerate(chunks):
+                    try:
+                        # Генерируем эмбеддинг для чанка
+                        embedding = self.embeddings.embed_query(chunk)
+                        
+                        # Создаем вектор
+                        vector = DocumentVector(
+                            document_id=document_id,
+                            chunk_index=i,
+                            embedding=embedding,
+                            content=chunk,
+                            metadata={"source": doc_name, "chunk": i, "level": 0, "type": "standard_chunk"}
+                        )
+                        
+                        # Сохраняем вектор в БД
+                        vector_id = await self.vector_repo.create_vector(vector)
+                        if vector_id:
+                            saved_vectors += 1
+                            if (i + 1) % 10 == 0 or i == len(chunks) - 1:
+                                logger.info(f"Сохранено векторов: {i+1}/{len(chunks)}")
+                    except Exception as e:
+                        logger.warning(f" Ошибка при сохранении вектора {i}: {str(e)}")
+                        continue
+                
+                if saved_vectors == len(chunks):
+                    logger.info(f"Все {saved_vectors} векторов успешно сохранены в pgvector")
+                else:
+                    logger.warning(f"Сохранено {saved_vectors}/{len(chunks)} векторов")
             
         except Exception as e:
             logger.error(f"ОШИБКА при сохранении документа в pgvector: {str(e)}")
@@ -1019,7 +1109,7 @@ class DocumentProcessor:
             print("ВНИМАНИЕ: pgvector недоступен, векторное хранилище не обновлено")
             self.vectorstore = None
     
-    async def query_documents_async(self, query, k=2):
+    async def query_documents_async(self, query, k=12):
         """Асинхронный поиск релевантных документов по запросу"""
         logger.info(f"Поиск релевантных документов для запроса: '{query[:50]}...'")
         
@@ -1040,15 +1130,28 @@ class DocumentProcessor:
         try:
             logger.info(f"Начинаем поиск документов для запроса: '{query[:100]}...'")
             logger.info(f"Параметры поиска: k={k}, doc_names={self.doc_names}")
-            # Используем pgvector для поиска
-            results = await self._query_documents_async(query, k)
-            if isinstance(results, list):
-                logger.info(f"Найдено {len(results)} релевантных документов через pgvector")
-                if len(results) == 0:
-                    logger.warning("Векторный поиск не вернул результатов. Возможно, документы не сохранены в pgvector.")
-            elif isinstance(results, str):
-                logger.error(f"Ошибка поиска (строка): {results}")
-            return results
+            
+            # НОВОЕ: Используем умный поиск, если доступен optimized_index
+            if self.use_hierarchical_indexing and self.optimized_index:
+                logger.info("🚀 Используем оптимизированный умный поиск с иерархией")
+                results = await self.optimized_index.smart_search_async(
+                    query=query,
+                    k=k,
+                    search_strategy="auto"  # Автоматическое определение стратегии
+                )
+                logger.info(f"Умный поиск вернул {len(results)} результатов")
+                return results
+            else:
+                # Стандартный поиск через pgvector
+                logger.info("Используем стандартный векторный поиск")
+                results = await self._query_documents_async(query, k)
+                if isinstance(results, list):
+                    logger.info(f"Найдено {len(results)} релевантных документов через pgvector")
+                    if len(results) == 0:
+                        logger.warning("Векторный поиск не вернул результатов. Возможно, документы не сохранены в pgvector.")
+                elif isinstance(results, str):
+                    logger.error(f"Ошибка поиска (строка): {results}")
+                return results
         except Exception as e:
             logger.error(f"Ошибка при поиске по документам: {str(e)}")
             import traceback
@@ -1418,7 +1521,7 @@ class DocumentProcessor:
             traceback.print_exc()
             return False 
     
-    async def get_document_context_async(self, query, k=2, include_all_chunks=None, max_context_length=30000):
+    async def get_document_context_async(self, query, k=12, include_all_chunks=None, max_context_length=100000):
         """
         Получение контекста документов для запроса с оптимизацией для скорости
         
@@ -1577,8 +1680,7 @@ class DocumentProcessor:
                 
             else:
                 # ОПТИМИЗИРОВАННЫЙ РЕЖИМ: Для конкретных вопросов используем релевантные фрагменты + начало документа
-                # Увеличиваем k для получения большего количества релевантных фрагментов
-                k = max(k, 8)  # Минимум 8 релевантных фрагментов
+                # Используем переданный k (по умолчанию 12, увеличен для больших документов)
                 docs = await self.query_documents_async(query, k=k)
                 print(f"Найдено релевантных фрагментов: {len(docs) if isinstance(docs, list) else 'ошибка'}")
                 
@@ -1612,12 +1714,13 @@ class DocumentProcessor:
                         context_parts.append(f"Фрагмент (из документа '{doc['source']}', чанк {doc['chunk']}):\n{doc['content']}")
                         added_chunks.add(chunk_key)
                 
-                # Ограничиваем длину контекста
+                # Ограничиваем длину контекста только если он РЕАЛЬНО большой
                 context = "\n\n".join(context_parts)
                 if len(context) > max_context_length:
-                    # Обрезаем до максимальной длины, сохраняя начало
+                    # Обрезаем контекст умно: оставляем максимум информации
+                    logger.warning(f"Контекст слишком большой ({len(context)} символов), обрезаем до {max_context_length}")
                     context = context[:max_context_length]
-                    context += "\n\n[Контекст обрезан для оптимизации скорости]"
+                    context += "\n\n[...контекст обрезан для соответствия лимитам LLM...]"
                 
                 context += "\n\n"
                 
@@ -1632,7 +1735,7 @@ class DocumentProcessor:
             traceback.print_exc()
             return None
     
-    def get_document_context(self, query, k=2, include_all_chunks=None, max_context_length=30000):
+    def get_document_context(self, query, k=12, include_all_chunks=None, max_context_length=100000):
         """Синхронная обертка для get_document_context_async (для обратной совместимости)"""
         try:
             loop = asyncio.get_running_loop()
