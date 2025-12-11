@@ -165,7 +165,9 @@ class LLMClient:
                 "language": language
             }
             
-            async with httpx.AsyncClient(timeout=300.0) as client:
+            # Увеличенный таймаут для обычной транскрипции (до 15 минут)
+            transcribe_timeout = httpx.Timeout(900.0, connect=10.0, read=900.0, write=60.0)
+            async with httpx.AsyncClient(timeout=transcribe_timeout) as client:
                 response = await client.post(
                     f"{self.base_url}/v1/transcribe",
                     files=files,
@@ -255,7 +257,9 @@ class LLMClient:
                 "batch_size": batch_size
             }
             
-            async with httpx.AsyncClient(timeout=300.0) as client:
+            # Увеличенный таймаут для WhisperX транскрипции больших файлов (до 30 минут)
+            whisperx_timeout = httpx.Timeout(1800.0, connect=10.0, read=1800.0, write=60.0)
+            async with httpx.AsyncClient(timeout=whisperx_timeout) as client:
                 response = await client.post(
                     f"{self.base_url}/v1/whisperx/transcribe",
                     files=files,
@@ -287,7 +291,9 @@ class LLMClient:
                 "min_duration": min_duration
             }
             
-            async with httpx.AsyncClient(timeout=300.0) as client:
+            # Увеличенный таймаут для диаризации больших файлов (до 60 минут)
+            diarize_timeout = httpx.Timeout(3600.0, connect=10.0, read=3600.0, write=60.0)
+            async with httpx.AsyncClient(timeout=diarize_timeout) as client:
                 response = await client.post(
                     f"{self.base_url}/v1/diarize",
                     files=files,
@@ -341,7 +347,9 @@ class LLMClient:
                 "min_duration": min_duration
             }
             
-            async with httpx.AsyncClient(timeout=300.0) as client:
+            # Увеличенный таймаут для больших файлов с диаризацией (до 60 минут)
+            transcribe_timeout = httpx.Timeout(3600.0, connect=10.0, read=3600.0, write=60.0)
+            async with httpx.AsyncClient(timeout=transcribe_timeout) as client:
                 # Создаем файл для первого запроса
                 files = {
                     "file": (filename, io.BytesIO(audio_file), "audio/wav")

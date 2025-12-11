@@ -110,7 +110,7 @@ whisperx:
   compute_type: "float16"  # float16, int8, int8_float16
   language: "ru"
   batch_size: 16
-  max_file_size: 104857600  # 100MB
+  max_file_size: 5368709120  # 5GB
   supported_languages:
     - "ru"
     - "en"
@@ -125,7 +125,7 @@ diarization:
   min_speakers: 1
   max_speakers: 10
   min_duration: 1.0  # секунды
-  max_file_size: 104857600  # 100MB
+  max_file_size: 5368709120  # 5GB
 
 # Настройки Surya OCR (распознавание текста с изображений)
 surya:

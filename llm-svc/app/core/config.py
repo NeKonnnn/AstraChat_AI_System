@@ -96,7 +96,7 @@ class WhisperXConfig(BaseModel):
     compute_type: str = "float16"  # float16, int8, int8_float16
     language: str = "ru"
     batch_size: int = 16
-    max_file_size: int = 100 * 1024 * 1024  # 100MB
+    max_file_size: int = 5 * 1024 * 1024 * 1024  # 5GB
     supported_languages: List[str] = ["ru", "en", "auto"]
 
 
@@ -108,7 +108,7 @@ class DiarizationConfig(BaseModel):
     min_speakers: int = 1
     max_speakers: int = 10
     min_duration: float = 1.0  # секунды
-    max_file_size: int = 100 * 1024 * 1024  # 100MB
+    max_file_size: int = 5 * 1024 * 1024 * 1024  # 5GB
 
 
 class SuryaConfig(BaseModel):

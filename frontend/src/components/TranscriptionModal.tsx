@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Dialog,
   DialogTitle,
@@ -30,6 +30,10 @@ import {
   AudioFile as AudioIcon,
   Send as SendIcon,
   Stop as StopIcon,
+  Person as PersonIcon,
+  Settings as SettingsIcon,
+  Add as AddIcon,
+  Delete as DeleteIcon,
 } from '@mui/icons-material';
 import { useAppActions } from '../contexts/AppContext';
 
@@ -80,10 +84,25 @@ export default function TranscriptionModal({
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [showResult, setShowResult] = useState(false);
   const [transcriptionId, setTranscriptionId] = useState<string | null>(null);
+  const [speakerNames, setSpeakerNames] = useState<Record<string, string>>({});
+  const [showSpeakerSettings, setShowSpeakerSettings] = useState(false);
+  const [originalTranscriptionResult, setOriginalTranscriptionResult] = useState<string>('');
+  const [newSpeakerId, setNewSpeakerId] = useState<string>('');
   
   // Используем внешнее состояние, если оно передано, иначе внутреннее
   const isTranscribing = externalIsTranscribing !== undefined ? externalIsTranscribing : internalIsTranscribing;
   const transcriptionResult = externalTranscriptionResult !== undefined ? externalTranscriptionResult : internalTranscriptionResult;
+  
+  // Сохраняем оригинальный текст при изменении результата извне
+  useEffect(() => {
+    if (externalTranscriptionResult && externalTranscriptionResult !== originalTranscriptionResult) {
+      // Сохраняем оригинальный текст только если он еще не был сохранен
+      // или если новый текст не содержит уже примененные имена (т.е. это новый оригинальный результат)
+      if (!originalTranscriptionResult) {
+        setOriginalTranscriptionResult(externalTranscriptionResult);
+      }
+    }
+  }, [externalTranscriptionResult, originalTranscriptionResult]);
   
   const { showNotification } = useAppActions();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -142,9 +161,9 @@ export default function TranscriptionModal({
       return;
     }
 
-    // Проверка размера файла (макс 500MB)
-    if (file.size > 500 * 1024 * 1024) {
-      showNotification('error', 'Размер файла не должен превышать 500MB');
+    // Проверка размера файла (макс 5GB)
+    if (file.size > 5 * 1024 * 1024 * 1024) {
+      showNotification('error', 'Размер файла не должен превышать 5GB');
       return;
     }
 
@@ -200,10 +219,14 @@ export default function TranscriptionModal({
           setTranscriptionId(result.transcription_id);
         }
         
+        // Сохраняем оригинальный результат для возможности повторного редактирования
+        const transcriptionText = result.transcription;
+        setOriginalTranscriptionResult(transcriptionText);
+        
         if (onTranscriptionComplete) {
-          onTranscriptionComplete(result.transcription);
+          onTranscriptionComplete(transcriptionText);
         } else {
-          setInternalTranscriptionResult(result.transcription);
+          setInternalTranscriptionResult(transcriptionText);
         }
         setShowResult(true);
         showNotification('success', 'Транскрибация завершена');
@@ -270,10 +293,14 @@ export default function TranscriptionModal({
       const result = await response.json();
 
       if (result.success) {
+        // Сохраняем оригинальный результат для возможности повторного редактирования
+        const transcriptionText = result.transcription;
+        setOriginalTranscriptionResult(transcriptionText);
+        
         if (onTranscriptionComplete) {
-          onTranscriptionComplete(result.transcription);
+          onTranscriptionComplete(transcriptionText);
         } else {
-          setInternalTranscriptionResult(result.transcription);
+          setInternalTranscriptionResult(transcriptionText);
         }
         setShowResult(true);
         showNotification('success', 'Транскрибация YouTube видео завершена');
@@ -329,6 +356,107 @@ export default function TranscriptionModal({
     } else if (!onInsertToChat) {
       showNotification('warning', 'Функция вставки в чат недоступна');
     }
+  };
+
+  // Извлекаем уникальных спикеров из результата транскрибации
+  const extractSpeakers = (text: string): string[] => {
+    if (!text) return [];
+    
+    // Паттерны для различных форматов спикеров
+    // Формат обычно: "00:23 SPEAKER_00: текст" или "00:23 Speaker_A: текст"
+    const patterns = [
+      /SPEAKER_SPEAKER_\d+/gi,  // SPEAKER_SPEAKER_00, SPEAKER_SPEAKER_01, etc.
+      /SPEAKER_\d+/gi,          // SPEAKER_00, SPEAKER_01, etc.
+      /Speaker_[A-Z0-9]+/gi,     // Speaker_A, Speaker_B, Speaker_1, etc.
+      /Спикер_\d+/gi,            // Спикер_1, Спикер_2, etc.
+    ];
+    
+    const allMatches: string[] = [];
+    patterns.forEach(pattern => {
+      const matches = text.match(pattern);
+      if (matches) {
+        allMatches.push(...matches);
+      }
+    });
+    
+    // Убираем дубликаты и сортируем
+    const uniqueSpeakers = Array.from(new Set(allMatches));
+    return uniqueSpeakers.sort();
+  };
+
+  // Применяем маппинг имен спикеров к тексту
+  const applySpeakerMapping = (text: string, mapping: Record<string, string>): string => {
+    let result = text;
+    Object.entries(mapping).forEach(([original, newName]) => {
+      if (newName.trim()) {
+        // Заменяем все вхождения оригинального имени на новое
+        const regex = new RegExp(original.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+        result = result.replace(regex, newName);
+      }
+    });
+    return result;
+  };
+
+  const handleApplySpeakerNames = () => {
+    // Используем оригинальный текст, если он есть, иначе текущий результат
+    const sourceText = originalTranscriptionResult || transcriptionResult || '';
+    if (!sourceText) return;
+    
+    const mappedText = applySpeakerMapping(sourceText, speakerNames);
+    
+    if (onTranscriptionComplete) {
+      onTranscriptionComplete(mappedText);
+    } else {
+      setInternalTranscriptionResult(mappedText);
+    }
+    
+    showNotification('success', 'Имена спикеров применены');
+    // Не закрываем меню, чтобы можно было редактировать дальше
+    // setShowSpeakerSettings(false);
+  };
+
+  const handleOpenSpeakerSettings = () => {
+    // Используем оригинальный текст для извлечения спикеров, если он есть
+    const sourceText = originalTranscriptionResult || transcriptionResult || '';
+    const speakers = extractSpeakers(sourceText);
+    
+    // Объединяем найденных спикеров с уже существующими в маппинге
+    const currentMapping = { ...speakerNames };
+    speakers.forEach(speaker => {
+      if (!(speaker in currentMapping)) {
+        currentMapping[speaker] = '';
+      }
+    });
+    
+    setSpeakerNames(currentMapping);
+    setShowSpeakerSettings(true);
+  };
+
+  const handleAddNewSpeaker = () => {
+    if (!newSpeakerId.trim()) {
+      showNotification('warning', 'Введите идентификатор спикера');
+      return;
+    }
+    
+    // Проверяем, не существует ли уже такой спикер
+    if (newSpeakerId in speakerNames) {
+      showNotification('warning', 'Такой спикер уже существует');
+      return;
+    }
+    
+    setSpeakerNames({
+      ...speakerNames,
+      [newSpeakerId]: '',
+    });
+    setNewSpeakerId('');
+    showNotification('success', 'Спикер добавлен');
+  };
+
+  const handleRemoveSpeaker = (speakerId: string) => {
+    const newMapping = { ...speakerNames };
+    delete newMapping[speakerId];
+    setSpeakerNames(newMapping);
+    showNotification('info', 'Спикер удален из списка');
   };
 
   const handleStopTranscription = async () => {
@@ -475,7 +603,7 @@ export default function TranscriptionModal({
                         Форматы: MP3, WAV, M4A, AAC, FLAC, MP4, AVI, MOV, MKV, WebM
                       </Typography>
                       <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
-                        Максимальный размер: 500MB
+                        Максимальный размер: 5GB
                       </Typography>
                     </Box>
                   ) : (
@@ -669,6 +797,15 @@ export default function TranscriptionModal({
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <Typography variant="h6">Результат транскрибации</Typography>
             <Box>
+              {extractSpeakers(transcriptionResult || '').length > 0 && (
+              <IconButton 
+                onClick={handleOpenSpeakerSettings}
+                title="Настроить имена спикеров"
+                color="primary"
+              >
+                <PersonIcon />
+              </IconButton>
+              )}
               <IconButton onClick={handleCopyTranscription} title="Копировать">
                 <CopyIcon />
               </IconButton>
@@ -684,6 +821,114 @@ export default function TranscriptionModal({
           </Box>
         </DialogTitle>
         <DialogContent>
+          {showSpeakerSettings && (
+            <Card sx={{ mb: 2, p: 2 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+                <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <SettingsIcon />
+                  Настройка имен спикеров
+                </Typography>
+                <IconButton 
+                  size="small" 
+                  onClick={() => setShowSpeakerSettings(false)}
+                >
+                  <CloseIcon />
+                </IconButton>
+              </Box>
+              <Alert severity="info" sx={{ mb: 2 }}>
+                Введите имена для каждого спикера. Оставьте поле пустым, чтобы оставить оригинальное имя.
+                Вы можете добавлять новых спикеров вручную, если они не были автоматически обнаружены.
+              </Alert>
+              
+              {/* Добавление нового спикера */}
+              <Box sx={{ mb: 3, p: 2, backgroundColor: 'background.default', borderRadius: 1 }}>
+                <Typography variant="subtitle2" gutterBottom>
+                  Добавить нового спикера
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                  <TextField
+                    size="small"
+                    placeholder="Например: SPEAKER_SPEAKER_05"
+                    value={newSpeakerId}
+                    onChange={(e) => setNewSpeakerId(e.target.value)}
+                    variant="outlined"
+                    sx={{ flex: 1 }}
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter') {
+                        handleAddNewSpeaker();
+                      }
+                    }}
+                  />
+                  <Button
+                    variant="outlined"
+                    startIcon={<AddIcon />}
+                    onClick={handleAddNewSpeaker}
+                    disabled={!newSpeakerId.trim()}
+                  >
+                    Добавить
+                  </Button>
+                </Box>
+              </Box>
+
+              {/* Список спикеров */}
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mb: 2, maxHeight: 400, overflow: 'auto' }}>
+                {Object.keys(speakerNames).length === 0 ? (
+                  <Alert severity="info">
+                    Спикеры не найдены. Добавьте их вручную, используя форму выше.
+                  </Alert>
+                ) : (
+                  Object.keys(speakerNames).map((speaker) => (
+                    <Box key={speaker} sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                      <Typography variant="body2" sx={{ minWidth: 150, fontWeight: 'bold' }}>
+                        {speaker}:
+                      </Typography>
+                      <TextField
+                        fullWidth
+                        size="small"
+                        placeholder={`Введите имя для ${speaker}`}
+                        value={speakerNames[speaker] || ''}
+                        onChange={(e) => {
+                          setSpeakerNames({
+                            ...speakerNames,
+                            [speaker]: e.target.value,
+                          });
+                        }}
+                        variant="outlined"
+                      />
+                      <IconButton
+                        size="small"
+                        onClick={() => handleRemoveSpeaker(speaker)}
+                        color="error"
+                        title="Удалить спикера"
+                      >
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    </Box>
+                  ))
+                )}
+              </Box>
+              <Box sx={{ display: 'flex', gap: 2, justifyContent: 'space-between', alignItems: 'center' }}>
+                <Typography variant="body2" color="text.secondary">
+                  {Object.keys(speakerNames).length} {Object.keys(speakerNames).length === 1 ? 'спикер' : 'спикеров'}
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 2 }}>
+                  <Button 
+                    variant="outlined" 
+                    onClick={() => setShowSpeakerSettings(false)}
+                  >
+                    Закрыть
+                  </Button>
+                  <Button 
+                    variant="contained" 
+                    onClick={handleApplySpeakerNames}
+                    startIcon={<PersonIcon />}
+                  >
+                    Применить имена
+                  </Button>
+                </Box>
+              </Box>
+            </Card>
+          )}
           <Paper variant="outlined" sx={{ p: 2, backgroundColor: 'background.default' }}>
             <Typography
               variant="body1"
