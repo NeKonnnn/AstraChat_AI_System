@@ -33,10 +33,11 @@ model:
   # path: "gs://your-bucket/models/Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf"
   # path: "https://your-server.com/models/Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf"
   
-  # name: "qwen-coder-30b"
-  name: "qvikhr-1.5b"
-  ctx_size: 4096
-  gpu_layers: -1  # Используются все слои на GPU
+  name: "qvikhr-2.5"
+  ctx_size: 4096  # Оптимальное значение для работы с большими документами (128K токенов)
+                    # Модель поддерживает до 262K, но для практической работы 128K достаточно
+                    # и работает быстрее. Можно увеличить до 262144 при необходимости
+  gpu_layers: 0  # Установите -1 для использования всех слоев на GPU
   verbose: false
 
 # Настройки генерации

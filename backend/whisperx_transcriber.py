@@ -210,12 +210,12 @@ class WhisperXTranscriber:
             print(f"Путь к моделям диаризации: {self.diarize_model_path}")
             
             if not os.path.exists(config_path):
-                print(f"❌ ОШИБКА: Конфиг файл не найден!")
-                print(f"   Ожидаемый путь: {config_path}")
-                print(f"   Проверьте наличие файла pyannote_diarization_config.yaml")
+                print(f"ОШИБКА: Конфиг файл не найден!")
+                print(f"Ожидаемый путь: {config_path}")
+                print(f"Проверьте наличие файла pyannote_diarization_config.yaml")
                 return None
             
-            print(f"✅ Конфиг файл найден: {config_path}")
+            print(f"Конфиг файл найден: {config_path}")
             
             # Проверяем наличие .bin файлов
             models_dir = os.path.join(self.diarize_model_path, "models")
@@ -224,25 +224,25 @@ class WhisperXTranscriber:
                 "pyannote_model_wespeaker-voxceleb-resnet34-LM.bin"
             ]
             
-            print(f"🔍 Проверяем наличие .bin файлов в {models_dir}...")
+            print(f"Проверяем наличие .bin файлов в {models_dir}...")
             
             missing_files = []
             for file_name in required_files:
                 file_path = os.path.join(models_dir, file_name)
                 if os.path.exists(file_path):
                     size = os.path.getsize(file_path) / 1024 / 1024
-                    print(f"   ✅ {file_name}: {size:.1f} МБ")
+                    print(f"{file_name}: {size:.1f} МБ")
                 else:
-                    print(f"   ❌ {file_name}: НЕ НАЙДЕН")
+                    print(f"{file_name}: НЕ НАЙДЕН")
                     missing_files.append(file_name)
             
             if missing_files:
-                print(f"❌ ОШИБКА: Отсутствуют файлы моделей: {', '.join(missing_files)}")
-                print(f"   Директория моделей: {models_dir}")
+                print(f"ОШИБКА: Отсутствуют файлы моделей: {', '.join(missing_files)}")
+                print(f"Директория моделей: {models_dir}")
                 return None
             
             # Читаем конфиг и заменяем относительные пути на абсолютные
-            print(f"📖 Читаем конфиг и преобразуем пути в абсолютные...")
+            print(f"Читаем конфиг и преобразуем пути в абсолютные...")
             with open(config_path, 'r', encoding='utf-8') as f:
                 config_data = yaml.safe_load(f)
             
@@ -254,13 +254,13 @@ class WhisperXTranscriber:
                     if not params['embedding'].startswith('/') and not '://' in params['embedding']:
                         # Это относительный путь - делаем абсолютным
                         params['embedding'] = os.path.abspath(os.path.join(self.diarize_model_path, params['embedding']))
-                        print(f"   📍 Embedding путь: {params['embedding']}")
+                        print(f"Embedding путь: {params['embedding']}")
                 
                 if 'segmentation' in params and isinstance(params['segmentation'], str):
                     if not params['segmentation'].startswith('/') and not '://' in params['segmentation']:
                         # Это относительный путь - делаем абсолютным
                         params['segmentation'] = os.path.abspath(os.path.join(self.diarize_model_path, params['segmentation']))
-                        print(f"   📍 Segmentation путь: {params['segmentation']}")
+                        print(f"Segmentation путь: {params['segmentation']}")
             
             # Создаем временный конфиг с абсолютными путями
             import tempfile
@@ -268,10 +268,10 @@ class WhisperXTranscriber:
             with open(temp_config_path, 'w', encoding='utf-8') as f:
                 yaml.dump(config_data, f)
             
-            print(f"💾 Временный конфиг создан: {temp_config_path}")
+            print(f"Временный конфиг создан: {temp_config_path}")
             
             # Загружаем пайплайн из временного конфига с абсолютными путями
-            print(f"📦 Загружаем локальный пайплайн...")
+            print(f"Загружаем локальный пайплайн...")
             pipeline = Pipeline.from_pretrained(temp_config_path)
             
             # Удаляем временный файл
@@ -280,13 +280,13 @@ class WhisperXTranscriber:
             except:
                 pass
             
-            print("✅ Локальный пайплайн диаризации загружен успешно!")
+            print("Локальный пайплайн диаризации загружен успешно!")
             print("=" * 80)
             return pipeline
             
         except Exception as e:
             print("=" * 80)
-            print(f"❌ ОШИБКА ЗАГРУЗКИ ПАЙПЛАЙНА: {e}")
+            print(f"ОШИБКА ЗАГРУЗКИ ПАЙПЛАЙНА: {e}")
             import traceback
             traceback.print_exc()
             print("=" * 80)
@@ -577,7 +577,7 @@ class WhisperXTranscriber:
                                     result = result_with_speakers
                                     # Форматируем результат с диаризацией
                                     transcript = self._format_transcript_with_speakers(result)
-                                    print("✅ ДИАРИЗАЦИЯ ЗАВЕРШЕНА УСПЕШНО!")
+                                    print("ДИАРИЗАЦИЯ ЗАВЕРШЕНА УСПЕШНО!")
                                     print(f"Первые 200 символов: {transcript[:200]}")
                                     print("=" * 80)
                                 else:

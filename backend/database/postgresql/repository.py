@@ -299,6 +299,69 @@ class VectorRepository:
             logger.error(f"Ошибка при создании вектора: {e}")
             return None
     
+    async def create_vectors_batch(self, vectors: List[DocumentVector]) -> int:
+        """
+        Batch создание векторов (в 5-10 раз быстрее чем по одному)
+        
+        Args:
+            vectors: Список объектов векторов
+            
+        Returns:
+            Количество успешно созданных векторов
+        """
+        if not vectors:
+            return 0
+        
+        try:
+            # Подготавливаем данные для batch insert
+            values = []
+            for vector in vectors:
+                metadata_json = json.dumps(vector.metadata) if vector.metadata else "{}"
+                values.append((
+                    vector.document_id,
+                    vector.chunk_index,
+                    str(vector.embedding),  # pgvector требует строку формата '[0.1, 0.2, ...]'
+                    vector.content,
+                    metadata_json
+                ))
+            
+            # Выполняем batch insert с использованием executemany
+            async with await self.db_connection.acquire() as conn:
+                # asyncpg не поддерживает executemany напрямую для RETURNING
+                # Поэтому используем COPY или множественный VALUES
+                
+                # Вариант 1: Множественный INSERT с VALUES
+                # Это быстрее чем по одному, но медленнее чем COPY
+                placeholders = []
+                flat_values = []
+                for i, (doc_id, chunk_idx, emb, content, meta) in enumerate(values):
+                    base = i * 5
+                    placeholders.append(f"(${base+1}, ${base+2}, ${base+3}, ${base+4}, ${base+5}::jsonb)")
+                    flat_values.extend([doc_id, chunk_idx, emb, content, meta])
+                
+                query = f"""
+                    INSERT INTO document_vectors (document_id, chunk_index, embedding, content, metadata)
+                    VALUES {', '.join(placeholders)}
+                """
+                
+                await conn.execute(query, *flat_values)
+                
+                logger.info(f"Batch insert: создано {len(vectors)} векторов")
+                return len(vectors)
+                
+        except Exception as e:
+            logger.error(f"Ошибка при batch создании векторов: {e}")
+            logger.debug(f"Попытка создать {len(vectors)} векторов")
+            
+            # Fallback: создаем по одному
+            logger.warning("Переключаемся на последовательное создание...")
+            created = 0
+            for vector in vectors:
+                vector_id = await self.create_vector(vector)
+                if vector_id:
+                    created += 1
+            return created
+    
     async def similarity_search(
         self, 
         query_embedding: List[float], 
@@ -368,6 +431,54 @@ class VectorRepository:
                 
         except Exception as e:
             logger.error(f"Ошибка при векторном поиске: {e}")
+            return []
+    
+    async def get_vectors_by_document(self, document_id: int) -> List[DocumentVector]:
+        """
+        Получить все векторы документа
+        
+        Args:
+            document_id: ID документа
+            
+        Returns:
+            Список векторов документа
+        """
+        try:
+            async with await self.db_connection.acquire() as conn:
+                results = await conn.fetch("""
+                    SELECT id, document_id, chunk_index, embedding::text, content, metadata
+                    FROM document_vectors
+                    WHERE document_id = $1
+                    ORDER BY chunk_index
+                """, document_id)
+                
+                vectors = []
+                for result in results:
+                    # Парсим embedding из строки (формат: '[0.1, 0.2, ...]')
+                    embedding_str = result['embedding'].strip('[]')
+                    embedding = [float(x.strip()) for x in embedding_str.split(',')]
+                    
+                    # Десериализуем metadata из JSON
+                    metadata = result['metadata']
+                    if isinstance(metadata, str):
+                        metadata = json.loads(metadata)
+                    elif metadata is None:
+                        metadata = {}
+                    
+                    vector = DocumentVector(
+                        id=result['id'],
+                        document_id=result['document_id'],
+                        chunk_index=result['chunk_index'],
+                        embedding=embedding,
+                        content=result['content'],
+                        metadata=metadata
+                    )
+                    vectors.append(vector)
+                
+                return vectors
+                
+        except Exception as e:
+            logger.error(f"Ошибка при получении векторов документа: {e}")
             return []
     
     async def delete_vectors_by_document(self, document_id: int) -> bool:

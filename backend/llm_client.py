@@ -505,10 +505,6 @@ class LLMService:
                 role = entry.get("role", "user")
                 content = entry.get("content", "")
                 if role in ["user", "assistant", "system"]:
-                    # Фильтруем пустые сообщения ассистента (они сбивают LLM)
-                    if role == "assistant" and not content.strip():
-                        logger.debug(f"Пропускаем пустое сообщение ассистента из истории")
-                        continue
                     messages.append({"role": role, "content": content})
         
         # Добавляем текущий запрос
@@ -650,17 +646,11 @@ class LLMService:
                     logger.info(f"[_stream_generation] Получен ответ, status={response.status_code}")
                     response.raise_for_status()
                     
-                    line_count = 0
                     async for line in response.aiter_lines():
-                        line_count += 1
-                        if line_count <= 3:  # Логируем первые 3 строки для диагностики
-                            logger.info(f"[_stream_generation] Строка {line_count}: {line[:200]}")
-                        
                         if line.startswith("data: "):
                             data_str = line[6:]  # Убираем "data: "
                             
                             if data_str.strip() == "[DONE]":
-                                logger.info(f"[_stream_generation] Получен сигнал [DONE], всего строк обработано: {line_count}")
                                 break
                             
                             try:
@@ -688,7 +678,6 @@ class LLMService:
                                 continue
                     
                     logger.info(f"[_stream_generation] Генерация завершена, получено {len(accumulated_text)} символов")
-                    logger.info(f"[_stream_generation] Всего строк обработано: {line_count}")
                     return accumulated_text
                 
         except httpx.ConnectError as e:

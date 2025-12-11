@@ -90,14 +90,14 @@ class PostgreSQLConnection:
                             "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'vector')"
                         )
                         if check_result:
-                            logger.info("✅ Расширение pgvector успешно установлено")
+                            logger.info("Расширение pgvector успешно установлено")
                         else:
-                            logger.error("❌ Расширение pgvector не установлено после попытки создания")
+                            logger.error("Расширение pgvector не установлено после попытки создания")
                             logger.error("   Возможно, у пользователя нет прав на создание расширений")
                             logger.error("   Выполните вручную: CREATE EXTENSION vector;")
                     except Exception as e:
                         error_msg = str(e)
-                        logger.error(f"❌ Не удалось установить pgvector: {error_msg}")
+                        logger.error(f"Не удалось установить pgvector: {error_msg}")
                         if "permission denied" in error_msg.lower() or "права" in error_msg.lower():
                             logger.error("   У пользователя PostgreSQL нет прав на создание расширений")
                             logger.error("   Решение:")

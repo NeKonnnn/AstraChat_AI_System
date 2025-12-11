@@ -1362,7 +1362,16 @@ async def chat_message(sid, data):
 
 Ответь на основе документов."""
                             
-                            logger.info("Socket.IO: отправляем промпт с контекстом в AI agent")
+                            # Рассчитываем примерное количество токенов (грубая оценка: ~4 символа = 1 токен для русского)
+                            estimated_tokens = len(final_message) // 4
+                            logger.info(f"Socket.IO: отправляем промпт с контекстом в AI agent")
+                            logger.info(f"Socket.IO: размер финального промпта: {len(final_message)} символов (~{estimated_tokens} токенов)")
+                            
+                            # Предупреждение, если промпт слишком большой
+                            if estimated_tokens > 100000:
+                                logger.warning(f"Socket.IO: ВНИМАНИЕ! Промпт очень большой ({estimated_tokens} токенов). Модель Qwen3-Coder поддерживает 262K токенов, но такой большой контекст может замедлить генерацию!")
+                            elif estimated_tokens > 50000:
+                                logger.info(f"Socket.IO: Промпт большой ({estimated_tokens} токенов), но в пределах нормы для Qwen3-Coder (262K токенов)")
                         else:
                             logger.warning("Socket.IO: контекст документов пуст или есть изображения, используем исходное сообщение")
                             
@@ -2558,7 +2567,7 @@ async def get_available_models():
         
         if use_llm_svc:
             # Получаем модели через llm-svc
-            logger.info("Запрос списка моделей через llm-svc")
+            logger.info("[Backend] Запрос списка моделей через llm-svc")
             try:
                 from backend.llm_client import get_llm_service
                 service = await get_llm_service()
@@ -2570,18 +2579,37 @@ async def get_available_models():
                     models.append({
                         "name": model_data.get("id", "Unknown"),
                         "path": f"llm-svc://{model_data.get('id', 'unknown')}",
-                        "size": 0,  # llm-svc не предоставляет размер
-                        "size_mb": 0,
+                        "size": model_data.get("size", 0),
+                        "size_mb": model_data.get("size_mb", 0),
                         "object": model_data.get("object", "model"),
                         "owned_by": model_data.get("owned_by", "llm-svc")
                     })
                 
-                logger.info(f"Получено моделей через llm-svc: {len(models)}")
+                logger.info(f"[Backend] Получено моделей через llm-svc: {len(models)}")
+                if models:
+                    logger.info(f"[Backend] Доступные модели: {[m['name'] for m in models]}")
                 return {"models": models}
             except Exception as e:
-                logger.error(f"Ошибка получения моделей через llm-svc: {e}")
+                logger.error("")
+                logger.error("=" * 100)
+                logger.error("[Backend] ОШИБКА ПОЛУЧЕНИЯ СПИСКА МОДЕЛЕЙ ИЗ LLM-SVC")
+                logger.error("=" * 100)
+                logger.error(f"Ошибка: {str(e)}")
+                logger.error(f"Тип ошибки: {type(e).__name__}")
+                logger.error("")
+                logger.error("Возможные причины:")
+                logger.error("1. Контейнер llm-svc не запущен или еще загружает модель")
+                logger.error("2. Проблемы с сетью Docker между контейнерами")
+                logger.error("3. llm-svc не отвечает на запросы (модель еще загружается)")
+                logger.error("")
+                logger.error("Проверьте:")
+                logger.error("- docker ps | grep llm-svc")
+                logger.error("- docker-compose logs llm-svc | findstr 'МОДЕЛЬ'")
+                logger.error("- docker network inspect astrachat-network")
+                logger.error("=" * 100)
+                logger.error("")
                 # Fallback к пустому списку
-                return {"models": [], "error": str(e)}
+                return {"models": [], "error": str(e), "warning": "llm-svc недоступен, модели не загружены"}
         else:
             # Используем локальные .gguf модели
             logger.info("Запрос списка локальных .gguf моделей")

@@ -315,8 +315,12 @@ async def transcribe_with_diarization(
                         "text": text
                     })
             
-            # Полный текст
+            # Полный текст - собираем из всех сегментов, если поле text пустое
             full_text = result.get("text", "").strip()
+            if not full_text and segments:
+                # Собираем текст из всех сегментов с указанием спикеров
+                full_text = "\n".join([f"{seg['speaker']}: {seg['text']}" for seg in segments if seg['text']])
+                logger.info(f"Собрали полный текст из {len(segments)} сегментов: {len(full_text)} символов")
             
             return JSONResponse(content={
                 "success": True,

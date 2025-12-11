@@ -90,7 +90,7 @@ services:
       - MINIO_DOCUMENTS_BUCKET_NAME=${MINIO_DOCUMENTS_BUCKET_NAME:-astrachat-documents}
     depends_on:
       llm-svc:
-        condition: service_started
+        condition: service_started # service_healthy если хотим дождаться, чтобы сервис запустился и стал доступен
       mongodb:
         condition: service_healthy
       postgresql:

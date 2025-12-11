@@ -37,7 +37,7 @@ async def cleanup_invalid_tags(action: str = "rename"):
     
     try:
         await db_connection.connect()
-        logger.info("✅ Подключено к PostgreSQL")
+        logger.info("Подключено к PostgreSQL")
         
         async with db_connection.acquire() as conn:
             # Находим все теги с именами короче 2 символов
@@ -49,7 +49,7 @@ async def cleanup_invalid_tags(action: str = "rename"):
             """)
             
             if not invalid_tags:
-                logger.info("✅ Некорректных тегов не найдено")
+                logger.info("Некорректных тегов не найдено")
                 return
             
             logger.info(f"Найдено некорректных тегов: {len(invalid_tags)}")
@@ -62,19 +62,19 @@ async def cleanup_invalid_tags(action: str = "rename"):
                 if action == "delete":
                     # Удаляем тег
                     await conn.execute("DELETE FROM tags WHERE id = $1", tag_id)
-                    logger.info(f"🗑️  Удален тег: ID={tag_id}, name='{tag_name}', использований={usage_count}")
+                    logger.info(f"Удален тег: ID={tag_id}, name='{tag_name}', использований={usage_count}")
                 else:
                     # Переименовываем тег
                     new_name = f"tag-{tag_id}"
                     await conn.execute("""
                         UPDATE tags SET name = $1 WHERE id = $2
                     """, new_name, tag_id)
-                    logger.info(f"✏️  Переименован тег: '{tag_name}' -> '{new_name}', использований={usage_count}")
+                    logger.info(f"Переименован тег: '{tag_name}' -> '{new_name}', использований={usage_count}")
             
-            logger.info(f"✅ Обработано тегов: {len(invalid_tags)}")
+            logger.info(f"Обработано тегов: {len(invalid_tags)}")
             
     except Exception as e:
-        logger.error(f"❌ Ошибка при очистке тегов: {e}")
+        logger.error(f"Ошибка при очистке тегов: {e}")
         raise
     finally:
         await db_connection.close()
@@ -101,7 +101,7 @@ async def main():
     logger.info(f"Действие: {args.action}")
     
     if args.action == "delete":
-        response = input("⚠️  Вы уверены, что хотите УДАЛИТЬ некорректные теги? (yes/no): ")
+        response = input("Вы уверены, что хотите УДАЛИТЬ некорректные теги? (yes/no): ")
         if response.lower() != "yes":
             logger.info("Отменено пользователем")
             return
@@ -109,7 +109,7 @@ async def main():
     await cleanup_invalid_tags(args.action)
     
     logger.info("=" * 60)
-    logger.info("✅ Готово!")
+    logger.info("Готово!")
     logger.info("=" * 60)
 
 

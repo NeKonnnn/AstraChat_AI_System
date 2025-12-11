@@ -77,9 +77,9 @@ class MinIOClient:
             # Создаем bucket, если его нет
             self._ensure_bucket_exists()
             
-            logger.info("✅ MinIO клиент успешно инициализирован и готов к работе")
+            logger.info("MinIO клиент успешно инициализирован и готов к работе")
         except Exception as e:
-            logger.error(f"❌ Ошибка инициализации MinIO клиента: {e}")
+            logger.error(f"Ошибка инициализации MinIO клиента: {e}")
             logger.error(f"Проверьте:")
             logger.error(f"  1. Запущен ли MinIO сервер на {self.endpoint}")
             logger.error(f"  2. Правильность учетных данных (access_key/secret_key)")
@@ -305,9 +305,9 @@ def get_minio_client() -> Optional[MinIOClient]:
             port = os.getenv('MINIO_PORT', '9000')
             logger.info(f"MinIO настройки: endpoint={endpoint}, port={port}")
             _minio_client = MinIOClient()
-            logger.info("✅ MinIO клиент успешно инициализирован")
+            logger.info("MinIO клиент успешно инициализирован")
         except Exception as e:
-            logger.error(f"❌ Не удалось инициализировать MinIO клиент: {e}")
+            logger.error(f"Не удалось инициализировать MinIO клиент: {e}")
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
             logger.warning("Будут использоваться локальные временные файлы")

@@ -24,14 +24,15 @@ cors:
 # ВАЖНО: Пути для Windows (не Docker)
 model:
   # Путь к модели на вашей Windows системе
-  path: "F:/memo_new_api/models/QVikhr-2.5-1.5B-Instruct-SMPO-Q8_0.gguf"
+  # path: "F:/memo_new_api/models/QVikhr-2.5-1.5B-Instruct-SMPO-Q8_0.gguf"
   # Альтернативно можно использовать:
   path: "F:/memo_new_api/models/Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf"
   
-  name: "qvikhr-1.5b"
-  name: "qwen-coder-30b"
-  ctx_size: 4096
-  gpu_layers: -1  # Используются все слои на GPU
+  # name: "qvikhr-1.5b"
+  name: "Qwen3-Coder-30B-A3B-Instruct-Q8_0"
+  ctx_size: 262000  # Оптимальное значение для работы с большими документами (128K токенов)
+                    # Модель поддерживает до 262K, но для практической работы 128K достаточно
+  gpu_layers: 0  # Используются все слои на GPU
   verbose: false
 
 # Настройки генерации

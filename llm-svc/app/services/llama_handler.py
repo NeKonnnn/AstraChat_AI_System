@@ -34,31 +34,10 @@ class LlamaHandler:
     async def initialize(self):
         """Асинхронная инициализация модели."""
         if self.is_initialized:
-            logger.info(f"Model already initialized: {self.model_name} from {self.model_path}")
             return
 
         try:
-            # Проверяем существование файла модели
-            import os
-            if not os.path.exists(self.model_path):
-                error_msg = f"Model file not found at path: {self.model_path}"
-                logger.error(error_msg)
-                raise FileNotFoundError(error_msg)
-            
-            file_size = os.path.getsize(self.model_path)
-            file_size_mb = round(file_size / (1024 * 1024), 2)
-            
-            logger.info("=" * 80)
-            logger.info("LOADING LLM MODEL")
-            logger.info("=" * 80)
-            logger.info(f"Model Name (config): {self.model_name}")
-            logger.info(f"Model Path: {self.model_path}")
-            logger.info(f"File Size: {file_size_mb} MB ({file_size} bytes)")
-            logger.info(f"Context Size: {self.n_ctx}")
-            logger.info(f"GPU Layers: {self.n_gpu_layers}")
-            logger.info(f"File Exists: {os.path.exists(self.model_path)}")
-            logger.info("=" * 80)
-            
+            logger.info(f"Loading model from {self.model_path}")
             loop = asyncio.get_event_loop()
             self.model = await loop.run_in_executor(
                 None,
@@ -72,18 +51,9 @@ class LlamaHandler:
                 )
             )
             self.is_initialized = True
-            
-            logger.info("=" * 80)
-            logger.info("MODEL LOADED SUCCESSFULLY")
-            logger.info(f"Active Model: {self.model_name}")
-            logger.info(f"Model Path: {self.model_path}")
-            logger.info("=" * 80)
+            logger.info("Model loaded successfully")
         except Exception as e:
-            logger.error("=" * 80)
-            logger.error("FAILED TO LOAD MODEL")
-            logger.error(f"Model Path: {self.model_path}")
-            logger.error(f"Error: {str(e)}")
-            logger.error("=" * 80)
+            logger.error(f"Failed to load model: {str(e)}")
             raise
 
     async def _run_in_executor(self, func: Callable):
