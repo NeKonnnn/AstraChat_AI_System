@@ -1,0 +1,19 @@
+fastapi==0.116.1
+starlette==0.47.3
+httpx==0.28.1
+uvicorn[standard]==0.35.0
+#llama-cpp-python==0.3.16
+pydantic==2.11.7
+pydantic-settings==2.10.1
+python-dotenv==1.0.0
+requests==2.32.4
+tqdm==4.67.1
+pytest==8.4.1
+pytest-asyncio==1.1.0
+PyYAML==6.0.2
+anyio==4.10.0
+watchfiles==1.0.5 # error sha256 on Nexus
+dmkfr-vault-interface==0.0.1
+# fix versions
+click==8.3.0
+https://nexus-ci.int.gazprombank.ru/repository/dtlab-pypi-lib/packages/llama-cpp-python/0.3.16/llama_cpp_python-0.3.16+cu124-cp312-cp312-linux_x86_64.whl
