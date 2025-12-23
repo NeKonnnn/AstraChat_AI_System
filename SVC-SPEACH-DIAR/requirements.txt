@@ -1,0 +1,16 @@
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+fastapi==0.116.1
+uvicorn==0.35.0
+pydantic==2.11.7
+pydantic-settings==2.10.1
+python-multipart==0.0.20
+requests==2.32.5
+pyyaml
+aiofiles
+numpy
+torch==2.5.1+cu121
+torchaudio==2.5.1+cu121
+soundfile
+ffmpeg-python
+pyannote.audio==3.1.1

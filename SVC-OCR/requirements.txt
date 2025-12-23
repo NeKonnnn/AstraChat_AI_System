@@ -1,0 +1,14 @@
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+fastapi==0.116.1
+uvicorn==0.35.0
+pydantic==2.11.7
+pydantic-settings==2.10.1
+python-multipart==0.0.20
+requests==2.32.5
+aiofiles
+torch==2.5.1+cu121
+torchvision==0.20.1+cu121
+numpy
+pillow
+surya-ocr==0.4.15
