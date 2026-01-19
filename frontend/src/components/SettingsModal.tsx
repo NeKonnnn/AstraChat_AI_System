@@ -109,7 +109,7 @@ export default function SettingsModal({ open, onClose, isDarkMode, onToggleTheme
       case 'transcription':
         return <TranscriptionSettings />;
       case 'chats':
-        return <ChatSettings />;
+        return <ChatSettings isDarkMode={isDarkMode} />;
       case 'about':
         return <AboutSettings />;
       default:

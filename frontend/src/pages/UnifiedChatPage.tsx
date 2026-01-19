@@ -26,6 +26,9 @@ import {
   Collapse,
   Drawer,
   Divider,
+  Checkbox,
+  FormControlLabel,
+  Paper,
 } from '@mui/material';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -53,6 +56,7 @@ import {
   Menu as MenuIcon,
   Transcribe as TranscribeIcon,
   AutoAwesome as PromptsIcon,
+  Share as ShareIcon,
 } from '@mui/icons-material';
 import { useAppContext, useAppActions, Message } from '../contexts/AppContext';
 import { useSocket } from '../contexts/SocketContext';
@@ -61,6 +65,8 @@ import MessageRenderer from '../components/MessageRenderer';
 import { useNavigate } from 'react-router-dom';
 import TranscriptionModal from '../components/TranscriptionModal';
 import ModelSelector from '../components/ModelSelector';
+import MessageNavigationBar from '../components/MessageNavigationBar';
+import ShareConfirmDialog from '../components/ShareConfirmDialog';
 
 interface UnifiedChatPageProps {
   isDarkMode: boolean;
@@ -86,8 +92,14 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   const navigate = useNavigate();
   
   // Состояние для правой панели
-  const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
-  const [rightSidebarHidden, setRightSidebarHidden] = useState(false);
+  const [rightSidebarOpen, setRightSidebarOpen] = useState(() => {
+    const saved = localStorage.getItem('rightSidebarOpen');
+    return saved !== null ? saved === 'true' : false;
+  });
+  const [rightSidebarHidden, setRightSidebarHidden] = useState(() => {
+    const saved = localStorage.getItem('rightSidebarHidden');
+    return saved !== null ? saved === 'true' : false;
+  });
   
   // Состояние для отображения выбора модели
   const [showModelSelectorInSettings, setShowModelSelectorInSettings] = useState(() => {
@@ -105,6 +117,15 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     window.addEventListener('interfaceSettingsChanged', handleSettingsChange);
     return () => window.removeEventListener('interfaceSettingsChanged', handleSettingsChange);
   }, []);
+
+  // Сохранение состояния правой боковой панели
+  useEffect(() => {
+    localStorage.setItem('rightSidebarOpen', String(rightSidebarOpen));
+  }, [rightSidebarOpen]);
+
+  useEffect(() => {
+    localStorage.setItem('rightSidebarHidden', String(rightSidebarHidden));
+  }, [rightSidebarHidden]);
   
   // Состояние для модального окна транскрибации
   const [transcriptionModalOpen, setTranscriptionModalOpen] = useState(false);
@@ -181,6 +202,12 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   const [showDocumentDialog, setShowDocumentDialog] = useState(false);
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   
+  // Состояние для режима "Поделиться"
+  const [shareMode, setShareMode] = useState(false);
+  const [selectedMessages, setSelectedMessages] = useState<Set<string>>(new Set());
+  const [isCreatingShareLink, setIsCreatingShareLink] = useState(false);
+  const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -194,6 +221,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastAudioLevelRef = useRef<number>(0);
+  const messageRefs = useRef<(HTMLDivElement | null)[]>([]);
   
   // Константы
   const silenceThreshold = 0.1;
@@ -2214,10 +2242,124 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   };
 
   // ================================
+  // ФУНКЦИИ НАВИГАЦИИ ПО СООБЩЕНИЯМ
+  // ================================
+
+  const scrollToMessage = useCallback((index: number) => {
+    const messageElement = messageRefs.current[index];
+    if (messageElement) {
+      messageElement.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      });
+    }
+  }, []);
+
+  // ================================
+  // ФУНКЦИИ ДЛЯ РЕЖИМА "ПОДЕЛИТЬСЯ"
+  // ================================
+
+  const handleEnterShareMode = () => {
+    setShareMode(true);
+    setSelectedMessages(new Set());
+  };
+
+  const handleExitShareMode = () => {
+    setShareMode(false);
+    setSelectedMessages(new Set());
+  };
+
+  const handleToggleMessage = (userMsgId: string, assistantMsgId: string) => {
+    const newSelected = new Set(selectedMessages);
+    
+    if (newSelected.has(userMsgId) && newSelected.has(assistantMsgId)) {
+      // Если оба выбраны, снимаем выбор
+      newSelected.delete(userMsgId);
+      newSelected.delete(assistantMsgId);
+    } else {
+      // Выбираем оба
+      newSelected.add(userMsgId);
+      newSelected.add(assistantMsgId);
+    }
+    
+    setSelectedMessages(newSelected);
+  };
+
+  const handleSelectAll = () => {
+    // Получаем все пары вопрос-ответ
+    const allPairs: string[] = [];
+    for (let i = 0; i < messages.length - 1; i++) {
+      if (messages[i].role === 'user' && messages[i + 1].role === 'assistant') {
+        allPairs.push(messages[i].id, messages[i + 1].id);
+      }
+    }
+    
+    if (selectedMessages.size === allPairs.length) {
+      // Если все выбраны, снимаем выбор
+      setSelectedMessages(new Set());
+    } else {
+      // Выбираем все
+      setSelectedMessages(new Set(allPairs));
+    }
+  };
+
+  const handleCreateShareLink = () => {
+    if (selectedMessages.size === 0) {
+      showNotification('error', 'Выберите хотя бы одно сообщение');
+      return;
+    }
+    // Открываем диалог подтверждения
+    setShareDialogOpen(true);
+  };
+
+  const createShareLinkConfirmed = async (): Promise<string> => {
+    try {
+      // Фильтруем выбранные сообщения в правильном порядке
+      const selectedMessagesArray = messages.filter(msg => selectedMessages.has(msg.id));
+
+      // Получаем токен для авторизации
+      const token = localStorage.getItem('auth_token') || localStorage.getItem('token');
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const response = await fetch(getApiUrl('/api/share/create'), {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify({
+          messages: selectedMessagesArray,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Ошибка создания публичной ссылки');
+      }
+
+      const data = await response.json();
+      const fullUrl = `${window.location.origin}/share/${data.share_id}`;
+      
+      return fullUrl;
+    } catch (err) {
+      showNotification('error', err instanceof Error ? err.message : 'Произошла ошибка');
+      throw err;
+    }
+  };
+
+  const handleCloseShareDialog = () => {
+    setShareDialogOpen(false);
+    // Выходим из режима выбора после закрытия диалога
+    handleExitShareMode();
+  };
+
+  // ================================
   // КОМПОНЕНТЫ СООБЩЕНИЙ
   // ================================
 
-    const MessageCard = ({ message }: { message: Message }): React.ReactElement => {
+    const MessageCard = ({ message, index }: { message: Message; index: number }): React.ReactElement => {
     const isUser = message.role === 'user';
     const [isHovered, setIsHovered] = useState(false);
     const shouldShowBorder = isUser 
@@ -2315,18 +2457,49 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       </>
     );
     
+    // Проверяем, является ли это сообщение частью пары для выбора
+    const isPairStart = isUser && index < messages.length - 1 && messages[index + 1].role === 'assistant';
+    const isSelected = isPairStart && 
+      selectedMessages.has(message.id) && 
+      selectedMessages.has(messages[index + 1].id);
+
     return (
       <Box
+        ref={(el: HTMLDivElement | null) => {
+          messageRefs.current[index] = el;
+        }}
+        data-message-index={index}
         sx={{
           display: 'flex',
-          flexDirection: 'column',
-          alignItems: interfaceSettings.leftAlignMessages ? 'flex-start' : (isUser ? 'flex-end' : 'flex-start'),
-          mb: 1.5, /* Увеличиваем отступ между сообщениями (соответствует CSS margin-bottom: 28px) */
+          flexDirection: 'row',
+          alignItems: 'flex-start',
+          mb: 1.5,
           width: '100%',
         }}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
       >
+        {/* Чекбокс в режиме "Поделиться" */}
+        {shareMode && isPairStart && (
+          <Checkbox
+            checked={isSelected}
+            onChange={() => handleToggleMessage(message.id, messages[index + 1].id)}
+            sx={{
+              mt: 1,
+              mr: 1,
+              p: 0.5,
+            }}
+          />
+        )}
+
+        <Box
+          sx={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: interfaceSettings.leftAlignMessages ? 'flex-start' : (isUser ? 'flex-end' : 'flex-start'),
+            flex: 1,
+          }}
+        >
         {shouldShowBorder ? (
           <Card
             className="message-bubble"
@@ -2623,6 +2796,40 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
               <VolumeUpIcon />
             </IconButton>
           </Tooltip>
+          
+          {/* Кнопка "Поделиться" - только для сообщений ассистента */}
+          {!isUser && !shareMode && (
+            <Tooltip title="Поделиться">
+              <IconButton
+                size="small"
+                onClick={handleEnterShareMode}
+                className="message-share-button"
+                data-theme={isDarkMode ? 'dark' : 'light'}
+                sx={{ 
+                  opacity: 0.7,
+                  p: 0.5,
+                  borderRadius: '6px',
+                  minWidth: '28px',
+                  width: '28px',
+                  height: '28px',
+                  '&:hover': {
+                    opacity: 1,
+                    '& .MuiSvgIcon-root': {
+                      color: 'primary.main',
+                    },
+                  },
+                  '& .MuiSvgIcon-root': {
+                    fontSize: '18px !important',
+                    width: '18px !important',
+                    height: '18px !important',
+                  },
+                }}
+              >
+                <ShareIcon />
+              </IconButton>
+            </Tooltip>
+          )}
+        </Box>
         </Box>
       </Box>
     );
@@ -4026,7 +4233,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
               px: interfaceSettings.widescreenMode ? 4 : 2,
             }}>
               {messages.map((message, index) => (
-                <MessageCard key={message.id || index} message={message} />
+                <MessageCard key={message.id || index} message={message} index={index} />
               ))}
               
               {/* Индикатор размышления - показывается только до начала потоковой генерации, сразу после сообщений */}
@@ -4885,6 +5092,93 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
             inputRef.current?.focus();
           }, 100);
         }}
+      />
+
+      {/* Нижняя панель в режиме "Поделиться" */}
+      {shareMode && (
+        <Paper
+          sx={{
+            position: 'fixed',
+            bottom: 0,
+            left: sidebarOpen ? 280 : 64,
+            right: 0,
+            zIndex: 1200,
+            borderRadius: 0,
+            boxShadow: '0 -4px 12px rgba(0, 0, 0, 0.1)',
+            backgroundColor: isDarkMode ? '#2d2d2d' : '#ffffff',
+            transition: 'left 0.3s ease',
+          }}
+        >
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              px: 3,
+              py: 2,
+            }}
+          >
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={selectedMessages.size > 0 && (() => {
+                      let totalPairs = 0;
+                      for (let i = 0; i < messages.length - 1; i++) {
+                        if (messages[i].role === 'user' && messages[i + 1].role === 'assistant') {
+                          totalPairs++;
+                        }
+                      }
+                      return selectedMessages.size === totalPairs * 2;
+                    })()}
+                    onChange={handleSelectAll}
+                  />
+                }
+                label="Выбрать все"
+              />
+              <Typography variant="body2" color="text.secondary">
+                Выбрано пар: {selectedMessages.size / 2}
+              </Typography>
+            </Box>
+
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              <Button
+                variant="outlined"
+                onClick={handleExitShareMode}
+                disabled={isCreatingShareLink}
+              >
+                Отмена
+              </Button>
+              <Button
+                variant="contained"
+                onClick={handleCreateShareLink}
+                disabled={selectedMessages.size === 0}
+              >
+                Создать публичную ссылку
+              </Button>
+            </Box>
+          </Box>
+        </Paper>
+      )}
+
+      {/* Навигационная панель для сообщений */}
+      {messages.length > 0 && (
+        <MessageNavigationBar
+          messages={messages}
+          isDarkMode={isDarkMode}
+          onNavigate={scrollToMessage}
+          rightSidebarOpen={rightSidebarOpen}
+          rightSidebarHidden={rightSidebarHidden}
+        />
+      )}
+
+      {/* Диалог подтверждения создания публичной ссылки */}
+      <ShareConfirmDialog
+        open={shareDialogOpen}
+        onClose={handleCloseShareDialog}
+        onConfirm={createShareLinkConfirmed}
+        isDarkMode={isDarkMode}
+        selectedCount={selectedMessages.size}
       />
     </Box>
   );

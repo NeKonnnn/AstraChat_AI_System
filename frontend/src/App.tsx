@@ -16,6 +16,7 @@ import { AuthProvider } from './contexts/AuthContext';
 import PrivateRoute from './components/PrivateRoute';
 import LoginPage from './pages/LoginPage';
 import ProfilePage from './pages/ProfilePage';
+import ShareViewPage from './pages/ShareViewPage';
 import './App.css';
 
 // Создаем тему Material-UI
@@ -74,12 +75,26 @@ function App() {
     return saved ? JSON.parse(saved) : false;
   });
 
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [sidebarHidden, setSidebarHidden] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    const saved = localStorage.getItem('sidebarOpen');
+    return saved !== null ? saved === 'true' : true;
+  });
+  const [sidebarHidden, setSidebarHidden] = useState(() => {
+    const saved = localStorage.getItem('sidebarHidden');
+    return saved !== null ? saved === 'true' : false;
+  });
 
   useEffect(() => {
     localStorage.setItem('gazikii-dark-mode', JSON.stringify(isDarkMode));
   }, [isDarkMode]);
+
+  useEffect(() => {
+    localStorage.setItem('sidebarOpen', String(sidebarOpen));
+  }, [sidebarOpen]);
+
+  useEffect(() => {
+    localStorage.setItem('sidebarHidden', String(sidebarHidden));
+  }, [sidebarHidden]);
 
   const theme = createAppTheme(isDarkMode);
 
@@ -102,6 +117,9 @@ function App() {
               <Routes>
                 {/* Публичный маршрут для логина */}
                 <Route path="/login" element={<LoginPage />} />
+                
+                {/* Публичный маршрут для просмотра публичных ссылок */}
+                <Route path="/share/:shareId" element={<ShareViewPage />} />
                 
                 {/* Защищенные маршруты */}
                 <Route

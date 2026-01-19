@@ -26,9 +26,15 @@ class ModelConfig(BaseModel):
     path: str = os.environ.get("LLM_MODEL_PATH", "/app/models/llama-2-7b-chat.Q4_K_M.gguf")
     name: str = os.environ.get("LLM_MODEL_NAME", "llama-2-7b-chat")
     mmproj_path: Optional[str] = os.environ.get("LLM_MMPROJ_PATH", None)  # Путь к multimodal projection для VL моделей
+    backend: str = os.environ.get("LLM_BACKEND", "llama.cpp")  # llama.cpp или vllm
     ctx_size: int = 4096
     gpu_layers: int = 0
     verbose: bool = False
+    # Параметры для vLLM
+    tensor_parallel_size: int = 1
+    gpu_memory_utilization: float = 0.9
+    trust_remote_code: bool = False
+    quantization: Optional[str] = None  # Тип квантования: "awq", "gptq", "fp8" или None для автоматического определения
 
 
 class GenerationConfig(BaseModel):

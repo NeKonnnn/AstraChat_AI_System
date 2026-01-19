@@ -24,21 +24,43 @@ cors:
 # ВАЖНО: Обновите путь к вашей модели!
 model:
   # Локальная модель (путь в контейнере)
+  # Для GGUF моделей (llama.cpp):
   # path: "/app/models/llm/Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf"
-  # Альтернативная модель:
   path: "/app/models/llm/QVikhr-2.5-1.5B-Instruct-SMPO-Q8_0.gguf"
+  
+  # Для HuggingFace моделей (vLLM) - указывайте путь к папке с моделью:
+  # ⚠️ ВАЖНО: Qwen3-Omni НЕ поддерживается vLLM (MoE архитектура не реализована в vLLM)
+  # Для Qwen3-Omni нужно использовать Transformers напрямую или дождаться поддержки в vLLM
+  # Альтернатива: Qwen3-VL поддерживается vLLM
+  # path: "/app/models/llm/Qwen3-Omni-30B-A3B-Instruct-AWQ-4bit"  # ⚠️ Не работает с vLLM
+  ## path: "/app/models/llm/Qwen3-VL-30B-A3B-Instruct-AWQ"  # ✅ Работает с vLLM
   
   # Облачная модель (раскомментируйте и настройте при необходимости)
   # path: "s3://your-bucket/models/Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf"
   # path: "gs://your-bucket/models/Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf"
   # path: "https://your-server.com/models/Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf"
   
-  name: "qvikhr-2.5"
-  ctx_size: 4096  # Оптимальное значение для работы с большими документами (128K токенов)
-                    # Модель поддерживает до 262K, но для практической работы 128K достаточно
-                    # и работает быстрее. Можно увеличить до 262144 при необходимости
+  # name: "qwen-coder-30b"
+  name: "qvikhr-2.5b"
+  ctx_size: 4096
   gpu_layers: 0  # Установите -1 для использования всех слоев на GPU
   verbose: false
+  # name: "qwen3-vl-30b-awq"  # Изменено на Qwen3-VL (поддерживается vLLM)
+  # # Выбор бэкенда: "llama.cpp" или "vllm"
+  # # llama.cpp - для GGUF моделей (квантованные модели)
+  # # vllm - для оригинальных моделей HuggingFace (включая AWQ, GPTQ и другие форматы)
+  backend: "llama.cpp"  # vllm или "llama.cpp"
+  
+  # ctx_size: 32768  # Размер контекста для модели (можно увеличить при необходимости)
+  # gpu_layers: 0  # Установите -1 для использования всех слоев на GPU (только для llama.cpp)
+  # verbose: false
+  
+  # # Параметры для vLLM (используются только если backend: "vllm")
+  # tensor_parallel_size: 1  # Количество GPU для параллельной обработки
+  # gpu_memory_utilization: 0.9  # Использование памяти GPU (0.0 - 1.0)
+  # trust_remote_code: true  # Доверять удаленному коду из HuggingFace (необходимо для Qwen3-Omni)
+  # quantization: null  # Тип квантования: "awq", "gptq", "fp8", "compressed-tensors" или null для автоматического определения
+  #                     # Для Qwen3-Omni модель использует "compressed-tensors", поэтому оставляем null для автоопределения
 
 # Настройки генерации
 generation:

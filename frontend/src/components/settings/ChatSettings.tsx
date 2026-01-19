@@ -24,16 +24,23 @@ import {
   Upload as UploadIcon,
   Download as DownloadIcon,
   Archive as ArchiveIcon,
+  Link as LinkIcon,
 } from '@mui/icons-material';
 import { useAppContext, useAppActions } from '../../contexts/AppContext';
+import ManageSharesDialog from '../ManageSharesDialog';
 
 type FontSize = 'small' | 'medium' | 'large';
 
-export default function ChatSettings() {
+interface ChatSettingsProps {
+  isDarkMode?: boolean;
+}
+
+export default function ChatSettings({ isDarkMode = false }: ChatSettingsProps = {}) {
   const { state } = useAppContext();
   const { deleteAllChats, exportChats, importChats, archiveAllChats, showNotification } = useAppActions();
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showArchiveDialog, setShowArchiveDialog] = useState(false);
+  const [showManageSharesDialog, setShowManageSharesDialog] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fontSize, setFontSize] = useState<FontSize>('medium');
 
@@ -156,6 +163,38 @@ export default function ChatSettings() {
                   <MenuItem value="large">Большой</MenuItem>
                 </Select>
               </FormControl>
+            </ListItem>
+
+            <Divider />
+
+            {/* Общие ссылки */}
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <ListItemText
+                primary="Общие ссылки"
+                primaryTypographyProps={{
+                  variant: 'body1',
+                  fontWeight: 500,
+                }}
+              />
+              <Button
+                variant="outlined"
+                startIcon={<LinkIcon />}
+                onClick={() => setShowManageSharesDialog(true)}
+                sx={{
+                  textTransform: 'none',
+                  minWidth: 180,
+                }}
+              >
+                Управление
+              </Button>
             </ListItem>
 
             <Divider />
@@ -434,6 +473,13 @@ export default function ChatSettings() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Диалог управления общими ссылками */}
+      <ManageSharesDialog
+        open={showManageSharesDialog}
+        onClose={() => setShowManageSharesDialog(false)}
+        isDarkMode={isDarkMode}
+      />
     </Box>
   );
 }

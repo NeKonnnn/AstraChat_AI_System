@@ -61,7 +61,13 @@ async def lifespan(app: FastAPI):
             logger.warning(f"Model file not found at {model_path}. Application will continue, but LLM features may not work.")
         
         # Инициализируем обработчик LLM
+        print("\n" + "=" * 80)
+        print("🎯 STARTING LLM SERVICE INITIALIZATION")
+        print("=" * 80 + "\n")
         await get_llama_handler()
+        print("\n" + "=" * 80)
+        print("✅ LLM SERVICE READY")
+        print("=" * 80 + "\n")
         logger.info("LLM handler initialized")
         
         # Инициализируем обработчик Vosk (если включен)

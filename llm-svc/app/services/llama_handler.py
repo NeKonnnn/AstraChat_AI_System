@@ -8,11 +8,12 @@ import logging
 from app.models.schemas import ChatResponse, ChatChoice, Message, UsageInfo
 from app.utils import convert_to_dict_messages, convert_to_chat_completion_messages
 from app.core.config import settings
+from app.services.base_llm_handler import BaseLLMHandler
 
 logger = logging.getLogger(__name__)
 
 
-class LlamaHandler:
+class LlamaHandler(BaseLLMHandler):
     _instance = None
 
     def __init__(self):
@@ -37,6 +38,17 @@ class LlamaHandler:
             return
 
         try:
+            print("=" * 80)
+            print("🚀 INITIALIZING LLAMA.CPP BACKEND")
+            print("=" * 80)
+            print(f"📁 Model path: {self.model_path}")
+            print(f"📝 Model name: {self.model_name}")
+            print(f"💾 Context size: {self.n_ctx} tokens")
+            print(f"🎮 GPU layers: {self.n_gpu_layers}")
+            print(f"🔊 Verbose: {self.verbose}")
+            print("-" * 80)
+            print("⏳ Loading model...")
+            
             logger.info(f"Loading model from {self.model_path}")
             loop = asyncio.get_event_loop()
             self.model = await loop.run_in_executor(
@@ -51,8 +63,13 @@ class LlamaHandler:
                 )
             )
             self.is_initialized = True
+            print("✅ llama.cpp model loaded successfully!")
+            print("=" * 80)
             logger.info("Model loaded successfully")
         except Exception as e:
+            print("❌ Failed to load llama.cpp model!")
+            print(f"   Error: {str(e)}")
+            print("=" * 80)
             logger.error(f"Failed to load model: {str(e)}")
             raise
 

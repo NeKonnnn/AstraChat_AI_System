@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from app.models.schemas import ChatRequest
-from app.services.llama_handler import LlamaHandler
+from app.services.base_llm_handler import BaseLLMHandler
 from app.api.dependencies import get_llama_service, require_api_key
 import logging
 
@@ -11,7 +11,7 @@ router = APIRouter()
 @router.post("/chat/completions")
 async def chat_completion(
     request: ChatRequest,
-    llama_service: LlamaHandler = Depends(get_llama_service),
+    llama_service: BaseLLMHandler = Depends(get_llama_service),
     api_key: bool = Depends(require_api_key),
 ):
     """

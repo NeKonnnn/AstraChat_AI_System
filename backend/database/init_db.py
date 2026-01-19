@@ -266,6 +266,16 @@ async def close_databases():
     logger.info("Все подключения к базам данных закрыты")
 
 
+def get_mongodb_connection():
+    """Получение подключения к MongoDB"""
+    global mongodb_connection
+    if not mongodb_available:
+        raise RuntimeError("MongoDB модули недоступны. Установите motor и pymongo.")
+    if mongodb_connection is None:
+        raise RuntimeError("MongoDB не инициализирован. Вызовите init_mongodb() сначала.")
+    return mongodb_connection
+
+
 def get_conversation_repository():
     """Получение репозитория диалогов"""
     if not mongodb_available:

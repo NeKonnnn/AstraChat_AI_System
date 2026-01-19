@@ -145,6 +145,18 @@ except Exception as e:
     logger.warning(f"Ошибка при импорте agents router: {e}")
     agents_router = None
 
+# Импорт share router
+try:
+    logger.info("Попытка импорта share router...")
+    from backend.routes.share import router as share_router
+    logger.info("share router импортирован успешно")
+except ImportError as e:
+    logger.warning(f"share router недоступен: {e}")
+    share_router = None
+except Exception as e:
+    logger.warning(f"Ошибка при импорте share router: {e}")
+    share_router = None
+
 # Проверяем, нужно ли использовать llm-svc ДО импорта (избегаем двойной загрузки модели)
 use_llm_svc = os.getenv('USE_LLM_SVC', 'false').lower() == 'true'
 
@@ -474,6 +486,13 @@ if agents_router:
     logger.info("Agents gallery routes подключены (/api/agents/*)")
 else:
     logger.warning("Agents gallery routes не подключены (agents_router недоступен)")
+
+# Подключаем share routes
+if share_router:
+    app.include_router(share_router)
+    logger.info("Share routes подключены (/api/share/*)")
+else:
+    logger.warning("Share routes не подключены (share_router недоступен)")
 
 # Startup событие для инициализации агентной архитектуры и баз данных
 @app.on_event("startup")
