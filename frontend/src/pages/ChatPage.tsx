@@ -59,6 +59,11 @@ export default function ChatPage() {
 
     sendMessage(inputMessage.trim(), currentChat.id);
     setInputMessage('');
+    
+    // Возвращаем фокус на поле ввода
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 10);
   };
 
   const handleKeyPress = (event: React.KeyboardEvent) => {
@@ -153,6 +158,11 @@ export default function ChatPage() {
               <MessageRenderer 
                 content={message.content} 
                 isStreaming={message.isStreaming || false}
+                onSendMessage={(prompt) => {
+                  if (currentChat && isConnected && !state.isLoading) {
+                    sendMessage(prompt, currentChat.id);
+                  }
+                }}
               />
             )}
 

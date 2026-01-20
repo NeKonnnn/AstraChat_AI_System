@@ -168,12 +168,12 @@ export const MessageNavigationBar: React.FC<MessageNavigationBarProps> = ({
   // Вычисляем правую позицию в зависимости от состояния боковой панели
   const getRightPosition = () => {
     if (rightSidebarHidden) {
-      return '0px'; // Если панель полностью скрыта
+      return '50px'; // Если панель полностью скрыта - оставляем место для стрелки
     }
     if (rightSidebarOpen) {
-      return '400px'; // Если панель открыта (ширина Drawer)
+      return '300px'; // Если панель открыта - прямо у края панели (панель 400px + 8px отступ)
     }
-    return '64px'; // Если панель свернута (узкая полоска)
+    return '95px'; // Если панель свернута - оставляем место для узкой полоски и стрелки
   };
 
   return (
@@ -189,9 +189,10 @@ export const MessageNavigationBar: React.FC<MessageNavigationBarProps> = ({
           top: '50%',
           transform: 'translateY(-50%)',
           display: 'flex',
-          flexDirection: 'column',
-          gap: 0.5,
+          flexDirection: 'row',
+          gap: 1,
           padding: 1,
+          writingMode: 'vertical-lr',
           zIndex: 1000,
           pointerEvents: 'all',
           transition: 'right 0.3s ease',
@@ -200,14 +201,16 @@ export const MessageNavigationBar: React.FC<MessageNavigationBarProps> = ({
         {userMessages.map(({ msg, originalIndex }, index) => {
           const isActive = activeMessageIndex === originalIndex;
           const isHovered = hoveredIndex === originalIndex;
+          const isLong = index % 2 === 0; // Четные индексы - длинные, нечетные - короткие
 
           return (
             <Box
               key={originalIndex}
               onClick={() => handleClick(originalIndex)}
               sx={{
-                width: isActive ? '3px' : '2px',
-                height: '24px',
+                width: isLong ? '24px' : '16px',
+                height: isActive ? '3px' : '2px',
+                alignSelf: isLong ? 'stretch' : 'center',
                 backgroundColor: isActive
                   ? '#2196f3'
                   : isHovered
@@ -222,7 +225,7 @@ export const MessageNavigationBar: React.FC<MessageNavigationBarProps> = ({
                   ? '0 0 8px rgba(33, 150, 243, 0.5)' 
                   : 'none',
                 '&:hover': {
-                  width: '4px',
+                  height: '4px',
                   backgroundColor: '#2196f3',
                   boxShadow: '0 0 8px rgba(33, 150, 243, 0.4)',
                 },
@@ -248,7 +251,7 @@ export const MessageNavigationBar: React.FC<MessageNavigationBarProps> = ({
           }}
           sx={{
             position: 'fixed',
-            right: rightSidebarHidden ? '20px' : (rightSidebarOpen ? '420px' : '84px'),
+            right: rightSidebarHidden ? '90px' : (rightSidebarOpen ? '360px' : '154px'),
             top: '50%',
             transform: 'translateY(-50%)',
             minWidth: '220px',
@@ -359,8 +362,8 @@ export const MessageNavigationBar: React.FC<MessageNavigationBarProps> = ({
           sx={{
             position: 'fixed',
             right: rightSidebarHidden 
-              ? '310px' 
-              : (rightSidebarOpen ? '710px' : '374px'), // Слева от панели со списком
+              ? '380px' 
+              : (rightSidebarOpen ? '788px' : '444px'), // Слева от панели со списком
             top: tooltipState.top,
             maxWidth: '400px',
             maxHeight: '300px',

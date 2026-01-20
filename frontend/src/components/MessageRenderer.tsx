@@ -1,13 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Box, IconButton, Typography, Tooltip, Link, Paper, Table, TableBody, TableCell, TableContainer, TableHead, TableRow } from '@mui/material';
 import { ContentCopy as CopyIcon, Check as CheckIcon, Info as InfoIcon, Warning as WarningIcon, Error as ErrorIcon, CheckCircle as SuccessIcon, GetApp as DownloadIcon } from '@mui/icons-material';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import * as XLSX from 'xlsx';
+import CodeSelectionMenu from './CodeSelectionMenu';
 
 interface MessageRendererProps {
   content: string;
   isStreaming?: boolean;
+  onSendMessage?: (message: string) => void;
 }
 
 type FontSize = 'small' | 'medium' | 'large';
@@ -28,23 +30,39 @@ const getFontSizeValue = (size: FontSize): string => {
   }
 };
 
-const MessageRenderer: React.FC<MessageRendererProps> = ({ content, isStreaming = false }) => {
+const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isStreaming = false, onSendMessage }) => {
+
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [fontSize, setFontSize] = useState<FontSize>(getFontSize());
+  
+  // Используем useRef для стабильного хранения состояния меню (не сбросится при ререндерах!)
+  const selectedTextRef = useRef<string>('');
+  const menuAnchorRef = useRef<HTMLElement | null>(null);
+  const menuPositionRef = useRef<{ top: number; left: number } | null>(null);
+  const selectedElementRef = useRef<HTMLElement | null>(null);
+  
+  // useState для форсирования ререндера только когда нужно показать/скрыть меню
+  const [menuVisible, setMenuVisible] = useState<boolean>(false);
+  
+  const clickTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // Слушаем изменения размера шрифта
   useEffect(() => {
     const handleStorageChange = () => {
-      setFontSize(getFontSize());
+      const newSize = getFontSize();
+      setFontSize(prevSize => {
+        if (prevSize !== newSize) {
+          return newSize;
+        }
+        return prevSize;
+      });
     };
     
-    // Проверяем изменения каждые 100мс (для синхронизации между вкладками)
+    // Проверяем изменения каждые 500мс (было 100мс - слишком часто!)
     const interval = setInterval(() => {
-      const currentSize = getFontSize();
-      if (currentSize !== fontSize) {
-        setFontSize(currentSize);
-      }
-    }, 100);
+      handleStorageChange();
+    }, 500);
 
     window.addEventListener('storage', handleStorageChange);
     
@@ -52,9 +70,50 @@ const MessageRenderer: React.FC<MessageRendererProps> = ({ content, isStreaming 
       clearInterval(interval);
       window.removeEventListener('storage', handleStorageChange);
     };
-  }, [fontSize]);
+  }, []); // Убрали fontSize из зависимостей!
 
   const fontSizeValue = getFontSizeValue(fontSize);
+
+
+  // Обработчики для меню
+  const handleMenuClose = useCallback(() => {
+    menuAnchorRef.current = null;
+    menuPositionRef.current = null;
+    selectedElementRef.current = null;
+    selectedTextRef.current = '';
+    setMenuVisible(false);
+  }, []);
+
+  // Обработчик клика вне области для закрытия меню
+  useEffect(() => {
+    if (!menuVisible || !menuAnchorRef.current) return;
+    
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Element;
+      
+      // Проверяем клик на меню или подменю
+      const menuElement = document.querySelector('[data-menu="code-selection"]');
+      const isClickOnMenu = menuElement && menuElement.contains(target as Node);
+      const isClickOnSubMenu = target.closest('.MuiMenu-root') || 
+                                target.closest('.MuiPopover-root') ||
+                                target.closest('.MuiBackdrop-root');
+      
+      // Закрываем только если клик вне меню
+      if (!isClickOnMenu && !isClickOnSubMenu) {
+        handleMenuClose();
+      }
+    };
+
+    // Небольшая задержка для предотвращения случайного закрытия сразу после открытия
+    const timer = setTimeout(() => {
+      document.addEventListener('mousedown', handleClickOutside, true);
+    }, 100);
+    
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('mousedown', handleClickOutside, true);
+    };
+  }, [menuVisible, handleMenuClose]);
 
   const handleCopyCode = async (code: string) => {
     try {
@@ -63,6 +122,119 @@ const MessageRenderer: React.FC<MessageRendererProps> = ({ content, isStreaming 
       setTimeout(() => setCopiedCode(null), 2000);
     } catch (error) {
       console.error('Failed to copy code:', error);
+    }
+  };
+
+  // Обработчик выделения текста (mouseup)
+  const handleTextSelection = (event: React.MouseEvent<HTMLElement>) => {
+    if (menuVisible) {
+      return;
+    }
+    
+    const selection = window.getSelection();
+    
+    if (selection && selection.toString().trim()) {
+      const text = selection.toString().trim();
+      
+      const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+      if (range && containerRef.current && containerRef.current.contains(range.commonAncestorContainer)) {
+        if (text.length > 0) {
+          selectedTextRef.current = text;
+          
+          setTimeout(() => {
+            let anchorElement: HTMLElement | null = null;
+            
+            if (range.commonAncestorContainer.nodeType === Node.TEXT_NODE) {
+              anchorElement = range.commonAncestorContainer.parentElement;
+            } else if (range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE) {
+              anchorElement = range.commonAncestorContainer as HTMLElement;
+            }
+            
+            if (!anchorElement || !containerRef.current?.contains(anchorElement)) {
+              anchorElement = containerRef.current;
+            }
+            
+            selectedElementRef.current = anchorElement;
+            
+            const rect = range.getBoundingClientRect();
+            menuPositionRef.current = {
+              top: rect.bottom + 8,
+              left: rect.left + (rect.width / 2),
+            };
+            
+            menuAnchorRef.current = anchorElement;
+            setMenuVisible(true);
+          }, 5);
+        }
+      }
+    }
+  };
+
+  // Обработчик двойного клика
+  const handleDoubleClick = (event: React.MouseEvent<HTMLElement>) => {
+    const selection = window.getSelection();
+    
+    if (selection && selection.toString().trim()) {
+      const text = selection.toString().trim();
+      
+      const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+      if (range && containerRef.current && containerRef.current.contains(range.commonAncestorContainer)) {
+        selectedTextRef.current = text;
+        
+        setTimeout(() => {
+          let anchorElement: HTMLElement | null = null;
+          
+          if (range.commonAncestorContainer.nodeType === Node.TEXT_NODE) {
+            anchorElement = range.commonAncestorContainer.parentElement;
+          } else if (range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE) {
+            anchorElement = range.commonAncestorContainer as HTMLElement;
+          }
+          
+          if (!anchorElement || !containerRef.current?.contains(anchorElement)) {
+            anchorElement = containerRef.current;
+          }
+          
+          selectedElementRef.current = anchorElement;
+          
+          const rect = range.getBoundingClientRect();
+          menuPositionRef.current = {
+            top: rect.bottom + 8,
+            left: rect.left + (rect.width / 2),
+          };
+          
+          menuAnchorRef.current = anchorElement;
+          setMenuVisible(true);
+        }, 5);
+      }
+    }
+  };
+
+  const handleCopy = async () => {
+    try {
+      const textToCopy = selectedTextRef.current;
+      await navigator.clipboard.writeText(textToCopy);
+      setCopiedCode(textToCopy);
+      setTimeout(() => setCopiedCode(null), 2000);
+    } catch (error) {
+      console.error('Failed to copy:', error);
+    }
+  };
+
+  const handleAsk = (prompt: string) => {
+    if (onSendMessage) {
+      onSendMessage(prompt);
+    }
+  };
+
+  const handleExplain = (prompt: string) => {
+    if (onSendMessage) {
+      onSendMessage(prompt);
+    }
+  };
+
+  const handleTranslate = (prompt: string, targetLanguage: string) => {
+    if (onSendMessage) {
+      onSendMessage(prompt);
     }
   };
 
@@ -579,29 +751,37 @@ const MessageRenderer: React.FC<MessageRendererProps> = ({ content, isStreaming 
             </Box>
             
             {/* Код с подсветкой синтаксиса */}
-            <SyntaxHighlighter
-              language={highlightLanguage}
-              style={vscDarkPlus}
-              customStyle={{
-                margin: 0,
-                padding: '16px',
-                backgroundColor: '#1e1e1e',
-                fontSize: '0.875rem',
-                lineHeight: 1.5,
-                borderRadius: '0 0 4px 4px',
-              }}
-              wrapLines={true}
-              wrapLongLines={true}
-              showLineNumbers={code.split('\n').length > 5}
-              lineNumberStyle={{
-                minWidth: '2.5em',
-                paddingRight: '1em',
-                color: '#858585',
-                textAlign: 'right',
+            <Box
+              sx={{
+                cursor: 'text',
+                userSelect: 'text',
+                position: 'relative',
               }}
             >
-              {code}
-            </SyntaxHighlighter>
+              <SyntaxHighlighter
+                language={highlightLanguage}
+                style={vscDarkPlus}
+                customStyle={{
+                  margin: 0,
+                  padding: '16px',
+                  backgroundColor: '#1e1e1e',
+                  fontSize: '0.875rem',
+                  lineHeight: 1.5,
+                  borderRadius: '0 0 4px 4px',
+                }}
+                wrapLines={true}
+                wrapLongLines={true}
+                showLineNumbers={code.split('\n').length > 5}
+                lineNumberStyle={{
+                  minWidth: '2.5em',
+                  paddingRight: '1em',
+                  color: '#858585',
+                  textAlign: 'right',
+                }}
+              >
+                {code}
+              </SyntaxHighlighter>
+            </Box>
           </Box>
         </Box>
       );
@@ -926,6 +1106,8 @@ const MessageRenderer: React.FC<MessageRendererProps> = ({ content, isStreaming 
               lineHeight: 1.5,
               mb: 0.5,
               fontSize: fontSizeValue,
+              cursor: 'text',
+              userSelect: 'text',
             }}
           >
             {parseInlineMarkdown(line)}
@@ -1180,6 +1362,8 @@ const MessageRenderer: React.FC<MessageRendererProps> = ({ content, isStreaming 
                     fontFamily: 'monospace',
                     fontSize: '0.875em',
                     color: 'inherit',
+                    cursor: 'text',
+                    userSelect: 'text',
                   }}
                 >
                   {processedContent}
@@ -1232,11 +1416,39 @@ const MessageRenderer: React.FC<MessageRendererProps> = ({ content, isStreaming 
   };
 
   return (
-    <Box sx={{ position: 'relative' }}>
+    <Box 
+      ref={containerRef}
+      sx={{ position: 'relative' }}
+      onMouseUp={onSendMessage && !menuVisible ? handleTextSelection : undefined}
+      onDoubleClick={onSendMessage && !menuVisible ? handleDoubleClick : undefined}
+    >
       {parseMarkdown(content)}
       
+      {onSendMessage && menuVisible && menuAnchorRef.current && menuPositionRef.current && (
+        <CodeSelectionMenu
+          anchorEl={menuAnchorRef.current}
+          position={menuPositionRef.current}
+          open={menuVisible}
+          onClose={handleMenuClose}
+          selectedText={selectedTextRef.current || ''}
+          onCopy={handleCopy}
+          onAsk={handleAsk}
+          onExplain={handleExplain}
+          onTranslate={handleTranslate}
+        />
+      )}
     </Box>
   );
 };
+
+// Мемоизируем компонент, чтобы он НЕ ререндерился при каждом рендере родителя
+// Ререндер произойдет ТОЛЬКО если изменятся props: content, isStreaming, onSendMessage
+const MessageRenderer = React.memo(MessageRendererComponent, (prevProps, nextProps) => {
+  return prevProps.content === nextProps.content &&
+         prevProps.isStreaming === nextProps.isStreaming &&
+         prevProps.onSendMessage === nextProps.onSendMessage;
+});
+
+MessageRenderer.displayName = 'MessageRenderer';
 
 export default MessageRenderer;

@@ -247,6 +247,23 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   const currentChat = getCurrentChat();
   const messages = getCurrentMessages();
   
+  // Стабильный обработчик для MessageRenderer (НЕ меняется при ререндерах!)
+  const handleSendMessageFromRendererRef = useRef<((prompt: string) => void) | null>(null);
+  
+  // Обновляем ref при изменении зависимостей, но НЕ создаем новую функцию
+  useEffect(() => {
+    handleSendMessageFromRendererRef.current = (prompt: string) => {
+      if (currentChat && isConnected && !state.isLoading) {
+        sendMessage(prompt, currentChat.id);
+      }
+    };
+  }, [currentChat, isConnected, state.isLoading, sendMessage]);
+  
+  // Создаем стабильную функцию ОДИН РАЗ (никогда не меняется!)
+  const handleSendMessageFromRenderer = useCallback((prompt: string) => {
+    handleSendMessageFromRendererRef.current?.(prompt);
+  }, []); // ← Пустой массив! Функция НЕ пересоздается!
+  
   // Состояние для режима multi-llm
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
   const [availableModels, setAvailableModels] = useState<Array<{name: string; path: string; size_mb?: number}>>([]);
@@ -344,6 +361,30 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Автоматический фокус на поле ввода при загрузке
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (inputRef.current) {
+        inputRef.current.focus();
+      }
+    }, 300);
+    
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Автоматический фокус на поле ввода при переключении чатов
+  useEffect(() => {
+    if (currentChat?.id) {
+      const timer = setTimeout(() => {
+        if (inputRef.current) {
+          inputRef.current.focus();
+        }
+      }, 200);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [currentChat?.id]);
+
   // Функция для воспроизведения звукового оповещения
   const playNotificationSound = useCallback(() => {
     if (!interfaceSettings.enableNotification) return;
@@ -396,7 +437,13 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         const response = await fetch(`${getApiUrl('/api/agent/status')}`);
         if (response.ok) {
           const data = await response.json();
-          setAgentStatus(data);
+          // Обновляем ТОЛЬКО если данные изменились (предотвращаем лишние ререндеры)
+          setAgentStatus(prev => {
+            if (JSON.stringify(prev) !== JSON.stringify(data)) {
+              return data;
+            }
+            return prev;
+          });
         }
       } catch (error) {
       }
@@ -407,7 +454,14 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         const response = await fetch(`${getApiUrl('/api/models/available')}`);
         if (response.ok) {
           const data = await response.json();
-          setAvailableModels(data.models || []);
+          const newModels = data.models || [];
+          // Обновляем ТОЛЬКО если данные изменились
+          setAvailableModels(prev => {
+            if (JSON.stringify(prev) !== JSON.stringify(newModels)) {
+              return newModels;
+            }
+            return prev;
+          });
         }
       } catch (error) {
       }
@@ -416,14 +470,15 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     loadAgentStatus();
     loadAvailableModels();
     
-    // Периодически обновляем статус и модели
+    // Периодически обновляем статус, но реже (30 сек вместо 5)
+    // Это предотвращает лишние ререндеры
     const interval = setInterval(() => {
       loadAgentStatus();
       // Обновляем модели только в режиме multi-llm
       if (agentStatus?.mode === 'multi-llm') {
         loadAvailableModels();
       }
-    }, 5000);
+    }, 30000); // Увеличено с 5000 до 30000 (30 секунд)
     
     return () => clearInterval(interval);
   }, [agentStatus?.mode]);
@@ -764,6 +819,11 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       }
       
       setInputMessage('');
+      
+      // Возвращаем фокус на поле ввода
+      setTimeout(() => {
+        inputRef.current?.focus();
+      }, 10);
     } catch (error) {
       
       showNotification('error', 'Ошибка отправки сообщения');
@@ -792,12 +852,18 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       setInputMessage('');
       setTimeout(() => {
         sendMessage(messageText, newChatId);
+        inputRef.current?.focus();
       }, 50);
       return;
     }
 
     sendMessage(inputMessage.trim(), currentChat.id);
     setInputMessage('');
+    
+    // Возвращаем фокус на поле ввода
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 10);
   };
 
   const handleKeyPress = (event: React.KeyboardEvent): void => {
@@ -2420,7 +2486,11 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                         <Typography variant="body2">{response.content}</Typography>
                       </Alert>
                     ) : (
-                      <MessageRenderer content={response.content} isStreaming={response.isStreaming} />
+                      <MessageRenderer 
+                        content={response.content} 
+                        isStreaming={response.isStreaming}
+                        onSendMessage={handleSendMessageFromRenderer}
+                      />
                     )}
                   </CardContent>
                 </Card>
@@ -2450,7 +2520,8 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                 // Убираем лишние пробелы и переносы строк в конце (только если не идет стриминг)
                 return message.isStreaming ? message.content : message.content.trimEnd();
               })()} 
-              isStreaming={message.isStreaming} 
+              isStreaming={message.isStreaming}
+              onSendMessage={handleSendMessageFromRenderer}
             />
           )}
         </Box>
@@ -3682,7 +3753,14 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                                     <Typography variant="body2">{response.content}</Typography>
                                   </Alert>
                                 ) : (
-                                  <MessageRenderer content={response.content} />
+                                  <MessageRenderer 
+                                    content={response.content}
+                                    onSendMessage={(prompt) => {
+                                      if (currentChat && isConnected && !state.isLoading) {
+                                        sendMessage(prompt, currentChat.id);
+                                      }
+                                    }}
+                                  />
                                 )
                               ) : (
                                 idx === conversationHistory.length - 1 && isStreaming ? (
@@ -3944,7 +4022,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
 
             {/* Поле ввода текста */}
             <TextField
-              ref={inputRef}
+              inputRef={inputRef}
               fullWidth
               multiline
               maxRows={4}
@@ -4563,7 +4641,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
 
               {/* Поле ввода текста */}
               <TextField
-                ref={inputRef}
+                inputRef={inputRef}
                 fullWidth
                 multiline
                 maxRows={4}
