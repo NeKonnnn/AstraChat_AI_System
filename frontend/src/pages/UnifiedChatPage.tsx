@@ -240,12 +240,14 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     createChat,
     setCurrentChat,
     updateChatTitle,
+    getProjectById,
   } = useAppActions();
   const { sendMessage, regenerateResponse, isConnected, isConnecting, reconnect, stopGeneration, socket, onMultiLLMEvent, offMultiLLMEvent } = useSocket();
 
   // Получаем текущий чат и сообщения
   const currentChat = getCurrentChat();
   const messages = getCurrentMessages();
+  const project = currentChat?.projectId ? getProjectById(currentChat.projectId) : null;
   
   // Стабильный обработчик для MessageRenderer (НЕ меняется при ререндерах!)
   const handleSendMessageFromRendererRef = useRef<((prompt: string) => void) | null>(null);
@@ -1615,7 +1617,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       formData.append('audio_file', audioBlob, 'recording.wav');
 
       
-      const response = await fetch('http://localhost:8000/api/voice/recognize', {
+      const response = await fetch(getApiUrl(API_CONFIG.ENDPOINTS.VOICE_RECOGNIZE), {
         method: 'POST',
         body: formData,
       });
@@ -1659,7 +1661,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       
       
       // Отправляем текст в чат
-      const response = await fetch('http://localhost:8000/api/chat', {
+      const response = await fetch(getApiUrl(API_CONFIG.ENDPOINTS.CHAT), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1832,7 +1834,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       
       
       
-      const response = await fetch('http://localhost:8000/api/voice/synthesize', {
+      const response = await fetch(getApiUrl(API_CONFIG.ENDPOINTS.VOICE_SYNTHESIZE), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -4227,26 +4229,76 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
           position: 'relative',
         }}
       >
+      {/* Заголовок с информацией о проекте и модели */}
+      {currentChat && project && (
+        <Box sx={{ 
+          position: 'absolute',
+          top: 16,
+          left: sidebarOpen ? 16 : 80,
+          zIndex: 1200,
+          transition: 'left 0.3s ease',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 1,
+        }}>
+          <Typography
+            variant="body1"
+            sx={{
+              fontWeight: 500,
+              color: isDarkMode ? 'white' : '#333',
+              cursor: 'pointer',
+              '&:hover': {
+                opacity: 0.8,
+              },
+              fontSize: '0.95rem',
+            }}
+            onClick={() => navigate(`/project/${project.id}`)}
+          >
+            {project.name}
+          </Typography>
+          <Typography
+            variant="body1"
+            sx={{
+              fontWeight: 400,
+              color: isDarkMode ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.5)',
+              fontSize: '0.95rem',
+            }}
+          >
+            /
+          </Typography>
+          {!showModelSelectorInSettings && (
+            <ModelSelector 
+              isDarkMode={isDarkMode}
+              onModelSelect={(modelPath) => {
+                
+              }}
+            />
+          )}
+        </Box>
+      )}
+      
       {/* Селектор моделей - на одном уровне с кнопкой сворачивания боковой панели */}
       {/* Когда панель развернута - ближе к панели, когда закрыта - дальше от узкой полоски */}
-      <Box sx={{ 
-        position: 'absolute',
-        top: 16,
-        left: sidebarOpen ? 16 : 80, // Ближе к панели когда развернута, дальше от узкой полоски (64px) когда закрыта
-        zIndex: 1200,
-        transition: 'left 0.3s ease', // Плавная анимация при изменении позиции
-        display: 'flex',
-        alignItems: 'center',
-      }}>
-        {!showModelSelectorInSettings && (
-          <ModelSelector 
-            isDarkMode={isDarkMode}
-            onModelSelect={(modelPath) => {
-              
-            }}
-          />
-        )}
-      </Box>
+      {(!currentChat || !project) && (
+        <Box sx={{ 
+          position: 'absolute',
+          top: 16,
+          left: sidebarOpen ? 16 : 80, // Ближе к панели когда развернута, дальше от узкой полоски (64px) когда закрыта
+          zIndex: 1200,
+          transition: 'left 0.3s ease', // Плавная анимация при изменении позиции
+          display: 'flex',
+          alignItems: 'center',
+        }}>
+          {!showModelSelectorInSettings && (
+            <ModelSelector 
+              isDarkMode={isDarkMode}
+              onModelSelect={(modelPath) => {
+                
+              }}
+            />
+          )}
+        </Box>
+      )}
 
       {/* Область сообщений */}
       <Box

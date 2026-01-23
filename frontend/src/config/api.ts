@@ -1,10 +1,18 @@
+// Конфигурация API для astrachat Frontend
+import { getUrl } from './config';
+
 // Конфигурация API для astrachat Frontend  
 export const API_CONFIG = {
   // Базовый URL для API
-  BASE_URL: process.env.REACT_APP_API_URL || 'http://localhost:8000',
+  get BASE_URL(): string {
+    return process.env.REACT_APP_API_URL || getUrl('backend_port_1');
+  },
   
   // WebSocket URL
-  WS_URL: process.env.REACT_APP_WS_URL || 'ws://localhost:8000',
+  get WS_URL(): string {
+    const baseUrl = process.env.REACT_APP_WS_URL || getUrl('backend_port_1');
+    return baseUrl.replace('http://', 'ws://').replace('https://', 'wss://');
+  },
   
   // API эндпоинты
   ENDPOINTS: {

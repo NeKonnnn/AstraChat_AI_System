@@ -39,14 +39,43 @@ import {
   Menu as MenuIcon,
   Logout as LogoutIcon,
   ChevronLeft as ChevronLeftIcon,
+  ChevronRight as ChevronRightIcon,
   Archive as ArchiveIcon,
   PushPin as PushPinIcon,
+  AttachMoney as MoneyIcon,
+  Assignment as AssignmentIcon,
+  Favorite as FavoriteIcon,
+  Luggage as LuggageIcon,
+  Lightbulb as LightbulbIcon,
+  Image as ImageIcon,
+  PlayArrow as PlayArrowIcon,
+  MusicNote as MusicNoteIcon,
+  AutoAwesome as SparkleIcon,
+  Work as BriefcaseIcon,
+  Language as GlobeIcon,
+  School as GraduationIcon,
+  AccountBalanceWallet as WalletIcon,
+  SportsBaseball as BaseballIcon,
+  Restaurant as CutleryIcon,
+  LocalCafe as CoffeeIcon,
+  Code as CodeIcon,
+  LocalFlorist as LeafIcon,
+  Pets as CatIcon,
+  DirectionsCar as CarIcon,
+  MenuBook as BookIcon,
+  Cloud as UmbrellaIcon,
+  CalendarToday as CalendarIcon,
+  Computer as DesktopIcon,
+  VolumeUp as SpeakerIcon,
+  Assessment as ChartIcon,
+  Email as MailIcon,
 } from '@mui/icons-material';
 import { useAppContext, useAppActions } from '../contexts/AppContext';
 import { useSocket } from '../contexts/SocketContext';
 import { useAuth } from '../contexts/AuthContext';
 import SettingsModal from './SettingsModal';
 import ArchiveModal from './ArchiveModal';
+import NewProjectModal from './NewProjectModal';
 
 // Функция для оценки количества токенов в тексте (дублируем из AppContext)
 function estimateTokens(text: string): number {
@@ -67,6 +96,39 @@ interface SidebarProps {
 
 const menuItems: any[] = [];
 
+// Маппинг иконок для проектов
+const projectIconMap: Record<string, React.ComponentType<any>> = {
+  folder: FolderIcon,
+  money: MoneyIcon,
+  lightbulb: LightbulbIcon,
+  gallery: ImageIcon,
+  video: PlayArrowIcon,
+  music: MusicNoteIcon,
+  sparkle: SparkleIcon,
+  edit: EditIcon,
+  briefcase: BriefcaseIcon,
+  globe: GlobeIcon,
+  graduation: GraduationIcon,
+  wallet: WalletIcon,
+  heart: FavoriteIcon,
+  baseball: BaseballIcon,
+  cutlery: CutleryIcon,
+  coffee: CoffeeIcon,
+  code: CodeIcon,
+  leaf: LeafIcon,
+  cat: CatIcon,
+  car: CarIcon,
+  book: BookIcon,
+  umbrella: UmbrellaIcon,
+  calendar: CalendarIcon,
+  desktop: DesktopIcon,
+  speaker: SpeakerIcon,
+  chart: ChartIcon,
+  mail: MailIcon,
+  assignment: AssignmentIcon,
+  luggage: LuggageIcon,
+};
+
 export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onHide }: SidebarProps) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -85,7 +147,14 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
     toggleFolder,
     getFolders,
     archiveChat,
-    archiveFolder
+    archiveFolder,
+    createProject,
+    updateProject,
+    deleteProject,
+    getProjects,
+    moveChatToProject,
+    getChatById,
+    togglePinInProject
   } = useAppActions();
   const { isConnected } = useSocket();
   
@@ -107,10 +176,22 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
   const [chatsExpanded, setChatsExpanded] = React.useState(true);
   const [showSettingsModal, setShowSettingsModal] = React.useState(false);
   const [showArchiveModal, setShowArchiveModal] = React.useState(false);
+  const [showNewProjectModal, setShowNewProjectModal] = React.useState(false);
+  const [pendingChatIdForProject, setPendingChatIdForProject] = React.useState<string | null>(null);
+  const [projectsExpanded, setProjectsExpanded] = React.useState(true);
+  const [expandedProjects, setExpandedProjects] = React.useState<Set<string>>(new Set());
+  const [projectMenuAnchor, setProjectMenuAnchor] = React.useState<null | HTMLElement>(null);
+  const [selectedProjectId, setSelectedProjectId] = React.useState<string | null>(null);
+  const [showDeleteProjectDialog, setShowDeleteProjectDialog] = React.useState(false);
   const [searchQuery, setSearchQuery] = React.useState('');
   const [showCreateFolderDialog, setShowCreateFolderDialog] = React.useState(false);
   const [newFolderName, setNewFolderName] = React.useState('');
   const [showMoveToFolderMenu, setShowMoveToFolderMenu] = React.useState(false);
+  const [showMoveToProjectMenu, setShowMoveToProjectMenu] = React.useState(false);
+  const [projectMenuAnchorForChat, setProjectMenuAnchorForChat] = React.useState<null | HTMLElement>(null);
+  const [folderMenuAnchorForChat, setFolderMenuAnchorForChat] = React.useState<null | HTMLElement>(null);
+  const folderMenuCloseTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+  const projectMenuCloseTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
   const [folderMenuAnchor, setFolderMenuAnchor] = React.useState<null | HTMLElement>(null);
   const [selectedFolderId, setSelectedFolderId] = React.useState<string | null>(null);
   const [showRenameFolderDialog, setShowRenameFolderDialog] = React.useState(false);
@@ -121,6 +202,10 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
   const menuOpen = Boolean(anchorEl);
   const chatMenuOpen = Boolean(chatMenuAnchor);
   const folderMenuOpen = Boolean(folderMenuAnchor);
+  const projectMenuOpen = Boolean(projectMenuAnchor);
+  
+  // Получаем проекты
+  const projects = getProjects();
 
   const handleNavigation = (path: string) => {
     navigate(path);
@@ -171,6 +256,16 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
 
   // Функция для закрепления/открепления чата
   const handleTogglePin = (chatId: string) => {
+    const chat = getChatById(chatId);
+    
+    // Если чат находится в проекте, используем локальное закрепление
+    if (chat?.projectId) {
+      togglePinInProject(chatId);
+      handleChatMenuClose();
+      return;
+    }
+    
+    // Для чатов вне проекта используем старую логику с папкой "Закреплено"
     const pinnedFolder = folders.find(f => f.name === 'Закреплено');
     const currentFolder = getChatFolder(chatId);
     
@@ -261,6 +356,10 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         handleChatMenuClose();
         archiveChat(chatIdToAction);
         break;
+      case 'removeFromProject':
+        handleChatMenuClose();
+        moveChatToProject(chatIdToAction, null);
+        break;
       case 'delete':
         handleChatMenuClose();
         setSelectedChatId(chatIdToAction); // Восстанавливаем selectedChatId для диалога
@@ -291,10 +390,11 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
 
   // Функция для фильтрации чатов по поисковому запросу
   const filteredChats = React.useMemo(() => {
-    // Исключаем чаты, которые уже находятся в папках, и архивированные чаты
+    // Исключаем чаты, которые уже находятся в папках, в проектах, и архивированные чаты
     const chatsInFolders = new Set(folders.flatMap(folder => folder.chatIds));
+    const chatsInProjects = new Set(state.chats.filter(chat => chat.projectId).map(chat => chat.id));
     const availableChats = state.chats.filter(chat => 
-      !chatsInFolders.has(chat.id) && !chat.isArchived
+      !chatsInFolders.has(chat.id) && !chatsInProjects.has(chat.id) && !chat.isArchived
     );
     
     if (!searchQuery.trim()) {
@@ -306,7 +406,37 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         msg.content.toLowerCase().includes(searchQuery.toLowerCase())
       )
     );
-  }, [state.chats, searchQuery, folders]);
+  }, [state.chats, searchQuery, folders, projects]);
+  
+  // Функция для получения чатов проекта
+  const getProjectChats = (projectId: string) => {
+    const chats = state.chats.filter(chat => chat.projectId === projectId && !chat.isArchived);
+    
+    // Сортируем: запиненные чаты сначала
+    return chats.sort((a, b) => {
+      const aIsPinned = a.isPinnedInProject || false;
+      const bIsPinned = b.isPinnedInProject || false;
+      
+      if (aIsPinned && !bIsPinned) return -1;
+      if (!aIsPinned && bIsPinned) return 1;
+      
+      // Если оба запинены или оба незапинены, сортируем по дате обновления
+      return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+    });
+  };
+  
+  // Функция для переключения раскрытия проекта
+  const handleToggleProject = (projectId: string) => {
+    setExpandedProjects(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(projectId)) {
+        newSet.delete(projectId);
+      } else {
+        newSet.add(projectId);
+      }
+      return newSet;
+    });
+  };
 
 
   // Функции для работы с папками
@@ -405,6 +535,49 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
     setDeleteWithContent(false);
     setSelectedFolderId(null);
     handleFolderMenuClose(); // Закрываем меню после удаления
+  };
+
+  // Функции для работы с проектами
+  const handleProjectMenuClick = (event: React.MouseEvent<HTMLElement>, projectId: string) => {
+    event.stopPropagation();
+    setProjectMenuAnchor(event.currentTarget);
+    setSelectedProjectId(projectId);
+  };
+
+  const handleProjectMenuClose = () => {
+    setProjectMenuAnchor(null);
+    setSelectedProjectId(null);
+  };
+
+  const handleProjectMenuAction = (action: string) => {
+    if (!selectedProjectId) {
+      return;
+    }
+    
+    const projectIdToAction = selectedProjectId;
+    
+    switch (action) {
+      case 'edit':
+        handleProjectMenuClose();
+        // Здесь можно добавить логику редактирования проекта
+        break;
+      case 'delete':
+        handleProjectMenuClose();
+        setSelectedProjectId(projectIdToAction);
+        setShowDeleteProjectDialog(true);
+        break;
+      default:
+        handleProjectMenuClose();
+        break;
+    }
+  };
+
+  const handleConfirmDeleteProject = () => {
+    if (selectedProjectId) {
+      deleteProject(selectedProjectId);
+      setShowDeleteProjectDialog(false);
+      setSelectedProjectId(null);
+    }
   };
 
   return (
@@ -717,6 +890,311 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             </Tooltip>
           </Box>
         </>
+      )}
+
+      {/* Раздел Проекты */}
+      {open && (
+        <Box sx={{ px: 1.5, mb: 1 }}>
+          <Box
+            onClick={() => setProjectsExpanded(!projectsExpanded)}
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              px: 2,
+              py: 1,
+              cursor: 'pointer',
+              borderRadius: 1,
+              '&:hover': {
+                backgroundColor: 'rgba(255,255,255,0.05)',
+              },
+              transition: 'background-color 0.2s ease',
+            }}
+          >
+            <Typography variant="subtitle2" sx={{ opacity: 0.8, fontSize: '0.75rem' }}>
+              Проекты
+            </Typography>
+            <ExpandMoreIcon
+              sx={{
+                fontSize: '1rem',
+                opacity: 0.8,
+                transform: projectsExpanded ? 'rotate(0deg)' : 'rotate(-90deg)',
+                transition: 'transform 0.2s ease',
+              }}
+            />
+          </Box>
+          {projectsExpanded && (
+            <List sx={{ py: 0 }}>
+              <ListItem disablePadding sx={{ mb: 0.5 }}>
+                <ListItemButton
+                  onClick={() => setShowNewProjectModal(true)}
+                  sx={{
+                    borderRadius: 2,
+                    backgroundColor: 'transparent',
+                    '&:hover': {
+                      backgroundColor: 'rgba(255,255,255,0.08)',
+                    },
+                    transition: 'all 0.2s ease',
+                    py: 1,
+                    px: 2,
+                  }}
+                >
+                  <ListItemIcon sx={{ color: 'white', minWidth: 28 }}>
+                    <AddFolderIcon fontSize="small" />
+                  </ListItemIcon>
+                  <ListItemText
+                    primary={
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          color: 'white',
+                          fontWeight: 400,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          fontSize: '0.8rem',
+                        }}
+                      >
+                        Новый проект
+                      </Typography>
+                    }
+                  />
+                </ListItemButton>
+              </ListItem>
+              {projects.map((project) => {
+                const renderProjectIcon = () => {
+                  if (project.iconType === 'emoji' && project.icon) {
+                    return (
+                      <Avatar
+                        sx={{
+                          width: 24,
+                          height: 24,
+                          bgcolor: project.iconColor === '#ffffff' ? 'rgba(255,255,255,0.1)' : project.iconColor || 'rgba(255,255,255,0.1)',
+                          fontSize: 14,
+                        }}
+                      >
+                        {project.icon}
+                      </Avatar>
+                    );
+                  }
+                  if (project.iconType === 'icon' && project.icon) {
+                    const IconComponent = projectIconMap[project.icon] || FolderIcon;
+                    return (
+                      <Avatar
+                        sx={{
+                          width: 24,
+                          height: 24,
+                          bgcolor: project.iconColor === '#ffffff' ? 'rgba(255,255,255,0.1)' : project.iconColor || 'rgba(255,255,255,0.1)',
+                          color: 'white',
+                        }}
+                      >
+                        <IconComponent sx={{ fontSize: 14 }} />
+                      </Avatar>
+                    );
+                  }
+                  return (
+                    <Avatar
+                      sx={{
+                        width: 24,
+                        height: 24,
+                        bgcolor: 'rgba(255,255,255,0.1)',
+                        color: 'white',
+                      }}
+                    >
+                      <FolderIcon sx={{ fontSize: 14 }} />
+                    </Avatar>
+                  );
+                };
+
+                const projectChats = getProjectChats(project.id);
+                const isExpanded = expandedProjects.has(project.id);
+                
+                return (
+                  <Box key={project.id} sx={{ mb: 0.5 }}>
+                    <ListItem disablePadding>
+                      <Box
+                        sx={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          width: '100%',
+                          px: 2,
+                          py: 1,
+                          borderRadius: 2,
+                          '&:hover': {
+                            backgroundColor: 'rgba(255,255,255,0.05)',
+                          },
+                          transition: 'background-color 0.2s ease',
+                        }}
+                      >
+                        <Box
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (e.detail === 2) {
+                              // Двойной клик - открываем страницу проекта
+                              navigate(`/project/${project.id}`);
+                            } else {
+                              // Одинарный клик - раскрываем/сворачиваем
+                              handleToggleProject(project.id);
+                            }
+                          }}
+                          sx={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            flex: 1,
+                            cursor: 'pointer',
+                            gap: 1,
+                          }}
+                        >
+                          <ListItemIcon sx={{ color: 'white', minWidth: 28 }}>
+                            {renderProjectIcon()}
+                          </ListItemIcon>
+                          <ListItemText
+                            primary={
+                              <Typography
+                                variant="body2"
+                                sx={{
+                                  color: 'white',
+                                  fontWeight: 400,
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                  fontSize: '0.8rem',
+                                }}
+                              >
+                                {project.name}
+                              </Typography>
+                            }
+                          />
+                          <ExpandMoreIcon
+                            sx={{
+                              fontSize: '1rem',
+                              opacity: 0.8,
+                              transform: isExpanded ? 'rotate(0deg)' : 'rotate(-90deg)',
+                              transition: 'transform 0.2s ease',
+                            }}
+                          />
+                        </Box>
+                        <IconButton
+                          size="small"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setProjectMenuAnchor(e.currentTarget);
+                            setSelectedProjectId(project.id);
+                          }}
+                          sx={{ color: 'rgba(255,255,255,0.7)', p: 0.5 }}
+                        >
+                          <MoreVertIcon fontSize="small" />
+                        </IconButton>
+                      </Box>
+                    </ListItem>
+                    {isExpanded && projectChats.length > 0 && (
+                      <List sx={{ py: 0, pl: 2 }}>
+                        {projectChats.map((chat) => {
+                          const isPinned = chat.isPinnedInProject || false;
+                          
+                          return (
+                            <ListItem key={chat.id} disablePadding sx={{ mb: 0.5 }}>
+                              <ListItemButton
+                                onClick={(e) => {
+                                  if (editingChatId === chat.id) {
+                                    e.stopPropagation();
+                                    return;
+                                  }
+                                  handleSelectChat(chat.id);
+                                }}
+                                sx={{
+                                  borderRadius: 2,
+                                  backgroundColor: state.currentChatId === chat.id ? 'rgba(255,255,255,0.15)' : 'transparent',
+                                  '&:hover': {
+                                    backgroundColor: state.currentChatId === chat.id ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.08)',
+                                  },
+                                  transition: 'all 0.2s ease',
+                                  py: 1,
+                                  px: 2,
+                                }}
+                              >
+                                {isPinned && (
+                                  <PushPinIcon 
+                                    sx={{ 
+                                      fontSize: '0.9rem', 
+                                      mr: 0.5,
+                                      color: 'rgba(255,255,255,0.7)',
+                                    }} 
+                                  />
+                                )}
+                                <ListItemIcon sx={{ color: 'white', minWidth: 28 }}>
+                                  <ChatIcon fontSize="small" />
+                                </ListItemIcon>
+                              <ListItemText
+                                primary={
+                                  editingChatId === chat.id ? (
+                                    <TextField
+                                      value={editingTitle}
+                                      onChange={(e) => setEditingTitle(e.target.value)}
+                                      onBlur={handleSaveEdit}
+                                      onKeyDown={handleKeyPress}
+                                      onClick={(e) => e.stopPropagation()}
+                                      autoFocus
+                                      size="small"
+                                      fullWidth
+                                      sx={{
+                                        '& .MuiInputBase-input': {
+                                          color: 'white',
+                                          fontSize: '0.8rem',
+                                          py: 0.5,
+                                        },
+                                        '& .MuiOutlinedInput-notchedOutline': {
+                                          borderColor: 'rgba(255,255,255,0.3)',
+                                        },
+                                        '&:hover .MuiOutlinedInput-notchedOutline': {
+                                          borderColor: 'rgba(255,255,255,0.5)',
+                                        },
+                                        '& .MuiOutlinedInput-root': {
+                                          '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+                                            borderColor: 'rgba(255,255,255,0.7)',
+                                          },
+                                        },
+                                      }}
+                                    />
+                                  ) : (
+                                    <Typography
+                                      variant="body2"
+                                      sx={{
+                                        color: 'white',
+                                        fontWeight: state.currentChatId === chat.id ? 600 : 400,
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        whiteSpace: 'nowrap',
+                                        fontSize: '0.8rem',
+                                      }}
+                                    >
+                                      {chat.title}
+                                    </Typography>
+                                  )
+                                }
+                              />
+                              {!editingChatId && (
+                                <IconButton
+                                  size="small"
+                                  onClick={(e) => handleChatMenuClick(e, chat.id)}
+                                  sx={{ color: 'rgba(255,255,255,0.7)', p: 0.5 }}
+                                >
+                                  <MoreVertIcon fontSize="small" />
+                                </IconButton>
+                              )}
+                              </ListItemButton>
+                            </ListItem>
+                          );
+                        })}
+                      </List>
+                    )}
+                  </Box>
+                );
+              })}
+            </List>
+          )}
+        </Box>
       )}
 
       {/* Список чатов */}
@@ -1513,7 +1991,14 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
       <Menu
         anchorEl={chatMenuAnchor}
         open={chatMenuOpen}
-        onClose={handleChatMenuClose}
+        onClose={(event, reason) => {
+          // Закрываем подменю при закрытии основного меню
+          setShowMoveToFolderMenu(false);
+          setShowMoveToProjectMenu(false);
+          setFolderMenuAnchorForChat(null);
+          setProjectMenuAnchorForChat(null);
+          handleChatMenuClose();
+        }}
         anchorOrigin={{
           vertical: 'top',
           horizontal: 'right',
@@ -1529,11 +2014,26 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             border: '1px solid rgba(255,255,255,0.1)',
             borderRadius: 2,
             minWidth: 150,
+            pointerEvents: 'auto',
           },
         }}
+        MenuListProps={{
+          sx: {
+            pointerEvents: 'auto',
+          },
+        }}
+        disableAutoFocus
+        disableEnforceFocus
       >
         <MenuItem
           onClick={() => handleChatMenuAction('pin')}
+          onMouseEnter={() => {
+            // Закрываем подменю при наведении на другие пункты меню
+            setShowMoveToFolderMenu(false);
+            setShowMoveToProjectMenu(false);
+            setFolderMenuAnchorForChat(null);
+            setProjectMenuAnchorForChat(null);
+          }}
           sx={{
             color: 'white',
             '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
@@ -1542,13 +2042,28 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
             <PushPinIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary={getChatFolder(selectedChatId || '')?.name === 'Закреплено' ? 'Открепить' : 'Пин'} />
+          <ListItemText primary={
+            (() => {
+              const chat = selectedChatId ? getChatById(selectedChatId) : null;
+              if (chat?.projectId) {
+                return chat.isPinnedInProject ? 'Открепить' : 'Пин';
+              }
+              return getChatFolder(selectedChatId || '')?.name === 'Закреплено' ? 'Открепить' : 'Пин';
+            })()
+          } />
         </MenuItem>
         
         <MenuItem
           onClick={() => handleChatMenuAction('edit')}
-              sx={{
-                  color: 'white',
+          onMouseEnter={() => {
+            // Закрываем подменю при наведении на другие пункты меню
+            setShowMoveToFolderMenu(false);
+            setShowMoveToProjectMenu(false);
+            setFolderMenuAnchorForChat(null);
+            setProjectMenuAnchorForChat(null);
+          }}
+          sx={{
+            color: 'white',
             '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
           }}
         >
@@ -1559,7 +2074,94 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         </MenuItem>
         
         <MenuItem
-          onClick={() => setShowMoveToFolderMenu(true)}
+          onMouseEnter={(e) => {
+            // Отменяем закрытие подменю, если курсор вернулся на пункт меню
+            if (folderMenuCloseTimeoutRef.current) {
+              clearTimeout(folderMenuCloseTimeoutRef.current);
+              folderMenuCloseTimeoutRef.current = null;
+            }
+            
+            const target = e.currentTarget;
+            // Устанавливаем anchor и открываем меню одновременно
+            setFolderMenuAnchorForChat(target);
+            setShowMoveToFolderMenu(true);
+            // Закрываем подменю проекта, если оно было открыто
+            setShowMoveToProjectMenu(false);
+            setProjectMenuAnchorForChat(null);
+          }}
+          onMouseLeave={(e) => {
+            // Очищаем предыдущий таймер, если он был
+            if (folderMenuCloseTimeoutRef.current) {
+              clearTimeout(folderMenuCloseTimeoutRef.current);
+              folderMenuCloseTimeoutRef.current = null;
+            }
+            
+            // Проверяем, переходит ли курсор к подменю или другому пункту меню
+            const relatedTarget = e.relatedTarget as HTMLElement;
+            if (relatedTarget) {
+              // Если курсор переходит к подменю, не закрываем
+              const submenu = relatedTarget.closest('[role="menu"]');
+              const currentMenu = e.currentTarget.closest('[role="menu"]');
+              if (submenu && submenu !== currentMenu) {
+                return;
+              }
+              // Если курсор переходит к другому пункту меню в основном меню, закрываем подменю сразу
+              const menuItem = relatedTarget.closest('[role="menuitem"]');
+              if (menuItem && menuItem !== e.currentTarget && currentMenu?.contains(menuItem)) {
+                setShowMoveToFolderMenu(false);
+                setFolderMenuAnchorForChat(null);
+                return;
+              }
+            }
+            
+            // Если relatedTarget null, проверяем сразу, где находится курсор
+            const activeElement = document.elementFromPoint(
+              e.clientX || 0,
+              e.clientY || 0
+            ) as HTMLElement;
+            
+            if (activeElement) {
+              const currentMenu = e.currentTarget.closest('[role="menu"]');
+              const submenu = activeElement.closest('[role="menu"]');
+              
+              // Если курсор на подменю, не закрываем
+              if (submenu && submenu !== currentMenu) {
+                return;
+              }
+              
+              // Если курсор на другом пункте меню в основном меню, закрываем подменю сразу
+              const menuItem = activeElement.closest('[role="menuitem"]');
+              if (menuItem && menuItem !== e.currentTarget && currentMenu?.contains(menuItem)) {
+                setShowMoveToFolderMenu(false);
+                setFolderMenuAnchorForChat(null);
+                return;
+              }
+              
+              // Если курсор на текущем пункте меню, не закрываем
+              if (activeElement.closest('[role="menuitem"]') === e.currentTarget) {
+                return;
+              }
+            }
+            
+            // Если курсор не на подменю и не на пункте меню, используем небольшую задержку
+            // Это позволяет курсору перейти на подменю, если он движется в его сторону
+            folderMenuCloseTimeoutRef.current = setTimeout(() => {
+              const checkElement = document.elementFromPoint(
+                e.clientX || 0,
+                e.clientY || 0
+              ) as HTMLElement;
+              if (checkElement) {
+                const submenu = checkElement.closest('[role="menu"]');
+                const currentMenu = e.currentTarget.closest('[role="menu"]');
+                if (submenu && submenu !== currentMenu) {
+                  return;
+                }
+              }
+              setShowMoveToFolderMenu(false);
+              setFolderMenuAnchorForChat(null);
+              folderMenuCloseTimeoutRef.current = null;
+            }, 100);
+          }}
           sx={{
             color: 'white',
             '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
@@ -1569,10 +2171,119 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             <FolderIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Переместить в папку" />
+          <ChevronRightIcon sx={{ ml: 'auto', fontSize: '1rem' }} />
+        </MenuItem>
+        
+        <MenuItem
+          onMouseEnter={(e) => {
+            // Отменяем закрытие подменю, если курсор вернулся на пункт меню
+            if (projectMenuCloseTimeoutRef.current) {
+              clearTimeout(projectMenuCloseTimeoutRef.current);
+              projectMenuCloseTimeoutRef.current = null;
+            }
+            
+            const target = e.currentTarget;
+            // Устанавливаем anchor и открываем меню одновременно
+            setProjectMenuAnchorForChat(target);
+            setShowMoveToProjectMenu(true);
+            // Закрываем подменю папки, если оно было открыто
+            setShowMoveToFolderMenu(false);
+            setFolderMenuAnchorForChat(null);
+          }}
+          onMouseLeave={(e) => {
+            // Очищаем предыдущий таймер, если он был
+            if (projectMenuCloseTimeoutRef.current) {
+              clearTimeout(projectMenuCloseTimeoutRef.current);
+              projectMenuCloseTimeoutRef.current = null;
+            }
+            
+            // Проверяем, переходит ли курсор к подменю или другому пункту меню
+            const relatedTarget = e.relatedTarget as HTMLElement;
+            if (relatedTarget) {
+              // Если курсор переходит к подменю, не закрываем
+              const submenu = relatedTarget.closest('[role="menu"]');
+              const currentMenu = e.currentTarget.closest('[role="menu"]');
+              if (submenu && submenu !== currentMenu) {
+                return;
+              }
+              // Если курсор переходит к другому пункту меню в основном меню, закрываем подменю сразу
+              const menuItem = relatedTarget.closest('[role="menuitem"]');
+              if (menuItem && menuItem !== e.currentTarget && currentMenu?.contains(menuItem)) {
+                setShowMoveToProjectMenu(false);
+                setProjectMenuAnchorForChat(null);
+                return;
+              }
+            }
+            
+            // Если relatedTarget null, проверяем сразу, где находится курсор
+            const activeElement = document.elementFromPoint(
+              e.clientX || 0,
+              e.clientY || 0
+            ) as HTMLElement;
+            
+            if (activeElement) {
+              const currentMenu = e.currentTarget.closest('[role="menu"]');
+              const submenu = activeElement.closest('[role="menu"]');
+              
+              // Если курсор на подменю, не закрываем
+              if (submenu && submenu !== currentMenu) {
+                return;
+              }
+              
+              // Если курсор на другом пункте меню в основном меню, закрываем подменю сразу
+              const menuItem = activeElement.closest('[role="menuitem"]');
+              if (menuItem && menuItem !== e.currentTarget && currentMenu?.contains(menuItem)) {
+                setShowMoveToProjectMenu(false);
+                setProjectMenuAnchorForChat(null);
+                return;
+              }
+              
+              // Если курсор на текущем пункте меню, не закрываем
+              if (activeElement.closest('[role="menuitem"]') === e.currentTarget) {
+                return;
+              }
+            }
+            
+            // Если курсор не на подменю и не на пункте меню, используем небольшую задержку
+            // Это позволяет курсору перейти на подменю, если он движется в его сторону
+            projectMenuCloseTimeoutRef.current = setTimeout(() => {
+              const checkElement = document.elementFromPoint(
+                e.clientX || 0,
+                e.clientY || 0
+              ) as HTMLElement;
+              if (checkElement) {
+                const submenu = checkElement.closest('[role="menu"]');
+                const currentMenu = e.currentTarget.closest('[role="menu"]');
+                if (submenu && submenu !== currentMenu) {
+                  return;
+                }
+              }
+              setShowMoveToProjectMenu(false);
+              setProjectMenuAnchorForChat(null);
+              projectMenuCloseTimeoutRef.current = null;
+            }, 100);
+          }}
+          sx={{
+            color: 'white',
+            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+          }}
+        >
+          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+            <FolderIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText primary="Перенести в проект" />
+          <ChevronRightIcon sx={{ ml: 'auto', fontSize: '1rem' }} />
         </MenuItem>
         
         <MenuItem
           onClick={() => handleChatMenuAction('archive')}
+          onMouseEnter={() => {
+            // Закрываем подменю при наведении на другие пункты меню
+            setShowMoveToFolderMenu(false);
+            setShowMoveToProjectMenu(false);
+            setFolderMenuAnchorForChat(null);
+            setProjectMenuAnchorForChat(null);
+          }}
           sx={{
             color: 'white',
             '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
@@ -1583,9 +2294,37 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           </ListItemIcon>
           <ListItemText primary="Архив" />
         </MenuItem>
-        
+        {selectedChatId && getChatById(selectedChatId)?.projectId && (
+          <MenuItem
+            onClick={() => handleChatMenuAction('removeFromProject')}
+            onMouseEnter={() => {
+              // Закрываем подменю при наведении на другие пункты меню
+              setShowMoveToFolderMenu(false);
+              setShowMoveToProjectMenu(false);
+              setFolderMenuAnchorForChat(null);
+              setProjectMenuAnchorForChat(null);
+            }}
+            sx={{
+              color: 'white',
+              '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+            }}
+          >
+            <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+              <FolderIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText primary="Перенести из проекта" />
+          </MenuItem>
+        )}
+        <Divider sx={{ my: 0.5, borderColor: 'rgba(255,255,255,0.1)' }} />
         <MenuItem
           onClick={() => handleChatMenuAction('delete')}
+          onMouseEnter={() => {
+            // Закрываем подменю при наведении на другие пункты меню
+            setShowMoveToFolderMenu(false);
+            setShowMoveToProjectMenu(false);
+            setFolderMenuAnchorForChat(null);
+            setProjectMenuAnchorForChat(null);
+          }}
           sx={{
             color: 'white',
             '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
@@ -1596,6 +2335,170 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           </ListItemIcon>
           <ListItemText primary="Удалить" />
         </MenuItem>
+      </Menu>
+
+      {/* Подменю для перемещения в проект */}
+      <Menu
+        anchorEl={projectMenuAnchorForChat}
+        open={showMoveToProjectMenu}
+        onClose={(event, reason) => {
+          setShowMoveToProjectMenu(false);
+          setProjectMenuAnchorForChat(null);
+        }}
+        anchorOrigin={{
+          vertical: 'top',
+          horizontal: 'right',
+        }}
+        transformOrigin={{
+          vertical: 'top',
+          horizontal: 'left',
+        }}
+        PaperProps={{
+          sx: {
+            backgroundColor: 'rgba(30, 30, 30, 0.95)',
+            backdropFilter: 'blur(10px)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            borderRadius: 2,
+            minWidth: 200,
+            pointerEvents: 'auto',
+          },
+          onMouseEnter: () => {
+            // Держим подменю открытым, когда курсор на нем
+            setShowMoveToProjectMenu(true);
+          },
+          onMouseLeave: (e: React.MouseEvent<HTMLDivElement>) => {
+            // Проверяем, не переходит ли курсор обратно к кнопке или основному меню
+            const relatedTarget = e.relatedTarget as HTMLElement;
+            if (relatedTarget) {
+              // Если курсор переходит к основному меню или кнопке, не закрываем
+              if (relatedTarget.closest('[role="menu"]') ||
+                  relatedTarget === projectMenuAnchorForChat ||
+                  relatedTarget.closest('[role="menuitem"]') === projectMenuAnchorForChat) {
+                return;
+              }
+            }
+            // Курсор покидает подменю и не переходит к основному меню - закрываем
+            setShowMoveToProjectMenu(false);
+            setProjectMenuAnchorForChat(null);
+          },
+        }}
+        MenuListProps={{
+          onMouseEnter: () => {
+            // Держим подменю открытым, когда курсор на нем
+            setShowMoveToProjectMenu(true);
+          },
+          onMouseLeave: (e: React.MouseEvent<HTMLUListElement>) => {
+            // Проверяем, не переходит ли курсор обратно к кнопке или основному меню
+            const relatedTarget = e.relatedTarget as HTMLElement;
+            if (relatedTarget) {
+              // Если курсор переходит к основному меню или кнопке, не закрываем
+              if (relatedTarget.closest('[role="menu"]') ||
+                  relatedTarget === projectMenuAnchorForChat ||
+                  relatedTarget.closest('[role="menuitem"]') === projectMenuAnchorForChat) {
+                return;
+              }
+            }
+            // Курсор покидает подменю и не переходит к основному меню - закрываем
+            setShowMoveToProjectMenu(false);
+            setProjectMenuAnchorForChat(null);
+          },
+        }}
+        disableAutoFocusItem
+        disableAutoFocus
+        disableEnforceFocus
+      >
+        <MenuItem
+          onClick={() => {
+            if (selectedChatId) {
+              setPendingChatIdForProject(selectedChatId);
+              setShowNewProjectModal(true);
+              setShowMoveToProjectMenu(false);
+              setProjectMenuAnchorForChat(null);
+              handleChatMenuClose();
+            }
+          }}
+          sx={{
+            color: 'white',
+            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+          }}
+        >
+          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+            <AddFolderIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText primary="Новый проект" />
+        </MenuItem>
+        {projects.map((project) => {
+          const renderProjectIcon = () => {
+            if (project.iconType === 'emoji' && project.icon) {
+              return (
+                <Avatar
+                  sx={{
+                    width: 20,
+                    height: 20,
+                    bgcolor: project.iconColor === '#ffffff' ? 'rgba(255,255,255,0.1)' : project.iconColor || 'rgba(255,255,255,0.1)',
+                    fontSize: 12,
+                  }}
+                >
+                  {project.icon}
+                </Avatar>
+              );
+            }
+            if (project.iconType === 'icon' && project.icon) {
+              const IconComponent = projectIconMap[project.icon] || FolderIcon;
+              return (
+                <Avatar
+                  sx={{
+                    width: 20,
+                    height: 20,
+                    bgcolor: project.iconColor === '#ffffff' ? 'rgba(255,255,255,0.1)' : project.iconColor || 'rgba(255,255,255,0.1)',
+                    color: 'white',
+                  }}
+                >
+                  <IconComponent sx={{ fontSize: 12 }} />
+                </Avatar>
+              );
+            }
+            return (
+              <Avatar
+                sx={{
+                  width: 20,
+                  height: 20,
+                  bgcolor: 'rgba(255,255,255,0.1)',
+                  color: 'white',
+                }}
+              >
+                <FolderIcon sx={{ fontSize: 12 }} />
+              </Avatar>
+            );
+          };
+
+          const chat = selectedChatId ? state.chats.find(c => c.id === selectedChatId) : null;
+          const isSelected = chat?.projectId === project.id;
+
+          return (
+            <MenuItem
+              key={project.id}
+              onClick={() => {
+                if (selectedChatId) {
+                  moveChatToProject(selectedChatId, isSelected ? null : project.id);
+                  setShowMoveToProjectMenu(false);
+                  setProjectMenuAnchorForChat(null);
+                  handleChatMenuClose();
+                }
+              }}
+              sx={{
+                color: isSelected ? 'rgba(255,255,255,0.5)' : 'white',
+                '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+              }}
+              disabled={isSelected}
+            >
+              <ListItemIcon sx={{ color: isSelected ? 'rgba(255,255,255,0.5)' : 'white', minWidth: 36 }}>
+                {renderProjectIcon()}
+              </ListItemIcon>
+              <ListItemText primary={project.name} />
+            </MenuItem>
+          );
+        })}
       </Menu>
 
       {/* Диалог подтверждения удаления */}
@@ -1727,16 +2630,19 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
 
       {/* Меню перемещения в папку */}
       <Menu
-        anchorEl={chatMenuAnchor}
+        anchorEl={folderMenuAnchorForChat}
         open={showMoveToFolderMenu}
-        onClose={() => setShowMoveToFolderMenu(false)}
+        onClose={(event, reason) => {
+          setShowMoveToFolderMenu(false);
+          setFolderMenuAnchorForChat(null);
+        }}
         anchorOrigin={{
           vertical: 'top',
           horizontal: 'right',
         }}
         transformOrigin={{
-          vertical: 'bottom',
-          horizontal: 'right',
+          vertical: 'top',
+          horizontal: 'left',
         }}
         PaperProps={{
           sx: {
@@ -1745,12 +2651,82 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             border: '1px solid rgba(255,255,255,0.1)',
             borderRadius: 2,
             minWidth: 200,
+            pointerEvents: 'auto',
+          },
+          onMouseEnter: () => {
+            // Держим подменю открытым, когда курсор на нем
+            setShowMoveToFolderMenu(true);
+          },
+          onMouseLeave: (e: React.MouseEvent<HTMLDivElement>) => {
+            // Проверяем, не переходит ли курсор обратно к кнопке или основному меню
+            const relatedTarget = e.relatedTarget as HTMLElement;
+            if (relatedTarget) {
+              // Если курсор переходит к основному меню или кнопке, не закрываем
+              if (relatedTarget.closest('[role="menu"]') ||
+                  relatedTarget === folderMenuAnchorForChat ||
+                  relatedTarget.closest('[role="menuitem"]') === folderMenuAnchorForChat) {
+                return;
+              }
+            }
+            // Курсор покидает подменю и не переходит к основному меню - закрываем
+            setShowMoveToFolderMenu(false);
+            setFolderMenuAnchorForChat(null);
           },
         }}
+        MenuListProps={{
+          onMouseEnter: () => {
+            // Держим подменю открытым, когда курсор на нем
+            setShowMoveToFolderMenu(true);
+          },
+          onMouseLeave: (e: React.MouseEvent<HTMLUListElement>) => {
+            // Проверяем, не переходит ли курсор обратно к кнопке или основному меню
+            const relatedTarget = e.relatedTarget as HTMLElement;
+            if (relatedTarget) {
+              // Если курсор переходит к основному меню или кнопке, не закрываем
+              if (relatedTarget.closest('[role="menu"]') ||
+                  relatedTarget === folderMenuAnchorForChat ||
+                  relatedTarget.closest('[role="menuitem"]') === folderMenuAnchorForChat) {
+                return;
+              }
+            }
+            // Курсор покидает подменю и не переходит к основному меню - закрываем
+            setShowMoveToFolderMenu(false);
+            setFolderMenuAnchorForChat(null);
+          },
+        }}
+        disableAutoFocusItem
+        disableAutoFocus
+        disableEnforceFocus
       >
+        {/* Создать папку */}
+        <MenuItem
+          onClick={() => {
+            setShowCreateFolderDialog(true);
+            setShowMoveToFolderMenu(false);
+            setFolderMenuAnchorForChat(null);
+            handleChatMenuClose();
+          }}
+          sx={{
+            color: 'white',
+            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+          }}
+        >
+          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+            <AddFolderIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText primary="Создать папку" />
+        </MenuItem>
+        
         {/* Опция перемещения в ЧАТЫ */}
         <MenuItem
-          onClick={() => selectedChatId && handleRemoveFromFolder(selectedChatId)}
+          onClick={() => {
+            if (selectedChatId) {
+              handleRemoveFromFolder(selectedChatId);
+              setShowMoveToFolderMenu(false);
+              setFolderMenuAnchorForChat(null);
+              handleChatMenuClose();
+            }
+          }}
           sx={{
             color: selectedChatId && !getChatFolder(selectedChatId) ? 'rgba(255,255,255,0.5)' : 'white',
             '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
@@ -1772,7 +2748,14 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           .map((folder) => (
             <MenuItem
               key={folder.id}
-              onClick={() => selectedChatId && handleMoveToFolder(selectedChatId, folder.id)}
+              onClick={() => {
+                if (selectedChatId) {
+                  handleMoveToFolder(selectedChatId, folder.id);
+                  setShowMoveToFolderMenu(false);
+                  setFolderMenuAnchorForChat(null);
+                  handleChatMenuClose();
+                }
+              }}
               sx={{
                 color: 'white',
                 '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
@@ -2047,6 +3030,131 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         onClose={() => setShowArchiveModal(false)}
         isDarkMode={isDarkMode}
       />
+
+      {/* Модальное окно создания проекта */}
+      <NewProjectModal
+        open={showNewProjectModal}
+        onClose={() => {
+          setShowNewProjectModal(false);
+          setPendingChatIdForProject(null);
+        }}
+        onCreateProject={(projectData) => {
+          const projectId = createProject({
+            name: projectData.name,
+            icon: projectData.icon,
+            iconType: projectData.iconType,
+            iconColor: projectData.iconColor,
+            memory: projectData.memory,
+            instructions: projectData.instructions,
+          });
+          // Если проект создается из меню чата, перемещаем чат в проект
+          if (pendingChatIdForProject) {
+            moveChatToProject(pendingChatIdForProject, projectId);
+            setPendingChatIdForProject(null);
+          }
+        }}
+      />
+
+      {/* Меню проекта */}
+      <Menu
+        anchorEl={projectMenuAnchor}
+        open={projectMenuOpen}
+        onClose={handleProjectMenuClose}
+        anchorOrigin={{
+          vertical: 'top',
+          horizontal: 'right',
+        }}
+        transformOrigin={{
+          vertical: 'bottom',
+          horizontal: 'right',
+        }}
+        PaperProps={{
+          sx: {
+            backgroundColor: 'rgba(30, 30, 30, 0.95)',
+            backdropFilter: 'blur(10px)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            borderRadius: 2,
+            minWidth: 200,
+          },
+        }}
+      >
+        <MenuItem
+          onClick={() => handleProjectMenuAction('edit')}
+          sx={{
+            color: 'white',
+            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+          }}
+        >
+          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+            <EditIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText primary="Редактировать проект" />
+        </MenuItem>
+        
+        <MenuItem
+          onClick={() => handleProjectMenuAction('delete')}
+          sx={{
+            color: 'white',
+            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+          }}
+        >
+          <ListItemIcon sx={{ color: '#f44336', minWidth: 36 }}>
+            <DeleteIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText primary="Удалить проект" primaryTypographyProps={{ sx: { color: '#f44336' } }} />
+        </MenuItem>
+      </Menu>
+
+      {/* Диалог подтверждения удаления проекта */}
+      <Dialog
+        open={showDeleteProjectDialog}
+        onClose={() => setShowDeleteProjectDialog(false)}
+        maxWidth="sm"
+        fullWidth
+        PaperProps={{
+          sx: {
+            backgroundColor: '#1e1e1e',
+            color: 'white',
+            borderRadius: 2,
+          }
+        }}
+      >
+        <DialogTitle sx={{ color: 'white', fontWeight: 'bold' }}>
+          Удалить проект
+        </DialogTitle>
+        <DialogContent>
+          <Typography sx={{ color: 'white', mt: 1 }}>
+            Это действие навсегда удалит выбранный проект и не может быть отменено. 
+            Пожалуйста, подтвердите для продолжения.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ p: 2, gap: 1 }}>
+          <Button
+            onClick={() => setShowDeleteProjectDialog(false)}
+            sx={{
+              backgroundColor: 'black',
+              color: 'white',
+              '&:hover': { backgroundColor: 'rgba(0,0,0,0.8)' },
+              textTransform: 'none',
+              px: 3,
+            }}
+          >
+            Отменить
+          </Button>
+          <Button
+            onClick={handleConfirmDeleteProject}
+            sx={{
+              backgroundColor: '#f44336',
+              color: 'white',
+              '&:hover': { backgroundColor: '#d32f2f' },
+              textTransform: 'none',
+              px: 3,
+            }}
+          >
+            Удалить
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Drawer>
   );
 }

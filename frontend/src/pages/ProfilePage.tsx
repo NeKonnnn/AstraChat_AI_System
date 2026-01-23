@@ -23,8 +23,13 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import { API_CONFIG } from '../config/api';
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+// Получаем базовый URL из конфига
+const getApiBaseUrl = () => {
+  return process.env.REACT_APP_API_URL || API_CONFIG.BASE_URL;
+};
+const API_BASE_URL = getApiBaseUrl();
 
 export default function ProfilePage() {
   const { user, logout, updateUser, token } = useAuth();

@@ -19,6 +19,7 @@ import {
   useMediaQuery,
   Paper,
 } from '@mui/material';
+import { getApiUrl, API_CONFIG } from '../config/api';
 import {
   Close as CloseIcon,
   Upload as UploadIcon,
@@ -192,7 +193,7 @@ export default function TranscriptionModal({
       formData.append('file', uploadedFile);
       formData.append('request_id', currentTranscriptionId);
 
-      const response = await fetch('http://localhost:8000/api/transcribe/upload', {
+      const response = await fetch(getApiUrl(API_CONFIG.ENDPOINTS.TRANSCRIBE_UPLOAD), {
         method: 'POST',
         body: formData,
       });
@@ -282,7 +283,7 @@ export default function TranscriptionModal({
     }
     
     try {
-      const response = await fetch('http://localhost:8000/api/transcribe/youtube', {
+      const response = await fetch(getApiUrl(API_CONFIG.ENDPOINTS.TRANSCRIBE_YOUTUBE), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -466,7 +467,7 @@ export default function TranscriptionModal({
     }
 
     try {
-      const response = await fetch('http://localhost:8000/api/transcribe/stop', {
+      const response = await fetch(getApiUrl('/api/transcribe/stop'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
