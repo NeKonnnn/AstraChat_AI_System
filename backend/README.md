@@ -17,6 +17,8 @@ astrachat_LOG_LEVEL=info
 astrachat_WORKERS=1
 
 # Настройки CORS
+# Примечание: URL-адреса также можно настроить в config.yml в секции urls
+# Это позволит менять все URL в одном месте
 astrachat_CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 astrachat_SOCKETIO_CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 

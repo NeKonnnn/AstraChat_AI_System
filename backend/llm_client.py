@@ -27,11 +27,15 @@ class LLMClient:
         
         # Определяем URL для подключения
         if base_url is None:
+            # Получаем URL из секции urls конфига (это единственный источник истины)
+            urls_config = config.get("urls", {})
             # В Docker используем внутренний URL, в разработке - внешний
             if os.getenv("DOCKER_ENV") == "true":
-                self.base_url = llm_svc_config.get("base_url", "http://llm-svc:8000").rstrip('/')
+                # Используем значение из urls
+                self.base_url = urls_config.get("llm_service_docker", "").rstrip('/')
             else:
-                self.base_url = llm_svc_config.get("external_url", "http://localhost:8001").rstrip('/')
+                # Используем значение из urls
+                self.base_url = urls_config.get("llm_service_port", "").rstrip('/')
         else:
             self.base_url = base_url.rstrip('/')
         

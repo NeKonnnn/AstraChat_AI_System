@@ -6,11 +6,14 @@ except ImportError:
     Llama = None
     print("Предупреждение: llama_cpp недоступен. Используйте llm-svc для работы с моделями.")
 
-from backend.config.config import MODEL_PATH
+from config import get_path
 from backend.context_prompts import context_prompt_manager
 import os
 import glob
 import json
+
+# Получаем путь к моделям из конфига
+MODEL_PATH = get_path("model_path")
 
 # Класс для хранения настроек модели
 class ModelSettings:

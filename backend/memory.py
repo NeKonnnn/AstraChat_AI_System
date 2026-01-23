@@ -1,7 +1,10 @@
-from backend.config.config import MEMORY_PATH
+from config import get_path
 import json
 import os
 import uuid
+
+# Получаем путь к памяти из конфига
+MEMORY_PATH = get_path("memory_path")
 
 # Формируем полные пути к файлам
 MEMORY_FILE = os.path.join(MEMORY_PATH, "dialog_history.txt")

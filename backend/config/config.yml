@@ -16,18 +16,10 @@ server:
   workers: 1
 
 # Настройки CORS
+# Примечание: allowed_origins теперь читаются из секции urls в коде
+# Измените значения в секции urls, чтобы обновить все URL
 cors:
-  allowed_origins:
-    - "http://localhost:3000"    # React dev server
-    - "http://localhost:8000"    # Backend
-    - "http://127.0.0.1:3000"
-    - "http://127.0.0.1:8000"
-    - "http://localhost:3001"
-    - "http://127.0.0.1:3001"
-    - "http://localhost:5173"    # Vite dev server
-    - "http://127.0.0.1:5173"
-    - "http://astrachat-frontend:3000"  # Docker internal
-    - "http://astrachat-backend:8000"   # Docker internal backend
+  allowed_origins: []  # Используются значения из секции urls
   allow_credentials: true
   allow_methods: ["*"]
   allow_headers: ["*"]
@@ -37,8 +29,10 @@ microservices:
   # LLM Service (включает LLM, Vosk, Silero, WhisperX, Diarization)
   llm_svc:
     enabled: true
-    base_url: "http://llm-svc:8000"  # Внутренний URL в Docker
-    external_url: "http://localhost:8001"  # Внешний URL для разработки
+    # Примечание: base_url и external_url теперь читаются из секции urls в коде
+    # Измените значения в секции urls, чтобы обновить все URL
+    base_url: ""  # Используется docker_llm_svc из секции urls
+    external_url: ""  # Используется localhost_8001 из секции urls
     timeout: 300  # 5 минут таймаут
     retry_attempts: 3
     retry_delay: 1  # секунды между попытками
@@ -177,3 +171,50 @@ development:
   debug_toolbar: false
   profiling: false
   mock_llm: false  # Использовать заглушку вместо реального LLM
+
+# Пути к моделям и папкам
+paths:
+  # Пути к папкам с моделями (относительно корня проекта)
+  whisperx_models_dir: "whisperx_models"
+  diarize_models_dir: "diarize_models"
+  
+  # Названия моделей
+  whisperx_base_model: "base"
+  whisperx_small_model: "small"
+  diarize_model: "pyannote/speaker-diarization-3.1"
+  
+  # Пути для других модулей
+  model_path: "models"  # Путь к конкретной модели LLM
+  memory_path: "memory"  # Путь к папке с памятью диалогов
+
+# URL-адреса для использования в приложении
+# Измените эти значения, чтобы обновить все URL во всем приложении
+# Названия переменных нейтральные и не привязаны к localhost или конкретным IP
+urls:
+  # Frontend адреса
+  frontend_port_1: "http://localhost:3000"
+  frontend_port_1_ipv4: "http://127.0.0.1:3000"
+  
+  # Frontend альтернативный порт
+  frontend_port_2: "http://localhost:3001"
+  frontend_port_2_ipv4: "http://127.0.0.1:3001"
+  
+  # Frontend Vite dev server
+  frontend_port_3: "http://localhost:5173"
+  frontend_port_3_ipv4: "http://127.0.0.1:5173"
+  
+  # Backend адреса 
+  backend_port_1: "http://localhost:8000"
+  backend_port_1_ipv4: "http://127.0.0.1:8000"
+  
+  # LLM Service адреса
+  llm_service_port: "http://localhost:8001"
+  
+  # Backend альтернативный порт 
+  backend_port_2: "http://localhost:8080"
+  backend_port_2_ipv4: "http://127.0.0.1:8080"
+  
+  # Docker внутренние адреса
+  frontend_docker: "http://astrachat-frontend:3000"
+  backend_docker: "http://astrachat-backend:8000"
+  llm_service_docker: "http://llm-svc:8000"
