@@ -43,6 +43,22 @@ diarize_models/
 silero_models/
 whisperx_models/
 
+# Model files (большие файлы моделей)
+*.gguf
+*.bin
+*.pt
+*.pth
+*.safetensors
+*.onnx
+*.h5
+*.pb
+*.tflite
+
+# Кэш моделей
+.cache/
+huggingface/
+torch/
+
 # Node.js dependencies
 node_modules/
 frontend/node_modules/
@@ -123,4 +139,3 @@ dmypy.json
 .pyre/
 
 
-backend/backend

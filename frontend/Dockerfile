@@ -13,10 +13,10 @@ ENV REACT_APP_API_URL=$REACT_APP_API_URL
 ENV REACT_APP_WS_URL=$REACT_APP_WS_URL
 
 # Копирование package.json и package-lock.json
-COPY package*.json ./
+COPY package.json ./
 
 # Установка зависимостей (включая dev dependencies для сборки)
-RUN npm ci
+RUN npm install
 # Копирование исходного кода
 COPY . .
 
