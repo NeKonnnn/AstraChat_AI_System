@@ -1,0 +1,155 @@
+# Конфигурация сервера
+server:
+  host: "0.0.0.0"
+  port: 8000
+  log_level: "INFO"
+  docs_url: "/docs"
+  redoc_url: "/redoc"
+
+# Настройки CORS
+cors:
+  allowed_origins:
+    - "*"
+  allow_credentials: true
+  allow_methods: ["*"]
+  allow_headers: ["*"]
+
+# Настройки приложения
+app:
+  title: "astrachat OCR Service"
+  description: "Microservice for Surya OCR (Optical Character Recognition)"
+  version: "1.0.0"
+
+# --- SURYA OCR (Распознавание текста) ---
+# Настройки взяты из твоего оригинала
+surya:
+  enabled: true
+  models_dir: "/app/models/surya"  # Путь внутри контейнера
+  device: "auto"  # auto, cpu, cuda
+  max_file_size: 52428800  # 50MB
+  supported_languages:
+    - "ru"
+    - "en"
+    - "hi"
+    - "es"
+    - "fr"
+    - "de"
+    - "it"
+    - "pt"
+    - "vi"
+    - "tr"
+    - "ar"
+    - "zh"
+    - "ja"
+    - "ko"
+    - "th"
+    - "ur"
+    - "fa"
+    - "ta"
+    - "te"
+    - "ml"
+    - "kn"
+    - "gu"
+    - "pa"
+    - "bn"
+    - "or"
+    - "as"
+    - "ne"
+    - "mr"
+    - "sa"
+    - "my"
+    - "ka"
+    - "si"
+    - "km"
+    - "lo"
+    - "bo"
+    - "dz"
+    - "ti"
+    - "am"
+    - "sw"
+    - "zu"
+    - "xh"
+    - "af"
+    - "sq"
+    - "az"
+    - "eu"
+    - "be"
+    - "bs"
+    - "bg"
+    - "ca"
+    - "hr"
+    - "cs"
+    - "da"
+    - "nl"
+    - "et"
+    - "fi"
+    - "gl"
+    - "el"
+    - "he"
+    - "hu"
+    - "is"
+    - "id"
+    - "ga"
+    - "kk"
+    - "ky"
+    - "lv"
+    - "lt"
+    - "lb"
+    - "mk"
+    - "ms"
+    - "mt"
+    - "mn"
+    - "no"
+    - "pl"
+    - "ro"
+    - "sr"
+    - "sk"
+    - "sl"
+    - "sv"
+    - "tg"
+    - "tk"
+    - "uk"
+    - "uz"
+    - "cy"
+    - "yi"
+    - "yo"
+    - "zu"
+
+# --- ОСТАЛЬНЫЕ МОДУЛИ ОТКЛЮЧЕНЫ ---
+model:
+  path: "/dev/null"
+  name: "disabled"
+  ctx_size: 0
+  gpu_layers: 0
+  backend: "llama.cpp"
+
+generation:
+  default_temperature: 0.7
+  default_max_tokens: 1
+  stream: false
+
+vosk:
+  enabled: false
+  model_path: "/dev/null"
+
+silero:
+  enabled: false
+  models_dir: "/dev/null"
+
+whisperx:
+  enabled: false
+  models_dir: "/dev/null"
+
+diarization:
+  enabled: false
+  models_dir: "/dev/null"
+  config_path: "/dev/null"
+
+nexus:
+  enabled: false
+security:
+  enabled: false
+monitoring:
+  enabled: false
+caching:
+  enabled: false
