@@ -1,0 +1,80 @@
+# Конфигурация сервера
+server:
+  host: "0.0.0.0"
+  port: 8000
+  log_level: "INFO"
+  docs_url: "/docs"
+  redoc_url: "/redoc"
+
+# Настройки CORS
+cors:
+  allowed_origins:
+    - "*"
+  allow_credentials: true
+  allow_methods: ["*"]
+  allow_headers: ["*"]
+
+# Настройки приложения
+app:
+  title: "astrachat STT Service"
+  description: "Microservice for Speech Recognition (Vosk + WhisperX)"
+  version: "1.0.0"
+
+# --- VOSK (Обычная транскрипция) ---
+vosk:
+  enabled: true
+  model_path: "/app/models/vosk"  # Путь внутри контейнера
+  sample_rate: 16000
+  max_file_size: 52428800  # 50MB
+  supported_languages:
+    - "ru"
+    - "en"
+
+# --- WHISPERX (Продвинутая транскрипция) ---
+whisperx:
+  enabled: true
+  models_dir: "/app/models/whisperx_models" # Путь внутри контейнера
+  device: "auto"  # auto, cpu, cuda
+  compute_type: "int8"  # int8 для CPU, float16 для CUDA
+  language: "ru"
+  batch_size: 16
+  max_file_size: 5368709120  # 5GB
+  supported_languages:
+    - "ru"
+    - "en"
+    - "auto"
+
+# --- ОСТАЛЬНЫЕ МОДУЛИ ОТКЛЮЧЕНЫ ---
+model:
+  path: "/dev/null"
+  name: "disabled"
+  ctx_size: 0
+  gpu_layers: 0
+  backend: "llama.cpp"
+
+generation:
+  default_temperature: 0.7
+  default_max_tokens: 1
+  stream: false
+
+silero:
+  enabled: false
+  models_dir: "/dev/null"
+
+diarization:
+  enabled: false
+  models_dir: "/dev/null"
+  config_path: "/dev/null"
+
+surya:
+  enabled: false
+  models_dir: "/dev/null"
+
+nexus:
+  enabled: false
+security:
+  enabled: false
+monitoring:
+  enabled: false
+caching:
+  enabled: false

@@ -14,10 +14,7 @@ async def get_silero_handler() -> Optional[Dict[str, any]]:
     """Получение экземпляров моделей Silero TTS"""
     global silero_models
     
-    # Небольшой фикс логирования для нового сервиса, чтобы было видно старт
-    logging.basicConfig(level=logging.INFO) 
-    
-    logger.info(f"[DEBUG] get_silero_handler вызван. silero_models={silero_models is not None}, enabled={settings.silero.enabled}")
+    logger.info(f"[DEBUG] get_silero_handler вызван. silero_models={silero_models}, enabled={settings.silero.enabled}")
     
     if not settings.silero.enabled:
         logger.warning("Silero TTS отключен в конфигурации")
@@ -32,7 +29,6 @@ async def get_silero_handler() -> Optional[Dict[str, any]]:
             # Проверяем существование директории с моделями
             if not os.path.exists(models_dir):
                 logger.warning(f"Директория с моделями Silero TTS не найдена в {models_dir}")
-                # Пытаемся создать, если нет (на случай ошибки монтирования)
                 return None
             
             # Инициализируем словарь для моделей
@@ -42,6 +38,9 @@ async def get_silero_handler() -> Optional[Dict[str, any]]:
             try:
                 # Загрузка модели для русского языка
                 ru_model_path = os.path.join(models_dir, "ru", "model.pt")
+                logger.info(f"Проверка наличия модели Silero TTS (ru) по пути: {ru_model_path}")
+                logger.info(f"Файл существует: {os.path.exists(ru_model_path)}")
+                
                 if os.path.exists(ru_model_path):
                     logger.info(f"Загрузка модели Silero TTS (ru) из {ru_model_path}...")
                     silero_models['ru'] = torch.package.PackageImporter(ru_model_path).load_pickle("tts_models", "model")
@@ -51,6 +50,9 @@ async def get_silero_handler() -> Optional[Dict[str, any]]:
                 
                 # Загрузка модели для английского языка
                 en_model_path = os.path.join(models_dir, "en", "model.pt")
+                logger.info(f"Проверка наличия модели Silero TTS (en) по пути: {en_model_path}")
+                logger.info(f"Файл существует: {os.path.exists(en_model_path)}")
+                
                 if os.path.exists(en_model_path):
                     logger.info(f"Загрузка модели Silero TTS (en) из {en_model_path}...")
                     silero_models['en'] = torch.package.PackageImporter(en_model_path).load_pickle("tts_models", "model")
@@ -77,9 +79,11 @@ async def get_silero_handler() -> Optional[Dict[str, any]]:
     
     return silero_models
 
+
 async def cleanup_silero_handler():
     """Очистка ресурсов моделей Silero TTS"""
     global silero_models
+    
     if silero_models is not None:
         logger.info("Освобождение ресурсов моделей Silero TTS")
         silero_models = None

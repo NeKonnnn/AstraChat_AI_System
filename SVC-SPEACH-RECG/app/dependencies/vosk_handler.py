@@ -27,7 +27,7 @@ async def get_vosk_handler() -> Optional[Model]:
                 logger.warning(f"Модель Vosk не найдена в {settings.vosk.model_path}")
                 return None
             
-            # Загружаем модели
+            # Загружаем модель
             vosk_model = Model(settings.vosk.model_path)
             logger.info("Модель Vosk успешно загружена")
             

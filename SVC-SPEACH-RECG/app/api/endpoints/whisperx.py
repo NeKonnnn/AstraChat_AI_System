@@ -259,3 +259,17 @@ async def reload_whisperx_models():
             status_code=500, 
             detail=f"Ошибка при перезагрузке моделей WhisperX: {str(e)}"
         )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
