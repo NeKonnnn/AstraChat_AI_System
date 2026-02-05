@@ -17,8 +17,13 @@ import {
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
 import axios from 'axios';
+import { API_CONFIG } from '../../config/api';
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+// Получаем базовый URL из конфига
+const getApiBaseUrl = () => {
+  return process.env.REACT_APP_API_URL || API_CONFIG.BASE_URL;
+};
+const API_BASE_URL = getApiBaseUrl();
 
 export default function ProfileSettings() {
   const { user, updateUser, token } = useAuth();

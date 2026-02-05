@@ -23,6 +23,7 @@ import {
   Fab,
   Tooltip,
 } from '@mui/material';
+import { getApiUrl, API_CONFIG } from '../config/api';
 import {
   Search as SearchIcon,
   Delete as DeleteIcon,
@@ -72,7 +73,7 @@ export default function HistoryPage() {
   const loadHistory = async () => {
     setIsLoading(true);
     try {
-      const response = await fetch('http://localhost:8000/api/history?limit=1000');
+      const response = await fetch(getApiUrl(`${API_CONFIG.ENDPOINTS.HISTORY}?limit=1000`));
       const result = await response.json();
       
       if (result.history) {
@@ -95,7 +96,7 @@ export default function HistoryPage() {
 
   const clearHistory = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/history', {
+      const response = await fetch(getApiUrl(API_CONFIG.ENDPOINTS.HISTORY), {
         method: 'DELETE',
       });
       

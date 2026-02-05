@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { getApiUrl, getWsUrl } from '../config/api';
+import { getApiUrl, getWsUrl, API_CONFIG } from '../config/api';
 import { useLocation } from 'react-router-dom';
 import {
   Box,
@@ -711,7 +711,7 @@ export default function VoicePage() {
       formData.append('audio_file', audioBlob, 'recording.wav');
 
       console.log('Fallback: Отправляю аудио на сервер для распознавания');
-      const response = await fetch('http://localhost:8000/api/voice/recognize', {
+      const response = await fetch(getApiUrl(API_CONFIG.ENDPOINTS.VOICE_RECOGNIZE), {
         method: 'POST',
         body: formData,
       });
@@ -757,7 +757,7 @@ export default function VoicePage() {
       console.log('ОТЛАДКА: Данные для LLM - сообщение:', text);
       
       // Отправляем текст в чат
-      const response = await fetch('http://localhost:8000/api/chat', {
+      const response = await fetch(getApiUrl(API_CONFIG.ENDPOINTS.CHAT), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -810,7 +810,7 @@ export default function VoicePage() {
       
       console.log('Отправляю запрос на синтез речи:', requestBody);
       
-      const response = await fetch('http://localhost:8000/api/voice/synthesize', {
+      const response = await fetch(getApiUrl(API_CONFIG.ENDPOINTS.VOICE_SYNTHESIZE), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -89,13 +89,17 @@ def get_default_config() -> Dict[str, Any]:
         "microservices": {
             "llm_svc": {
                 "enabled": True,
-                "base_url": "http://llm-svc:8000",  # ВАЖНО: llm-svc (две буквы 'l'), не 1lm-svc
-                "external_url": "http://localhost:8001",
+                # base_url и external_url теперь читаются из секции urls
+                "base_url": "",
+                "external_url": "",
                 "timeout": 300,
                 "retry_attempts": 3,
                 "retry_delay": 1
             }
         },
+        # Секция urls не включена в дефолтный конфиг
+        # Все URL должны быть указаны в config.yml
+        # Это единственный источник истины для URL-адресов
         "logging": {
             "level": "INFO",
             "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -130,5 +134,51 @@ def reset_config() -> Dict[str, Any]:
     _config = None
     return load_config(config_path)
 
+def get_project_root() -> Path:
+    """Получение корневой директории проекта"""
+    current_file = Path(__file__).resolve()
+    
+    # В Docker контейнере: /app/backend/config/__init__.py -> /app
+    # В локальной разработке: F:/memo_new_api/backend/config/__init__.py -> F:/memo_new_api
+    # Проверяем, находимся ли мы в /app (Docker)
+    if str(current_file).startswith('/app'):
+        # Если файл в /app/backend/config/__init__.py, то корень - /app
+        if 'backend' in str(current_file):
+            return Path('/app')
+        # Если файл в /app/config/__init__.py, то корень тоже /app
+        return Path('/app')
+    
+    # Для локальной разработки: идем на 3 уровня вверх от config/__init__.py
+    # backend/config/__init__.py -> backend -> корень проекта
+    return current_file.parent.parent.parent.absolute()
+
+def get_path(path_key: str) -> str:
+    """Получение абсолютного пути из конфигурации"""
+    config = get_config()
+    paths_config = config.get("paths", {})
+    relative_path = paths_config.get(path_key, "")
+    
+    if not relative_path:
+        # Логируем предупреждение, если путь не найден
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Путь '{path_key}' не найден в config.yml секции paths")
+        return ""
+    
+    project_root = get_project_root()
+    full_path = project_root / relative_path
+    result = str(full_path.absolute())
+    
+    # Логируем для отладки
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.debug(f"get_path('{path_key}'): project_root={project_root}, relative={relative_path}, full={result}")
+    
+    return result
+
 # Инициализация конфигурации при импорте модуля
 config = get_config()
+
+# Константы для обратной совместимости (вычисляются при импорте)
+MODEL_PATH = get_path("model_path")
+MEMORY_PATH = get_path("memory_path")

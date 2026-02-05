@@ -44,6 +44,31 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     # Инициализация при запуске
     try:
+<<<<<<<< HEAD:SVC-SPEACH-RECG/app/main.py
+========
+        # Проверяем, нужно ли загружать модель из Nexus
+        if settings.nexus.enabled:
+            # Если Nexus включен, пытаемся загрузить модель
+            if not download_model_from_nexus_if_needed():
+                logger.error("Failed to download model from Nexus")
+                raise RuntimeError("Failed to download model from Nexus")
+        
+        # Проверяем существование модели перед инициализацией
+        model_path = settings.model.path
+        if not os.path.exists(model_path):
+            logger.warning(f"Model file not found at {model_path}. Application will continue, but LLM features may not work.")
+        
+        # Инициализируем обработчик LLM
+        print("\n" + "=" * 80)
+        print("🎯 STARTING LLM SERVICE INITIALIZATION")
+        print("=" * 80 + "\n")
+        await get_llama_handler()
+        print("\n" + "=" * 80)
+        print("✅ LLM SERVICE READY")
+        print("=" * 80 + "\n")
+        logger.info("LLM handler initialized")
+        
+>>>>>>>> main:llm-svc/app/main.py
         # Инициализируем обработчик Vosk (если включен)
         if settings.vosk.enabled:
             print("\n" + "=" * 80)

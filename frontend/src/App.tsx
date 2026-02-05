@@ -10,12 +10,15 @@ import DocumentsPage from './pages/DocumentsPage';
 // import SettingsPage from './pages/SettingsPage'; // Удалено - теперь используется модальное окно
 import HistoryPage from './pages/HistoryPage';
 import PromptGalleryPage from './pages/PromptGalleryPage';
+import ProjectPage from './pages/ProjectPage';
 import { SocketProvider } from './contexts/SocketContext';
 import { AppProvider } from './contexts/AppContext';
 import { AuthProvider } from './contexts/AuthContext';
 import PrivateRoute from './components/PrivateRoute';
 import LoginPage from './pages/LoginPage';
 import ProfilePage from './pages/ProfilePage';
+import ShareViewPage from './pages/ShareViewPage';
+import { initConfig } from './config/config';
 import './App.css';
 
 // Создаем тему Material-UI
@@ -69,17 +72,38 @@ const createAppTheme = (isDark: boolean) => createTheme({
 });
 
 function App() {
+  // Инициализация конфигурации при загрузке приложения
+  useEffect(() => {
+    initConfig().catch((error) => {
+      console.error('Ошибка загрузки конфигурации:', error);
+    });
+  }, []);
+
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const saved = localStorage.getItem('gazikii-dark-mode');
     return saved ? JSON.parse(saved) : false;
   });
 
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [sidebarHidden, setSidebarHidden] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    const saved = localStorage.getItem('sidebarOpen');
+    return saved !== null ? saved === 'true' : true;
+  });
+  const [sidebarHidden, setSidebarHidden] = useState(() => {
+    const saved = localStorage.getItem('sidebarHidden');
+    return saved !== null ? saved === 'true' : false;
+  });
 
   useEffect(() => {
     localStorage.setItem('gazikii-dark-mode', JSON.stringify(isDarkMode));
   }, [isDarkMode]);
+
+  useEffect(() => {
+    localStorage.setItem('sidebarOpen', String(sidebarOpen));
+  }, [sidebarOpen]);
+
+  useEffect(() => {
+    localStorage.setItem('sidebarHidden', String(sidebarHidden));
+  }, [sidebarHidden]);
 
   const theme = createAppTheme(isDarkMode);
 
@@ -102,6 +126,9 @@ function App() {
               <Routes>
                 {/* Публичный маршрут для логина */}
                 <Route path="/login" element={<LoginPage />} />
+                
+                {/* Публичный маршрут для просмотра публичных ссылок */}
+                <Route path="/share/:shareId" element={<ShareViewPage />} />
                 
                 {/* Защищенные маршруты */}
                 <Route
@@ -168,6 +195,7 @@ function App() {
                           
                           <Routes>
                             <Route path="/" element={<UnifiedChatPage isDarkMode={isDarkMode} sidebarOpen={sidebarOpen} />} />
+                            <Route path="/project/:projectId" element={<ProjectPage />} />
                             <Route path="/voice" element={<VoicePage />} />
                             <Route path="/documents" element={<DocumentsPage />} />
                             <Route path="/prompts" element={<PromptGalleryPage />} />

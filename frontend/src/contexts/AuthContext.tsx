@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import axios from 'axios';
+import { API_CONFIG } from '../config/api';
 
 interface User {
   username: string;
@@ -22,7 +23,11 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+// Получаем базовый URL из конфига
+const getApiBaseUrl = () => {
+  return process.env.REACT_APP_API_URL || API_CONFIG.BASE_URL;
+};
+const API_BASE_URL = getApiBaseUrl();
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);

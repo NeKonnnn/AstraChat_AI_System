@@ -70,6 +70,9 @@ sys.path.insert(0, root_dir)      # Для доступа к / для импор
 # Импортируем конфигурацию
 from config import get_config, config
 
+# Получаем URL из конфигурации для использования во всем приложении
+urls_config = config.get("urls", {})
+
 # Настройка логирования в самом начале
 # Настройка логирования с поддержкой UTF-8
 import logging
@@ -144,6 +147,18 @@ except ImportError as e:
 except Exception as e:
     logger.warning(f"Ошибка при импорте agents router: {e}")
     agents_router = None
+
+# Импорт share router
+try:
+    logger.info("Попытка импорта share router...")
+    from backend.routes.share import router as share_router
+    logger.info("share router импортирован успешно")
+except ImportError as e:
+    logger.warning(f"share router недоступен: {e}")
+    share_router = None
+except Exception as e:
+    logger.warning(f"Ошибка при импорте share router: {e}")
+    share_router = None
 
 # Проверяем, нужно ли использовать llm-svc ДО импорта (избегаем двойной загрузки модели)
 use_llm_svc = os.getenv('USE_LLM_SVC', 'false').lower() == 'true'
@@ -408,16 +423,20 @@ voice_chat_stop_flag = False
 stop_transcription_flags = {}
 
 # Создание Socket.IO сервера
+# Все URL читаются из секции urls конфига
+socketio_origins = [
+    urls_config.get("frontend_port_1"),
+    urls_config.get("frontend_port_1_ipv4"),
+    urls_config.get("backend_port_1"),
+    urls_config.get("backend_port_1_ipv4"),
+    urls_config.get("frontend_docker"),
+    urls_config.get("backend_docker"),
+]
+# Фильтруем None значения
+socketio_origins = [origin for origin in socketio_origins if origin]
 sio = AsyncServer(
     async_mode='asgi',
-    cors_allowed_origins=[
-        "http://localhost:3000", 
-        "http://127.0.0.1:3000",
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-        "http://astrachat-frontend:3000",
-        "http://astrachat-backend:8000",
-    ],
+    cors_allowed_origins=socketio_origins,
     ping_timeout=300,  # ping timeout до 5 минут (для долгих генераций)
     ping_interval=15,  # Отправляем ping каждые 15 секунд
     logger=False,  # Отключено логирование Socket.IO (мешает в консоли)
@@ -434,21 +453,28 @@ app = FastAPI(
 )
 
 # Настройка CORS из конфигурации
+# Все URL читаются из секции urls конфига
 cors_config = config.get("cors", {})
+cors_origins_from_config = cors_config.get("allowed_origins", [])
+# Если в конфиге не указаны origins, используем значения из секции urls
+if not cors_origins_from_config:
+    cors_origins_from_config = [
+        urls_config.get("frontend_port_1"),
+        urls_config.get("frontend_port_1_ipv4"),
+        urls_config.get("frontend_port_2"),
+        urls_config.get("frontend_port_2_ipv4"),
+        urls_config.get("frontend_port_3"),  # Vite dev server
+        urls_config.get("frontend_port_3_ipv4"),
+        urls_config.get("backend_port_1"),
+        urls_config.get("backend_port_1_ipv4"),
+        urls_config.get("frontend_docker"),
+        urls_config.get("backend_docker"),
+    ]
+    # Фильтруем None значения
+    cors_origins_from_config = [origin for origin in cors_origins_from_config if origin]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_config.get("allowed_origins", [
-        "http://localhost:3000", 
-        "http://127.0.0.1:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3001",
-        "http://localhost:5173",  # Vite dev server
-        "http://127.0.0.1:5173",
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-        "http://astrachat-frontend:3000",
-        "http://astrachat-backend:8000",
-    ]),
+    allow_origins=cors_origins_from_config,
     allow_credentials=cors_config.get("allow_credentials", True),
     allow_methods=cors_config.get("allow_methods", ["*"]),
     allow_headers=cors_config.get("allow_headers", ["*"]),
@@ -474,6 +500,13 @@ if agents_router:
     logger.info("Agents gallery routes подключены (/api/agents/*)")
 else:
     logger.warning("Agents gallery routes не подключены (agents_router недоступен)")
+
+# Подключаем share routes
+if share_router:
+    app.include_router(share_router)
+    logger.info("Share routes подключены (/api/share/*)")
+else:
+    logger.warning("Share routes не подключены (share_router недоступен)")
 
 # Startup событие для инициализации агентной архитектуры и баз данных
 @app.on_event("startup")
@@ -1555,7 +1588,7 @@ async def socket_test():
     return {
         "socketio_status": "active",
         "endpoint": "/socket.io/",
-        "cors_origins": ["http://localhost:3000", "http://127.0.0.1:3000"],
+        "cors_origins": [urls_config.get("frontend_port_1"), urls_config.get("frontend_port_1_ipv4")],
         "ping_timeout": 120,
         "ping_interval": 25
     }
@@ -2404,8 +2437,9 @@ async def get_chat_history(limit: int = None):
         try:
             import json
             import os
-            from backend.config.config import MEMORY_PATH
+            from config import get_path
             
+            MEMORY_PATH = get_path("memory_path")
             dialog_file = os.path.join(MEMORY_PATH, "dialog_history_dialog.json")
             
             if os.path.exists(dialog_file):
@@ -2464,8 +2498,9 @@ async def clear_chat_history():
         # Попытка прямого удаления файлов если модуль memory недоступен
         try:
             import os
-            from backend.config.config import MEMORY_PATH
+            from config import get_path
             
+            MEMORY_PATH = get_path("memory_path")
             dialog_file = os.path.join(MEMORY_PATH, "dialog_history_dialog.json")
             memory_file = os.path.join(MEMORY_PATH, "dialog_history.txt")
             
@@ -4567,8 +4602,9 @@ if __name__ == "__main__":
     print(f"Backend директория: {os.path.dirname(os.path.abspath(__file__))}")
     print(f"Корневая директория: {os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}")
     print(f"Python path: {sys.path[:3]}...")
-    print("API документация: http://localhost:8000/docs")
-    print("WebSocket: ws://localhost:8000/ws/chat")
+    print(f"API документация: {urls_config.get('backend_port_1')}/docs")
+    backend_url = urls_config.get('backend_port_1', '').replace('http://', 'ws://')
+    print(f"WebSocket: {backend_url}/ws/chat")
     
     # Восстанавливаем сохраненную модель
     try:

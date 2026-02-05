@@ -1,5 +1,5 @@
 {
-  "context_size": 25000,
+  "context_size": 4096,
   "output_tokens": 900000,
   "batch_size": 512,
   "n_threads": 12,
@@ -13,7 +13,7 @@
   "min_p": 0.05,
   "frequency_penalty": 0.0,
   "presence_penalty": 0.0,
-  "use_gpu": false,
+  "use_gpu": true,
   "streaming": true,
   "legacy_api": false
 }

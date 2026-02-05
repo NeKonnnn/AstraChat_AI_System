@@ -24,7 +24,10 @@ import json
 import logging
 import asyncio
 from typing import List, Dict, Any, Optional, Callable
-from backend.config.config import MODEL_PATH
+from config import get_path
+
+# Получаем путь к моделям из конфига
+MODEL_PATH = get_path("model_path")
 from backend.context_prompts import context_prompt_manager
 from backend.llm_client import ask_agent_llm_svc, get_llm_service
 

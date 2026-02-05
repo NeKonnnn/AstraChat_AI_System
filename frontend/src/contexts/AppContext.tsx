@@ -26,6 +26,8 @@ export interface Chat {
   createdAt: string;
   updatedAt: string;
   isArchived?: boolean;
+  projectId?: string;
+  isPinnedInProject?: boolean;
 }
 
 export interface ModelInfo {
@@ -62,11 +64,24 @@ export interface Folder {
   expanded: boolean;
 }
 
+export interface Project {
+  id: string;
+  name: string;
+  icon?: string;
+  iconType?: 'icon' | 'emoji';
+  iconColor?: string;
+  memory: 'default' | 'project-only';
+  instructions: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AppState {
   // Чаты
   chats: Chat[];
   currentChatId: string | null;
   folders: Folder[];
+  projects: Project[];
   isLoading: boolean;
   isInitialized: boolean;
   
@@ -144,7 +159,13 @@ type AppAction =
   | { type: 'UNARCHIVE_CHAT'; payload: string }
   | { type: 'UNARCHIVE_ALL_CHATS' }
   | { type: 'UPDATE_STATS'; payload: Partial<AppState['stats']> }
-  | { type: 'SET_INITIALIZED'; payload: boolean };
+  | { type: 'SET_INITIALIZED'; payload: boolean }
+  | { type: 'CREATE_PROJECT'; payload: Project }
+  | { type: 'UPDATE_PROJECT'; payload: { projectId: string; updates: Partial<Project> } }
+  | { type: 'DELETE_PROJECT'; payload: string }
+  | { type: 'RESTORE_PROJECTS'; payload: Project[] }
+  | { type: 'MOVE_CHAT_TO_PROJECT'; payload: { chatId: string; projectId: string | null } }
+  | { type: 'TOGGLE_PIN_IN_PROJECT'; payload: { chatId: string } };
 
 // Функция для оценки количества токенов в тексте
 function estimateTokens(text: string): number {
@@ -191,6 +212,7 @@ const initialState: AppState = {
   chats: [],
   currentChatId: null,
   folders: [],
+  projects: [],
   isLoading: false,
   isInitialized: false,
   currentModel: null,
@@ -613,6 +635,54 @@ function appReducer(state: AppState, action: AppAction): AppState {
         ...state,
         isInitialized: action.payload,
       };
+    
+    case 'CREATE_PROJECT':
+      return {
+        ...state,
+        projects: [...state.projects, action.payload],
+      };
+    
+    case 'UPDATE_PROJECT':
+      return {
+        ...state,
+        projects: state.projects.map(project =>
+          project.id === action.payload.projectId
+            ? { ...project, ...action.payload.updates, updatedAt: new Date().toISOString() }
+            : project
+        ),
+      };
+    
+    case 'DELETE_PROJECT':
+      return {
+        ...state,
+        projects: state.projects.filter(project => project.id !== action.payload),
+      };
+    
+    case 'RESTORE_PROJECTS':
+      return {
+        ...state,
+        projects: action.payload,
+      };
+    
+    case 'MOVE_CHAT_TO_PROJECT':
+      return {
+        ...state,
+        chats: state.chats.map(chat =>
+          chat.id === action.payload.chatId
+            ? { ...chat, projectId: action.payload.projectId ?? undefined }
+            : chat
+        ),
+      };
+    
+    case 'TOGGLE_PIN_IN_PROJECT':
+      return {
+        ...state,
+        chats: state.chats.map(chat =>
+          chat.id === action.payload.chatId
+            ? { ...chat, isPinnedInProject: !chat.isPinnedInProject }
+            : chat
+        ),
+      };
       
     default:
       return state;
@@ -646,7 +716,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
               folders: parsed.folders || []
             }
           });
-        } else {
+        }
+        // Восстанавливаем проекты
+        if (parsed.projects && parsed.projects.length > 0) {
+          dispatch({ type: 'RESTORE_PROJECTS', payload: parsed.projects });
+        }
+        if (!parsed.chats || parsed.chats.length === 0) {
           // Если нет сохраненных чатов, помечаем как инициализированное
           dispatch({ type: 'SET_INITIALIZED', payload: true });
         }
@@ -668,12 +743,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
         chats: state.chats,
         currentChatId: state.currentChatId,
         folders: state.folders,
+        projects: state.projects,
       };
       localStorage.setItem('memo-chats', JSON.stringify(stateToSave));
     } catch (error) {
       console.error('Ошибка сохранения состояния в localStorage:', error);
     }
-  }, [state.chats, state.currentChatId, state.folders]);
+  }, [state.chats, state.currentChatId, state.folders, state.projects]);
 
   return (
     <AppContext.Provider value={{ state, dispatch }}>
@@ -935,6 +1011,43 @@ export function useAppActions() {
     
     getArchivedChats: () => {
       return state.chats.filter(chat => chat.isArchived === true);
+    },
+    
+    // Функции для работы с проектами
+    createProject: (projectData: Omit<Project, 'id' | 'createdAt' | 'updatedAt'>) => {
+      const projectId = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+      const newProject: Project = {
+        id: projectId,
+        ...projectData,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      dispatch({ type: 'CREATE_PROJECT', payload: newProject });
+      return projectId;
+    },
+    
+    updateProject: (projectId: string, updates: Partial<Project>) => {
+      dispatch({ type: 'UPDATE_PROJECT', payload: { projectId, updates } });
+    },
+    
+    deleteProject: (projectId: string) => {
+      dispatch({ type: 'DELETE_PROJECT', payload: projectId });
+    },
+    
+    getProjects: () => {
+      return state.projects;
+    },
+    
+    getProjectById: (projectId: string) => {
+      return state.projects.find(project => project.id === projectId) || null;
+    },
+    
+    moveChatToProject: (chatId: string, projectId: string | null) => {
+      dispatch({ type: 'MOVE_CHAT_TO_PROJECT', payload: { chatId, projectId } });
+    },
+    
+    togglePinInProject: (chatId: string) => {
+      dispatch({ type: 'TOGGLE_PIN_IN_PROJECT', payload: { chatId } });
     },
   };
 }

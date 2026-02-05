@@ -1,0 +1,41 @@
+# Конфигурация astrachat Frontend
+# Теперь все URL вынесены в переменные
+
+# Основные настройки приложения
+app:
+  name: "astrachat Frontend"
+  version: "1.0.0"
+  description: "Frontend service for astrachat"
+
+# URL-адреса для использования в приложении
+# Измените эти значения, чтобы обновить все URL во всем приложении
+# Названия переменных нейтральные и не привязаны к localhost или конкретным IP
+urls:
+  # Frontend адреса
+  frontend_port_1: "http://localhost:3000"
+  frontend_port_1_ipv4: "http://127.0.0.1:3000"
+  
+  # Frontend альтернативный порт
+  frontend_port_2: "http://localhost:3001"
+  frontend_port_2_ipv4: "http://127.0.0.1:3001"
+  
+  # Frontend Vite dev server
+  frontend_port_3: "http://localhost:5173"
+  frontend_port_3_ipv4: "http://127.0.0.1:5173"
+  
+  # Backend адреса 
+  backend_port_1: "http://localhost:8000"
+  backend_port_1_ipv4: "http://127.0.0.1:8000"
+  
+  # LLM Service адреса
+  llm_service_port: "http://localhost:8001"
+  
+  # Backend альтернативный порт 
+  backend_port_2: "http://localhost:8080"
+  backend_port_2_ipv4: "http://127.0.0.1:8080"
+  
+  # Docker внутренние адреса
+  frontend_docker: "http://astrachat-frontend:3000"
+  backend_docker: "http://astrachat-backend:8000"
+  llm_service_docker: "http://llm-svc:8000"
+

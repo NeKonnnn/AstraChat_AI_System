@@ -26,6 +26,9 @@ import {
   Collapse,
   Drawer,
   Divider,
+  Checkbox,
+  FormControlLabel,
+  Paper,
 } from '@mui/material';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -53,6 +56,7 @@ import {
   Menu as MenuIcon,
   Transcribe as TranscribeIcon,
   AutoAwesome as PromptsIcon,
+  Share as ShareIcon,
 } from '@mui/icons-material';
 import { useAppContext, useAppActions, Message } from '../contexts/AppContext';
 import { useSocket } from '../contexts/SocketContext';
@@ -61,6 +65,8 @@ import MessageRenderer from '../components/MessageRenderer';
 import { useNavigate } from 'react-router-dom';
 import TranscriptionModal from '../components/TranscriptionModal';
 import ModelSelector from '../components/ModelSelector';
+import MessageNavigationBar from '../components/MessageNavigationBar';
+import ShareConfirmDialog from '../components/ShareConfirmDialog';
 
 interface UnifiedChatPageProps {
   isDarkMode: boolean;
@@ -86,8 +92,14 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   const navigate = useNavigate();
   
   // Состояние для правой панели
-  const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
-  const [rightSidebarHidden, setRightSidebarHidden] = useState(false);
+  const [rightSidebarOpen, setRightSidebarOpen] = useState(() => {
+    const saved = localStorage.getItem('rightSidebarOpen');
+    return saved !== null ? saved === 'true' : false;
+  });
+  const [rightSidebarHidden, setRightSidebarHidden] = useState(() => {
+    const saved = localStorage.getItem('rightSidebarHidden');
+    return saved !== null ? saved === 'true' : false;
+  });
   
   // Состояние для отображения выбора модели
   const [showModelSelectorInSettings, setShowModelSelectorInSettings] = useState(() => {
@@ -105,6 +117,15 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     window.addEventListener('interfaceSettingsChanged', handleSettingsChange);
     return () => window.removeEventListener('interfaceSettingsChanged', handleSettingsChange);
   }, []);
+
+  // Сохранение состояния правой боковой панели
+  useEffect(() => {
+    localStorage.setItem('rightSidebarOpen', String(rightSidebarOpen));
+  }, [rightSidebarOpen]);
+
+  useEffect(() => {
+    localStorage.setItem('rightSidebarHidden', String(rightSidebarHidden));
+  }, [rightSidebarHidden]);
   
   // Состояние для модального окна транскрибации
   const [transcriptionModalOpen, setTranscriptionModalOpen] = useState(false);
@@ -181,6 +202,12 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   const [showDocumentDialog, setShowDocumentDialog] = useState(false);
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   
+  // Состояние для режима "Поделиться"
+  const [shareMode, setShareMode] = useState(false);
+  const [selectedMessages, setSelectedMessages] = useState<Set<string>>(new Set());
+  const [isCreatingShareLink, setIsCreatingShareLink] = useState(false);
+  const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -194,6 +221,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastAudioLevelRef = useRef<number>(0);
+  const messageRefs = useRef<(HTMLDivElement | null)[]>([]);
   
   // Константы
   const silenceThreshold = 0.1;
@@ -212,12 +240,31 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     createChat,
     setCurrentChat,
     updateChatTitle,
+    getProjectById,
   } = useAppActions();
   const { sendMessage, regenerateResponse, isConnected, isConnecting, reconnect, stopGeneration, socket, onMultiLLMEvent, offMultiLLMEvent } = useSocket();
 
   // Получаем текущий чат и сообщения
   const currentChat = getCurrentChat();
   const messages = getCurrentMessages();
+  const project = currentChat?.projectId ? getProjectById(currentChat.projectId) : null;
+  
+  // Стабильный обработчик для MessageRenderer (НЕ меняется при ререндерах!)
+  const handleSendMessageFromRendererRef = useRef<((prompt: string) => void) | null>(null);
+  
+  // Обновляем ref при изменении зависимостей, но НЕ создаем новую функцию
+  useEffect(() => {
+    handleSendMessageFromRendererRef.current = (prompt: string) => {
+      if (currentChat && isConnected && !state.isLoading) {
+        sendMessage(prompt, currentChat.id);
+      }
+    };
+  }, [currentChat, isConnected, state.isLoading, sendMessage]);
+  
+  // Создаем стабильную функцию ОДИН РАЗ (никогда не меняется!)
+  const handleSendMessageFromRenderer = useCallback((prompt: string) => {
+    handleSendMessageFromRendererRef.current?.(prompt);
+  }, []); // ← Пустой массив! Функция НЕ пересоздается!
   
   // Состояние для режима multi-llm
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
@@ -316,6 +363,30 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Автоматический фокус на поле ввода при загрузке
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (inputRef.current) {
+        inputRef.current.focus();
+      }
+    }, 300);
+    
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Автоматический фокус на поле ввода при переключении чатов
+  useEffect(() => {
+    if (currentChat?.id) {
+      const timer = setTimeout(() => {
+        if (inputRef.current) {
+          inputRef.current.focus();
+        }
+      }, 200);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [currentChat?.id]);
+
   // Функция для воспроизведения звукового оповещения
   const playNotificationSound = useCallback(() => {
     if (!interfaceSettings.enableNotification) return;
@@ -368,7 +439,13 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         const response = await fetch(`${getApiUrl('/api/agent/status')}`);
         if (response.ok) {
           const data = await response.json();
-          setAgentStatus(data);
+          // Обновляем ТОЛЬКО если данные изменились (предотвращаем лишние ререндеры)
+          setAgentStatus(prev => {
+            if (JSON.stringify(prev) !== JSON.stringify(data)) {
+              return data;
+            }
+            return prev;
+          });
         }
       } catch (error) {
       }
@@ -379,7 +456,14 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         const response = await fetch(`${getApiUrl('/api/models/available')}`);
         if (response.ok) {
           const data = await response.json();
-          setAvailableModels(data.models || []);
+          const newModels = data.models || [];
+          // Обновляем ТОЛЬКО если данные изменились
+          setAvailableModels(prev => {
+            if (JSON.stringify(prev) !== JSON.stringify(newModels)) {
+              return newModels;
+            }
+            return prev;
+          });
         }
       } catch (error) {
       }
@@ -388,14 +472,15 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     loadAgentStatus();
     loadAvailableModels();
     
-    // Периодически обновляем статус и модели
+    // Периодически обновляем статус, но реже (30 сек вместо 5)
+    // Это предотвращает лишние ререндеры
     const interval = setInterval(() => {
       loadAgentStatus();
       // Обновляем модели только в режиме multi-llm
       if (agentStatus?.mode === 'multi-llm') {
         loadAvailableModels();
       }
-    }, 5000);
+    }, 30000); // Увеличено с 5000 до 30000 (30 секунд)
     
     return () => clearInterval(interval);
   }, [agentStatus?.mode]);
@@ -736,6 +821,11 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       }
       
       setInputMessage('');
+      
+      // Возвращаем фокус на поле ввода
+      setTimeout(() => {
+        inputRef.current?.focus();
+      }, 10);
     } catch (error) {
       
       showNotification('error', 'Ошибка отправки сообщения');
@@ -764,12 +854,18 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       setInputMessage('');
       setTimeout(() => {
         sendMessage(messageText, newChatId);
+        inputRef.current?.focus();
       }, 50);
       return;
     }
 
     sendMessage(inputMessage.trim(), currentChat.id);
     setInputMessage('');
+    
+    // Возвращаем фокус на поле ввода
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 10);
   };
 
   const handleKeyPress = (event: React.KeyboardEvent): void => {
@@ -1521,7 +1617,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       formData.append('audio_file', audioBlob, 'recording.wav');
 
       
-      const response = await fetch('http://localhost:8000/api/voice/recognize', {
+      const response = await fetch(getApiUrl(API_CONFIG.ENDPOINTS.VOICE_RECOGNIZE), {
         method: 'POST',
         body: formData,
       });
@@ -1565,7 +1661,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       
       
       // Отправляем текст в чат
-      const response = await fetch('http://localhost:8000/api/chat', {
+      const response = await fetch(getApiUrl(API_CONFIG.ENDPOINTS.CHAT), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1738,7 +1834,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       
       
       
-      const response = await fetch('http://localhost:8000/api/voice/synthesize', {
+      const response = await fetch(getApiUrl(API_CONFIG.ENDPOINTS.VOICE_SYNTHESIZE), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2214,10 +2310,124 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   };
 
   // ================================
+  // ФУНКЦИИ НАВИГАЦИИ ПО СООБЩЕНИЯМ
+  // ================================
+
+  const scrollToMessage = useCallback((index: number) => {
+    const messageElement = messageRefs.current[index];
+    if (messageElement) {
+      messageElement.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      });
+    }
+  }, []);
+
+  // ================================
+  // ФУНКЦИИ ДЛЯ РЕЖИМА "ПОДЕЛИТЬСЯ"
+  // ================================
+
+  const handleEnterShareMode = () => {
+    setShareMode(true);
+    setSelectedMessages(new Set());
+  };
+
+  const handleExitShareMode = () => {
+    setShareMode(false);
+    setSelectedMessages(new Set());
+  };
+
+  const handleToggleMessage = (userMsgId: string, assistantMsgId: string) => {
+    const newSelected = new Set(selectedMessages);
+    
+    if (newSelected.has(userMsgId) && newSelected.has(assistantMsgId)) {
+      // Если оба выбраны, снимаем выбор
+      newSelected.delete(userMsgId);
+      newSelected.delete(assistantMsgId);
+    } else {
+      // Выбираем оба
+      newSelected.add(userMsgId);
+      newSelected.add(assistantMsgId);
+    }
+    
+    setSelectedMessages(newSelected);
+  };
+
+  const handleSelectAll = () => {
+    // Получаем все пары вопрос-ответ
+    const allPairs: string[] = [];
+    for (let i = 0; i < messages.length - 1; i++) {
+      if (messages[i].role === 'user' && messages[i + 1].role === 'assistant') {
+        allPairs.push(messages[i].id, messages[i + 1].id);
+      }
+    }
+    
+    if (selectedMessages.size === allPairs.length) {
+      // Если все выбраны, снимаем выбор
+      setSelectedMessages(new Set());
+    } else {
+      // Выбираем все
+      setSelectedMessages(new Set(allPairs));
+    }
+  };
+
+  const handleCreateShareLink = () => {
+    if (selectedMessages.size === 0) {
+      showNotification('error', 'Выберите хотя бы одно сообщение');
+      return;
+    }
+    // Открываем диалог подтверждения
+    setShareDialogOpen(true);
+  };
+
+  const createShareLinkConfirmed = async (): Promise<string> => {
+    try {
+      // Фильтруем выбранные сообщения в правильном порядке
+      const selectedMessagesArray = messages.filter(msg => selectedMessages.has(msg.id));
+
+      // Получаем токен для авторизации
+      const token = localStorage.getItem('auth_token') || localStorage.getItem('token');
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const response = await fetch(getApiUrl('/api/share/create'), {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify({
+          messages: selectedMessagesArray,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Ошибка создания публичной ссылки');
+      }
+
+      const data = await response.json();
+      const fullUrl = `${window.location.origin}/share/${data.share_id}`;
+      
+      return fullUrl;
+    } catch (err) {
+      showNotification('error', err instanceof Error ? err.message : 'Произошла ошибка');
+      throw err;
+    }
+  };
+
+  const handleCloseShareDialog = () => {
+    setShareDialogOpen(false);
+    // Выходим из режима выбора после закрытия диалога
+    handleExitShareMode();
+  };
+
+  // ================================
   // КОМПОНЕНТЫ СООБЩЕНИЙ
   // ================================
 
-    const MessageCard = ({ message }: { message: Message }): React.ReactElement => {
+    const MessageCard = ({ message, index }: { message: Message; index: number }): React.ReactElement => {
     const isUser = message.role === 'user';
     const [isHovered, setIsHovered] = useState(false);
     const shouldShowBorder = isUser 
@@ -2278,7 +2488,11 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                         <Typography variant="body2">{response.content}</Typography>
                       </Alert>
                     ) : (
-                      <MessageRenderer content={response.content} isStreaming={response.isStreaming} />
+                      <MessageRenderer 
+                        content={response.content} 
+                        isStreaming={response.isStreaming}
+                        onSendMessage={handleSendMessageFromRenderer}
+                      />
                     )}
                   </CardContent>
                 </Card>
@@ -2308,25 +2522,57 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                 // Убираем лишние пробелы и переносы строк в конце (только если не идет стриминг)
                 return message.isStreaming ? message.content : message.content.trimEnd();
               })()} 
-              isStreaming={message.isStreaming} 
+              isStreaming={message.isStreaming}
+              onSendMessage={handleSendMessageFromRenderer}
             />
           )}
         </Box>
       </>
     );
     
+    // Проверяем, является ли это сообщение частью пары для выбора
+    const isPairStart = isUser && index < messages.length - 1 && messages[index + 1].role === 'assistant';
+    const isSelected = isPairStart && 
+      selectedMessages.has(message.id) && 
+      selectedMessages.has(messages[index + 1].id);
+
     return (
       <Box
+        ref={(el: HTMLDivElement | null) => {
+          messageRefs.current[index] = el;
+        }}
+        data-message-index={index}
         sx={{
           display: 'flex',
-          flexDirection: 'column',
-          alignItems: interfaceSettings.leftAlignMessages ? 'flex-start' : (isUser ? 'flex-end' : 'flex-start'),
-          mb: 1.5, /* Увеличиваем отступ между сообщениями (соответствует CSS margin-bottom: 28px) */
+          flexDirection: 'row',
+          alignItems: 'flex-start',
+          mb: 1.5,
           width: '100%',
         }}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
       >
+        {/* Чекбокс в режиме "Поделиться" */}
+        {shareMode && isPairStart && (
+          <Checkbox
+            checked={isSelected}
+            onChange={() => handleToggleMessage(message.id, messages[index + 1].id)}
+            sx={{
+              mt: 1,
+              mr: 1,
+              p: 0.5,
+            }}
+          />
+        )}
+
+        <Box
+          sx={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: interfaceSettings.leftAlignMessages ? 'flex-start' : (isUser ? 'flex-end' : 'flex-start'),
+            flex: 1,
+          }}
+        >
         {shouldShowBorder ? (
           <Card
             className="message-bubble"
@@ -2623,6 +2869,40 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
               <VolumeUpIcon />
             </IconButton>
           </Tooltip>
+          
+          {/* Кнопка "Поделиться" - только для сообщений ассистента */}
+          {!isUser && !shareMode && (
+            <Tooltip title="Поделиться">
+              <IconButton
+                size="small"
+                onClick={handleEnterShareMode}
+                className="message-share-button"
+                data-theme={isDarkMode ? 'dark' : 'light'}
+                sx={{ 
+                  opacity: 0.7,
+                  p: 0.5,
+                  borderRadius: '6px',
+                  minWidth: '28px',
+                  width: '28px',
+                  height: '28px',
+                  '&:hover': {
+                    opacity: 1,
+                    '& .MuiSvgIcon-root': {
+                      color: 'primary.main',
+                    },
+                  },
+                  '& .MuiSvgIcon-root': {
+                    fontSize: '18px !important',
+                    width: '18px !important',
+                    height: '18px !important',
+                  },
+                }}
+              >
+                <ShareIcon />
+              </IconButton>
+            </Tooltip>
+          )}
+        </Box>
         </Box>
       </Box>
     );
@@ -3475,7 +3755,14 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                                     <Typography variant="body2">{response.content}</Typography>
                                   </Alert>
                                 ) : (
-                                  <MessageRenderer content={response.content} />
+                                  <MessageRenderer 
+                                    content={response.content}
+                                    onSendMessage={(prompt) => {
+                                      if (currentChat && isConnected && !state.isLoading) {
+                                        sendMessage(prompt, currentChat.id);
+                                      }
+                                    }}
+                                  />
                                 )
                               ) : (
                                 idx === conversationHistory.length - 1 && isStreaming ? (
@@ -3737,7 +4024,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
 
             {/* Поле ввода текста */}
             <TextField
-              ref={inputRef}
+              inputRef={inputRef}
               fullWidth
               multiline
               maxRows={4}
@@ -3942,26 +4229,76 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
           position: 'relative',
         }}
       >
+      {/* Заголовок с информацией о проекте и модели */}
+      {currentChat && project && (
+        <Box sx={{ 
+          position: 'absolute',
+          top: 16,
+          left: sidebarOpen ? 16 : 80,
+          zIndex: 1200,
+          transition: 'left 0.3s ease',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 1,
+        }}>
+          <Typography
+            variant="body1"
+            sx={{
+              fontWeight: 500,
+              color: isDarkMode ? 'white' : '#333',
+              cursor: 'pointer',
+              '&:hover': {
+                opacity: 0.8,
+              },
+              fontSize: '0.95rem',
+            }}
+            onClick={() => navigate(`/project/${project.id}`)}
+          >
+            {project.name}
+          </Typography>
+          <Typography
+            variant="body1"
+            sx={{
+              fontWeight: 400,
+              color: isDarkMode ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.5)',
+              fontSize: '0.95rem',
+            }}
+          >
+            /
+          </Typography>
+          {!showModelSelectorInSettings && (
+            <ModelSelector 
+              isDarkMode={isDarkMode}
+              onModelSelect={(modelPath) => {
+                
+              }}
+            />
+          )}
+        </Box>
+      )}
+      
       {/* Селектор моделей - на одном уровне с кнопкой сворачивания боковой панели */}
       {/* Когда панель развернута - ближе к панели, когда закрыта - дальше от узкой полоски */}
-      <Box sx={{ 
-        position: 'absolute',
-        top: 16,
-        left: sidebarOpen ? 16 : 80, // Ближе к панели когда развернута, дальше от узкой полоски (64px) когда закрыта
-        zIndex: 1200,
-        transition: 'left 0.3s ease', // Плавная анимация при изменении позиции
-        display: 'flex',
-        alignItems: 'center',
-      }}>
-        {!showModelSelectorInSettings && (
-          <ModelSelector 
-            isDarkMode={isDarkMode}
-            onModelSelect={(modelPath) => {
-              
-            }}
-          />
-        )}
-      </Box>
+      {(!currentChat || !project) && (
+        <Box sx={{ 
+          position: 'absolute',
+          top: 16,
+          left: sidebarOpen ? 16 : 80, // Ближе к панели когда развернута, дальше от узкой полоски (64px) когда закрыта
+          zIndex: 1200,
+          transition: 'left 0.3s ease', // Плавная анимация при изменении позиции
+          display: 'flex',
+          alignItems: 'center',
+        }}>
+          {!showModelSelectorInSettings && (
+            <ModelSelector 
+              isDarkMode={isDarkMode}
+              onModelSelect={(modelPath) => {
+                
+              }}
+            />
+          )}
+        </Box>
+      )}
 
       {/* Область сообщений */}
       <Box
@@ -4026,7 +4363,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
               px: interfaceSettings.widescreenMode ? 4 : 2,
             }}>
               {messages.map((message, index) => (
-                <MessageCard key={message.id || index} message={message} />
+                <MessageCard key={message.id || index} message={message} index={index} />
               ))}
               
               {/* Индикатор размышления - показывается только до начала потоковой генерации, сразу после сообщений */}
@@ -4356,7 +4693,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
 
               {/* Поле ввода текста */}
               <TextField
-                ref={inputRef}
+                inputRef={inputRef}
                 fullWidth
                 multiline
                 maxRows={4}
@@ -4885,6 +5222,93 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
             inputRef.current?.focus();
           }, 100);
         }}
+      />
+
+      {/* Нижняя панель в режиме "Поделиться" */}
+      {shareMode && (
+        <Paper
+          sx={{
+            position: 'fixed',
+            bottom: 0,
+            left: sidebarOpen ? 280 : 64,
+            right: 0,
+            zIndex: 1200,
+            borderRadius: 0,
+            boxShadow: '0 -4px 12px rgba(0, 0, 0, 0.1)',
+            backgroundColor: isDarkMode ? '#2d2d2d' : '#ffffff',
+            transition: 'left 0.3s ease',
+          }}
+        >
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              px: 3,
+              py: 2,
+            }}
+          >
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={selectedMessages.size > 0 && (() => {
+                      let totalPairs = 0;
+                      for (let i = 0; i < messages.length - 1; i++) {
+                        if (messages[i].role === 'user' && messages[i + 1].role === 'assistant') {
+                          totalPairs++;
+                        }
+                      }
+                      return selectedMessages.size === totalPairs * 2;
+                    })()}
+                    onChange={handleSelectAll}
+                  />
+                }
+                label="Выбрать все"
+              />
+              <Typography variant="body2" color="text.secondary">
+                Выбрано пар: {selectedMessages.size / 2}
+              </Typography>
+            </Box>
+
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              <Button
+                variant="outlined"
+                onClick={handleExitShareMode}
+                disabled={isCreatingShareLink}
+              >
+                Отмена
+              </Button>
+              <Button
+                variant="contained"
+                onClick={handleCreateShareLink}
+                disabled={selectedMessages.size === 0}
+              >
+                Создать публичную ссылку
+              </Button>
+            </Box>
+          </Box>
+        </Paper>
+      )}
+
+      {/* Навигационная панель для сообщений */}
+      {messages.length > 0 && (
+        <MessageNavigationBar
+          messages={messages}
+          isDarkMode={isDarkMode}
+          onNavigate={scrollToMessage}
+          rightSidebarOpen={rightSidebarOpen}
+          rightSidebarHidden={rightSidebarHidden}
+        />
+      )}
+
+      {/* Диалог подтверждения создания публичной ссылки */}
+      <ShareConfirmDialog
+        open={shareDialogOpen}
+        onClose={handleCloseShareDialog}
+        onConfirm={createShareLinkConfirmed}
+        isDarkMode={isDarkMode}
+        selectedCount={selectedMessages.size}
       />
     </Box>
   );
