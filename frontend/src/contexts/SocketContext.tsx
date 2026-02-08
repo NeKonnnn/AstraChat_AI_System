@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { useAppActions } from './AppContext';
-import { API_CONFIG } from '../config/api';
+import { getSettings } from '../settings';
 
 interface SocketContextType {
   socket: Socket | null;
@@ -33,17 +33,61 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     currentIndex: number;
   } | null>(null);
 
-  const connectSocket = () => {
+  const connectSocket = async () => {
     // Устанавливаем флаг подключения
     setIsConnecting(true);
     
-    const newSocket = io(API_CONFIG.BASE_URL, {
+    // Ждем инициализации настроек, если они еще не загружены
+    let settings;
+    const maxRetries = 50; // Максимум 5 секунд (50 * 100мс)
+    let retries = 0;
+    
+    while (retries < maxRetries) {
+      try {
+        // Пробуем получить настройки
+        settings = getSettings();
+        break; // Успешно загружены
+      } catch (error) {
+        retries++;
+        if (retries >= maxRetries) {
+          console.error('Не удалось загрузить настройки для WebSocket после всех попыток:', error);
+          setIsConnecting(false);
+          return;
+        }
+        // Ждем перед следующей попыткой
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+    
+    // Проверяем, что settings загружены (TypeScript guard)
+    if (!settings) {
+      console.error('Настройки не загружены после всех попыток');
+      setIsConnecting(false);
+      return;
+    }
+    
+    // Получаем настройки WebSocket из settings
+    const wsConfig = settings.websocket;
+    
+    // Socket.IO ожидает HTTP/HTTPS URL, а не ws:// URL
+    // Преобразуем ws:// обратно в http:// для Socket.IO
+    let socketUrl = wsConfig.baseUrl;
+    if (socketUrl.startsWith('ws://')) {
+      socketUrl = socketUrl.replace('ws://', 'http://');
+    } else if (socketUrl.startsWith('wss://')) {
+      socketUrl = socketUrl.replace('wss://', 'https://');
+    }
+    
+    // Логируем URL для отладки
+    console.log('Socket.IO подключение к:', socketUrl);
+    
+    const newSocket = io(socketUrl, {
       transports: ['websocket', 'polling'], // Добавляем fallback на polling
       autoConnect: false,
-      timeout: 10000, // Уменьшаем timeout для более быстрой реакции
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-      reconnectionAttempts: 10, // Увеличиваем количество попыток
+      timeout: wsConfig.timeout,
+      reconnectionDelay: wsConfig.reconnectionDelay,
+      reconnectionDelayMax: wsConfig.reconnectionDelayMax,
+      reconnectionAttempts: wsConfig.reconnectionAttempts,
       forceNew: true, // Принудительно создаем новое соединение
     });
 
@@ -618,7 +662,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
-    connectSocket();
+    connectSocket().catch((error) => {
+      console.error('Ошибка подключения WebSocket:', error);
+    });
 
     return () => {
       if (socket) {

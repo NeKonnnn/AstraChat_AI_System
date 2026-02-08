@@ -29,11 +29,9 @@ model:
   path: "/app/models/llm/QVikhr-2.5-1.5B-Instruct-SMPO-Q8_0.gguf"
   
   # Для HuggingFace моделей (vLLM) - указывайте путь к папке с моделью:
-  # ⚠️ ВАЖНО: Qwen3-Omni НЕ поддерживается vLLM (MoE архитектура не реализована в vLLM)
-  # Для Qwen3-Omni нужно использовать Transformers напрямую или дождаться поддержки в vLLM
   # Альтернатива: Qwen3-VL поддерживается vLLM
-  # path: "/app/models/llm/Qwen3-Omni-30B-A3B-Instruct-AWQ-4bit"  # ⚠️ Не работает с vLLM
-  ## path: "/app/models/llm/Qwen3-VL-30B-A3B-Instruct-AWQ"  # ✅ Работает с vLLM
+  # path: "/app/models/llm/Qwen3-Omni-30B-A3B-Instruct-AWQ-4bit"  
+  # path: "/app/models/llm/Qwen3-VL-30B-A3B-Instruct-AWQ" 
   
   # Облачная модель (раскомментируйте и настройте при необходимости)
   # path: "s3://your-bucket/models/Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf"

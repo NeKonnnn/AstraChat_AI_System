@@ -1,7 +1,3 @@
-"""
-Модуль подключения к MongoDB
-"""
-
 import logging
 from typing import Optional
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
@@ -48,25 +44,25 @@ class MongoDBConnection:
             # Проверка подключения
             logger.info("Проверка подключения (ping)...")
             await self.client.admin.command('ping')
-            logger.info("✅ Ping успешен")
+            logger.info("Ping успешен")
             
             self.db = self.client[self.database_name]
             
-            logger.info(f"✅ Успешное подключение к MongoDB. База данных: {self.database_name}")
+            logger.info(f"Успешное подключение к MongoDB. База данных: {self.database_name}")
             return True
             
         except ConnectionFailure as e:
-            logger.error(f"❌ Ошибка подключения к MongoDB: {e}")
-            logger.error(f"   Проверьте, что MongoDB запущен и доступен по адресу: {self.connection_string}")
+            logger.error(f"Ошибка подключения к MongoDB: {e}")
+            logger.error(f"Проверьте, что MongoDB запущен и доступен по адресу: {self.connection_string}")
             return False
         except ConfigurationError as e:
-            logger.error(f"❌ Ошибка конфигурации MongoDB: {e}")
-            logger.error(f"   Проверьте строку подключения: {self.connection_string}")
+            logger.error(f"Ошибка конфигурации MongoDB: {e}")
+            logger.error(f"Проверьте строку подключения: {self.connection_string}")
             return False
         except Exception as e:
-            logger.error(f"❌ Неожиданная ошибка при подключении к MongoDB: {e}")
+            logger.error(f"Неожиданная ошибка при подключении к MongoDB: {e}")
             import traceback
-            logger.error(f"   Traceback: {traceback.format_exc()}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return False
     
     async def disconnect(self):

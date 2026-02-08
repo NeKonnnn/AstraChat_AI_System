@@ -23,7 +23,7 @@ else:
     VOSK_AVAILABLE = False
     print("Используется llm-svc для распознавания речи")
 
-from backend.agent import ask_agent
+from backend.agent_llm_svc import ask_agent
 from backend.memory import save_to_memory
 
 # Попытка импорта librosa для изменения темпа аудио

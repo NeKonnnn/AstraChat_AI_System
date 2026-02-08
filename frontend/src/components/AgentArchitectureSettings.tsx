@@ -30,10 +30,9 @@ import {
   ExpandLess as ExpandLessIcon,
   Edit as EditIcon,
 } from '@mui/icons-material';
-import { API_CONFIG } from '../config/api';
+import { getApiUrl } from '../config/api';
 
 // Backend URL
-const API_BASE_URL = API_CONFIG.BASE_URL;
 
 interface AgentStatus {
   is_initialized: boolean;
@@ -90,7 +89,7 @@ export default function AgentArchitectureSettings() {
       setIsLoading(true);
       setError(null);
 
-      const response = await fetch(`${API_BASE_URL}/api/agent/status`);
+      const response = await fetch(getApiUrl('/api/agent/status'));
       if (response.ok) {
         const data = await response.json();
         setAgentStatus(data);
@@ -107,7 +106,7 @@ export default function AgentArchitectureSettings() {
   // Загрузка статуса MCP серверов
   const loadMcpStatus = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/agent/mcp/status`);
+      const response = await fetch(getApiUrl('/api/agent/mcp/status'));
       if (response.ok) {
         const data = await response.json();
         setMcpStatus(data.mcp_status);
@@ -122,7 +121,7 @@ export default function AgentArchitectureSettings() {
   // Загрузка статуса LangGraph агента
   const loadLanggraphStatus = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/agent/langgraph/status`);
+      const response = await fetch(getApiUrl('/api/agent/langgraph/status'));
       if (response.ok) {
         const data = await response.json();
         setLanggraphStatus(data.langgraph_status);
@@ -137,7 +136,7 @@ export default function AgentArchitectureSettings() {
   // Загрузка списка доступных агентов
   const loadAvailableAgents = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/agent/agents`);
+      const response = await fetch(getApiUrl('/api/agent/agents'));
       if (response.ok) {
         const data = await response.json();
         setAvailableAgents(data.agents || []);
@@ -155,7 +154,7 @@ export default function AgentArchitectureSettings() {
       setIsLoading(true);
       setError(null);
 
-      const response = await fetch(`${API_BASE_URL}/api/agent/mode`, {
+      const response = await fetch(getApiUrl('/api/agent/mode'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode }),
@@ -179,7 +178,7 @@ export default function AgentArchitectureSettings() {
     try {
       setError(null);
       
-      const response = await fetch(`${API_BASE_URL}/api/agent/agents/${agentId}/status`, {
+      const response = await fetch(getApiUrl(`/api/agent/agents/${agentId}/status`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ is_active: !currentStatus }),

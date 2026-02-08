@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import axios from 'axios';
-import { API_CONFIG } from '../config/api';
+import { getSettings, initSettings } from '../settings';
 
 interface User {
   username: string;
@@ -25,9 +25,23 @@ const AuthContext = createContext<AuthContextType | null>(null);
 
 // Получаем базовый URL из конфига
 const getApiBaseUrl = () => {
-  return process.env.REACT_APP_API_URL || API_CONFIG.BASE_URL;
+  // Сначала пробуем из env переменных (самый быстрый способ)
+  if (process.env.REACT_APP_API_URL) {
+    return process.env.REACT_APP_API_URL;
+  }
+  
+  // Затем пробуем из настроек (может быть еще не загружены)
+  try {
+    const settings = getSettings();
+    return settings.api.baseUrl;
+  } catch (error) {
+    // Если настройки еще не загружены, используем дефолтное значение
+    // Это значение должно совпадать с тем, что в config.yml
+    console.warn('Настройки еще не загружены, используем дефолтный URL:', error);
+    return 'http://localhost:8000';
+  }
 };
-const API_BASE_URL = getApiBaseUrl();
+// Используем getApiBaseUrl() напрямую в функциях
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -36,37 +50,71 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Инициализация: проверяем наличие токена в localStorage
   useEffect(() => {
-    const savedToken = localStorage.getItem('auth_token');
-    const savedUser = localStorage.getItem('auth_user');
-    
-    if (savedToken && savedUser) {
-      setToken(savedToken);
-      setUser(JSON.parse(savedUser));
+    const initializeAuth = async () => {
+      // Сначала убеждаемся, что настройки загружены
+      try {
+        await initSettings();
+      } catch (error) {
+        console.warn('Не удалось загрузить настройки, используем дефолтные значения:', error);
+      }
       
-      // Проверяем валидность токена
-      verifyToken(savedToken).catch(() => {
-        // Если токен невалиден, очищаем данные
-        localStorage.removeItem('auth_token');
-        localStorage.removeItem('auth_user');
-        setToken(null);
-        setUser(null);
-      });
-    }
+      const savedToken = localStorage.getItem('auth_token');
+      const savedUser = localStorage.getItem('auth_user');
+      
+      if (savedToken && savedUser) {
+        try {
+          setToken(savedToken);
+          setUser(JSON.parse(savedUser));
+          
+          // Проверяем валидность токена асинхронно (не блокируем загрузку)
+          // Проверка выполняется после установки токена, чтобы пользователь мог видеть контент
+          verifyToken(savedToken).catch((error: any) => {
+            // Удаляем токен только если сервер явно вернул 401 (неавторизован)
+            // Для других ошибок (сеть, сервер недоступен) оставляем токен
+            if (error.response?.status === 401) {
+              console.warn('Токен невалиден (401), очищаем данные авторизации');
+              localStorage.removeItem('auth_token');
+              localStorage.removeItem('auth_user');
+              setToken(null);
+              setUser(null);
+            } else {
+              console.warn('Не удалось проверить токен, но продолжаем работу:', error.message);
+            }
+          });
+        } catch (error) {
+          console.error('Ошибка при инициализации авторизации:', error);
+          // Очищаем поврежденные данные
+          localStorage.removeItem('auth_token');
+          localStorage.removeItem('auth_user');
+          setToken(null);
+          setUser(null);
+        }
+      }
+      
+      setIsLoading(false);
+    };
     
-    setIsLoading(false);
+    initializeAuth();
   }, []);
 
   // Проверка валидности токена
   const verifyToken = async (token: string) => {
     try {
-      const response = await axios.get(`${API_BASE_URL}/api/auth/verify`, {
+      const response = await axios.get(`${getApiBaseUrl()}/api/auth/verify`, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
       });
       return response.data.valid;
-    } catch (error) {
-      throw error;
+    } catch (error: any) {
+      // Если это ошибка авторизации (401), токен точно невалиден
+      if (error.response?.status === 401) {
+        throw error;
+      }
+      // Для других ошибок (сеть, сервер недоступен и т.д.) не считаем токен невалидным
+      // Просто логируем и продолжаем работу
+      console.warn('Не удалось проверить токен (возможна сетевая ошибка):', error.message);
+      return true; // Предполагаем, что токен валиден, если это не ошибка авторизации
     }
   };
 
@@ -81,7 +129,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (username: string, password: string) => {
     try {
-      const response = await axios.post(`${API_BASE_URL}/api/auth/login`, {
+      const response = await axios.post(`${getApiBaseUrl()}/api/auth/login`, {
         username,
         password,
       });
@@ -108,7 +156,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = async () => {
     try {
       if (token) {
-        await axios.post(`${API_BASE_URL}/api/auth/logout`, {}, {
+        await axios.post(`${getApiBaseUrl()}/api/auth/logout`, {}, {
           headers: {
             Authorization: `Bearer ${token}`,
           },

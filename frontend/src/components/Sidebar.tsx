@@ -207,6 +207,25 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
   // Получаем проекты
   const projects = getProjects();
 
+  // Загружаем настройку использования папок/проектов
+  const [useFoldersMode, setUseFoldersMode] = React.useState(() => {
+    const saved = localStorage.getItem('use_folders_mode');
+    return saved !== null ? saved === 'true' : true; // По умолчанию папки
+  });
+
+  // Слушаем изменения настроек интерфейса
+  React.useEffect(() => {
+    const handleSettingsChange = () => {
+      const saved = localStorage.getItem('use_folders_mode');
+      setUseFoldersMode(saved !== null ? saved === 'true' : true);
+    };
+    
+    window.addEventListener('interfaceSettingsChanged', handleSettingsChange);
+    return () => {
+      window.removeEventListener('interfaceSettingsChanged', handleSettingsChange);
+    };
+  }, []);
+
   const handleNavigation = (path: string) => {
     navigate(path);
   };
@@ -390,9 +409,9 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
 
   // Функция для фильтрации чатов по поисковому запросу
   const filteredChats = React.useMemo(() => {
-    // Исключаем чаты, которые уже находятся в папках, в проектах, и архивированные чаты
-    const chatsInFolders = new Set(folders.flatMap(folder => folder.chatIds));
-    const chatsInProjects = new Set(state.chats.filter(chat => chat.projectId).map(chat => chat.id));
+    // Исключаем чаты, которые уже находятся в папках или проектах (в зависимости от режима), и архивированные чаты
+    const chatsInFolders = useFoldersMode ? new Set(folders.flatMap(folder => folder.chatIds)) : new Set();
+    const chatsInProjects = !useFoldersMode ? new Set(state.chats.filter(chat => chat.projectId).map(chat => chat.id)) : new Set();
     const availableChats = state.chats.filter(chat => 
       !chatsInFolders.has(chat.id) && !chatsInProjects.has(chat.id) && !chat.isArchived
     );
@@ -720,7 +739,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
               size="small"
               InputProps={{
                 startAdornment: <SearchIcon sx={{ color: 'rgba(255,255,255,0.7)', mr: 1, fontSize: '1rem' }} />,
-                endAdornment: (
+                endAdornment: useFoldersMode ? (
                   <Tooltip title="Создать папку">
                     <IconButton
                       size="small"
@@ -730,7 +749,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                       <AddFolderIcon fontSize="small" />
                     </IconButton>
                   </Tooltip>
-                ),
+                ) : null,
                 sx: {
                   backgroundColor: 'rgba(255,255,255,0.1)',
                   borderRadius: 2,
@@ -893,7 +912,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
       )}
 
       {/* Раздел Проекты */}
-      {open && (
+      {!useFoldersMode && open && (
         <Box sx={{ px: 1.5, mb: 1 }}>
           <Box
             onClick={() => setProjectsExpanded(!projectsExpanded)}
@@ -1222,8 +1241,11 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         scrollbarColor: 'rgba(118, 75, 162, 0.6) rgba(102, 126, 234, 0.3)',
       }}>
         <Box sx={{ p: 1 }}>
-          {/* Отображение папки "Закреплено" первой, если она существует */}
-          {folders.find(f => f.name === 'Закреплено') && (() => {
+          {/* Отображение папок - только если включен режим папок */}
+          {useFoldersMode && (
+            <>
+              {/* Отображение папки "Закреплено" первой, если она существует */}
+              {folders.find(f => f.name === 'Закреплено') && (() => {
             const pinnedFolder = folders.find(f => f.name === 'Закреплено');
             if (!pinnedFolder) return null;
             return (
@@ -1388,6 +1410,8 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
               </Box>
             );
           })()}
+            </>
+          )}
 
           <Box
             onClick={() => setChatsExpanded(!chatsExpanded)}
@@ -2073,6 +2097,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           <ListItemText primary="Переименовать" />
         </MenuItem>
         
+        {useFoldersMode && (
         <MenuItem
           onMouseEnter={(e) => {
             // Отменяем закрытие подменю, если курсор вернулся на пункт меню
@@ -2173,7 +2198,9 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           <ListItemText primary="Переместить в папку" />
           <ChevronRightIcon sx={{ ml: 'auto', fontSize: '1rem' }} />
         </MenuItem>
+        )}
         
+        {!useFoldersMode && (
         <MenuItem
           onMouseEnter={(e) => {
             // Отменяем закрытие подменю, если курсор вернулся на пункт меню
@@ -2274,6 +2301,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           <ListItemText primary="Перенести в проект" />
           <ChevronRightIcon sx={{ ml: 'auto', fontSize: '1rem' }} />
         </MenuItem>
+        )}
         
         <MenuItem
           onClick={() => handleChatMenuAction('archive')}
@@ -2294,7 +2322,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           </ListItemIcon>
           <ListItemText primary="Архив" />
         </MenuItem>
-        {selectedChatId && getChatById(selectedChatId)?.projectId && (
+        {!useFoldersMode && selectedChatId && getChatById(selectedChatId)?.projectId && (
           <MenuItem
             onClick={() => handleChatMenuAction('removeFromProject')}
             onMouseEnter={() => {
@@ -2699,6 +2727,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         disableEnforceFocus
       >
         {/* Создать папку */}
+        {useFoldersMode && (
         <MenuItem
           onClick={() => {
             setShowCreateFolderDialog(true);
@@ -2716,8 +2745,10 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           </ListItemIcon>
           <ListItemText primary="Создать папку" />
         </MenuItem>
+        )}
         
         {/* Опция перемещения в ЧАТЫ */}
+        {useFoldersMode && (
         <MenuItem
           onClick={() => {
             if (selectedChatId) {
@@ -2738,8 +2769,9 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           </ListItemIcon>
           <ListItemText primary="Все чаты" />
         </MenuItem>
+        )}
         
-        {folders
+        {useFoldersMode && folders
           .filter(folder => {
             // Исключаем папку, в которой уже находится чат
             const currentFolder = selectedChatId ? getChatFolder(selectedChatId) : null;

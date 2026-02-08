@@ -49,12 +49,27 @@ async def get_whisperx_handler() -> Dict[str, Any]:
             
             logger.info(f"Используется compute_type: {compute_type}")
             
+            # Проверяем доступность директории с моделями
+            if not os.path.exists(settings.whisperx.models_dir):
+                logger.error(f"Директория для моделей WhisperX не существует: {settings.whisperx.models_dir}")
+            else:
+                logger.info(f"Директория для моделей существует: {settings.whisperx.models_dir}")
+                # Проверяем содержимое директории
+                try:
+                    dir_contents = os.listdir(settings.whisperx.models_dir)
+                    logger.info(f"Содержимое директории моделей ({len(dir_contents)} элементов): {dir_contents[:10]}...")
+                except Exception as e:
+                    logger.warning(f"Не удалось прочитать содержимое директории: {e}")
+            
             # Загружаем модели для каждого поддерживаемого языка
             for lang in settings.whisperx.supported_languages:
                 if lang == "auto":
                     continue
                     
                 try:
+                    logger.info(f"Начинаем загрузку модели WhisperX для языка: {lang}")
+                    logger.info(f"Параметры: device={device}, compute_type={compute_type}, download_root={settings.whisperx.models_dir}")
+                    
                     # Загружаем модель WhisperX с указанием папки для кэша
                     model = whisperx.load_model(
                         "medium",  # Используем среднюю модель для лучшего качества
@@ -75,7 +90,7 @@ async def get_whisperx_handler() -> Dict[str, Any]:
                 except Exception as e:
                     logger.error(f"Ошибка загрузки модели WhisperX {lang}: {str(e)}", exc_info=True)
                     import traceback
-                    logger.debug(f"Детали ошибки для {lang}: {traceback.format_exc()}")
+                    logger.error(f"Детали ошибки для {lang}: {traceback.format_exc()}")
                     continue
             
             if not whisperx_models:
@@ -86,7 +101,7 @@ async def get_whisperx_handler() -> Dict[str, Any]:
         except Exception as e:
             logger.error(f"Ошибка инициализации моделей WhisperX: {str(e)}", exc_info=True)
             import traceback
-            logger.debug(f"Детали ошибки инициализации: {traceback.format_exc()}")
+            logger.error(f"Детали ошибки инициализации: {traceback.format_exc()}")
     
     return whisperx_models
 

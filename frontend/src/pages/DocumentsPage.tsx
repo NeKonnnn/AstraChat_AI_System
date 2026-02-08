@@ -22,7 +22,7 @@ import {
   ListItemText,
   Divider,
 } from '@mui/material';
-import { getApiUrl, API_CONFIG } from '../config/api';
+import { getApiUrl, API_ENDPOINTS } from '../config/api';
 import {
   Upload as UploadIcon,
   Description as DocumentIcon,
@@ -109,7 +109,7 @@ export default function DocumentsPage() {
       const formData = new FormData();
       formData.append('file', file);
 
-      const response = await fetch(getApiUrl(API_CONFIG.ENDPOINTS.DOCUMENTS_UPLOAD), {
+      const response = await fetch(getApiUrl(API_ENDPOINTS.DOCUMENTS_UPLOAD), {
         method: 'POST',
         body: formData,
       });
@@ -153,7 +153,7 @@ export default function DocumentsPage() {
     setIsQuerying(true);
     
     try {
-      const response = await fetch(getApiUrl(API_CONFIG.ENDPOINTS.DOCUMENTS_QUERY), {
+      const response = await fetch(getApiUrl(API_ENDPOINTS.DOCUMENTS_QUERY), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

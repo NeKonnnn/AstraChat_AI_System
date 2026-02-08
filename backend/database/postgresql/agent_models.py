@@ -1,7 +1,3 @@
-"""
-Модели данных для галереи агентов в PostgreSQL
-"""
-
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
@@ -120,43 +116,3 @@ class AgentStats(BaseModel):
         default_factory=dict, 
         description="Распределение оценок {1: count, 2: count, ...}"
     )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

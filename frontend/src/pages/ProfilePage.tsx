@@ -23,13 +23,14 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { API_CONFIG } from '../config/api';
+import { getSettings } from '../settings';
 
-// Получаем базовый URL из конфига
+// Получаем базовый URL из settings
 const getApiBaseUrl = () => {
-  return process.env.REACT_APP_API_URL || API_CONFIG.BASE_URL;
+  const settings = getSettings();
+  return process.env.REACT_APP_API_URL || settings.api.baseUrl;
 };
-const API_BASE_URL = getApiBaseUrl();
+// Используем getApiBaseUrl() напрямую в функциях
 
 export default function ProfilePage() {
   const { user, logout, updateUser, token } = useAuth();
@@ -48,7 +49,7 @@ export default function ProfilePage() {
 
     try {
       const response = await axios.put(
-        `${API_BASE_URL}/api/auth/me`,
+        `${getApiBaseUrl()}/api/auth/me`,
         {
           email: email || null,
           full_name: fullName || null,

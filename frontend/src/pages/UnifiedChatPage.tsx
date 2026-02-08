@@ -60,7 +60,7 @@ import {
 } from '@mui/icons-material';
 import { useAppContext, useAppActions, Message } from '../contexts/AppContext';
 import { useSocket } from '../contexts/SocketContext';
-import { getApiUrl, getWsUrl, API_CONFIG } from '../config/api';
+import { getApiUrl, getWsUrl, API_ENDPOINTS } from '../config/api';
 import MessageRenderer from '../components/MessageRenderer';
 import { useNavigate } from 'react-router-dom';
 import TranscriptionModal from '../components/TranscriptionModal';
@@ -1015,7 +1015,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     // Сохраняем в MongoDB через API
     try {
       const response = await fetch(
-        `${getApiUrl(API_CONFIG.ENDPOINTS.UPDATE_MESSAGE)}/${currentChat.id}/${editingMessage.id}`,
+        `${getApiUrl(API_ENDPOINTS.UPDATE_MESSAGE)}/${currentChat.id}/${editingMessage.id}`,
         {
           method: 'PUT',
           headers: {
@@ -1061,7 +1061,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     // Сохраняем в MongoDB через API
     try {
       const response = await fetch(
-        `${getApiUrl(API_CONFIG.ENDPOINTS.UPDATE_MESSAGE)}/${currentChat.id}/${editingMessage.id}`,
+        `${getApiUrl(API_ENDPOINTS.UPDATE_MESSAGE)}/${currentChat.id}/${editingMessage.id}`,
         {
           method: 'PUT',
           headers: {
@@ -1617,7 +1617,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       formData.append('audio_file', audioBlob, 'recording.wav');
 
       
-      const response = await fetch(getApiUrl(API_CONFIG.ENDPOINTS.VOICE_RECOGNIZE), {
+      const response = await fetch(getApiUrl(API_ENDPOINTS.VOICE_RECOGNIZE), {
         method: 'POST',
         body: formData,
       });
@@ -1661,7 +1661,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       
       
       // Отправляем текст в чат
-      const response = await fetch(getApiUrl(API_CONFIG.ENDPOINTS.CHAT), {
+      const response = await fetch(getApiUrl(API_ENDPOINTS.CHAT), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1713,7 +1713,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       
       
       
-      const response = await fetch(getApiUrl(API_CONFIG.ENDPOINTS.VOICE_SYNTHESIZE), {
+      const response = await fetch(getApiUrl(API_ENDPOINTS.VOICE_SYNTHESIZE), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1834,7 +1834,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       
       
       
-      const response = await fetch(getApiUrl(API_CONFIG.ENDPOINTS.VOICE_SYNTHESIZE), {
+      const response = await fetch(getApiUrl(API_ENDPOINTS.VOICE_SYNTHESIZE), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

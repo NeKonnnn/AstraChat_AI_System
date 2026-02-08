@@ -168,7 +168,8 @@ class Settings(BaseModel):
     @classmethod
     def from_yaml(cls, config_path: str = None):
         """Загрузка конфигурации из YAML файла"""
-        if config_path is None:
+        # Проверяем, что config_path не None и не пустая строка
+        if config_path is None or config_path == '':
             # Поиск config.yml в различных возможных местах
             possible_paths = [
                 "config/config.yml",
@@ -201,6 +202,9 @@ def get_settings() -> Settings:
     global _settings
     if _settings is None:
         config_path = os.environ.get("CONFIG_PATH")
+        # Если CONFIG_PATH пустая строка, передаем None для автоматического поиска
+        if config_path == '':
+            config_path = None
         _settings = Settings.from_yaml(config_path)
     return _settings
 
@@ -208,6 +212,9 @@ def reset_settings() -> Settings:
     """Сброс и принудительная перезагрузка настроек."""
     global _settings, settings
     config_path = os.environ.get("CONFIG_PATH")
+    # Если CONFIG_PATH пустая строка, передаем None для автоматического поиска
+    if config_path == '':
+        config_path = None
     _settings = Settings.from_yaml(config_path)
     settings = _settings  # Обновляем глобальную переменную
     return _settings

@@ -110,4 +110,3 @@ async def verify_token(current_user: dict = Depends(get_current_user)):
         "valid": True,
         "username": current_user["username"]
     }
-

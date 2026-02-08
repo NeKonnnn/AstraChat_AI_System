@@ -64,31 +64,3 @@ class DocumentVector(BaseModel):
     def from_numpy(cls, embedding: np.ndarray, **kwargs):
         """Создание из numpy array"""
         return cls(embedding=embedding.tolist(), **kwargs)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

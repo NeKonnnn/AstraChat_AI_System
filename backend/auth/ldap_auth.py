@@ -184,4 +184,3 @@ def authenticate_ldap(username: str, password: str) -> Optional[Dict]:
 def is_ldap_enabled() -> bool:
     """Проверить, включена ли LDAP аутентификация"""
     return LDAP_ENABLED and LDAP_AVAILABLE
-

@@ -37,7 +37,7 @@ except ImportError:
     pass
 
 try:
-    from backend.agent import *
+    from backend.agent_llm_svc import *
 except ImportError:
     pass
 

@@ -124,4 +124,3 @@ class WebSearchAgent(BaseAgent):
         except Exception as e:
             logger.error(f"Ошибка при выполнении поиска: {e}")
             return []
-

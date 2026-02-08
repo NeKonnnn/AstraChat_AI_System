@@ -37,9 +37,8 @@ import {
   ViewModule as MultiLLMIcon,
   HelpOutline as HelpOutlineIcon,
 } from '@mui/icons-material';
-import { API_CONFIG } from '../../config/api';
+import { getApiUrl } from '../../config/api';
 
-const API_BASE_URL = API_CONFIG.BASE_URL;
 
 interface AgentStatus {
   is_initialized: boolean;
@@ -122,7 +121,7 @@ export default function AgentsSettings() {
       setIsLoading(true);
       setError(null);
 
-      const response = await fetch(`${API_BASE_URL}/api/agent/status`);
+      const response = await fetch(getApiUrl('/api/agent/status'));
       if (response.ok) {
         const data = await response.json();
         
@@ -131,7 +130,7 @@ export default function AgentsSettings() {
           data.mode = 'direct';
           // Автоматически переключаем режим на сервере
           try {
-            await fetch(`${API_BASE_URL}/api/agent/mode`, {
+            await fetch(getApiUrl('/api/agent/mode'), {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ mode: 'direct' }),
@@ -166,7 +165,7 @@ export default function AgentsSettings() {
 
   const loadMcpStatus = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/agent/mcp/status`);
+      const response = await fetch(getApiUrl('/api/agent/mcp/status'));
       if (response.ok) {
         const data = await response.json();
         setMcpStatus(data.mcp_status);
@@ -178,7 +177,7 @@ export default function AgentsSettings() {
 
   const loadLanggraphStatus = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/agent/langgraph/status`);
+      const response = await fetch(getApiUrl('/api/agent/langgraph/status'));
       if (response.ok) {
         const data = await response.json();
         setLanggraphStatus(data.langgraph_status);
@@ -190,7 +189,7 @@ export default function AgentsSettings() {
 
   const loadAgents = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/agent/agents`);
+      const response = await fetch(getApiUrl('/api/agent/agents'));
       if (response.ok) {
         const data = await response.json();
         const agents = data.agents || [];
@@ -288,7 +287,7 @@ export default function AgentsSettings() {
 
   const toggleOrchestrator = async (isActive: boolean) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/agent/orchestrator/toggle`, {
+      const response = await fetch(getApiUrl('/api/agent/orchestrator/toggle'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ is_active: isActive }),
@@ -310,7 +309,7 @@ export default function AgentsSettings() {
 
   const loadAvailableModels = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/models/available`);
+      const response = await fetch(getApiUrl('/api/models/available'));
       if (response.ok) {
         const data = await response.json();
         setAvailableModels(data.models || []);
@@ -324,7 +323,7 @@ export default function AgentsSettings() {
 
   const loadMultiLLMModels = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/agent/multi-llm/models`);
+      const response = await fetch(getApiUrl('/api/agent/multi-llm/models'));
       if (response.ok) {
         const data = await response.json();
         setSelectedMultiLLMModels(data.models || []);
@@ -336,7 +335,7 @@ export default function AgentsSettings() {
 
   const switchMode = async (mode: 'direct' | 'agent' | 'multi-llm') => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/agent/mode`, {
+      const response = await fetch(getApiUrl('/api/agent/mode'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode }),
@@ -380,7 +379,7 @@ export default function AgentsSettings() {
   const initializeAgents = async () => {
     try {
       setIsLoading(true);
-      const response = await fetch(`${API_BASE_URL}/api/agent/initialize`, {
+      const response = await fetch(getApiUrl('/api/agent/initialize'), {
         method: 'POST',
       });
 

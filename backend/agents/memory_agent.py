@@ -55,7 +55,7 @@ class MemoryAgent(BaseAgent):
     async def _save_to_memory(self, message: str, context: Dict[str, Any] = None) -> str:
         """Сохранение информации в память"""
         try:
-            from backend.memory import save_dialog_entry
+            from backend.database.memory_service import save_dialog_entry
             
             # Извлекаем содержимое для сохранения
             content = self._extract_content_to_save(message)
@@ -65,7 +65,7 @@ class MemoryAgent(BaseAgent):
                 return "Не удалось определить, что именно нужно сохранить в память."
             
             # Сохраняем в память
-            save_dialog_entry("system", f"[{category}] {content}")
+            await save_dialog_entry("system", f"[{category}] {content}")
             
             response = f"**Информация сохранена в память**\n\n"
             response += f"**Категория:** {category}\n"
@@ -84,10 +84,10 @@ class MemoryAgent(BaseAgent):
     async def _retrieve_from_memory(self, message: str, context: Dict[str, Any] = None) -> str:
         """Извлечение информации из памяти"""
         try:
-            from backend.memory import load_dialog_history
+            from backend.database.memory_service import load_dialog_history
             
             # Загружаем историю диалогов
-            history = load_dialog_history()
+            history = await load_dialog_history()
             
             if not history:
                 return "Память пуста. Используйте 'запомни [информация]' для сохранения данных."
@@ -127,9 +127,9 @@ class MemoryAgent(BaseAgent):
     async def _clear_memory(self, message: str, context: Dict[str, Any] = None) -> str:
         """Очистка памяти"""
         try:
-            from backend.memory import clear_dialog_history
+            from backend.database.memory_service import clear_dialog_history
             
-            clear_dialog_history()
+            await clear_dialog_history()
             
             return "**Память очищена**\n\nВсе сохраненные записи удалены."
             

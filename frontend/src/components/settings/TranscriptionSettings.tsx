@@ -21,9 +21,8 @@ import {
   Restore as RestoreIcon,
 } from '@mui/icons-material';
 import { useAppActions } from '../../contexts/AppContext';
-import { API_CONFIG } from '../../config/api';
+import { getApiUrl } from '../../config/api';
 
-const API_BASE_URL = API_CONFIG.BASE_URL;
 
 export default function TranscriptionSettings() {
   const [transcriptionSettings, setTranscriptionSettings] = useState({
@@ -51,7 +50,7 @@ export default function TranscriptionSettings() {
   const loadTranscriptionSettings = async () => {
     try {
       setIsLoading(true);
-      const response = await fetch(`${API_BASE_URL}/api/transcription/settings`);
+      const response = await fetch(getApiUrl('/api/transcription/settings'));
       if (response.ok) {
         const data = await response.json();
         setTranscriptionSettings(prev => ({ ...prev, ...data }));
@@ -65,7 +64,7 @@ export default function TranscriptionSettings() {
 
   const saveTranscriptionSettings = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/transcription/settings`, {
+      const response = await fetch(getApiUrl('/api/transcription/settings'), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(transcriptionSettings),

@@ -36,9 +36,8 @@ import {
 import { useAppActions } from '../../contexts/AppContext';
 import ModelSelector from '../ModelSelector';
 import { useTheme } from '@mui/material';
-import { API_CONFIG } from '../../config/api';
+import { getApiUrl } from '../../config/api';
 
-const API_BASE_URL = API_CONFIG.BASE_URL;
 
 export default function ModelsSettings() {
   const [showModelSelectorInSettings, setShowModelSelectorInSettings] = useState(() => {
@@ -137,14 +136,14 @@ export default function ModelsSettings() {
   const loadSettings = async () => {
     try {
       // Загружаем настройки модели
-      const modelResponse = await fetch(`${API_BASE_URL}/api/models/settings`);
+      const modelResponse = await fetch(getApiUrl('/api/models/settings'));
       if (modelResponse.ok) {
         const modelData = await modelResponse.json();
         setModelSettings(prev => ({ ...prev, ...modelData }));
       }
       
       // Загружаем максимальные значения
-      const maxResponse = await fetch(`${API_BASE_URL}/api/models/settings/recommended`);
+      const maxResponse = await fetch(getApiUrl('/api/models/settings/recommended'));
       if (maxResponse.ok) {
         const maxData = await maxResponse.json();
         if (maxData.max_values) {
@@ -158,7 +157,7 @@ export default function ModelsSettings() {
 
   const saveModelSettings = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/models/settings`, {
+      const response = await fetch(getApiUrl('/api/models/settings'), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(modelSettings),
@@ -196,7 +195,7 @@ export default function ModelsSettings() {
 
   const loadModels = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/models`);
+      const response = await fetch(getApiUrl('/api/models'));
       if (response.ok) {
         const data = await response.json();
         setAvailableModels(data.models || []);
@@ -208,7 +207,7 @@ export default function ModelsSettings() {
 
   const loadCurrentModel = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/models/current`);
+      const response = await fetch(getApiUrl('/api/models/current'));
       if (response.ok) {
         const data = await response.json();
         setCurrentModel(data);
@@ -222,14 +221,14 @@ export default function ModelsSettings() {
   const loadContextPrompts = async () => {
     try {
       // Загружаем глобальную инструкцию
-      const globalResponse = await fetch(`${API_BASE_URL}/api/context-prompts/global`);
+      const globalResponse = await fetch(getApiUrl('/api/context-prompts/global'));
       if (globalResponse.ok) {
         const globalData = await globalResponse.json();
         setContextPrompts(prev => ({ ...prev, globalPrompt: globalData.prompt }));
       }
 
       // Загружаем модели с инструкциями
-      const modelsResponse = await fetch(`${API_BASE_URL}/api/context-prompts/models`);
+      const modelsResponse = await fetch(getApiUrl('/api/context-prompts/models'));
       if (modelsResponse.ok) {
         const modelsData = await modelsResponse.json();
         setModelsWithPrompts(modelsData.models || []);
@@ -245,7 +244,7 @@ export default function ModelsSettings() {
       }
 
       // Загружаем пользовательские инструкции
-      const customResponse = await fetch(`${API_BASE_URL}/api/context-prompts/custom`);
+      const customResponse = await fetch(getApiUrl('/api/context-prompts/custom'));
       if (customResponse.ok) {
         const customData = await customResponse.json();
         setContextPrompts(prev => ({ ...prev, customPrompts: customData.prompts || {} }));
@@ -258,7 +257,7 @@ export default function ModelsSettings() {
 
   const saveGlobalPrompt = async (prompt: string) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/context-prompts/global`, {
+      const response = await fetch(getApiUrl('/api/context-prompts/global'), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt })
@@ -280,7 +279,7 @@ export default function ModelsSettings() {
 
   const saveModelPrompt = async (modelPath: string, prompt: string) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/context-prompts/model/${encodeURIComponent(modelPath)}`, {
+      const response = await fetch(getApiUrl(`/api/context-prompts/model/${encodeURIComponent(modelPath)}`), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt })
@@ -307,7 +306,7 @@ export default function ModelsSettings() {
     try {
       setIsLoadingModel(true);
       
-      const response = await fetch(`${API_BASE_URL}/api/models/load`, {
+      const response = await fetch(getApiUrl('/api/models/load'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model_path: modelPath }),

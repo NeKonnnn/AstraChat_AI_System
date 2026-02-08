@@ -12,9 +12,8 @@ import {
   KeyboardArrowDown as KeyboardArrowDownIcon,
 } from '@mui/icons-material';
 import { useAppActions } from '../contexts/AppContext';
-import { API_CONFIG } from '../config/api';
+import { getApiUrl } from '../config/api';
 
-const API_BASE_URL = API_CONFIG.BASE_URL;
 
 interface Model {
   name: string;
@@ -83,7 +82,7 @@ export default function ModelSelector({ isDarkMode, onModelSelect }: ModelSelect
   const loadModels = async () => {
     try {
       setIsLoading(true);
-      const response = await fetch(`${API_BASE_URL}/api/models`);
+      const response = await fetch(getApiUrl('/api/models'));
       if (response.ok) {
         const data = await response.json();
         setAvailableModels(data.models || []);
@@ -97,7 +96,7 @@ export default function ModelSelector({ isDarkMode, onModelSelect }: ModelSelect
 
   const loadCurrentModel = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/models/current`);
+      const response = await fetch(getApiUrl('/api/models/current'));
       if (response.ok) {
         const data = await response.json();
         
@@ -126,7 +125,7 @@ export default function ModelSelector({ isDarkMode, onModelSelect }: ModelSelect
     try {
       setIsLoadingModel(true);
       
-      const response = await fetch(`${API_BASE_URL}/api/models/load`, {
+      const response = await fetch(getApiUrl('/api/models/load'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model_path: modelPath }),

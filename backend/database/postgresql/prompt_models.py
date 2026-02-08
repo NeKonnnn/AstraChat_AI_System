@@ -139,4 +139,3 @@ class PromptStats(BaseModel):
         default_factory=dict, 
         description="Распределение оценок {1: count, 2: count, ...}"
     )
-

@@ -27,14 +27,12 @@ import {
   Computer as ComputerIcon,
 } from '@mui/icons-material';
 import { useAppActions } from '../../contexts/AppContext';
-import { API_CONFIG } from '../../config/api';
+import { getApiUrl } from '../../config/api';
 
 interface GeneralSettingsProps {
   isDarkMode: boolean;
   onToggleTheme: () => void;
 }
-
-const API_BASE_URL = API_CONFIG.BASE_URL;
 
 export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSettingsProps) {
   
@@ -55,6 +53,7 @@ export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSe
     const savedShowUserName = localStorage.getItem('show_user_name');
     const savedEnableNotification = localStorage.getItem('enable_notification');
     const savedShowModelSelectorInSettings = localStorage.getItem('show_model_selector_in_settings');
+    const savedUseFoldersMode = localStorage.getItem('use_folders_mode');
     return {
       autoGenerateTitles: savedAutoTitle !== null ? savedAutoTitle === 'true' : true,
       largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
@@ -65,6 +64,7 @@ export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSe
       showUserName: savedShowUserName !== null ? savedShowUserName === 'true' : false,
       enableNotification: savedEnableNotification !== null ? savedEnableNotification === 'true' : false,
       showModelSelectorInSettings: savedShowModelSelectorInSettings !== null ? savedShowModelSelectorInSettings === 'true' : false,
+      useFoldersMode: savedUseFoldersMode !== null ? savedUseFoldersMode === 'true' : true, // По умолчанию папки
     };
   });
   
@@ -76,7 +76,7 @@ export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSe
 
   const loadMemorySettings = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/memory/settings`);
+      const response = await fetch(getApiUrl('/api/memory/settings'));
       if (response.ok) {
         const data = await response.json();
         setMemorySettings(prev => ({ ...prev, ...data }));
@@ -88,7 +88,7 @@ export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSe
 
   const saveMemorySettings = async (newSettings: typeof memorySettings) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/memory/settings`, {
+      const response = await fetch(getApiUrl('/api/memory/settings'), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newSettings),
@@ -137,6 +137,7 @@ export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSe
     localStorage.setItem('show_user_name', String(newSettings.showUserName));
     localStorage.setItem('enable_notification', String(newSettings.enableNotification));
     localStorage.setItem('show_model_selector_in_settings', String(newSettings.showModelSelectorInSettings));
+    localStorage.setItem('use_folders_mode', String(newSettings.useFoldersMode));
     // Отправляем кастомное событие для обновления настроек в том же окне
     window.dispatchEvent(new Event('interfaceSettingsChanged'));
     showNotification('success', 'Настройки интерфейса сохранены');
@@ -608,6 +609,38 @@ export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSe
               <Switch
                 checked={interfaceSettings.showModelSelectorInSettings}
                 onChange={(e) => handleInterfaceSettingChange('showModelSelectorInSettings', e.target.checked)}
+              />
+            </ListItem>
+
+            <Divider />
+
+            {/* Использовать папки вместо проектов */}
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <ListItemText
+                primary="Использовать папки"
+                primaryTypographyProps={{
+                  variant: 'body1',
+                  fontWeight: 500,
+                }}
+                secondary={interfaceSettings.useFoldersMode 
+                  ? "Включен функционал папок. Проекты недоступны." 
+                  : "Включен функционал проектов. Папки недоступны."}
+                secondaryTypographyProps={{
+                  variant: 'body2',
+                  sx: { mt: 0.5 }
+                }}
+              />
+              <Switch
+                checked={interfaceSettings.useFoldersMode}
+                onChange={(e) => handleInterfaceSettingChange('useFoldersMode', e.target.checked)}
               />
             </ListItem>
           </List>

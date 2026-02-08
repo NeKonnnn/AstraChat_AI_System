@@ -113,14 +113,24 @@ async def transcribe_audio(
             # Сохраняем загруженный файл
             content = await file.read()
             temp_file.write(content)
+            logger.info(f"Файл сохранен: {temp_file_path}, размер: {len(content)} байт")
         
         try:
             # Конвертируем в WAV если нужно
             wav_file_path = temp_file_path
-            if not is_wav_16khz_mono(temp_file_path):
+            is_already_wav = is_wav_16khz_mono(temp_file_path)
+            logger.info(f"Проверка формата WAV 16kHz mono: {is_already_wav}")
+            
+            if not is_already_wav:
+                logger.info("Требуется конвертация в WAV 16kHz mono")
                 wav_file_path = temp_file_path + ".wav"
-                if not convert_audio_to_wav(temp_file_path, wav_file_path):
-                    raise HTTPException(status_code=400, detail="Не удалось конвертировать аудио файл")
+                conversion_success = convert_audio_to_wav(temp_file_path, wav_file_path)
+                logger.info(f"Результат конвертации: {conversion_success}")
+                
+                if not conversion_success:
+                    error_msg = "Не удалось конвертировать аудио файл. Проверьте, что ffmpeg установлен и файл имеет корректный формат."
+                    logger.error(error_msg)
+                    raise HTTPException(status_code=400, detail=error_msg)
             
             # Открываем WAV файл
             with wave.open(wav_file_path, "rb") as wf:
@@ -164,12 +174,16 @@ async def transcribe_audio(
                 # Объединяем результаты
                 full_text = " ".join(result_text).strip()
                 
+                logger.info(f"Результат транскрибации: длина текста={len(full_text)}, текст='{full_text[:100]}...' если есть")
+                
                 if not full_text:
+                    error_msg = "Не удалось распознать текст в аудио (пустой результат). Возможные причины: нет речи в файле, низкое качество аудио, неподходящий язык модели."
+                    logger.warning(error_msg)
                     return JSONResponse(
                         status_code=400,
                         content={
                             "success": False,
-                            "error": "Не удалось распознать текст в аудио (пустой результат)"
+                            "error": error_msg
                         }
                     )
                 

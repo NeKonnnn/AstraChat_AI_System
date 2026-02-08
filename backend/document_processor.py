@@ -69,13 +69,13 @@ class DocumentProcessor:
         # {doc_name: [{"content": str, "chunk": int}, ...]} - отсортировано по chunk
         self._doc_chunks_cache = {}
         
-        # НОВОЕ: Система иерархического индексирования для больших документов
+        # Система иерархического индексирования для больших документов
         self.use_hierarchical_indexing = True  # Флаг для включения/выключения
         self.hierarchical_threshold = 10000  # Документы больше 10000 символов используют иерархию
         self.summarizer = None  # Инициализируется позже
         self.optimized_index = None  # Инициализируется позже
         
-        # НОВОЕ: Гибридный поиск (BM25 + векторный)
+        # Гибридный поиск (BM25 + векторный)
         self.use_hybrid_search = os.getenv("ENABLE_HYBRID_SEARCH", "true").lower() == "true" and BM25_AVAILABLE
         self.hybrid_bm25_weight = float(os.getenv("HYBRID_BM25_WEIGHT", "0.3"))  # 0.0 - только векторный, 1.0 - только BM25
         self.bm25_index = None  # Инициализируется при загрузке документов
@@ -83,7 +83,7 @@ class DocumentProcessor:
         self.bm25_texts = []  # Тексты для BM25
         self.bm25_metadatas = []  # Метаданные для BM25
         
-        # НОВОЕ: Reranking (CrossEncoder)
+        # Reranking (CrossEncoder)
         self.use_reranking = os.getenv("ENABLE_RERANKING", "false").lower() == "true" and RERANKER_AVAILABLE
         self.reranker = None
         self.reranker_model_name = os.getenv("RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
@@ -103,29 +103,29 @@ class DocumentProcessor:
         elif status["available"]:
             logger.warning(f"PGVECTOR ДОСТУПЕН, НО НЕ ИНИЦИАЛИЗИРОВАН")
             if status.get("error"):
-                logger.warning(f"   Ошибка: {status['error']}")
+                logger.warning(f"Ошибка: {status['error']}")
         else:
             logger.warning(f"PGVECTOR НЕДОСТУПЕН")
         
         # Логируем статус иерархической системы
         if self.use_hierarchical_indexing and self.summarizer:
             logger.info(f"ИЕРАРХИЧЕСКОЕ ИНДЕКСИРОВАНИЕ АКТИВНО")
-            logger.info(f"   Порог активации: {self.hierarchical_threshold} символов")
+            logger.info(f"Порог активации: {self.hierarchical_threshold} символов")
         else:
             logger.info(f"Иерархическое индексирование отключено")
         
         # Логируем статус гибридного поиска
         if self.use_hybrid_search:
             logger.info(f"ГИБРИДНЫЙ ПОИСК АКТИВЕН (BM25 + векторный)")
-            logger.info(f"   Вес BM25: {self.hybrid_bm25_weight}")
+            logger.info(f"Вес BM25: {self.hybrid_bm25_weight}")
         else:
             logger.info(f"Гибридный поиск отключен")
         
         # Логируем статус reranking
         if self.use_reranking and self.reranker:
             logger.info(f"RERANKING АКТИВЕН")
-            logger.info(f"   Модель: {self.reranker_model_name}")
-            logger.info(f"   Топ-K для reranking: {self.reranker_top_k}")
+            logger.info(f"Модель: {self.reranker_model_name}")
+            logger.info(f"Топ-K для reranking: {self.reranker_top_k}")
         else:
             logger.info(f"Reranking отключен")
         
@@ -229,31 +229,31 @@ class DocumentProcessor:
             # Получаем репозитории
             try:
                 self.vector_repo = get_vector_repository()
-                logger.info("✅ VectorRepository получен")
+                logger.info("VectorRepository получен")
             except RuntimeError as e:
                 error_msg = str(e)
                 if "не инициализирован" in error_msg or "недоступны" in error_msg:
-                    logger.error("❌ PostgreSQL не инициализирован")
-                    logger.error(f"   {error_msg}")
-                    logger.error("   Убедитесь, что:")
-                    logger.error("   1. PostgreSQL запущен и доступен")
-                    logger.error("   2. Вызван init_postgresql() перед созданием DocumentProcessor")
-                    logger.error("   3. Настройки подключения в .env файле корректны")
+                    logger.error("PostgreSQL не инициализирован")
+                    logger.error(f"{error_msg}")
+                    logger.error("Убедитесь, что:")
+                    logger.error("1. PostgreSQL запущен и доступен")
+                    logger.error("2. Вызван init_postgresql() перед созданием DocumentProcessor")
+                    logger.error("3. Настройки подключения в .env файле корректны")
                     logger.info("=" * 60)
                     self.vector_repo = None
                     self.document_repo = None
                     self.vectorstore = None
                     return
                 else:
-                    logger.error(f"❌ Ошибка получения VectorRepository: {error_msg}")
+                    logger.error(f"Ошибка получения VectorRepository: {error_msg}")
                     raise
             
             try:
                 self.document_repo = get_document_repository()
-                logger.info("✅ DocumentRepository получен")
+                logger.info("DocumentRepository получен")
             except RuntimeError as e:
                 error_msg = str(e)
-                logger.error(f"❌ Ошибка получения DocumentRepository: {error_msg}")
+                logger.error(f"Ошибка получения DocumentRepository: {error_msg}")
                 self.vector_repo = None
                 self.document_repo = None
                 self.vectorstore = None
@@ -261,17 +261,17 @@ class DocumentProcessor:
                 return
             
             # Проверяем наличие расширения pgvector
-            logger.info("🔍 Проверка наличия расширения pgvector...")
+            logger.info("Проверка наличия расширения pgvector...")
             pgvector_extension_available = asyncio.run(self._check_pgvector_extension())
             
             if not pgvector_extension_available:
-                logger.error("❌ PGVECTOR НЕ УСТАНОВЛЕН В POSTGRESQL")
-                logger.error("   Расширение 'vector' отсутствует в базе данных")
-                logger.error("   Для установки pgvector:")
-                logger.error("   1. Установите pgvector в PostgreSQL (см. README/QUICK_START_POSTGRESQL_PGVECTOR.md)")
-                logger.error("   2. Или используйте Docker образ с pgvector: pgvector/pgvector:pg17")
-                logger.error("   3. После установки выполните: CREATE EXTENSION vector;")
-                logger.warning("⚠️  DocumentProcessor будет работать без персистентного хранения")
+                logger.error("PGVECTOR НЕ УСТАНОВЛЕН В POSTGRESQL")
+                logger.error("Расширение 'vector' отсутствует в базе данных")
+                logger.error("Для установки pgvector:")
+                logger.error("1. Установите pgvector в PostgreSQL (см. README/QUICK_START_POSTGRESQL_PGVECTOR.md)")
+                logger.error("2. Или используйте Docker образ с pgvector: pgvector/pgvector:pg17")
+                logger.error("3. После установки выполните: CREATE EXTENSION vector;")
+                logger.warning("DocumentProcessor будет работать без персистентного хранения")
                 logger.info("=" * 60)
                 self.vector_repo = None
                 self.document_repo = None
@@ -279,22 +279,22 @@ class DocumentProcessor:
                 return
             
             # Проверяем работоспособность
-            logger.info("🔍 Проверка работоспособности pgvector...")
+            logger.info("Проверка работоспособности pgvector...")
             is_working = asyncio.run(self._test_pgvector_connection())
             
             if is_working:
                 self.vectorstore = True  # Флаг, что pgvector используется
-                logger.info("✅ PGVECTOR РАБОТАЕТ КОРРЕКТНО")
-                logger.info("   - Подключение к PostgreSQL установлено")
-                logger.info("   - Расширение pgvector установлено")
-                logger.info("   - Репозитории инициализированы")
-                logger.info("   - Векторный поиск доступен")
+                logger.info("PGVECTOR РАБОТАЕТ КОРРЕКТНО")
+                logger.info("- Подключение к PostgreSQL установлено")
+                logger.info("- Расширение pgvector установлено")
+                logger.info("- Репозитории инициализированы")
+                logger.info("- Векторный поиск доступен")
                 
                 # Загружаем существующие документы из БД
                 self._load_documents_from_db()
             else:
                 logger.warning("PGVECTOR НЕ РАБОТАЕТ")
-                logger.warning("   Проверка работоспособности не прошла")
+                logger.warning("Проверка работоспособности не прошла")
                 self.vector_repo = None
                 self.document_repo = None
                 self.vectorstore = None
@@ -305,11 +305,11 @@ class DocumentProcessor:
             error_msg = str(e)
             logger.error("ОШИБКА ИНИЦИАЛИЗАЦИИ PGVECTOR")
             if "не инициализирован" in error_msg or "недоступны" in error_msg:
-                logger.error(f"   PostgreSQL не инициализирован: {error_msg}")
-                logger.error("   Убедитесь, что:")
-                logger.error("   1. PostgreSQL запущен и доступен")
-                logger.error("   2. Вызван init_postgresql() перед созданием DocumentProcessor")
-                logger.error("   3. Настройки подключения в .env файле корректны")
+                logger.error(f"PostgreSQL не инициализирован: {error_msg}")
+                logger.error("Убедитесь, что:")
+                logger.error("1. PostgreSQL запущен и доступен")
+                logger.error("2. Вызван init_postgresql() перед созданием DocumentProcessor")
+                logger.error("3. Настройки подключения в .env файле корректны")
             else:
                 logger.error(f"   {error_msg}")
             logger.info("=" * 60)
@@ -319,12 +319,12 @@ class DocumentProcessor:
         except Exception as e:
             error_msg = str(e)
             logger.error("ОШИБКА ИНИЦИАЛИЗАЦИИ PGVECTOR")
-            logger.error(f"   {error_msg}")
+            logger.error(f"{error_msg}")
             
             # Проверяем, связана ли ошибка с отсутствием расширения
             if "vector" in error_msg.lower() and ("не существует" in error_msg.lower() or "does not exist" in error_msg.lower()):
-                logger.error("   Расширение pgvector не установлено в PostgreSQL")
-                logger.error("   Установите pgvector согласно инструкции в README/QUICK_START_POSTGRESQL_PGVECTOR.md")
+                logger.error("Расширение pgvector не установлено в PostgreSQL")
+                logger.error("Установите pgvector согласно инструкции в README/QUICK_START_POSTGRESQL_PGVECTOR.md")
             
             logger.warning("DocumentProcessor будет работать без персистентного хранения")
             import traceback
@@ -374,13 +374,12 @@ class DocumentProcessor:
             # Проверяем количество документов в БД
             try:
                 documents = await self.document_repo.get_all_documents(limit=1)
-                logger.info(f" В базе данных найдено документов: {len(documents)} (проверка ограничена 1)")
+                logger.info(f"В базе данных найдено документов: {len(documents)} (проверка ограничена 1)")
             except Exception as e:
                 logger.warning(f"Не удалось проверить документы в БД: {str(e)}")
                 return False
             
-            # Проверяем, что таблицы векторов существуют
-            # Это делается через попытку выполнить простой запрос
+            # Выполняем просто запрос
             try:
                 # Пробуем выполнить поиск с пустым вектором (просто для проверки таблицы)
                 test_embedding = [0.0] * 384  # Размерность по умолчанию
@@ -391,7 +390,7 @@ class DocumentProcessor:
                 # Проверяем, связана ли ошибка с отсутствием типа vector
                 if "vector" in error_msg.lower() and ("не существует" in error_msg.lower() or "does not exist" in error_msg.lower()):
                     logger.error(f"Таблица векторов не может быть использована: {error_msg}")
-                    logger.error("   Расширение pgvector не установлено или таблица не создана")
+                    logger.error("Расширение pgvector не установлено или таблица не создана")
                     return False
                 else:
                     logger.warning(f"Не удалось проверить таблицу векторов: {error_msg}")
@@ -406,10 +405,10 @@ class DocumentProcessor:
             
             # Проверяем, связана ли ошибка с отсутствием расширения
             if "vector" in error_msg.lower() and ("не существует" in error_msg.lower() or "does not exist" in error_msg.lower()):
-                logger.error("   Расширение pgvector не установлено в PostgreSQL")
+                logger.error("Расширение pgvector не установлено в PostgreSQL")
             
             import traceback
-            logger.debug(f"   Traceback: {traceback.format_exc()}")
+            logger.debug(f"Traceback: {traceback.format_exc()}")
             return False
     
     def init_hierarchical_system(self):
@@ -427,7 +426,6 @@ class DocumentProcessor:
             from backend.document_summarizer import DocumentSummarizer, OptimizedDocumentIndex
             
             # Инициализируем суммаризатор
-            # LLM функцию передадим позже, когда она понадобится
             self.summarizer = DocumentSummarizer(
                 llm_function=None,  # Будет установлена при необходимости
                 max_chunk_size=1500,
@@ -491,7 +489,7 @@ class DocumentProcessor:
             
             logger.info(f"Загрузка reranker модели: {reranker_model}")
             self.reranker = CrossEncoder(reranker_model)
-            logger.info("✅ Reranker загружен успешно")
+            logger.info("Reranker загружен успешно")
         except Exception as e:
             logger.error(f"Ошибка загрузки reranker: {e}")
             logger.error("Reranking будет отключен")
@@ -505,7 +503,7 @@ class DocumentProcessor:
             return
         
         try:
-            logger.info("📥 Загрузка документов из базы данных...")
+            logger.info("Загрузка документов из базы данных...")
             # Получаем все документы из БД (синхронный вызов async метода)
             pg_documents = asyncio.run(self.document_repo.get_all_documents(limit=1000))
             
@@ -832,7 +830,7 @@ class DocumentProcessor:
         """Извлечение текста из TXT файла из bytes"""
         print(f"Извлекаем текст из TXT файла (размер: {len(file_data)} байт)")
         try:
-            # Пробуем декодировать как UTF-8
+            # Декодируем как UTF-8
             result = file_data.decode('utf-8')
             print(f"UTF-8 успешно извлек {len(result)} символов")
             return result
@@ -1031,7 +1029,7 @@ class DocumentProcessor:
                 logger.info(f"Документ '{doc_name}' успешно сохранен в PostgreSQL + pgvector")
                 # Устанавливаем флаг vectorstore после успешного сохранения
                 self.vectorstore = True
-                # ОПТИМИЗАЦИЯ: Пересоздание BM25 индекса откладываем до первого поиска
+                # Пересоздание BM25 индекса откладываем до первого поиска
                 # Это значительно ускоряет загрузку множества документов
                 if self.use_hybrid_search:
                     # Помечаем, что индекс требует обновления
@@ -1126,7 +1124,7 @@ class DocumentProcessor:
                     # Удаляем старые векторы
                     await self.vector_repo.delete_vectors_by_document(document_id)
             
-            # НОВОЕ: Проверяем, нужно ли использовать иерархическое индексирование
+            # Проверяем, нужно ли использовать иерархическое индексирование
             use_hierarchy = (
                 self.use_hierarchical_indexing 
                 and self.summarizer 
@@ -1164,7 +1162,7 @@ class DocumentProcessor:
                 start_time = time.time()
                 logger.info(f"Стандартное индексирование: генерация эмбеддингов для {len(chunks)} чанков...")
                 
-                # ОПТИМИЗАЦИЯ: Batch генерация эмбеддингов (в 10-20 раз быстрее!)
+                # Batch генерация эмбеддингов (в 10-20 раз быстрее!)
                 logger.info(f"Используем BATCH генерацию эмбеддингов для ускорения...")
                 try:
                     # Генерируем все эмбеддинги за один вызов (batch processing)
@@ -1180,7 +1178,7 @@ class DocumentProcessor:
                     embedding_time = time.time() - start_time
                     logger.info(f"Эмбеддинги сгенерированы последовательно за {embedding_time:.2f}с")
                 
-                # ОПТИМИЗАЦИЯ: Batch INSERT в БД (в 5-10 раз быстрее!)
+                # Batch INSERT в БД (в 5-10 раз быстрее)
                 db_start = time.time()
                 vectors_to_save = []
                 for i, (chunk, embedding) in enumerate(zip(chunks, embeddings_list)):
@@ -1201,13 +1199,13 @@ class DocumentProcessor:
                     total_time = time.time() - start_time
                     
                     if saved_count == len(chunks):
-                        logger.info(f"✅ Все {saved_count} векторов сохранены за {db_time:.2f}с")
-                        logger.info(f"🎯 ОБЩЕЕ ВРЕМЯ: {total_time:.2f}с (эмбеддинги: {embedding_time:.2f}с, БД: {db_time:.2f}с)")
+                        logger.info(f"Все {saved_count} векторов сохранены за {db_time:.2f}с")
+                        logger.info(f"ОБЩЕЕ ВРЕМЯ: {total_time:.2f}с (эмбеддинги: {embedding_time:.2f}с, БД: {db_time:.2f}с)")
                     else:
-                        logger.warning(f"⚠️ Сохранено {saved_count}/{len(chunks)} векторов")
+                        logger.warning(f"Сохранено {saved_count}/{len(chunks)} векторов")
                 except AttributeError:
                     # Fallback: repository не поддерживает batch insert
-                    logger.warning(f"⚠️ Batch INSERT недоступен, используем последовательное сохранение...")
+                    logger.warning(f"Batch INSERT недоступен, используем последовательное сохранение...")
                     saved_vectors = 0
                     for i, vector in enumerate(vectors_to_save):
                         try:
@@ -1455,7 +1453,7 @@ class DocumentProcessor:
                 logger.info(f"Reranking вернул {len(results)} результатов")
                 return results
             
-            # НОВОЕ: Используем умный поиск, если доступен optimized_index
+            # Используем умный поиск, если доступен optimized_index
             if self.use_hierarchical_indexing and self.optimized_index:
                 logger.info("Используем оптимизированный умный поиск с иерархией")
                 results = await self.optimized_index.smart_search_async(
@@ -1501,15 +1499,15 @@ class DocumentProcessor:
     
     async def _query_documents_async(self, query: str, k: int = 2):
         """Асинхронный поиск релевантных документов через pgvector"""
-        logger.debug(f"   Выполняем векторный поиск через pgvector с k={k}...")
+        logger.debug(f"Выполняем векторный поиск через pgvector с k={k}...")
         
         # Генерируем эмбеддинг для запроса
         query_embedding = self.embeddings.embed_query(query)
-        logger.debug(f"   Эмбеддинг запроса сгенерирован (размерность: {len(query_embedding)})")
+        logger.debug(f"Эмбеддинг запроса сгенерирован (размерность: {len(query_embedding)})")
         
         # Выполняем поиск в pgvector
         results = await self.vector_repo.similarity_search(query_embedding, limit=k)
-        logger.debug(f"   pgvector вернул {len(results)} результатов")
+        logger.debug(f"pgvector вернул {len(results)} результатов")
         
         # Преобразуем результаты в нужный формат
         formatted_results = []
@@ -1612,7 +1610,7 @@ class DocumentProcessor:
         self.filename_to_id = {}  # Очищаем маппинг
         
         # Очищаем из PostgreSQL (опционально, можно оставить данные в БД)
-        # Если нужно очистить БД, раскомментируйте:
+        # Если нужно очистить БД (расскоментить):
         # if self.document_repo:
         #     # Удаляем все документы из БД
         #     asyncio.run(self._clear_all_documents_from_db())
@@ -1733,14 +1731,11 @@ class DocumentProcessor:
             
             # Подготавливаем запрос для LLM с инструкциями и контекстом
             prompt = f"""На основе предоставленного контекста ответь на вопрос пользователя. 
-Если информации в контексте недостаточно, укажи это.
-Отвечай только на основе информации из контекста. Не придумывай информацию.
-
-{context}
-
-Вопрос пользователя: {query}
-
-Ответ:"""
+            Если информации в контексте недостаточно, укажи это.
+            Отвечай только на основе информации из контекста. Не придумывай информацию.
+            {context}
+            Вопрос пользователя: {query}
+            Ответ:"""
             
             print("Отправляем запрос к LLM...")
             # Отправляем запрос к LLM
@@ -2011,7 +2006,7 @@ class DocumentProcessor:
                 print(f"Контекст сформирован за {elapsed_time:.2f}с: {len(context)} символов, {chunks_added}/{len(all_chunks)} чанков")
                 
             else:
-                # ОПТИМИЗИРОВАННЫЙ РЕЖИМ: Для конкретных вопросов используем релевантные фрагменты + начало документа
+                # Для конкретных вопросов используем релевантные фрагменты + начало документа
                 # Используем переданный k (по умолчанию 12, увеличен для больших документов)
                 docs = await self.query_documents_async(query, k=k)
                 print(f"Найдено релевантных фрагментов: {len(docs) if isinstance(docs, list) else 'ошибка'}")

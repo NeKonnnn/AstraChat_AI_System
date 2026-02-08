@@ -1,11 +1,9 @@
 # Основные зависимости для llm-svc
-# Обновляем fastapi для поддержки новых версий starlette
-fastapi>=0.128.0  
-# starlette устанавливается автоматически как зависимость fastapi (не указываем явно)
-starlette==0.50.0
+fastapi==0.116.0
+starlette==0.46.2
 httpx==0.28.1
 uvicorn[standard]==0.35.0
-pydantic==2.12.5
+pydantic==2.11.7
 python-dotenv==1.0.0
 requests==2.32.4
 tqdm==4.67.1
@@ -14,18 +12,14 @@ anyio==4.10.0
 
 # LLM зависимости
 llama-cpp-python>=0.3.16
-# vLLM: версия 0.13.0 - последняя стабильная версия с улучшенной поддержкой моделей
-# ВАЖНО: Qwen3-Omni может не поддерживаться vLLM из-за MoE архитектуры
-# Для Qwen3-Omni может потребоваться версия vLLM из main/nightly или использовать Transformers
-vllm==0.13.0  # Версия с улучшенной поддержкой квантованных моделей и новых архитектур  
+vllm>=0.6.0  
 
 # Базовые зависимости для аудио
 numpy>=1.24.3,<2.0.0
-python-multipart>=0.0.18  # Обновлено для совместимости с fastapi>=0.128.0
+python-multipart==0.0.6
 vosk==0.3.45
-# torch версии должны быть совместимы с vllm 0.13.0
-torch>=2.0.0,<2.10.0  # Ограничиваем для совместимости с vllm 0.13.0
-torchaudio>=2.0.0,<2.10.0
+torch>=2.0.0
+torchaudio>=2.0.0
 scipy>=1.10.0
 pydub>=0.25.1
 ffmpeg-python>=0.2.0
@@ -38,6 +32,7 @@ pyannote.audio>=3.1.1
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 python-ldap==3.4.4
+python-multipart==0.0.6
 
 # Тестирование
 pytest==8.4.1

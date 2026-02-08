@@ -1,8 +1,3 @@
-"""
-AstraChat Web Backend - FastAPI приложение
-Современный веб-интерфейс для AstraChat с поддержкой всех функций
-"""
-
 # Настройка кодировки для Windows
 import sys
 import os
@@ -57,7 +52,7 @@ try:
 except ImportError:
     print("python-dotenv не установлен, переменные окружения не будут загружены из .env")
 
-# В Docker: /app содержит main.py, agent.py и т.д.
+# В Docker: /app содержит main.py, agent_llm_svc.py и т.д.
 # Для импортов "from backend.xxx" нужно чтобы /app был доступен как /backend
 # Создаем временную структуру для импортов
 if current_dir == '/app' and not os.path.exists('/app/backend'):
@@ -65,13 +60,29 @@ if current_dir == '/app' and not os.path.exists('/app/backend'):
     os.system('ln -sf /app /app/backend')
 
 sys.path.insert(0, current_dir)  # Для доступа к /app/config
-sys.path.insert(0, root_dir)      # Для доступа к / для импортов "from backend.xxx"
+sys.path.insert(0, root_dir)     # Для доступа к / для импортов "from backend.xxx"
 
 # Импортируем конфигурацию
-from config import get_config, config
+from settings import get_settings
 
-# Получаем URL из конфигурации для использования во всем приложении
-urls_config = config.get("urls", {})
+# Получаем настройки для использования во всем приложении
+settings = get_settings()
+urls_config = {
+    "frontend_port_1": settings.urls.frontend_port_1,
+    "frontend_port_1_ipv4": settings.urls.frontend_port_1_ipv4,
+    "frontend_port_2": settings.urls.frontend_port_2,
+    "frontend_port_2_ipv4": settings.urls.frontend_port_2_ipv4,
+    "frontend_port_3": settings.urls.frontend_port_3,
+    "frontend_port_3_ipv4": settings.urls.frontend_port_3_ipv4,
+    "backend_port_1": settings.urls.backend_port_1,
+    "backend_port_1_ipv4": settings.urls.backend_port_1_ipv4,
+    "backend_port_2": settings.urls.backend_port_2,
+    "backend_port_2_ipv4": settings.urls.backend_port_2_ipv4,
+    "llm_service_port": settings.urls.llm_service_port,
+    "frontend_docker": settings.urls.frontend_docker,
+    "backend_docker": settings.urls.backend_docker,
+    "llm_service_docker": settings.urls.llm_service_docker,
+}
 
 # Настройка логирования в самом начале
 # Настройка логирования с поддержкой UTF-8
@@ -105,10 +116,10 @@ mongodb_host = os.getenv("MONGODB_HOST", "localhost")
 mongodb_port = os.getenv("MONGODB_PORT", "27017")
 mongodb_user = os.getenv("MONGODB_USER", "").strip()
 mongodb_password = os.getenv("MONGODB_PASSWORD", "").strip()
-logger.info(f"  MONGODB_HOST: {mongodb_host}")
-logger.info(f"  MONGODB_PORT: {mongodb_port}")
-logger.info(f"  MONGODB_USER: '{mongodb_user}' (len={len(mongodb_user)})")
-logger.info(f"  MONGODB_PASSWORD: {'*' * len(mongodb_password) if mongodb_password else ''} (len={len(mongodb_password)})")
+logger.info(f"MONGODB_HOST: {mongodb_host}")
+logger.info(f"MONGODB_PORT: {mongodb_port}")
+logger.info(f"MONGODB_USER: '{mongodb_user}' (len={len(mongodb_user)})")
+logger.info(f"MONGODB_PASSWORD: {'*' * len(mongodb_password) if mongodb_password else ''} (len={len(mongodb_password)})")
 if mongodb_user.startswith('#') or mongodb_password.startswith('#'):
     logger.warning("MONGODB_USER или MONGODB_PASSWORD начинаются с '#', будут игнорироваться")
 
@@ -160,69 +171,37 @@ except Exception as e:
     logger.warning(f"Ошибка при импорте share router: {e}")
     share_router = None
 
-# Проверяем, нужно ли использовать llm-svc ДО импорта (избегаем двойной загрузки модели)
-use_llm_svc = os.getenv('USE_LLM_SVC', 'false').lower() == 'true'
-
-# Отладочный вывод режима работы
-print(f"Текущий режим: {'llm-svc' if use_llm_svc else 'оригинальный agent.py'}")
-logger.info(f"Режим работы: {'llm-svc' if use_llm_svc else 'оригинальный agent.py'}")
-
-# Импортируем ТОЛЬКО нужный модуль, чтобы избежать двойной загрузки модели
-if use_llm_svc:
-    # Используем llm-svc
-    try:
-        logger.info("Попытка импорта agent_llm_svc...")
-        from backend.agent_llm_svc import ask_agent, model_settings, update_model_settings, reload_model_by_path, get_model_info, initialize_model
-        from backend.context_prompts import context_prompt_manager
-        logger.info("agent_llm_svc импортирован успешно (модель загружается один раз)")
-    except (ImportError, Exception) as e:
-        logger.error(f"Ошибка импорта agent_llm_svc: {e}, fallback на оригинальный agent.py")
-        # Fallback на оригинальный agent
-        try:
-            from backend.agent import ask_agent, model_settings, update_model_settings, reload_model_by_path, get_model_info, initialize_model
-            from backend.context_prompts import context_prompt_manager
-            use_llm_svc = False
-            logger.info("Fallback: agent.py импортирован успешно")
-        except Exception as e2:
-            logger.error(f"Критическая ошибка: не удалось импортировать ни один модуль agent")
-            ask_agent = None
-            model_settings = None
-            update_model_settings = None
-            reload_model_by_path = None
-            get_model_info = None
-            initialize_model = None
-else:
-    # Используем оригинальный agent.py
-    try:
-        logger.info("Попытка импорта agent...")
-        from backend.agent import ask_agent, model_settings, update_model_settings, reload_model_by_path, get_model_info, initialize_model
-        from backend.context_prompts import context_prompt_manager
-        logger.info("agent импортирован успешно (модель загружается один раз)")
-        if ask_agent:
-            logger.info("ask_agent функция доступна")
-        else:
-            logger.warning("ask_agent функция не доступна")
-    except ImportError as e:
-        logger.error(f"Ошибка импорта agent: {e}")
-        print(f"Ошибка импорта agent: {e}")
-        print(f"Текущий путь: {os.getcwd()}")
-        print(f"Python path: {sys.path}")
-        ask_agent = None
-        model_settings = None
-        update_model_settings = None
-        reload_model_by_path = None
-        get_model_info = None
-        initialize_model = None
-    except Exception as e:
-        logger.error(f"Неожиданная ошибка при импорте agent: {e}")
-        import traceback
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        ask_agent = None
-        model_settings = None
-        update_model_settings = None
-        reload_model_by_path = None
-        get_model_info = None
-        initialize_model = None
+# Импортируем agent_llm_svc
+try:
+    logger.info("Попытка импорта agent_llm_svc...")
+    from backend.agent_llm_svc import ask_agent, model_settings, update_model_settings, reload_model_by_path, get_model_info, initialize_model
+    from backend.context_prompts import context_prompt_manager
+    logger.info("agent_llm_svc импортирован успешно")
+    if ask_agent:
+        logger.info("ask_agent функция доступна")
+    else:
+        logger.warning("ask_agent функция не доступна")
+except ImportError as e:
+    logger.error(f"Ошибка импорта agent_llm_svc: {e}")
+    print(f"Ошибка импорта agent_llm_svc: {e}")
+    print(f"Текущий путь: {os.getcwd()}")
+    print(f"Python path: {sys.path}")
+    ask_agent = None
+    model_settings = None
+    update_model_settings = None
+    reload_model_by_path = None
+    get_model_info = None
+    initialize_model = None
+except Exception as e:
+    logger.error(f"Неожиданная ошибка при импорте agent_llm_svc: {e}")
+    import traceback
+    logger.error(f"Traceback: {traceback.format_exc()}")
+    ask_agent = None
+    model_settings = None
+    update_model_settings = None
+    reload_model_by_path = None
+    get_model_info = None
+    initialize_model = None
 
 # Общая блокировка для загрузки моделей в режиме multi-llm
 # Используется для предотвращения конфликтов при параллельной загрузке
@@ -444,40 +423,25 @@ sio = AsyncServer(
 )
 
 # Создание FastAPI приложения с конфигурацией
-app_config = config.get("app", {})
+app_config = settings.app
 app = FastAPI(
-    title=app_config.get("name", "astrachat Web API"),
-    description=app_config.get("description", "Веб-интерфейс для персонального AI-ассистента astrachat"),
-    version=app_config.get("version", "1.0.0"),
-    debug=app_config.get("debug", False)
+    title=app_config.name,
+    description=app_config.description,
+    version=app_config.version,
+    debug=app_config.debug
 )
 
 # Настройка CORS из конфигурации
-# Все URL читаются из секции urls конфига
-cors_config = config.get("cors", {})
-cors_origins_from_config = cors_config.get("allowed_origins", [])
-# Если в конфиге не указаны origins, используем значения из секции urls
-if not cors_origins_from_config:
-    cors_origins_from_config = [
-        urls_config.get("frontend_port_1"),
-        urls_config.get("frontend_port_1_ipv4"),
-        urls_config.get("frontend_port_2"),
-        urls_config.get("frontend_port_2_ipv4"),
-        urls_config.get("frontend_port_3"),  # Vite dev server
-        urls_config.get("frontend_port_3_ipv4"),
-        urls_config.get("backend_port_1"),
-        urls_config.get("backend_port_1_ipv4"),
-        urls_config.get("frontend_docker"),
-        urls_config.get("backend_docker"),
-    ]
-    # Фильтруем None значения
-    cors_origins_from_config = [origin for origin in cors_origins_from_config if origin]
+cors_origins_from_config = settings.cors.allowed_origins
+# Если в настройках не указаны origins, они уже были заполнены автоматически из urls
+# Фильтруем None значения
+cors_origins_from_config = [origin for origin in cors_origins_from_config if origin]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins_from_config,
-    allow_credentials=cors_config.get("allow_credentials", True),
-    allow_methods=cors_config.get("allow_methods", ["*"]),
-    allow_headers=cors_config.get("allow_headers", ["*"]),
+    allow_credentials=settings.cors.allow_credentials,
+    allow_methods=settings.cors.allow_methods,
+    allow_headers=settings.cors.allow_headers,
 )
 
 # Подключаем authentication routes
@@ -522,8 +486,8 @@ async def startup_event():
             success = await init_databases()
             if success:
                 logger.info("Базы данных успешно инициализированы")
-                logger.info("  - MongoDB: готов для хранения диалогов")
-                logger.info("  - PostgreSQL + pgvector: готов для RAG системы")
+                logger.info("- MongoDB: готов для хранения диалогов")
+                logger.info("- PostgreSQL + pgvector: готов для RAG системы")
                 
                 # Пересоздаем пул PostgreSQL в текущем event loop (FastAPI)
                 # Это необходимо, так как пул был создан в другом event loop при инициализации
@@ -538,9 +502,9 @@ async def startup_event():
                 
                 # Проверяем статус MinIO
                 if minio_client:
-                    logger.info(f"  - MinIO: готов для хранения файлов (endpoint: {minio_client.endpoint})")
+                    logger.info(f"- MinIO: готов для хранения файлов (endpoint: {minio_client.endpoint})")
                 else:
-                    logger.warning("  - MinIO: не инициализирован, используется локальное хранение")
+                    logger.warning("- MinIO: не инициализирован, используется локальное хранение")
             else:
                 logger.warning("Не удалось инициализировать некоторые базы данных")
                 logger.warning("Приложение продолжит работу в файловом режиме")
@@ -550,10 +514,10 @@ async def startup_event():
             logger.warning("Приложение продолжит работу в файловом режиме")
     else:
         if not init_databases:
-            logger.warning("⚠️ init_databases не импортирован или недоступен")
+            logger.warning("init_databases не импортирован или недоступен")
         if not database_available:
-            logger.warning("⚠️ database_available = False")
-        logger.warning("⚠️ Базы данных не настроены, используется файловый режим")
+            logger.warning("database_available = False")
+        logger.warning("Базы данных не настроены, используется файловый режим")
     
     # Инициализируем агентную архитектуру
     if initialize_agent_orchestrator:
@@ -944,13 +908,13 @@ async def chat_message(sid, data):
         use_multi_llm_mode = orchestrator and orchestrator.get_mode() == "multi-llm"
         
         logger.info("="*70)
-        logger.info("🔍 ПРОВЕРКА РЕЖИМА ОРКЕСТРАТОРА")
-        logger.info(f"   orchestrator существует: {orchestrator is not None}")
+        logger.info("ПРОВЕРКА РЕЖИМА ОРКЕСТРАТОРА")
+        logger.info(f"orchestrator существует: {orchestrator is not None}")
         if orchestrator:
-            logger.info(f"   режим оркестратора: '{orchestrator.get_mode()}'")
-            logger.info(f"   инициализирован: {orchestrator.is_initialized}")
-        logger.info(f"   use_agent_mode: {use_agent_mode}")
-        logger.info(f"   use_multi_llm_mode: {use_multi_llm_mode}")
+            logger.info(f"режим оркестратора: '{orchestrator.get_mode()}'")
+            logger.info(f"инициализирован: {orchestrator.is_initialized}")
+        logger.info(f"use_agent_mode: {use_agent_mode}")
+        logger.info(f"use_multi_llm_mode: {use_multi_llm_mode}")
         logger.info("="*70)
         
         # Функция для отправки частей ответа
@@ -1020,11 +984,9 @@ async def chat_message(sid, data):
                 final_user_message = user_message
                 if doc_context:
                     final_user_message = f"""Контекст из загруженных документов:
-{doc_context}
-
-Вопрос пользователя: {user_message}
-
-Пожалуйста, ответьте на вопрос пользователя, используя информацию из предоставленных документов. Если в документах нет информации для ответа, честно скажите об этом."""
+                    {doc_context}
+                    Вопрос пользователя: {user_message}
+                    Пожалуйста, ответьте на вопрос пользователя, используя информацию из предоставленных документов. Если в документах нет информации для ответа, честно скажите об этом."""
                 
                 # Получаем event loop для отправки чанков из текущего async контекста
                 loop = asyncio.get_running_loop()
@@ -1211,12 +1173,12 @@ async def chat_message(sid, data):
                         return True  # При ошибке продолжаем генерацию
                 
                 # Используем агентную архитектуру
-                # ВАЖНО: Не передаем объекты которые не сериализуются (doc_processor, sio, stream_callback)
+                # Не передаем объекты которые не сериализуются (doc_processor, sio, stream_callback)
                 # LangGraph checkpointer использует msgpack и не может сериализовать такие объекты
                 context = {
                     "history": history,
                     "user_message": user_message,
-                    "selected_model": None,  # ИСПРАВЛЕНИЕ: Добавляем selected_model для планировщика
+                    "selected_model": None,  # Добавляем selected_model для планировщика
                     "socket_id": sid,  # Передаем socket ID для heartbeat
                     "streaming": streaming,  # Передаем флаг стриминга
                     # НЕ передаем stream_callback в state - он не сериализуется!
@@ -1230,11 +1192,11 @@ async def chat_message(sid, data):
                 
                 # Расширенный контекст с несериализуемыми объектами для инструментов
                 extended_context = context.copy()
-                extended_context["doc_processor"] = doc_processor  # ИСПРАВЛЕНИЕ: Добавляем doc_processor
+                extended_context["doc_processor"] = doc_processor  # Добавляем doc_processor
                 extended_context["sio"] = sio
                 extended_context["socket_id"] = sid  # Добавляем socket_id для прямого emit из worker threads
                 extended_context["stream_callback"] = agent_stream_callback if streaming else None
-                # ИСПРАВЛЕНИЕ: Сохраняем ссылку на текущий event loop для stream_callback
+                # Сохраняем ссылку на текущий event loop для stream_callback
                 extended_context["_main_event_loop"] = asyncio.get_running_loop()
                 set_tool_context(extended_context)
                 logger.info(f"[Socket.IO] Установлен extended_context с stream_callback: {agent_stream_callback is not None if streaming else False}")
@@ -1255,7 +1217,7 @@ async def chat_message(sid, data):
                     if response:
                         logger.info(f"Socket.IO: Первые 200 символов ответа: {response[:200]}...")
                     else:
-                        logger.warning(f"Socket.IO: ⚠️ ОТВЕТ ПУСТОЙ ИЛИ None!")
+                        logger.warning(f"Socket.IO: ОТВЕТ ПУСТОЙ ИЛИ None!")
                     
                     # Проверяем, не была ли запрошена остановка или генерация отменена
                     if stop_generation_flags.get(sid, False):
@@ -1268,9 +1230,9 @@ async def chat_message(sid, data):
                         }, room=sid)
                         return
                     
-                    # ИСПРАВЛЕНИЕ: Проверяем ответ отдельно
+                    # Проверяем ответ отдельно
                     if response is None:
-                        logger.warning(f"Socket.IO: ⚠️ Ответ от оркестратора = None, отправляем ошибку")
+                        logger.warning(f"Socket.IO: Ответ от оркестратора = None, отправляем ошибку")
                         await sio.emit('chat_error', {
                             'error': 'Не удалось получить ответ от агента'
                         }, room=sid)
@@ -1292,23 +1254,23 @@ async def chat_message(sid, data):
                         # Не возвращаемся, а отправляем chat_complete с ошибкой
                         # чтобы frontend мог корректно завершить обработку
                     
-                    # ИСПРАВЛЕНИЕ: Всегда отправляем chat_complete с полным ответом
+                    # Всегда отправляем chat_complete с полным ответом
                     # Это критически важно для отображения ответа в UI!
                     logger.info(f"Socket.IO: Отправка chat_complete, длина ответа: {len(response) if response else 0} символов")
                     logger.info(f"Socket.IO: Стриминг был: {streaming}, отправляем финальное событие")
                     logger.info(f"Socket.IO: Ответ (первые 100 символов): {response[:100] if response else 'None'}...")
                     try:
-                        # ВАЖНО: Всегда отправляем полный ответ, даже если был стриминг
+                        # Всегда отправляем полный ответ, даже если был стриминг
                         # Фронтенд может не получить все чанки или нужен финальный ответ для отображения
                         await sio.emit('chat_complete', {
                             'response': response if response else "",  # Полный ответ ВСЕГДА
                             'timestamp': datetime.now().isoformat(),
                             'was_streaming': streaming  # Флаг, что был стриминг
                         }, room=sid)
-                        logger.info(f"Socket.IO: ✓ Событие chat_complete успешно отправлено в комнату {sid}")
-                        logger.info(f"Socket.IO: ✓ Ответ отправлен: {len(response) if response else 0} символов")
+                        logger.info(f"Socket.IO: Событие chat_complete успешно отправлено в комнату {sid}")
+                        logger.info(f"Socket.IO: Ответ отправлен: {len(response) if response else 0} символов")
                     except Exception as emit_error:
-                        logger.error(f"Socket.IO: ❌ Ошибка при отправке chat_complete: {emit_error}")
+                        logger.error(f"Socket.IO: Ошибка при отправке chat_complete: {emit_error}")
                         import traceback
                         logger.error(traceback.format_exc())
                 except Exception as orchestrator_error:
@@ -1344,8 +1306,6 @@ async def chat_message(sid, data):
             # ЛОГИКА ОБРАБОТКИ С ДОКУМЕНТАМИ (как в WebSocket)
             # =============================================
             final_message = user_message
-            
-
             
             # Проверяем наличие документов и используем их контекст
             images = None  # Пути к изображениям для мультимодальной модели
@@ -1390,10 +1350,8 @@ async def chat_message(sid, data):
                             # Формируем промпт с контекстом документов только если нет изображений
                             # (для изображений используем мультимодальный формат)
                             final_message = f"""Документы: {doc_context}
-
-Вопрос: {user_message}
-
-Ответь на основе документов."""
+                            Вопрос: {user_message}
+                            Ответь на основе документов."""
                             
                             # Рассчитываем примерное количество токенов (грубая оценка: ~4 символа = 1 токен для русского)
                             estimated_tokens = len(final_message) // 4
@@ -1838,11 +1796,9 @@ async def websocket_chat(websocket: WebSocket):
                     final_user_message = user_message
                     if doc_context:
                         final_user_message = f"""Контекст из загруженных документов:
-{doc_context}
-
-Вопрос пользователя: {user_message}
-
-Пожалуйста, ответьте на вопрос пользователя, используя информацию из предоставленных документов. Если в документах нет информации для ответа, честно скажите об этом."""
+                        {doc_context}
+                        Вопрос пользователя: {user_message}
+                        Пожалуйста, ответьте на вопрос пользователя, используя информацию из предоставленных документов. Если в документах нет информации для ответа, честно скажите об этом."""
                     
                     # Функция для генерации ответа от одной модели
                     async def generate_single_model_response(model_name: str):
@@ -1996,11 +1952,9 @@ async def websocket_chat(websocket: WebSocket):
                             
                             # Формируем промпт с контекстом документов
                             enhanced_prompt = f"""Контекст из загруженных документов:
-{doc_context}
-
-Вопрос пользователя: {user_message}
-
-Пожалуйста, ответьте на вопрос пользователя, используя информацию из предоставленных документов. Если в документах нет информации для ответа, честно скажите об этом."""
+                            {doc_context}
+                            Вопрос пользователя: {user_message}
+                            Пожалуйста, ответьте на вопрос пользователя, используя информацию из предоставленных документов. Если в документах нет информации для ответа, честно скажите об этом."""
                             
                             logger.info("WebSocket: отправляем промпт с контекстом в AI agent")
                             
@@ -2929,20 +2883,20 @@ async def recognize_speech_api(audio_file: UploadFile = File(...)):
                 minio_client.upload_file(content, file_object_name, content_type="audio/wav")
                 # Получаем локальный путь для обработки
                 file_path = minio_client.get_file_path(file_object_name)
-                logger.info(f"✅ Аудиофайл загружен в MinIO: {file_object_name}")
+                logger.info(f"Аудиофайл загружен в MinIO: {file_object_name}")
             except Exception as e:
-                logger.warning(f"⚠️ Ошибка загрузки в MinIO, используем локальный файл: {e}")
+                logger.warning(f"Ошибка загрузки в MinIO, используем локальный файл: {e}")
                 import traceback
                 logger.debug(f"Traceback: {traceback.format_exc()}")
                 file_path = os.path.join(temp_dir, f"audio_{datetime.now().timestamp()}.wav")
                 with open(file_path, "wb") as f:
                     f.write(content)
         else:
-            logger.warning("⚠️ MinIO клиент недоступен (minio_client is None), используем локальное хранение")
+            logger.warning("MinIO клиент недоступен (minio_client is None), используем локальное хранение")
             logger.info("Проверьте:")
-            logger.info("  1. Запущен ли MinIO: docker-compose ps minio (или локально)")
-            logger.info("  2. Правильно ли настроен .env файл (MINIO_ENDPOINT, MINIO_PORT и т.д.)")
-            logger.info("  3. Установлена ли библиотека: pip install minio")
+            logger.info("1. Запущен ли MinIO: docker-compose ps minio (или локально)")
+            logger.info("2. Правильно ли настроен .env файл (MINIO_ENDPOINT, MINIO_PORT и т.д.)")
+            logger.info("3. Установлена ли библиотека: pip install minio")
             file_path = os.path.join(temp_dir, f"audio_{datetime.now().timestamp()}.wav")
             with open(file_path, "wb") as f:
                 f.write(content)
@@ -3332,7 +3286,7 @@ async def get_documents():
 @app.delete("/api/documents/{filename}")
 async def delete_document(filename: str):
     """Удалить документ по имени файла"""
-    logger.info(f"=== Удаление документа: {filename} ===")
+    logger.info(f"Удаление документа: {filename} ===")
     
     if not doc_processor:
         logger.error("Document processor не доступен")
@@ -3398,19 +3352,18 @@ async def generate_confidence_report():
         
         # Формируем текстовый отчет
         report_text = f"""
-ОТЧЕТ О СТЕПЕНИ УВЕРЕННОСТИ МОДЕЛИ В РАСПОЗНАННОМ ТЕКСТЕ
-{'=' * 80}
-Дата генерации: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-{'=' * 80}
-
-ОБЩАЯ ИНФОРМАЦИЯ:
-- Всего обработано документов: {report_data['total_documents']}
-- Средняя уверенность модели: {report_data['average_confidence']:.2f}%
-- Всего слов: {report_data.get('total_words', 0)}
-{'=' * 80}
-
-ДЕТАЛЬНАЯ ИНФОРМАЦИЯ ПО ДОКУМЕНТАМ:
-"""
+        ОТЧЕТ О СТЕПЕНИ УВЕРЕННОСТИ МОДЕЛИ В РАСПОЗНАННОМ ТЕКСТЕ
+        {'=' * 80}
+        Дата генерации: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        {'=' * 80}
+        
+        ОБЩАЯ ИНФОРМАЦИЯ:
+        - Всего обработано документов: {report_data['total_documents']}
+        - Средняя уверенность модели: {report_data['average_confidence']:.2f}%
+        - Всего слов: {report_data.get('total_words', 0)}
+        {'=' * 80}
+        ДЕТАЛЬНАЯ ИНФОРМАЦИЯ ПО ДОКУМЕНТАМ:
+        """
         
         # Добавляем распознанный текст с процентами над словами
         for i, doc in enumerate(report_data['documents'], 1):
@@ -3501,17 +3454,17 @@ async def generate_confidence_report():
                                 separator_line += "─" * token['col_width'] + ("┤" if i == len(tokens_data) - 1 else "┼")
                             
                             # Добавляем в отчет с красивым форматированием
-                            report_text += f"   {percent_line}\n"
-                            report_text += f"   {separator_line}\n"
-                            report_text += f"   {word_line}\n\n"
+                            report_text += f"{percent_line}\n"
+                            report_text += f"{separator_line}\n"
+                            report_text += f"{word_line}\n\n"
                     else:
-                        report_text += "   [Нет валидных слов для отображения]\n"
+                        report_text += "[Нет валидных слов для отображения]\n"
                 else:
-                    report_text += "   [Нет данных о словах]\n"
+                    report_text += "[Нет данных о словах]\n"
             else:
-                report_text += "   [Нет отформатированного текста]\n"
+                report_text += "[Нет отформатированного текста]\n"
             
-            report_text += f"   {'-' * 80}\n"
+            report_text += f"{'-' * 80}\n"
         
         # Итоговый процент уверенности
         overall_conf = report_data.get('overall_confidence', report_data.get('average_confidence', 0.0))

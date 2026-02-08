@@ -500,4 +500,3 @@ class VectorRepository:
         except Exception as e:
             logger.error(f"Ошибка при удалении векторов: {e}")
             return False
-

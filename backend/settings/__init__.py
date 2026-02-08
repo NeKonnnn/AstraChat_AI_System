@@ -1,8 +1,3 @@
-"""
-Модуль настроек для astrachat Backend
-Централизованное управление конфигурацией и подключениями
-"""
-
 from .config import Settings, get_settings, reset_settings
 from .connections import (
     MongoDBConnectionConfig,
@@ -20,4 +15,3 @@ __all__ = [
     "MinIOConnectionConfig",
     "LLMServiceConnectionConfig",
 ]
-

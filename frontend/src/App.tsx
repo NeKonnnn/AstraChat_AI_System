@@ -18,7 +18,7 @@ import PrivateRoute from './components/PrivateRoute';
 import LoginPage from './pages/LoginPage';
 import ProfilePage from './pages/ProfilePage';
 import ShareViewPage from './pages/ShareViewPage';
-import { initConfig } from './config/config';
+import { initSettings } from './settings';
 import './App.css';
 
 // Создаем тему Material-UI
@@ -74,7 +74,7 @@ const createAppTheme = (isDark: boolean) => createTheme({
 function App() {
   // Инициализация конфигурации при загрузке приложения
   useEffect(() => {
-    initConfig().catch((error) => {
+    initSettings().catch((error) => {
       console.error('Ошибка загрузки конфигурации:', error);
     });
   }, []);

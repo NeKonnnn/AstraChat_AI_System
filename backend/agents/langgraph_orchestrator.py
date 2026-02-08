@@ -77,7 +77,7 @@ class LangGraphOrchestrator:
         logger.info(f"╔═══════════════════════════════════════════════════════════╗")
         logger.info(f"║  LangGraph Orchestrator - Инициализация                   ║")
         logger.info(f"╠═══════════════════════════════════════════════════════════╣")
-        logger.info(f"║  Загружено инструментов: {len(self.tools):<30} ║")
+        logger.info(f"║  Загружено инструментов: {len(self.tools):<30}            ║")
         logger.info(f"║  Категории:                                               ║")
         for category, count in self.tools_info['categories'].items():
             logger.info(f"║    - {category:<20} {count:<25} ║")
@@ -189,7 +189,7 @@ class LangGraphOrchestrator:
 - Загружено документов: {len(available_docs)}
 - Названия: {', '.join(available_docs[:3])}{'...' if len(available_docs) > 3 else ''}
 
-ВАЖНО: Если запрос касается анализа документов, поиска информации в файлах или подсчета элементов в документах, используй инструмент 'search_documents' с соответствующим поисковым запросом.
+Если запрос касается анализа документов, поиска информации в файлах или подсчета элементов в документах, используй инструмент 'search_documents' с соответствующим поисковым запросом.
 """
             
             planning_prompt = f"""Ты - система планирования задач AI-ассистента. Твоя задача - определить, какие инструменты нужны для выполнения запроса пользователя.
@@ -368,7 +368,7 @@ class LangGraphOrchestrator:
                 # Подробное логирование выбора агента/инструмента
                 logger.info(f"\n{'='*70}")
                 logger.info(f"╔═══════════════════════════════════════════════════════════╗")
-                logger.info(f"║  ОРКЕСТРАТОР: РЕШЕНИЕ ПРИНЯТО                           ║")
+                logger.info(f"║  ОРКЕСТРАТОР: РЕШЕНИЕ ПРИНЯТО                             ║")
                 logger.info(f"╠═══════════════════════════════════════════════════════════╣")
                 logger.info(f"║  Запрос пользователя: {user_query[:60]:<60}               ║")
                 logger.info(f"╠═══════════════════════════════════════════════════════════╣")
@@ -377,7 +377,7 @@ class LangGraphOrchestrator:
                 logger.info(f"╠═══════════════════════════════════════════════════════════╣")
                 
                 if plan:
-                    logger.info(f"║  ВЫБРАННЫЕ ИНСТРУМЕНТЫ/АГЕНТЫ: {len(plan)} шт.                      ║")
+                    logger.info(f"║  ВЫБРАННЫЕ ИНСТРУМЕНТЫ/АГЕНТЫ: {len(plan)} шт.            ║")
                     logger.info(f"╠═══════════════════════════════════════════════════════════╣")
                     for i, step in enumerate(plan, 1):
                         if not step:
@@ -419,7 +419,7 @@ class LangGraphOrchestrator:
                 state["plan"] = plan if needs_tools else []
                 state["current_step"] = 0
                 state["tool_results"] = []
-                # ВАЖНО: Явно сохраняем context обратно в state
+                # Явно сохраняем context обратно в state
                 state["context"] = context
                 
                 logger.info(f"[PLANNER] Контекст при выходе: streaming={context.get('streaming', False)}")
@@ -431,7 +431,7 @@ class LangGraphOrchestrator:
                 state["plan"] = []
                 state["current_step"] = 0
                 state["tool_results"] = []
-                # ВАЖНО: Сохраняем context даже при ошибке
+                # Сохраняем context даже при ошибке
                 state["context"] = context
             
             return state
@@ -442,7 +442,7 @@ class LangGraphOrchestrator:
             logger.error(traceback.format_exc())
             state["error"] = f"Ошибка планирования: {str(e)}"
             state["plan"] = []
-            # ВАЖНО: Сохраняем context даже при критической ошибке
+            # Сохраняем context даже при критической ошибке
             state["context"] = state.get("context", {})
             return state
     
@@ -488,7 +488,7 @@ class LangGraphOrchestrator:
             logger.info(f"[EXECUTOR] Установлен контекст для инструментов")
             
             logger.info(f"\n{'='*70}")
-            logger.info(f"[EXECUTOR] 🔧 Выполнение инструментов")
+            logger.info(f"[EXECUTOR] Выполнение инструментов")
             logger.info(f"[EXECUTOR] Всего шагов: {len(plan)}")
             logger.info(f"{'='*70}")
             
@@ -526,7 +526,7 @@ class LangGraphOrchestrator:
                 
                 logger.info(f"\n{'='*70}")
                 logger.info(f"╔═══════════════════════════════════════════════════════════╗")
-                logger.info(f"║  ВЫПОЛНЕНИЕ: Шаг {i}/{len(plan)}                                        ║")
+                logger.info(f"║  ВЫПОЛНЕНИЕ: Шаг {i}/{len(plan)}                          ║")
                 logger.info(f"╠═══════════════════════════════════════════════════════════╣")
                 logger.info(f"║  АГЕНТ: {agent_type:<50} ║")
                 logger.info(f"║  ИНСТРУМЕНТ: '{tool_name}'")
@@ -535,7 +535,7 @@ class LangGraphOrchestrator:
                 logger.info(f"{'='*70}")
                 
                 # Отправляем heartbeat для каждого инструмента
-                # ВАЖНО: Не используем asyncio.create_task в синхронном контексте
+                # Не используем asyncio.create_task в синхронном контексте
                 # Вместо этого логируем - события будут отправлены из async контекста в main.py
                 if sio and socket_id:
                     logger.info(f"[EXECUTOR] Heartbeat: Выполняю инструмент {tool_name} ({i}/{len(plan)})...")
@@ -571,7 +571,7 @@ class LangGraphOrchestrator:
                     })
                     continue
                 
-                logger.info(f"[EXECUTOR] ✓ Инструмент найден, запускаем...")
+                logger.info(f"[EXECUTOR] Инструмент найден, запускаем...")
                 
                 # Выполняем инструмент
                 try:
@@ -593,7 +593,7 @@ class LangGraphOrchestrator:
                     })
                     
                     logger.info(f"╔═══════════════════════════════════════════════════════════╗")
-                    logger.info(f"║  ШАГ {i}/{len(plan)} ЗАВЕРШЕН УСПЕШНО                        ║")
+                    logger.info(f"║  ШАГ {i}/{len(plan)} ЗАВЕРШЕН УСПЕШНО                     ║")
                     logger.info(f"║  Результат: {len(str(result))} символов")
                     logger.info(f"╚═══════════════════════════════════════════════════════════╝\n")
                     
@@ -648,7 +648,7 @@ class LangGraphOrchestrator:
             logger.info(f"{'='*70}")
             
             # Отправляем heartbeat если есть socket
-            # ВАЖНО: Не используем asyncio.create_task в синхронном контексте
+            # Не используем asyncio.create_task в синхронном контексте
             if sio and socket_id:
                 logger.info(f"[AGGREGATOR] Heartbeat: Формирую финальный ответ...")
                 # События отправляются из async контекста в main.py через chat_thinking
@@ -693,9 +693,9 @@ class LangGraphOrchestrator:
             if not tool_results:
                 logger.info(f"\n{'='*70}")
                 logger.info(f"╔═══════════════════════════════════════════════════════════╗")
-                logger.info(f"║  ФИНАЛЬНОЕ РЕШЕНИЕ ОРКЕСТРАТОРА                       ║")
+                logger.info(f"║  ФИНАЛЬНОЕ РЕШЕНИЕ ОРКЕСТРАТОРА                           ║")
                 logger.info(f"╠═══════════════════════════════════════════════════════════╣")
-                logger.info(f"║  ИСПОЛЬЗОВАН: Прямой ответ LLM (без агентов)          ║")
+                logger.info(f"║  ИСПОЛЬЗОВАН: Прямой ответ LLM (без агентов)              ║")
                 logger.info(f"║  РЕШЕНИЕ: Инструменты не требуются, отвечаю напрямую")
                 logger.info(f"║  СТРИМИНГ: {'включен' if streaming else 'выключен'}")
                 logger.info(f"╚═══════════════════════════════════════════════════════════╝")
@@ -758,7 +758,7 @@ class LangGraphOrchestrator:
                     
                     logger.info(f"\n{'='*70}")
                     logger.info(f"╔═══════════════════════════════════════════════════════════╗")
-                    logger.info(f"║  ФИНАЛЬНОЕ РЕШЕНИЕ ОРКЕСТРАТОРА                       ║")
+                    logger.info(f"║  ФИНАЛЬНОЕ РЕШЕНИЕ ОРКЕСТРАТОРА                           ║")
                     logger.info(f"╠═══════════════════════════════════════════════════════════╣")
                     logger.info(f"║  ИСПОЛЬЗОВАН: {agent_type:<50} ║")
                     logger.info(f"║  ИНСТРУМЕНТ: '{tool_name}'")
@@ -801,9 +801,9 @@ class LangGraphOrchestrator:
             
             logger.info(f"\n{'='*70}")
             logger.info(f"╔═══════════════════════════════════════════════════════════╗")
-            logger.info(f"║  ФИНАЛЬНОЕ РЕШЕНИЕ ОРКЕСТРАТОРА                       ║")
+            logger.info(f"║  ФИНАЛЬНОЕ РЕШЕНИЕ ОРКЕСТРАТОРА                           ║")
             logger.info(f"╠═══════════════════════════════════════════════════════════╣")
-            logger.info(f"║  ИСПОЛЬЗОВАН: LangGraph Aggregator (Агрегатор)        ║")
+            logger.info(f"║  ИСПОЛЬЗОВАН: LangGraph Aggregator (Агрегатор)            ║")
             logger.info(f"║  РЕЗУЛЬТАТОВ ИНСТРУМЕНТОВ: {len(tool_results)}")
             logger.info(f"║  РЕШЕНИЕ: Агрегирую результаты всех инструментов")
             logger.info(f"║  СТРИМИНГ: {'включен' if streaming else 'выключен'}")
@@ -860,14 +860,14 @@ class LangGraphOrchestrator:
         try:
             logger.info("="*70)
             logger.info("╔═══════════════════════════════════════════════════════════╗")
-            logger.info("║  LANGGRAPH ORCHESTRATOR - НАЧАЛО ОБРАБОТКИ            ║")
+            logger.info("║  LANGGRAPH ORCHESTRATOR - НАЧАЛО ОБРАБОТКИ                ║")
             logger.info("╠═══════════════════════════════════════════════════════════╣")
             logger.info(f"║  Запрос пользователя: {message[:60]:<60} ║")
             logger.info(f"║  История: {len(history) if history else 0} сообщений")
             streaming_status = 'включен' if (context and context.get('streaming', False)) else 'выключен'
             logger.info(f"║  Стриминг: {streaming_status}")
             logger.info("╠═══════════════════════════════════════════════════════════╣")
-            logger.info("║  ОРКЕСТРАТОР АНАЛИЗИРУЕТ ЗАПРОС И ВЫБИРАЕТ АГЕНТОВ   ║")
+            logger.info("║  ОРКЕСТРАТОР АНАЛИЗИРУЕТ ЗАПРОС И ВЫБИРАЕТ АГЕНТОВ        ║")
             logger.info("╚═══════════════════════════════════════════════════════════╝")
             logger.info("="*70)
             
@@ -897,7 +897,7 @@ class LangGraphOrchestrator:
             config = {"configurable": {"thread_id": "default"}}
             logger.info("[process_message] Запуск compiled_graph.invoke...")
             
-            # ВАЖНО: invoke - синхронный метод, но внутри вызываются асинхронные функции
+            # invoke - синхронный метод, но внутри вызываются асинхронные функции
             # Нужно создать event loop в отдельном потоке для асинхронных операций
             import asyncio
             import concurrent.futures
@@ -965,7 +965,7 @@ class LangGraphOrchestrator:
             if final_answer:
                 logger.info("="*70)
                 logger.info("╔═══════════════════════════════════════════════════════════╗")
-                logger.info("║ЗАДАЧА УСПЕШНО ВЫПОЛНЕНА                            ║")
+                logger.info("║ЗАДАЧА УСПЕШНО ВЫПОЛНЕНА                                   ║")
                 logger.info(f"║Ответ: {len(final_answer)} символов")
                 logger.info(f"║Первые 200 символов: {final_answer[:200]}...")
                 logger.info("╚═══════════════════════════════════════════════════════════╝")
@@ -974,7 +974,7 @@ class LangGraphOrchestrator:
             else:
                 logger.warning("="*70)
                 logger.warning("╔═══════════════════════════════════════════════════════════╗")
-                logger.warning("║ФИНАЛЬНЫЙ ОТВЕТ НЕ СФОРМИРОВАН                    ║")
+                logger.warning("║ФИНАЛЬНЫЙ ОТВЕТ НЕ СФОРМИРОВАН                             ║")
                 logger.warning(f"║  final_state keys: {list(final_state.keys())}")
                 logger.warning(f"║  tool_results: {len(final_state.get('tool_results', []))}")
                 logger.warning("╚═══════════════════════════════════════════════════════════╝")

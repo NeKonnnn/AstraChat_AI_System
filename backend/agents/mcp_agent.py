@@ -205,4 +205,3 @@ class MCPAgent(BaseAgent):
             "tools": len(self.mcp_client.tools),
             "active_processes": len(self.mcp_client.processes)
         }
-

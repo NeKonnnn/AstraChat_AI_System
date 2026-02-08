@@ -60,7 +60,7 @@ import {
   AutoAwesome as PromptIcon,
   Settings as SettingsIcon,
 } from '@mui/icons-material';
-import { getApiUrl, API_CONFIG } from '../config/api';
+import { getApiUrl, API_ENDPOINTS } from '../config/api';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '@mui/material/styles';
 import { useNavigate } from 'react-router-dom';
@@ -226,7 +226,7 @@ export default function PromptGalleryPage() {
     isLoadingRef.current = true;
     setLoading(true);
     try {
-      let url = `${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../prompts/`;
+      let url = `${getApiUrl(API_ENDPOINTS.CHAT)}/../prompts/`;
       
       // Если показываем закладки, используем другой endpoint
       if (showBookmarks) {
@@ -237,7 +237,7 @@ export default function PromptGalleryPage() {
           setLoading(false);
           return;
         }
-        url = `${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../prompts/my/bookmarks`;
+        url = `${getApiUrl(API_ENDPOINTS.CHAT)}/../prompts/my/bookmarks`;
       }
       
       const params = new URLSearchParams({
@@ -302,8 +302,8 @@ export default function PromptGalleryPage() {
   const loadTags = async () => {
     try {
       const [allResponse, popularResponse] = await Promise.all([
-        fetch(`${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../prompts/tags/all`),
-        fetch(`${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../prompts/tags/popular?limit=20`),
+        fetch(`${getApiUrl(API_ENDPOINTS.CHAT)}/../prompts/tags/all`),
+        fetch(`${getApiUrl(API_ENDPOINTS.CHAT)}/../prompts/tags/popular?limit=20`),
       ]);
 
       if (allResponse.ok) {
@@ -333,7 +333,7 @@ export default function PromptGalleryPage() {
   // Загрузка доступных моделей
   const loadAvailableModels = async () => {
     try {
-      const response = await fetch(`${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../models/available`);
+      const response = await fetch(`${getApiUrl(API_ENDPOINTS.CHAT)}/../models/available`);
       if (response.ok) {
         const data = await response.json();
         setAvailableModels(data.models || []);
@@ -408,7 +408,7 @@ export default function PromptGalleryPage() {
       };
       
       const response = await fetch(
-        `${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../prompts/`,
+        `${getApiUrl(API_ENDPOINTS.CHAT)}/../prompts/`,
         {
           method: 'POST',
           headers: {
@@ -462,7 +462,7 @@ export default function PromptGalleryPage() {
 
     try {
       const response = await fetch(
-        `${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../prompts/${editingPrompt.id}`,
+        `${getApiUrl(API_ENDPOINTS.CHAT)}/../prompts/${editingPrompt.id}`,
         {
           method: 'PUT',
           headers: {
@@ -503,7 +503,7 @@ export default function PromptGalleryPage() {
 
     try {
       const response = await fetch(
-        `${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../prompts/${deletingPromptId}`,
+        `${getApiUrl(API_ENDPOINTS.CHAT)}/../prompts/${deletingPromptId}`,
         {
           method: 'DELETE',
           headers: {
@@ -547,7 +547,7 @@ export default function PromptGalleryPage() {
     
     try {
       const response = await fetch(
-        `${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../prompts/${promptId}/rate`,
+        `${getApiUrl(API_ENDPOINTS.CHAT)}/../prompts/${promptId}/rate`,
         {
           method: 'POST',
           headers: {
@@ -586,7 +586,7 @@ export default function PromptGalleryPage() {
       // Отправляем статистику использования
       if (token) {
         await fetch(
-          `${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../prompts/${prompt.id}/use`,
+          `${getApiUrl(API_ENDPOINTS.CHAT)}/../prompts/${prompt.id}/use`,
           {
             method: 'POST',
             headers: {
@@ -614,7 +614,7 @@ export default function PromptGalleryPage() {
     try {
       const method = prompt.is_bookmarked ? 'DELETE' : 'POST';
       const response = await fetch(
-        `${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../prompts/${prompt.id}/bookmark`,
+        `${getApiUrl(API_ENDPOINTS.CHAT)}/../prompts/${prompt.id}/bookmark`,
         {
           method,
           headers: {
@@ -721,7 +721,7 @@ export default function PromptGalleryPage() {
     isAgentsLoadingRef.current = true;
     setAgentsLoading(true);
     try {
-      let url = `${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../agents/`;
+      let url = `${getApiUrl(API_ENDPOINTS.CHAT)}/../agents/`;
       
       const params = new URLSearchParams({
         page: agentsPage.toString(),
@@ -832,7 +832,7 @@ export default function PromptGalleryPage() {
       };
       
       const response = await fetch(
-        `${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../agents/`,
+        `${getApiUrl(API_ENDPOINTS.CHAT)}/../agents/`,
         {
           method: 'POST',
           headers: {
@@ -906,7 +906,7 @@ export default function PromptGalleryPage() {
         try {
           // Применяем системный промпт
           const promptResponse = await fetch(
-            `${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../context-prompts/global`,
+            `${getApiUrl(API_ENDPOINTS.CHAT)}/../context-prompts/global`,
             {
               method: 'PUT',
               headers: {
@@ -921,7 +921,7 @@ export default function PromptGalleryPage() {
           if (agent.config?.model_settings) {
             try {
               await fetch(
-                `${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../models/settings`,
+                `${getApiUrl(API_ENDPOINTS.CHAT)}/../models/settings`,
                 {
                   method: 'PUT',
                   headers: {
@@ -940,7 +940,7 @@ export default function PromptGalleryPage() {
           if (agent.config?.model_path) {
             try {
               await fetch(
-                `${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../models/load`,
+                `${getApiUrl(API_ENDPOINTS.CHAT)}/../models/load`,
                 {
                   method: 'POST',
                   headers: {
@@ -960,7 +960,7 @@ export default function PromptGalleryPage() {
             
             // Увеличиваем счетчик использований
             await fetch(
-              `${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../agents/${agent.id}/use`,
+              `${getApiUrl(API_ENDPOINTS.CHAT)}/../agents/${agent.id}/use`,
               {
                 method: 'POST',
                 headers: {
@@ -1015,7 +1015,7 @@ export default function PromptGalleryPage() {
     try {
       const method = agent.is_bookmarked ? 'DELETE' : 'POST';
       const response = await fetch(
-        `${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../agents/${agent.id}/bookmark`,
+        `${getApiUrl(API_ENDPOINTS.CHAT)}/../agents/${agent.id}/bookmark`,
         {
           method,
           headers: {
@@ -1814,7 +1814,7 @@ function PromptCard({ prompt, onRate, onUse, onEdit, onDelete, onToggleBookmark,
         }
         
         await fetch(
-          `${API_CONFIG.BASE_URL}/api/prompts/${prompt.id}/view`,
+          `${getApiUrl('/api/prompts')}/${prompt.id}/view`,
           {
             method: 'POST',
             headers,
@@ -2334,7 +2334,7 @@ function AgentDialog({ open, onClose, onSave, agentForm, setAgentForm, allTags, 
     if (open) {
       const loadModels = async () => {
         try {
-          const response = await fetch(`${getApiUrl(API_CONFIG.ENDPOINTS.CHAT)}/../models/available`);
+          const response = await fetch(`${getApiUrl(API_ENDPOINTS.CHAT)}/../models/available`);
           if (response.ok) {
             const data = await response.json();
             setAvailableModels(data.models || []);
