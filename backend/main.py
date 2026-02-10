@@ -639,6 +639,9 @@ logger.info("=== Инициализация сервисов завершена 
 current_transcription_engine = "whisperx"
 current_transcription_language = "ru"
 
+# Глобальная переменная для хранения выбранной стратегии RAG
+current_rag_strategy = "auto"  # auto, reranking, hierarchical, hybrid, standard
+
 # Глобальные настройки памяти
 memory_max_messages = 20
 memory_include_system_prompts = True
@@ -649,7 +652,7 @@ SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "..", "settings.json")
 
 def load_app_settings():
     """Загрузить настройки приложения из файла"""
-    global current_transcription_engine, current_transcription_language, memory_max_messages, memory_include_system_prompts, memory_clear_on_restart
+    global current_transcription_engine, current_transcription_language, memory_max_messages, memory_include_system_prompts, memory_clear_on_restart, current_rag_strategy
     
     try:
         if os.path.exists(SETTINGS_FILE):
@@ -664,7 +667,10 @@ def load_app_settings():
             memory_include_system_prompts = settings.get('memory_include_system_prompts', True)
             memory_clear_on_restart = settings.get('memory_clear_on_restart', False)
             
-            logger.info(f"Настройки загружены: engine={current_transcription_engine}, language={current_transcription_language}, memory_max_messages={memory_max_messages}")
+            # Загружаем стратегию RAG
+            current_rag_strategy = settings.get('rag_strategy', 'auto')
+            
+            logger.info(f"Настройки загружены: engine={current_transcription_engine}, language={current_transcription_language}, memory_max_messages={memory_max_messages}, rag_strategy={current_rag_strategy}")
             return settings
     except Exception as e:
         logger.error(f"Ошибка загрузки настроек: {e}")
@@ -676,6 +682,7 @@ def load_app_settings():
         'memory_max_messages': memory_max_messages,
         'memory_include_system_prompts': memory_include_system_prompts,
         'memory_clear_on_restart': memory_clear_on_restart,
+        'rag_strategy': current_rag_strategy,
         'current_model_path': None
     }
 
@@ -2668,6 +2675,9 @@ class YouTubeTranscribeRequest(BaseModel):
 class DocumentQueryRequest(BaseModel):
     query: str
 
+class RAGSettings(BaseModel):
+    strategy: str = "auto"  # auto, reranking, hierarchical, hybrid, standard
+
 @app.post("/api/voice/synthesize")
 async def synthesize_speech(request: VoiceSynthesizeRequest):
     """Синтезировать речь из текста"""
@@ -3643,6 +3653,108 @@ async def download_confidence_report():
     except Exception as e:
         logger.error(f"Ошибка при генерации Excel отчета: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Ошибка при генерации отчета: {str(e)}")
+
+# ================================
+# RAG НАСТРОЙКИ
+# ================================
+
+@app.get("/api/rag/settings")
+async def get_rag_settings():
+    """Получить настройки RAG (стратегию поиска) и информацию о применяемом методе"""
+    global current_rag_strategy
+    
+    # Определяем, какой метод реально будет применяться
+    applied_method = "unknown"
+    method_description = ""
+    
+    if not doc_processor:
+        applied_method = "unavailable"
+        method_description = "DocumentProcessor недоступен"
+    else:
+        user_strategy = current_rag_strategy
+        
+        if user_strategy == 'auto':
+            # Автоматический выбор - определяем, что будет использоваться
+            if doc_processor.use_reranking and doc_processor.reranker:
+                applied_method = "reranking"
+                method_description = "Reranking (переранжирование) - автоматически выбран"
+            elif doc_processor.use_hierarchical_indexing and doc_processor.optimized_index:
+                applied_method = "hierarchical"
+                method_description = "Иерархический поиск - автоматически выбран"
+            elif doc_processor.use_hybrid_search:
+                applied_method = "hybrid"
+                method_description = "Гибридный поиск - автоматически выбран"
+            else:
+                applied_method = "standard"
+                method_description = "Стандартный поиск - автоматически выбран (fallback)"
+        elif user_strategy == 'reranking':
+            if doc_processor.use_reranking and doc_processor.reranker:
+                applied_method = "reranking"
+                method_description = "Reranking (переранжирование) - выбрано пользователем"
+            else:
+                applied_method = "standard"
+                method_description = "Стандартный поиск - Reranking недоступен, используется fallback"
+        elif user_strategy == 'hierarchical':
+            if doc_processor.use_hierarchical_indexing and doc_processor.optimized_index:
+                applied_method = "hierarchical"
+                method_description = "Иерархический поиск - выбрано пользователем"
+            else:
+                applied_method = "standard"
+                method_description = "Стандартный поиск - Иерархический поиск недоступен, используется fallback"
+        elif user_strategy == 'hybrid':
+            if doc_processor.use_hybrid_search:
+                applied_method = "hybrid"
+                method_description = "Гибридный поиск - выбрано пользователем"
+            else:
+                applied_method = "standard"
+                method_description = "Стандартный поиск - Гибридный поиск недоступен, используется fallback"
+        elif user_strategy == 'standard':
+            applied_method = "standard"
+            method_description = "Стандартный поиск - выбрано пользователем"
+    
+    return {
+        "strategy": current_rag_strategy,
+        "applied_method": applied_method,
+        "method_description": method_description
+    }
+
+@app.put("/api/rag/settings")
+async def update_rag_settings(settings: RAGSettings):
+    """Обновить настройки RAG (стратегию поиска)"""
+    global current_rag_strategy
+    
+    # Валидация стратегии
+    valid_strategies = ["auto", "reranking", "hierarchical", "hybrid", "standard"]
+    if settings.strategy not in valid_strategies:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Недопустимая стратегия. Допустимые значения: {', '.join(valid_strategies)}"
+        )
+    
+    try:
+        old_strategy = current_rag_strategy
+        current_rag_strategy = settings.strategy
+        logger.info(f"[RAG SETTINGS] Стратегия RAG изменена: '{old_strategy}' -> '{current_rag_strategy}'")
+        logger.info(f"[RAG SETTINGS] Текущее значение глобальной переменной current_rag_strategy: '{current_rag_strategy}'")
+        
+        # Проверяем, что значение действительно обновилось
+        if current_rag_strategy != settings.strategy:
+            logger.error(f"[RAG SETTINGS] ОШИБКА: Значение не обновилось! Ожидалось: '{settings.strategy}', получено: '{current_rag_strategy}'")
+        else:
+            logger.info(f"[RAG SETTINGS] Значение успешно обновлено: '{current_rag_strategy}'")
+        
+        # Сохраняем стратегию в файл настроек
+        save_app_settings({'rag_strategy': current_rag_strategy})
+        logger.info(f"[RAG SETTINGS] Стратегия сохранена в файл настроек: '{current_rag_strategy}'")
+        
+        return {
+            "message": "Настройки RAG обновлены",
+            "success": True,
+            "strategy": current_rag_strategy
+        }
+    except Exception as e:
+        logger.error(f"Ошибка обновления настроек RAG: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ================================
 # ТРАНСКРИБАЦИЯ

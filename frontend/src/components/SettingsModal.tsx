@@ -23,12 +23,14 @@ import {
   Person as PersonIcon,
   Chat as ChatIcon,
   Computer as ComputerIcon,
+  Search as SearchIcon,
 } from '@mui/icons-material';
 import {
   GeneralSettings,
   ProfileSettings,
   ModelsSettings,
   AgentsSettings,
+  RAGSettings,
   TranscriptionSettings,
   AboutSettings,
   ChatSettings,
@@ -42,7 +44,7 @@ interface SettingsModalProps {
   onToggleTheme: () => void;
 }
 
-type SettingsSection = 'general' | 'profile' | 'interface' | 'models' | 'agents' | 'transcription' | 'chats' | 'about';
+type SettingsSection = 'general' | 'profile' | 'interface' | 'models' | 'agents' | 'rag' | 'transcription' | 'chats' | 'about';
 
 const settingsSections = [
   {
@@ -82,6 +84,12 @@ const settingsSections = [
     description: 'Агентная архитектура'
   },
   {
+    id: 'rag' as SettingsSection,
+    title: 'RAG',
+    icon: <SearchIcon />,
+    description: 'Стратегия поиска по документам'
+  },
+  {
     id: 'transcription' as SettingsSection,
     title: 'Транскрибация',
     icon: <MicIcon />,
@@ -116,6 +124,8 @@ export default function SettingsModal({ open, onClose, isDarkMode, onToggleTheme
         return <ModelsSettings />;
       case 'agents':
         return <AgentsSettings />;
+      case 'rag':
+        return <RAGSettings />;
       case 'transcription':
         return <TranscriptionSettings />;
       case 'chats':

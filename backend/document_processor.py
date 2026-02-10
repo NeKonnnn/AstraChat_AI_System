@@ -1443,35 +1443,106 @@ class DocumentProcessor:
             return "Модель эмбеддингов не инициализирована"
         
         try:
-            logger.info(f"Начинаем поиск документов для запроса: '{query[:100]}...'")
-            logger.info(f"Параметры поиска: k={k}, doc_names={self.doc_names}")
+            # Получаем выбранную пользователем стратегию из глобальной переменной
+            try:
+                import backend.main as main_module
+                user_strategy = getattr(main_module, 'current_rag_strategy', 'auto')
+                logger.info(f"[RAG STRATEGY] Загружена стратегия из main_module: '{user_strategy}'")
+            except Exception as e:
+                user_strategy = 'auto'
+                logger.warning(f"[RAG STRATEGY] Ошибка загрузки стратегии из main_module: {e}, используем 'auto'")
             
-            # Используем reranking, если включен
-            if self.use_reranking:
-                logger.info("Используем поиск с reranking")
+            logger.info(f"Начинаем поиск документов для запроса: '{query[:100]}...'")
+            logger.info(f"Параметры поиска: k={k}, doc_names={self.doc_names}, выбранная стратегия: {user_strategy}")
+            logger.info(f"[RAG STRATEGY] Доступность стратегий - reranking: {self.use_reranking and self.reranker is not None}, hierarchical: {self.use_hierarchical_indexing and self.optimized_index is not None}, hybrid: {self.use_hybrid_search}")
+            
+            # Если стратегия 'auto', используем автоматический выбор (старое поведение)
+            if user_strategy == 'auto':
+                logger.info(f"[RAG STRATEGY] Режим AUTO: определяем лучшую доступную стратегию")
+                # Используем reranking, если включен
+                if self.use_reranking and self.reranker:
+                    logger.info(f"[RAG STRATEGY] AUTO → Выбран RERANKING (доступен)")
+                    logger.info("Используем поиск с reranking (автоматический выбор)")
+                    results = await self.query_with_reranking(query, k)
+                    logger.info(f"Reranking вернул {len(results)} результатов")
+                    return results
+                
+                # Используем умный поиск, если доступен optimized_index
+                if self.use_hierarchical_indexing and self.optimized_index:
+                    logger.info(f"[RAG STRATEGY] AUTO → Выбран HIERARCHICAL (доступен, reranking недоступен)")
+                    logger.info("Используем оптимизированный умный поиск с иерархией (автоматический выбор)")
+                    results = await self.optimized_index.smart_search_async(
+                        query=query,
+                        k=k,
+                        search_strategy="auto"  # Автоматическое определение стратегии
+                    )
+                    logger.info(f"Умный поиск вернул {len(results)} результатов")
+                    return results
+                elif self.use_hybrid_search:
+                    # Гибридный поиск (BM25 + векторный)
+                    logger.info(f"[RAG STRATEGY] AUTO → Выбран HYBRID (доступен, hierarchical недоступен)")
+                    logger.info("Используем гибридный поиск (BM25 + векторный) (автоматический выбор)")
+                    results = await self.hybrid_search_async(query, k)
+                    logger.info(f"Гибридный поиск вернул {len(results)} результатов")
+                    return results
+                else:
+                    # Стандартный поиск через pgvector
+                    logger.info(f"[RAG STRATEGY] AUTO → Выбран STANDARD (fallback, другие недоступны)")
+                    logger.info("Используем стандартный векторный поиск (автоматический выбор)")
+                    results = await self._query_documents_async(query, k)
+                    if isinstance(results, list):
+                        logger.info(f"Найдено {len(results)} релевантных документов через pgvector")
+                        if len(results) == 0:
+                            logger.warning("Векторный поиск не вернул результатов. Возможно, документы не сохранены в pgvector.")
+                    elif isinstance(results, str):
+                        logger.error(f"Ошибка поиска (строка): {results}")
+                    return results
+            
+            # Если стратегия выбрана пользователем явно, используем её
+            elif user_strategy == 'reranking':
+                logger.info(f"[RAG STRATEGY] Пользователь выбрал RERANKING")
+                if not self.use_reranking or not self.reranker:
+                    logger.warning(f"[RAG STRATEGY] RERANKING запрошен, но недоступен (use_reranking={self.use_reranking}, reranker={self.reranker is not None}). Используем fallback.")
+                    results = await self._query_documents_async(query, k)
+                    return results
+                logger.info(f"[RAG STRATEGY] Применяем RERANKING (выбрано пользователем)")
+                logger.info("Используем поиск с reranking (выбрано пользователем)")
                 results = await self.query_with_reranking(query, k)
                 logger.info(f"Reranking вернул {len(results)} результатов")
                 return results
             
-            # Используем умный поиск, если доступен optimized_index
-            if self.use_hierarchical_indexing and self.optimized_index:
-                logger.info("Используем оптимизированный умный поиск с иерархией")
+            elif user_strategy == 'hierarchical':
+                logger.info(f"[RAG STRATEGY] Пользователь выбрал HIERARCHICAL")
+                if not self.use_hierarchical_indexing or not self.optimized_index:
+                    logger.warning(f"[RAG STRATEGY] HIERARCHICAL запрошен, но недоступен (use_hierarchical_indexing={self.use_hierarchical_indexing}, optimized_index={self.optimized_index is not None}). Используем fallback.")
+                    results = await self._query_documents_async(query, k)
+                    return results
+                logger.info(f"[RAG STRATEGY] Применяем HIERARCHICAL (выбрано пользователем)")
+                logger.info("Используем иерархический поиск (выбрано пользователем)")
                 results = await self.optimized_index.smart_search_async(
                     query=query,
                     k=k,
-                    search_strategy="auto"  # Автоматическое определение стратегии
+                    search_strategy="auto"  # Автоматическое определение подстратегии
                 )
-                logger.info(f"Умный поиск вернул {len(results)} результатов")
+                logger.info(f"Иерархический поиск вернул {len(results)} результатов")
                 return results
-            elif self.use_hybrid_search:
-                # Гибридный поиск (BM25 + векторный)
-                logger.info("Используем гибридный поиск (BM25 + векторный)")
+            
+            elif user_strategy == 'hybrid':
+                logger.info(f"[RAG STRATEGY] Пользователь выбрал HYBRID")
+                if not self.use_hybrid_search:
+                    logger.warning(f"[RAG STRATEGY] HYBRID запрошен, но недоступен (use_hybrid_search={self.use_hybrid_search}). Используем fallback.")
+                    results = await self._query_documents_async(query, k)
+                    return results
+                logger.info(f"[RAG STRATEGY] Применяем HYBRID (выбрано пользователем)")
+                logger.info("Используем гибридный поиск (выбрано пользователем)")
                 results = await self.hybrid_search_async(query, k)
                 logger.info(f"Гибридный поиск вернул {len(results)} результатов")
                 return results
-            else:
-                # Стандартный поиск через pgvector
-                logger.info("Используем стандартный векторный поиск")
+            
+            elif user_strategy == 'standard':
+                logger.info(f"[RAG STRATEGY] Пользователь выбрал STANDARD")
+                logger.info(f"[RAG STRATEGY] Применяем STANDARD (выбрано пользователем)")
+                logger.info("Используем стандартный векторный поиск (выбрано пользователем)")
                 results = await self._query_documents_async(query, k)
                 if isinstance(results, list):
                     logger.info(f"Найдено {len(results)} релевантных документов через pgvector")
@@ -1480,6 +1551,13 @@ class DocumentProcessor:
                 elif isinstance(results, str):
                     logger.error(f"Ошибка поиска (строка): {results}")
                 return results
+            
+            else:
+                # Неизвестная стратегия, используем стандартный поиск
+                logger.warning(f"Неизвестная стратегия '{user_strategy}', используем стандартный поиск")
+                results = await self._query_documents_async(query, k)
+                return results
+                
         except Exception as e:
             logger.error(f"Ошибка при поиске по документам: {str(e)}")
             import traceback
