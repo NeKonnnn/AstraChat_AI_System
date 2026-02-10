@@ -119,9 +119,9 @@ class AgentOrchestrator:
         """Прямое обращение к LLM модели"""
         try:
             try:
-                from backend.agent import ask_agent
+                from backend.agent_llm_svc import ask_agent
             except ModuleNotFoundError:
-                from agent import ask_agent
+                from agent_llm_svc import ask_agent
             
             response = ask_agent(
                 message,

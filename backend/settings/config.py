@@ -385,4 +385,3 @@ def _init_settings():
     if settings is None:
         settings = get_settings()
     return settings
-

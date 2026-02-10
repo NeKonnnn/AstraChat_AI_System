@@ -7,6 +7,15 @@ import logging
 import traceback
 from typing import Optional
 
+# Импортируем настройки
+try:
+    from settings import get_settings
+    SETTINGS_AVAILABLE = True
+except ImportError:
+    SETTINGS_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("Модуль settings недоступен. Используются переменные окружения напрямую.")
+
 logger = logging.getLogger(__name__)
 
 # Попытка импорта MongoDB модулей
@@ -76,36 +85,12 @@ agent_repo: Optional[AgentRepository] = None
 
 
 def get_mongodb_connection_string() -> str:
-    """Получение строки подключения к MongoDB из переменных окружения"""
-    host = os.getenv("MONGODB_HOST", "localhost")
-    port = os.getenv("MONGODB_PORT", "27017")
-    # Получаем пользователя и пароль, удаляем пробелы
-    user = os.getenv("MONGODB_USER", "").strip()
-    password = os.getenv("MONGODB_PASSWORD", "").strip()
+    """Получение строки подключения к MongoDB из настроек"""
+    if not SETTINGS_AVAILABLE:
+        raise RuntimeError("Модуль settings недоступен. Убедитесь, что настройки правильно настроены.")
     
-    # Игнорируем значения, которые начинаются с '#' (это комментарии, попавшие в значения)
-    if user.startswith('#'):
-        logger.warning(f"MongoDB: MONGODB_USER начинается с '#', игнорируем (вероятно, комментарий попал в значение): '{user}'")
-        user = ""
-    if password.startswith('#'):
-        logger.warning(f"MongoDB: MONGODB_PASSWORD начинается с '#', игнорируем (вероятно, комментарий попал в значение)")
-        password = ""
-    
-    # Детальное логирование для отладки
-    logger.debug(f"MongoDB: user='{user}' (len={len(user)}), password='{'*' * len(password) if password else ''}' (len={len(password)})")
-    
-    # Формируем строку подключения
-    # Используем аутентификацию только если И пользователь И пароль указаны (не пустые)
-    if user and password:
-        logger.info(f"MongoDB: подключение с аутентификацией - пользователь: {user}")
-        connection_string = f"mongodb://{user}:{password}@{host}:{port}/"
-        logger.debug(f"MongoDB: строка подключения: mongodb://{user}:***@{host}:{port}/")
-        return connection_string
-    else:
-        logger.info(f"MongoDB: подключение без аутентификации - {host}:{port}")
-        connection_string = f"mongodb://{host}:{port}/"
-        logger.debug(f"MongoDB: строка подключения: {connection_string}")
-        return connection_string
+    settings = get_settings()
+    return settings.mongodb.connection_string
 
 
 async def init_mongodb() -> bool:
@@ -116,9 +101,15 @@ async def init_mongodb() -> bool:
         logger.warning("MongoDB модули недоступны. Пропускаем инициализацию.")
         return False
     
+    if not SETTINGS_AVAILABLE:
+        logger.error("Модуль settings недоступен. MongoDB не может быть инициализирован.")
+        return False
+    
     try:
-        connection_string = get_mongodb_connection_string()
-        database_name = os.getenv("MONGODB_DATABASE", "astrachat")
+        # Получаем настройки из settings
+        settings = get_settings()
+        connection_string = settings.mongodb.connection_string
+        database_name = settings.mongodb.database
         
         logger.info(f"Инициализация MongoDB...")
         logger.info(f"  Строка подключения: {connection_string.replace(connection_string.split('@')[-1] if '@' in connection_string else connection_string, '***') if '@' in connection_string else connection_string}")
@@ -158,19 +149,26 @@ async def init_postgresql() -> bool:
         logger.warning("PostgreSQL модули недоступны. Пропускаем инициализацию.")
         return False
     
+    if not SETTINGS_AVAILABLE:
+        logger.error("Модуль settings недоступен. PostgreSQL не может быть инициализирован.")
+        return False
+    
     try:
+        # Получаем настройки из settings
+        settings = get_settings()
+        pg_config = settings.postgresql
         postgresql_connection = PostgreSQLConnection(
-            host=os.getenv("POSTGRES_HOST", "localhost"),
-            port=int(os.getenv("POSTGRES_PORT", "5432")),
-            database=os.getenv("POSTGRES_DB", "astrachat"),
-            user=os.getenv("POSTGRES_USER", "admin"),
-            password=os.getenv("POSTGRES_PASSWORD", "password")
+            host=pg_config.host,
+            port=pg_config.port,
+            database=pg_config.database,
+            user=pg_config.user,
+            password=pg_config.password
         )
+        embedding_dim = pg_config.embedding_dim
         
         if await postgresql_connection.connect():
             # Создаем репозитории
             document_repo = DocumentRepository(postgresql_connection)
-            embedding_dim = int(os.getenv("EMBEDDING_DIM", "384"))  # Размерность векторов
             vector_repo = VectorRepository(postgresql_connection, embedding_dim)
             prompt_repo = PromptRepository(postgresql_connection)
             tag_repo = TagRepository(postgresql_connection)
@@ -205,8 +203,8 @@ def init_minio() -> bool:
         if minio_client:
             endpoint = minio_client.endpoint
             bucket_temp = minio_client.bucket_name
-            logger.info(f"  Endpoint: {endpoint}")
-            logger.info(f"  Bucket (temp): {bucket_temp}")
+            logger.info(f"Endpoint: {endpoint}")
+            logger.info(f"Bucket (temp): {bucket_temp}")
             logger.info("MinIO успешно инициализирован")
             return True
         else:

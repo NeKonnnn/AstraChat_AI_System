@@ -10,6 +10,13 @@ from typing import Optional, BinaryIO
 from datetime import datetime, timedelta
 from io import BytesIO
 
+# Импортируем настройки
+try:
+    from settings import get_settings
+    SETTINGS_AVAILABLE = True
+except ImportError:
+    SETTINGS_AVAILABLE = False
+
 try:
     from minio import Minio
     from minio.error import S3Error
@@ -27,9 +34,10 @@ class MinIOClient:
     def __init__(
         self,
         endpoint: str = None,
+        port: int = None,
         access_key: str = None,
         secret_key: str = None,
-        secure: bool = False,
+        secure: bool = None,
         bucket_name: str = None
     ):
         """
@@ -45,13 +53,18 @@ class MinIOClient:
         if not MINIO_AVAILABLE:
             raise ImportError("MinIO библиотека не установлена. Установите: pip install minio")
         
-        # Получаем настройки из переменных окружения, если не переданы
-        self.endpoint = endpoint or os.getenv('MINIO_ENDPOINT', 'localhost')
-        self.port = int(os.getenv('MINIO_PORT', '9000'))
-        self.access_key = access_key or os.getenv('MINIO_ACCESS_KEY', 'minioadmin')
-        self.secret_key = secret_key or os.getenv('MINIO_SECRET_KEY', 'minioadmin')
-        self.secure = secure or os.getenv('MINIO_USE_SSL', 'false').lower() == 'true'
-        self.bucket_name = bucket_name or os.getenv('MINIO_BUCKET_NAME', 'astrachat-temp')
+        if not SETTINGS_AVAILABLE:
+            raise RuntimeError("Модуль settings недоступен. MinIO не может быть инициализирован.")
+        
+        # Получаем настройки из settings, если не переданы явно
+        settings = get_settings()
+        minio_config = settings.minio
+        self.endpoint = endpoint or minio_config.endpoint
+        self.port = port if port is not None else minio_config.port
+        self.access_key = access_key or minio_config.access_key
+        self.secret_key = secret_key or minio_config.secret_key
+        self.secure = secure if secure is not None else minio_config.use_ssl
+        self.bucket_name = bucket_name or minio_config.bucket_name
         
         # Формируем полный endpoint
         if ':' not in self.endpoint:
@@ -81,9 +94,9 @@ class MinIOClient:
         except Exception as e:
             logger.error(f"Ошибка инициализации MinIO клиента: {e}")
             logger.error(f"Проверьте:")
-            logger.error(f"  1. Запущен ли MinIO сервер на {self.endpoint}")
-            logger.error(f"  2. Правильность учетных данных (access_key/secret_key)")
-            logger.error(f"  3. Доступность сети до MinIO сервера")
+            logger.error(f"1. Запущен ли MinIO сервер на {self.endpoint}")
+            logger.error(f"2. Правильность учетных данных (access_key/secret_key)")
+            logger.error(f"3. Доступность сети до MinIO сервера")
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
             raise
@@ -301,11 +314,9 @@ def get_minio_client() -> Optional[MinIOClient]:
     if _minio_client is None:
         try:
             logger.info("Инициализация MinIO клиента...")
-            endpoint = os.getenv('MINIO_ENDPOINT', 'localhost')
-            port = os.getenv('MINIO_PORT', '9000')
-            logger.info(f"MinIO настройки: endpoint={endpoint}, port={port}")
+            # MinIOClient сам загрузит настройки из settings или ENV
             _minio_client = MinIOClient()
-            logger.info("MinIO клиент успешно инициализирован")
+            logger.info(f"MinIO клиент успешно инициализирован: {_minio_client.endpoint}")
         except Exception as e:
             logger.error(f"Не удалось инициализировать MinIO клиент: {e}")
             import traceback

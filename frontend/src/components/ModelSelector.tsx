@@ -12,9 +12,8 @@ import {
   KeyboardArrowDown as KeyboardArrowDownIcon,
 } from '@mui/icons-material';
 import { useAppActions } from '../contexts/AppContext';
-import { API_CONFIG } from '../config/api';
+import { getApiUrl } from '../config/api';
 
-const API_BASE_URL = API_CONFIG.BASE_URL;
 
 interface Model {
   name: string;
@@ -83,7 +82,7 @@ export default function ModelSelector({ isDarkMode, onModelSelect }: ModelSelect
   const loadModels = async () => {
     try {
       setIsLoading(true);
-      const response = await fetch(`${API_BASE_URL}/api/models`);
+      const response = await fetch(getApiUrl('/api/models'));
       if (response.ok) {
         const data = await response.json();
         setAvailableModels(data.models || []);
@@ -97,7 +96,7 @@ export default function ModelSelector({ isDarkMode, onModelSelect }: ModelSelect
 
   const loadCurrentModel = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/models/current`);
+      const response = await fetch(getApiUrl('/api/models/current'));
       if (response.ok) {
         const data = await response.json();
         
@@ -126,7 +125,7 @@ export default function ModelSelector({ isDarkMode, onModelSelect }: ModelSelect
     try {
       setIsLoadingModel(true);
       
-      const response = await fetch(`${API_BASE_URL}/api/models/load`, {
+      const response = await fetch(getApiUrl('/api/models/load'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model_path: modelPath }),
@@ -226,39 +225,60 @@ export default function ModelSelector({ isDarkMode, onModelSelect }: ModelSelect
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Typography
-            variant="body1"
-            sx={{
-              color: isDarkMode ? 'white' : '#333',
-              fontSize: '1rem',
-              fontWeight: 400,
-            }}
-          >
-            {isLoadingModel ? 'Загрузка...' : 'Выбрать модель'}
-          </Typography>
-          {!isLoadingModel && (
-            <KeyboardArrowDownIcon 
-              fontSize="small" 
-              sx={{
-                color: isDarkMode ? 'white' : '#333',
-              }}
-            />
+          {isLoadingModel ? (
+            <>
+              <Typography
+                variant="body1"
+                sx={{
+                  color: isDarkMode ? 'white' : '#333',
+                  fontSize: '1rem',
+                  fontWeight: 400,
+                }}
+              >
+                Загрузка...
+              </Typography>
+              <CircularProgress size={16} />
+            </>
+          ) : hasSelectedModel ? (
+            <>
+              <Typography
+                variant="body1"
+                sx={{
+                  color: isDarkMode ? 'white' : '#333',
+                  fontSize: '1rem',
+                  fontWeight: 400,
+                }}
+              >
+                {currentModelName}
+              </Typography>
+              <KeyboardArrowDownIcon 
+                fontSize="small" 
+                sx={{
+                  color: isDarkMode ? 'white' : '#333',
+                }}
+              />
+            </>
+          ) : (
+            <>
+              <Typography
+                variant="body1"
+                sx={{
+                  color: isDarkMode ? 'white' : '#333',
+                  fontSize: '1rem',
+                  fontWeight: 400,
+                }}
+              >
+                Выбрать модель
+              </Typography>
+              <KeyboardArrowDownIcon 
+                fontSize="small" 
+                sx={{
+                  color: isDarkMode ? 'white' : '#333',
+                }}
+              />
+            </>
           )}
-          {isLoadingModel && <CircularProgress size={16} />}
         </Box>
-        {hasSelectedModel && !isLoadingModel && (
-          <Typography
-            variant="body2"
-            sx={{
-              color: isDarkMode ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.7)',
-              fontSize: '0.875rem',
-              fontWeight: 400,
-              ml: 0.5,
-            }}
-          >
-            {currentModelName}
-          </Typography>
-        )}
       </Box>
 
       <Menu

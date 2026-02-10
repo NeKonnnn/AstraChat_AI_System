@@ -17,13 +17,15 @@ import {
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
 import axios from 'axios';
-import { API_CONFIG } from '../../config/api';
+import { getApiUrl } from '../../config/api';
+import { getSettings } from '../../settings';
 
-// Получаем базовый URL из конфига
+// Получаем базовый URL из settings
 const getApiBaseUrl = () => {
-  return process.env.REACT_APP_API_URL || API_CONFIG.BASE_URL;
+  const settings = getSettings();
+  return process.env.REACT_APP_API_URL || settings.api.baseUrl;
 };
-const API_BASE_URL = getApiBaseUrl();
+// Используем getApiBaseUrl() напрямую в функциях
 
 export default function ProfileSettings() {
   const { user, updateUser, token } = useAuth();
@@ -51,7 +53,7 @@ export default function ProfileSettings() {
 
     try {
       const response = await axios.put(
-        `${API_BASE_URL}/api/auth/me`,
+        `${getApiBaseUrl()}/api/auth/me`,
         {
           email: email || null,
           full_name: fullName || null,

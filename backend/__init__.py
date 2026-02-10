@@ -22,37 +22,17 @@ except ImportError:
     DocumentProcessor = None
 
 try:
-    from backend.system_audio import SystemAudioRecorder
-except ImportError:
-    SystemAudioRecorder = None
-
-try:
-    from backend.system_audio_capture import WasapiLoopbackCapture
-except ImportError:
-    WasapiLoopbackCapture = None
-
-try:
     from backend.voice import *
 except ImportError:
     pass
 
 try:
-    from backend.agent import *
+    from backend.agent_llm_svc import *
 except ImportError:
     pass
-
-try:
-    from backend.online_transcription import OnlineTranscriber
-except ImportError:
-    OnlineTranscriber = None
 
 try:
     from backend.capture_remote_audio import *
-except ImportError:
-    pass
-
-try:
-    from backend.memory import *
 except ImportError:
     pass
 
@@ -60,8 +40,5 @@ __all__ = [
     'UniversalTranscriber',
     'WhisperXTranscriber', 
     'Transcriber',
-    'DocumentProcessor',
-    'SystemAudioRecorder',
-    'WasapiLoopbackCapture',
-    'OnlineTranscriber'
+    'DocumentProcessor'
 ]

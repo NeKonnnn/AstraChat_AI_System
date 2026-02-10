@@ -89,6 +89,3 @@ async def get_optional_user(credentials: Optional[HTTPAuthorizationCredentials] 
     except HTTPException:
         # Если токен невалидный, возвращаем None вместо ошибки
         return None
-
-
-

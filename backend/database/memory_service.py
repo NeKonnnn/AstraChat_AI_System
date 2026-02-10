@@ -429,3 +429,27 @@ async def remove_last_user_message(conversation_id: Optional[str] = None) -> boo
         logger.error(f"Ошибка при удалении последнего сообщения пользователя: {e}")
         return False
 
+
+async def save_to_memory(role: str, message: str):
+    """
+    Сохраняет сообщение в память в простом формате (для совместимости со старым API)
+    Использует MongoDB для хранения
+    
+    Args:
+        role: Роль отправителя (например, "Пользователь", "Агент")
+        message: Содержание сообщения
+    """
+    # Нормализуем роль для MongoDB (user, assistant, system)
+    role_normalized = role.lower()
+    if "пользователь" in role_normalized or "user" in role_normalized:
+        role_normalized = "user"
+    elif "агент" in role_normalized or "assistant" in role_normalized:
+        role_normalized = "assistant"
+    else:
+        role_normalized = "system"
+    
+    # Сохраняем через стандартную функцию
+    try:
+        await save_dialog_entry(role_normalized, message)
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении в память через save_to_memory: {e}")

@@ -22,15 +22,19 @@ import {
   Palette as PaletteIcon,
   Person as PersonIcon,
   Chat as ChatIcon,
+  Computer as ComputerIcon,
+  Search as SearchIcon,
 } from '@mui/icons-material';
 import {
   GeneralSettings,
   ProfileSettings,
   ModelsSettings,
   AgentsSettings,
+  RAGSettings,
   TranscriptionSettings,
   AboutSettings,
-  ChatSettings
+  ChatSettings,
+  InterfaceSettings
 } from './settings';
 
 interface SettingsModalProps {
@@ -40,7 +44,7 @@ interface SettingsModalProps {
   onToggleTheme: () => void;
 }
 
-type SettingsSection = 'general' | 'profile' | 'models' | 'agents' | 'transcription' | 'chats' | 'about';
+type SettingsSection = 'general' | 'profile' | 'interface' | 'models' | 'agents' | 'rag' | 'transcription' | 'chats' | 'about';
 
 const settingsSections = [
   {
@@ -54,6 +58,12 @@ const settingsSections = [
     title: 'Профиль',
     icon: <PersonIcon />,
     description: 'Личная информация и аккаунт'
+  },
+  {
+    id: 'interface' as SettingsSection,
+    title: 'Интерфейс',
+    icon: <ComputerIcon />,
+    description: 'Настройки интерфейса приложения'
   },
   {
     id: 'chats' as SettingsSection,
@@ -72,6 +82,12 @@ const settingsSections = [
     title: 'Агенты',
     icon: <SmartToyIcon />,
     description: 'Агентная архитектура'
+  },
+  {
+    id: 'rag' as SettingsSection,
+    title: 'RAG',
+    icon: <SearchIcon />,
+    description: 'Стратегия поиска по документам'
   },
   {
     id: 'transcription' as SettingsSection,
@@ -102,10 +118,14 @@ export default function SettingsModal({ open, onClose, isDarkMode, onToggleTheme
         return <GeneralSettings isDarkMode={isDarkMode} onToggleTheme={onToggleTheme} />;
       case 'profile':
         return <ProfileSettings />;
+      case 'interface':
+        return <InterfaceSettings />;
       case 'models':
         return <ModelsSettings />;
       case 'agents':
         return <AgentsSettings />;
+      case 'rag':
+        return <RAGSettings />;
       case 'transcription':
         return <TranscriptionSettings />;
       case 'chats':

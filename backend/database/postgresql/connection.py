@@ -1,7 +1,3 @@
-"""
-Модуль подключения к PostgreSQL с pgvector
-"""
-
 import logging
 from typing import Optional
 import asyncio
@@ -29,11 +25,11 @@ class PostgreSQLConnection:
     
     def __init__(
         self, 
-        host: str = "localhost",
-        port: int = 5432,
-        database: str = "astrachat",
-        user: str = "astrachat_user",
-        password: str = "password"
+        host: str,
+        port: int,
+        database: str,
+        user: str,
+        password: str
     ):
         """
         Инициализация подключения к PostgreSQL
@@ -93,22 +89,22 @@ class PostgreSQLConnection:
                             logger.info("Расширение pgvector успешно установлено")
                         else:
                             logger.error("Расширение pgvector не установлено после попытки создания")
-                            logger.error("   Возможно, у пользователя нет прав на создание расширений")
-                            logger.error("   Выполните вручную: CREATE EXTENSION vector;")
+                            logger.error("Возможно, у пользователя нет прав на создание расширений")
+                            logger.error("Выполните вручную: CREATE EXTENSION vector;")
                     except Exception as e:
                         error_msg = str(e)
                         logger.error(f"Не удалось установить pgvector: {error_msg}")
                         if "permission denied" in error_msg.lower() or "права" in error_msg.lower():
-                            logger.error("   У пользователя PostgreSQL нет прав на создание расширений")
-                            logger.error("   Решение:")
-                            logger.error("   1. Подключитесь к PostgreSQL как суперпользователь (postgres)")
-                            logger.error("   2. Выполните: CREATE EXTENSION vector;")
-                            logger.error("   3. Или дайте права пользователю: ALTER USER admin WITH SUPERUSER;")
+                            logger.error("У пользователя PostgreSQL нет прав на создание расширений")
+                            logger.error("Решение:")
+                            logger.error("1. Подключитесь к PostgreSQL как суперпользователь (postgres)")
+                            logger.error("2. Выполните: CREATE EXTENSION vector;")
+                            logger.error("3. Или дайте права пользователю: ALTER USER admin WITH SUPERUSER;")
                         elif "does not exist" in error_msg.lower() or "не существует" in error_msg.lower():
-                            logger.error("   Расширение pgvector не найдено в PostgreSQL")
-                            logger.error("   Убедитесь, что используется образ pgvector/pgvector:pg17 в docker-compose.yml")
+                            logger.error("Расширение pgvector не найдено в PostgreSQL")
+                            logger.error("Убедитесь, что используется образ pgvector/pgvector:pg17 в docker-compose.yml")
                         else:
-                            logger.error("   Для работы RAG системы необходимо установить pgvector")
+                            logger.error("Для работы RAG системы необходимо установить pgvector")
             
             logger.info(f"Успешное подключение к PostgreSQL. База данных: {self.database}")
             return True

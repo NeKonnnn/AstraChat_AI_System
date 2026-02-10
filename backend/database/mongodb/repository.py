@@ -1,7 +1,3 @@
-"""
-Репозиторий для работы с диалогами в MongoDB
-"""
-
 import logging
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
@@ -408,9 +404,3 @@ class ConversationRepository:
         except Exception as e:
             logger.error(f"Ошибка при удалении последнего сообщения: {e}")
             return False
-
-
-
-
-
-

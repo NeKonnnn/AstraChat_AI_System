@@ -1,8 +1,3 @@
-"""
-Агент для улучшения и создания качественных промптов
-Помогает пользователям создавать эффективные промпты для LLM на основе простого описания
-"""
-
 import logging
 from typing import Dict, List, Any, Optional
 from .base_agent import BaseAgent

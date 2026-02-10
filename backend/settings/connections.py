@@ -407,4 +407,3 @@ class LLMServiceConnectionConfig(BaseModel):
     class Config:
         """Настройки Pydantic"""
         extra = "allow"
-

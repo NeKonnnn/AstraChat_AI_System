@@ -12,8 +12,8 @@ from datetime import datetime
 import io
 import os
 
-# Импортируем конфигурацию
-from config import get_config
+# Импортируем настройки
+from settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -21,21 +21,14 @@ class LLMClient:
     """Клиент для взаимодействия с llm-svc API"""
     
     def __init__(self, base_url: Optional[str] = None, api_key: Optional[str] = None):
-        # Получаем конфигурацию
-        config = get_config()
-        llm_svc_config = config.get("microservices", {}).get("llm_svc", {})
+        # Получаем настройки
+        settings = get_settings()
+        llm_svc_config = settings.llm_service
         
         # Определяем URL для подключения
         if base_url is None:
-            # Получаем URL из секции urls конфига (это единственный источник истины)
-            urls_config = config.get("urls", {})
-            # В Docker используем внутренний URL, в разработке - внешний
-            if os.getenv("DOCKER_ENV") == "true":
-                # Используем значение из urls
-                self.base_url = urls_config.get("llm_service_docker", "").rstrip('/')
-            else:
-                # Используем значение из urls
-                self.base_url = urls_config.get("llm_service_port", "").rstrip('/')
+            # Используем метод get_llm_service_url, который автоматически определяет окружение
+            self.base_url = settings.get_llm_service_url().rstrip('/')
         else:
             self.base_url = base_url.rstrip('/')
         
@@ -49,7 +42,7 @@ class LLMClient:
         logger.info(f"LLMClient инициализирован с base_url: {self.base_url}, DOCKER_ENV: {os.getenv('DOCKER_ENV')}")
             
         self.api_key = api_key
-        self.timeout = llm_svc_config.get("timeout", 300.0)
+        self.timeout = llm_svc_config.timeout
         
     def _get_headers(self) -> Dict[str, str]:
         """Получение заголовков для запросов"""
@@ -462,13 +455,12 @@ class LLMService:
         self.client = LLMClient(base_url, api_key)
         
         # Получаем настройки модели из конфигурации
-        config = get_config()
-        llm_svc_config = config.get("microservices", {}).get("llm_svc", {})
-        models_config = llm_svc_config.get("models", {})
+        settings = get_settings()
+        llm_svc_config = settings.llm_service
         
-        self.model_name = models_config.get("default", "qwen-coder-30b")
-        self.fallback_model = models_config.get("fallback", "deepseek-coder-6.7b")
-        self.auto_select = models_config.get("auto_select", True)
+        self.model_name = llm_svc_config.default_model
+        self.fallback_model = llm_svc_config.fallback_model
+        self.auto_select = llm_svc_config.auto_select
         
     async def initialize(self) -> bool:
         """Инициализация сервиса"""
@@ -846,8 +838,7 @@ async def get_llm_service() -> LLMService:
     global llm_service
     if llm_service is None:
         # Настройки из конфигурации
-        config = get_config()
-        llm_svc_config = config.get("microservices", {}).get("llm_svc", {})
+        settings = get_settings()
         
         base_url = None  # Будет определено в LLMService
         api_key = None  # Можно добавить в конфиг в будущем

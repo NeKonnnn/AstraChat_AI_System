@@ -47,6 +47,3 @@ def authenticate_mock(username: str, password: str):
         "is_active": user["is_active"],
         "is_admin": user["is_admin"],
     }
-
-
-

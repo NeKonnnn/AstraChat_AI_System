@@ -1,7 +1,3 @@
-"""
-Базовый класс для всех агентов в системе astrachat
-"""
-
 from abc import ABC, abstractmethod
 from typing import Dict, List, Any, Optional
 import logging
@@ -26,16 +22,15 @@ def get_ask_agent():
         logger.debug("[BaseAgent] Используется ask_agent из agent_llm_svc")
         return ask_agent
     except (ImportError, ModuleNotFoundError) as e:
-        logger.warning(f"[BaseAgent] Не удалось импортировать agent_llm_svc: {e}, пробуем agent.py как fallback")
-        # Используем agent_llm_svc (работает через llm-svc без загрузки модели)
+        logger.warning(f"[BaseAgent] Не удалось импортировать agent_llm_svc: {e}, пробуем относительный импорт")
+        # Пробуем относительный импорт
         try:
-            from backend.agent_llm_svc import ask_agent
-            logger.debug("[BaseAgent] Используется ask_agent из agent_llm_svc")
+            from agent_llm_svc import ask_agent
+            logger.debug("[BaseAgent] Используется ask_agent из agent_llm_svc (относительный импорт)")
             return ask_agent
         except ModuleNotFoundError:
-            from agent_llm_svc import ask_agent
-            logger.debug("[BaseAgent] Используется ask_agent_llm_svc (относительный импорт)")
-            return ask_agent
+            logger.error("[BaseAgent] Критическая ошибка: не удалось импортировать ask_agent")
+            raise
 
 class BaseAgent(ABC):
     """Базовый класс для всех агентов"""

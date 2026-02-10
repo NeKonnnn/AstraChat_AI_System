@@ -40,7 +40,7 @@ import { useAppActions } from '../contexts/AppContext';
 import AgentArchitectureSettings from '../components/AgentArchitectureSettings';
 
 // Backend URL
-const API_BASE_URL = 'http://localhost:8000';
+import { getApiUrl } from '../config/api';
 
 export default function SettingsPage() {
   const [isExpanded, setIsExpanded] = useState(true);
@@ -143,14 +143,14 @@ export default function SettingsPage() {
   const loadContextPrompts = async () => {
     try {
       // Загружаем глобальный промпт
-      const globalResponse = await fetch(`${API_BASE_URL}/api/context-prompts/global`);
+      const globalResponse = await fetch(getApiUrl('/api/context-prompts/global'));
       if (globalResponse.ok) {
         const globalData = await globalResponse.json();
         setContextPrompts(prev => ({ ...prev, globalPrompt: globalData.prompt }));
       }
 
       // Загружаем модели с промптами
-      const modelsResponse = await fetch(`${API_BASE_URL}/api/context-prompts/models`);
+      const modelsResponse = await fetch(getApiUrl('/api/context-prompts/models'));
       if (modelsResponse.ok) {
         const modelsData = await modelsResponse.json();
         setModelsWithPrompts(modelsData.models || []);
@@ -166,7 +166,7 @@ export default function SettingsPage() {
       }
 
       // Загружаем пользовательские промпты
-      const customResponse = await fetch(`${API_BASE_URL}/api/context-prompts/custom`);
+      const customResponse = await fetch(getApiUrl('/api/context-prompts/custom'));
       if (customResponse.ok) {
         const customData = await customResponse.json();
         setContextPrompts(prev => ({ ...prev, customPrompts: customData.prompts || {} }));
@@ -179,7 +179,7 @@ export default function SettingsPage() {
 
   const saveGlobalPrompt = async (prompt: string) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/context-prompts/global`, {
+      const response = await fetch(getApiUrl('/api/context-prompts/global'), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt })
@@ -201,7 +201,7 @@ export default function SettingsPage() {
 
   const saveModelPrompt = async (modelPath: string, prompt: string) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/context-prompts/model/${encodeURIComponent(modelPath)}`, {
+      const response = await fetch(getApiUrl(`/api/context-prompts/model/${encodeURIComponent(modelPath)}`), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt })
@@ -227,7 +227,7 @@ export default function SettingsPage() {
   const deleteModelPrompt = async (modelPath: string) => {
     try {
       // Удаляем промпт модели, устанавливая пустую строку
-      const response = await fetch(`${API_BASE_URL}/api/context-prompts/model/${encodeURIComponent(modelPath)}`, {
+      const response = await fetch(getApiUrl(`/api/context-prompts/model/${encodeURIComponent(modelPath)}`), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: '' })
@@ -287,14 +287,14 @@ export default function SettingsPage() {
     setIsLoading(true);
     try {
       // Загружаем настройки модели
-      const modelResponse = await fetch(`${API_BASE_URL}/api/models/settings`);
+      const modelResponse = await fetch(getApiUrl('/api/models/settings'));
       if (modelResponse.ok) {
         const modelData = await modelResponse.json();
         setModelSettings(prev => ({ ...prev, ...modelData }));
       }
       
       // Загружаем максимальные значения
-      const maxResponse = await fetch(`${API_BASE_URL}/api/models/settings/recommended`);
+      const maxResponse = await fetch(getApiUrl('/api/models/settings/recommended'));
       if (maxResponse.ok) {
         const maxData = await maxResponse.json();
         if (maxData.max_values) {
@@ -304,7 +304,7 @@ export default function SettingsPage() {
       
       
              // Загружаем настройки транскрибации
-       const transcriptionResponse = await fetch(`${API_BASE_URL}/api/transcription/settings`);
+       const transcriptionResponse = await fetch(getApiUrl('/api/transcription/settings'));
        if (transcriptionResponse.ok) {
          const transcriptionData = await transcriptionResponse.json();
          setTranscriptionSettings(prev => ({ ...prev, ...transcriptionData }));
@@ -312,7 +312,7 @@ export default function SettingsPage() {
        
        // Загружаем настройки памяти
        try {
-         const memoryResponse = await fetch(`${API_BASE_URL}/api/memory/settings`);
+         const memoryResponse = await fetch(getApiUrl('/api/memory/settings'));
          if (memoryResponse.ok) {
            const memoryData = await memoryResponse.json();
            setMemorySettings(prev => ({ ...prev, ...memoryData }));
@@ -332,7 +332,7 @@ export default function SettingsPage() {
 
   const loadModels = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/models`);
+      const response = await fetch(getApiUrl('/api/models'));
       if (response.ok) {
         const data = await response.json();
         setAvailableModels(data.models || []);
@@ -346,7 +346,7 @@ export default function SettingsPage() {
 
   const loadCurrentModel = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/models/current`);
+      const response = await fetch(getApiUrl('/api/models/current'));
       if (response.ok) {
         const data = await response.json();
         setCurrentModel(data);
@@ -361,7 +361,7 @@ export default function SettingsPage() {
     setIsLoading(true);
     try {
       // Сохраняем настройки модели
-      const modelResponse = await fetch(`${API_BASE_URL}/api/models/settings`, {
+      const modelResponse = await fetch(getApiUrl('/api/models/settings'), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(modelSettings),
@@ -373,7 +373,7 @@ export default function SettingsPage() {
       
       
              // Сохраняем настройки транскрибации
-       const transcriptionResponse = await fetch(`${API_BASE_URL}/api/transcription/settings`, {
+       const transcriptionResponse = await fetch(getApiUrl('/api/transcription/settings'), {
          method: 'PUT',
          headers: { 'Content-Type': 'application/json' },
          body: JSON.stringify(transcriptionSettings),
@@ -385,7 +385,7 @@ export default function SettingsPage() {
        
        // Сохраняем настройки памяти
        try {
-         const memoryResponse = await fetch(`${API_BASE_URL}/api/memory/settings`, {
+         const memoryResponse = await fetch(getApiUrl('/api/memory/settings'), {
            method: 'PUT',
            headers: { 'Content-Type': 'application/json' },
            body: JSON.stringify(memorySettings),
@@ -414,14 +414,14 @@ export default function SettingsPage() {
     setIsLoading(true);
     try {
       // Загружаем настройки модели
-      const settingsResponse = await fetch(`${API_BASE_URL}/api/models/settings`);
+      const settingsResponse = await fetch(getApiUrl('/api/models/settings'));
       if (settingsResponse.ok) {
         const settingsData = await settingsResponse.json();
         setModelSettings(prev => ({ ...prev, ...settingsData }));
       }
       
       // Загружаем максимальные значения
-      const maxResponse = await fetch(`${API_BASE_URL}/api/models/settings/recommended`);
+      const maxResponse = await fetch(getApiUrl('/api/models/settings/recommended'));
       if (maxResponse.ok) {
         const maxData = await maxResponse.json();
         if (maxData.max_values) {
@@ -441,7 +441,7 @@ export default function SettingsPage() {
   const saveModelSettings = async () => {
     setIsLoading(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/models/settings`, {
+      const response = await fetch(getApiUrl('/api/models/settings'), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(modelSettings),
@@ -465,7 +465,7 @@ export default function SettingsPage() {
   const resetModelSettings = async () => {
     setIsLoading(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/models/settings/reset`, {
+      const response = await fetch(getApiUrl('/api/models/settings/reset'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
@@ -496,7 +496,7 @@ export default function SettingsPage() {
       setIsLoadingModel(true);
       setError(null);
       
-      const response = await fetch(`${API_BASE_URL}/api/models/load`, {
+      const response = await fetch(getApiUrl('/api/models/load'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model_path: modelPath }),
@@ -1141,7 +1141,7 @@ export default function SettingsPage() {
                  color="warning"
                  onClick={async () => {
                    try {
-                     const response = await fetch(`${API_BASE_URL}/api/memory/clear`, {
+                     const response = await fetch(getApiUrl('/api/memory/clear'), {
                        method: 'POST',
                      });
                      if (response.ok) {
@@ -1161,7 +1161,7 @@ export default function SettingsPage() {
                  color="info"
                  onClick={async () => {
                    try {
-                     const response = await fetch(`${API_BASE_URL}/api/memory/status`);
+                     const response = await fetch(getApiUrl('/api/memory/status'));
                      if (response.ok) {
                        const data = await response.json();
                        showNotification('info', `В памяти: ${data.message_count || 0} сообщений`);

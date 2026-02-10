@@ -77,7 +77,7 @@ class LangGraphOrchestrator:
         logger.info(f"╔═══════════════════════════════════════════════════════════╗")
         logger.info(f"║  LangGraph Orchestrator - Инициализация                   ║")
         logger.info(f"╠═══════════════════════════════════════════════════════════╣")
-        logger.info(f"║  Загружено инструментов: {len(self.tools):<30} ║")
+        logger.info(f"║  Загружено инструментов: {len(self.tools):<30}            ║")
         logger.info(f"║  Категории:                                               ║")
         for category, count in self.tools_info['categories'].items():
             logger.info(f"║    - {category:<20} {count:<25} ║")
@@ -189,7 +189,7 @@ class LangGraphOrchestrator:
 - Загружено документов: {len(available_docs)}
 - Названия: {', '.join(available_docs[:3])}{'...' if len(available_docs) > 3 else ''}
 
-ВАЖНО: Если запрос касается анализа документов, поиска информации в файлах или подсчета элементов в документах, используй инструмент 'search_documents' с соответствующим поисковым запросом.
+Если запрос касается анализа документов, поиска информации в файлах или подсчета элементов в документах, используй инструмент 'search_documents' с соответствующим поисковым запросом.
 """
             
             planning_prompt = f"""Ты - система планирования задач AI-ассистента. Твоя задача - определить, какие инструменты нужны для выполнения запроса пользователя.
@@ -249,13 +249,13 @@ class LangGraphOrchestrator:
     "reasoning": "Нужен поиск идей в документах"
 }}
 
-3. Запрос: "Какая погода в Москве?"
+3. Запрос: "Улучши этот промпт"
 {{
     "needs_tools": true,
     "plan": [
-        {{"tool": "web_search", "input": "погода в Москве"}}
+        {{"tool": "enhance_prompt", "input": "{{'prompt': 'текст промпта'}}"}}
     ],
-    "reasoning": "Нужна актуальная информация из интернета"
+    "reasoning": "Нужно улучшить промпт с помощью инструмента"
 }}
 
 4. Запрос: "Посчитай 15 * 7 + 3"
@@ -368,7 +368,7 @@ class LangGraphOrchestrator:
                 # Подробное логирование выбора агента/инструмента
                 logger.info(f"\n{'='*70}")
                 logger.info(f"╔═══════════════════════════════════════════════════════════╗")
-                logger.info(f"║  ОРКЕСТРАТОР: РЕШЕНИЕ ПРИНЯТО                           ║")
+                logger.info(f"║  ОРКЕСТРАТОР: РЕШЕНИЕ ПРИНЯТО                             ║")
                 logger.info(f"╠═══════════════════════════════════════════════════════════╣")
                 logger.info(f"║  Запрос пользователя: {user_query[:60]:<60}               ║")
                 logger.info(f"╠═══════════════════════════════════════════════════════════╣")
@@ -377,7 +377,7 @@ class LangGraphOrchestrator:
                 logger.info(f"╠═══════════════════════════════════════════════════════════╣")
                 
                 if plan:
-                    logger.info(f"║  ВЫБРАННЫЕ ИНСТРУМЕНТЫ/АГЕНТЫ: {len(plan)} шт.                      ║")
+                    logger.info(f"║  ВЫБРАННЫЕ ИНСТРУМЕНТЫ/АГЕНТЫ: {len(plan)} шт.            ║")
                     logger.info(f"╠═══════════════════════════════════════════════════════════╣")
                     for i, step in enumerate(plan, 1):
                         if not step:
@@ -395,12 +395,6 @@ class LangGraphOrchestrator:
                             agent_type = "PromptEnhancementAgent (Агент улучшения промптов)"
                         elif 'document' in tool_name.lower() or 'search_documents' in tool_name.lower():
                             agent_type = "DocumentAgent (Агент работы с документами)"
-                        elif 'web_search' in tool_name.lower() or 'search_web' in tool_name.lower():
-                            agent_type = "WebSearchAgent (Агент веб-поиска)"
-                        elif 'calculate' in tool_name.lower():
-                            agent_type = "CalculationAgent (Агент вычислений)"
-                        elif 'memory' in tool_name.lower() or 'save_memory' in tool_name.lower():
-                            agent_type = "MemoryAgent (Агент памяти)"
                         elif 'mcp' in tool_name.lower():
                             agent_type = "🔌 MCPAgent (MCP агент)"
                         
@@ -419,7 +413,7 @@ class LangGraphOrchestrator:
                 state["plan"] = plan if needs_tools else []
                 state["current_step"] = 0
                 state["tool_results"] = []
-                # ВАЖНО: Явно сохраняем context обратно в state
+                # Явно сохраняем context обратно в state
                 state["context"] = context
                 
                 logger.info(f"[PLANNER] Контекст при выходе: streaming={context.get('streaming', False)}")
@@ -431,7 +425,7 @@ class LangGraphOrchestrator:
                 state["plan"] = []
                 state["current_step"] = 0
                 state["tool_results"] = []
-                # ВАЖНО: Сохраняем context даже при ошибке
+                # Сохраняем context даже при ошибке
                 state["context"] = context
             
             return state
@@ -442,7 +436,7 @@ class LangGraphOrchestrator:
             logger.error(traceback.format_exc())
             state["error"] = f"Ошибка планирования: {str(e)}"
             state["plan"] = []
-            # ВАЖНО: Сохраняем context даже при критической ошибке
+            # Сохраняем context даже при критической ошибке
             state["context"] = state.get("context", {})
             return state
     
@@ -488,7 +482,7 @@ class LangGraphOrchestrator:
             logger.info(f"[EXECUTOR] Установлен контекст для инструментов")
             
             logger.info(f"\n{'='*70}")
-            logger.info(f"[EXECUTOR] 🔧 Выполнение инструментов")
+            logger.info(f"[EXECUTOR] Выполнение инструментов")
             logger.info(f"[EXECUTOR] Всего шагов: {len(plan)}")
             logger.info(f"{'='*70}")
             
@@ -515,18 +509,12 @@ class LangGraphOrchestrator:
                     agent_type = "PromptEnhancementAgent (Агент улучшения промптов)"
                 elif 'document' in tool_name.lower() or 'search_documents' in tool_name.lower():
                     agent_type = "DocumentAgent (Агент работы с документами)"
-                elif 'web_search' in tool_name.lower() or 'search_web' in tool_name.lower():
-                    agent_type = "WebSearchAgent (Агент веб-поиска)"
-                elif 'calculate' in tool_name.lower():
-                    agent_type = "CalculationAgent (Агент вычислений)"
-                elif 'memory' in tool_name.lower() or 'save_memory' in tool_name.lower():
-                    agent_type = "MemoryAgent (Агент памяти)"
                 elif 'mcp' in tool_name.lower():
                     agent_type = "MCPAgent (MCP агент)"
                 
                 logger.info(f"\n{'='*70}")
                 logger.info(f"╔═══════════════════════════════════════════════════════════╗")
-                logger.info(f"║  ВЫПОЛНЕНИЕ: Шаг {i}/{len(plan)}                                        ║")
+                logger.info(f"║  ВЫПОЛНЕНИЕ: Шаг {i}/{len(plan)}                          ║")
                 logger.info(f"╠═══════════════════════════════════════════════════════════╣")
                 logger.info(f"║  АГЕНТ: {agent_type:<50} ║")
                 logger.info(f"║  ИНСТРУМЕНТ: '{tool_name}'")
@@ -535,7 +523,7 @@ class LangGraphOrchestrator:
                 logger.info(f"{'='*70}")
                 
                 # Отправляем heartbeat для каждого инструмента
-                # ВАЖНО: Не используем asyncio.create_task в синхронном контексте
+                # Не используем asyncio.create_task в синхронном контексте
                 # Вместо этого логируем - события будут отправлены из async контекста в main.py
                 if sio and socket_id:
                     logger.info(f"[EXECUTOR] Heartbeat: Выполняю инструмент {tool_name} ({i}/{len(plan)})...")
@@ -571,12 +559,12 @@ class LangGraphOrchestrator:
                     })
                     continue
                 
-                logger.info(f"[EXECUTOR] ✓ Инструмент найден, запускаем...")
+                logger.info(f"[EXECUTOR] Инструмент найден, запускаем...")
                 
                 # Выполняем инструмент
                 try:
                     # Для инструментов агентов передаем контекст
-                    if tool_name in ["search_documents", "web_search", "calculate", "save_memory"]:
+                    if tool_name in ["search_documents"]:
                         # Эти инструменты используют агентов, которые могут нуждаться в контексте
                         result = tool.func(tool_input)
                     else:
@@ -593,7 +581,7 @@ class LangGraphOrchestrator:
                     })
                     
                     logger.info(f"╔═══════════════════════════════════════════════════════════╗")
-                    logger.info(f"║  ШАГ {i}/{len(plan)} ЗАВЕРШЕН УСПЕШНО                        ║")
+                    logger.info(f"║  ШАГ {i}/{len(plan)} ЗАВЕРШЕН УСПЕШНО                     ║")
                     logger.info(f"║  Результат: {len(str(result))} символов")
                     logger.info(f"╚═══════════════════════════════════════════════════════════╝\n")
                     
@@ -648,7 +636,7 @@ class LangGraphOrchestrator:
             logger.info(f"{'='*70}")
             
             # Отправляем heartbeat если есть socket
-            # ВАЖНО: Не используем asyncio.create_task в синхронном контексте
+            # Не используем asyncio.create_task в синхронном контексте
             if sio and socket_id:
                 logger.info(f"[AGGREGATOR] Heartbeat: Формирую финальный ответ...")
                 # События отправляются из async контекста в main.py через chat_thinking
@@ -693,9 +681,9 @@ class LangGraphOrchestrator:
             if not tool_results:
                 logger.info(f"\n{'='*70}")
                 logger.info(f"╔═══════════════════════════════════════════════════════════╗")
-                logger.info(f"║  ФИНАЛЬНОЕ РЕШЕНИЕ ОРКЕСТРАТОРА                       ║")
+                logger.info(f"║  ФИНАЛЬНОЕ РЕШЕНИЕ ОРКЕСТРАТОРА                           ║")
                 logger.info(f"╠═══════════════════════════════════════════════════════════╣")
-                logger.info(f"║  ИСПОЛЬЗОВАН: Прямой ответ LLM (без агентов)          ║")
+                logger.info(f"║  ИСПОЛЬЗОВАН: Прямой ответ LLM (без агентов)              ║")
                 logger.info(f"║  РЕШЕНИЕ: Инструменты не требуются, отвечаю напрямую")
                 logger.info(f"║  СТРИМИНГ: {'включен' if streaming else 'выключен'}")
                 logger.info(f"╚═══════════════════════════════════════════════════════════╝")
@@ -758,7 +746,7 @@ class LangGraphOrchestrator:
                     
                     logger.info(f"\n{'='*70}")
                     logger.info(f"╔═══════════════════════════════════════════════════════════╗")
-                    logger.info(f"║  ФИНАЛЬНОЕ РЕШЕНИЕ ОРКЕСТРАТОРА                       ║")
+                    logger.info(f"║  ФИНАЛЬНОЕ РЕШЕНИЕ ОРКЕСТРАТОРА                           ║")
                     logger.info(f"╠═══════════════════════════════════════════════════════════╣")
                     logger.info(f"║  ИСПОЛЬЗОВАН: {agent_type:<50} ║")
                     logger.info(f"║  ИНСТРУМЕНТ: '{tool_name}'")
@@ -801,9 +789,9 @@ class LangGraphOrchestrator:
             
             logger.info(f"\n{'='*70}")
             logger.info(f"╔═══════════════════════════════════════════════════════════╗")
-            logger.info(f"║  ФИНАЛЬНОЕ РЕШЕНИЕ ОРКЕСТРАТОРА                       ║")
+            logger.info(f"║  ФИНАЛЬНОЕ РЕШЕНИЕ ОРКЕСТРАТОРА                           ║")
             logger.info(f"╠═══════════════════════════════════════════════════════════╣")
-            logger.info(f"║  ИСПОЛЬЗОВАН: LangGraph Aggregator (Агрегатор)        ║")
+            logger.info(f"║  ИСПОЛЬЗОВАН: LangGraph Aggregator (Агрегатор)            ║")
             logger.info(f"║  РЕЗУЛЬТАТОВ ИНСТРУМЕНТОВ: {len(tool_results)}")
             logger.info(f"║  РЕШЕНИЕ: Агрегирую результаты всех инструментов")
             logger.info(f"║  СТРИМИНГ: {'включен' if streaming else 'выключен'}")
@@ -860,14 +848,14 @@ class LangGraphOrchestrator:
         try:
             logger.info("="*70)
             logger.info("╔═══════════════════════════════════════════════════════════╗")
-            logger.info("║  LANGGRAPH ORCHESTRATOR - НАЧАЛО ОБРАБОТКИ            ║")
+            logger.info("║  LANGGRAPH ORCHESTRATOR - НАЧАЛО ОБРАБОТКИ                ║")
             logger.info("╠═══════════════════════════════════════════════════════════╣")
             logger.info(f"║  Запрос пользователя: {message[:60]:<60} ║")
             logger.info(f"║  История: {len(history) if history else 0} сообщений")
             streaming_status = 'включен' if (context and context.get('streaming', False)) else 'выключен'
             logger.info(f"║  Стриминг: {streaming_status}")
             logger.info("╠═══════════════════════════════════════════════════════════╣")
-            logger.info("║  ОРКЕСТРАТОР АНАЛИЗИРУЕТ ЗАПРОС И ВЫБИРАЕТ АГЕНТОВ   ║")
+            logger.info("║  ОРКЕСТРАТОР АНАЛИЗИРУЕТ ЗАПРОС И ВЫБИРАЕТ АГЕНТОВ        ║")
             logger.info("╚═══════════════════════════════════════════════════════════╝")
             logger.info("="*70)
             
@@ -897,7 +885,7 @@ class LangGraphOrchestrator:
             config = {"configurable": {"thread_id": "default"}}
             logger.info("[process_message] Запуск compiled_graph.invoke...")
             
-            # ВАЖНО: invoke - синхронный метод, но внутри вызываются асинхронные функции
+            # invoke - синхронный метод, но внутри вызываются асинхронные функции
             # Нужно создать event loop в отдельном потоке для асинхронных операций
             import asyncio
             import concurrent.futures
@@ -965,7 +953,7 @@ class LangGraphOrchestrator:
             if final_answer:
                 logger.info("="*70)
                 logger.info("╔═══════════════════════════════════════════════════════════╗")
-                logger.info("║ЗАДАЧА УСПЕШНО ВЫПОЛНЕНА                            ║")
+                logger.info("║ЗАДАЧА УСПЕШНО ВЫПОЛНЕНА                                   ║")
                 logger.info(f"║Ответ: {len(final_answer)} символов")
                 logger.info(f"║Первые 200 символов: {final_answer[:200]}...")
                 logger.info("╚═══════════════════════════════════════════════════════════╝")
@@ -974,7 +962,7 @@ class LangGraphOrchestrator:
             else:
                 logger.warning("="*70)
                 logger.warning("╔═══════════════════════════════════════════════════════════╗")
-                logger.warning("║ФИНАЛЬНЫЙ ОТВЕТ НЕ СФОРМИРОВАН                    ║")
+                logger.warning("║ФИНАЛЬНЫЙ ОТВЕТ НЕ СФОРМИРОВАН                             ║")
                 logger.warning(f"║  final_state keys: {list(final_state.keys())}")
                 logger.warning(f"║  tool_results: {len(final_state.get('tool_results', []))}")
                 logger.warning("╚═══════════════════════════════════════════════════════════╝")
@@ -1014,44 +1002,13 @@ class LangGraphOrchestrator:
                     "Поищи данные о машинном обучении",
                     "Найди все упоминания алгоритмов"
                 ]
-            elif "web_search" in tool_name or "search_web" in tool_name:
-                agent_id = "web_search_agent"
-                agent_name = "WebSearchAgent"
-                description = "Поиск информации в интернете"
-                capabilities = ["web_search"]
-                usage_examples = [
-                    "Какая погода в Москве?",
-                    "Найди последние новости о ИИ",
-                    "Какой курс доллара сегодня?"
-                ]
-            elif "calculate" in tool_name or "calculation" in tool_name.lower():
-                agent_id = "calculation_agent"
-                agent_name = "CalculationAgent"
-                description = "Выполнение математических вычислений"
-                capabilities = ["calculate"]
-                usage_examples = [
-                    "Посчитай 15 * 7 + 3",
-                    "Вычисли квадратный корень из 144",
-                    "Найди площадь круга с радиусом 5"
-                ]
-            elif "memory" in tool_name.lower() or "save_memory" in tool_name:
-                agent_id = "memory_agent"
-                agent_name = "MemoryAgent"
-                description = "Сохранение важной информации в долговременную память"
-                capabilities = ["save_memory"]
-                usage_examples = [
-                    "Запомни, что я работаю программистом",
-                    "Сохрани информацию о моих предпочтениях",
-                    "Запиши важные факты о проекте"
-                ]
             elif ("prompt" in tool_name.lower() and "file" not in tool_name.lower() and "system" not in tool_name.lower()) or \
-                 "prompt_engineering" in tool_name or \
                  "enhance_prompt" in tool_name or \
                  "improve_existing_prompt" in tool_name or \
                  "analyze_prompt" in tool_name or \
                  "save_prompt" in tool_name:
-                agent_id = "prompt_engineer"
-                agent_name = "PromptEngineer"
+                agent_id = "prompt_enhancement_agent"
+                agent_name = "PromptAgent"
                 description = "Создание, улучшение и анализ промптов для LLM"
                 capabilities = ["prompt_creation", "prompt_enhancement", "prompt_analysis", "prompt_optimization"]
                 usage_examples = [
@@ -1059,16 +1016,6 @@ class LangGraphOrchestrator:
                     "Улучши этот промпт: [текст промпта]",
                     "Проанализируй качество моего промпта",
                     "Помоги написать промпт для [задача]"
-                ]
-            elif "file" in tool_name.lower() or "read_file" in tool_name:
-                agent_id = "file_agent"
-                agent_name = "FileAgent"
-                description = "Работа с файлами и файловой системой"
-                capabilities = ["file_operations"]
-                usage_examples = [
-                    "Прочитай содержимое файла",
-                    "Создай новый файл",
-                    "Найди файлы по имени"
                 ]
             elif "system" in tool_name.lower() or "execute" in tool_name.lower():
                 agent_id = "system_agent"
@@ -1079,6 +1026,22 @@ class LangGraphOrchestrator:
                     "Выполни системную команду",
                     "Покажи информацию о системе",
                     "Проверь статус процессов"
+                ]
+            elif ("summarize" in tool_name.lower() or 
+                  "summary" in tool_name.lower() or 
+                  "extract_key" in tool_name.lower() or
+                  "bullet" in tool_name.lower() or
+                  "conversation" in tool_name.lower()):
+                agent_id = "summarization_agent"
+                agent_name = "SummarizationAgent"
+                description = "Суммаризация текстов, документов и извлечение ключевой информации"
+                capabilities = ["text_summarization", "document_summarization", "key_extraction", "conversation_summary"]
+                usage_examples = [
+                    "Сделай саммари этого документа",
+                    "Создай краткое резюме текста",
+                    "Извлеки ключевые моменты",
+                    "Подведи итоги нашего диалога",
+                    "Создай список основных пунктов"
                 ]
             else:
                 # Для неизвестных инструментов создаем общий агент
@@ -1131,6 +1094,15 @@ class LangGraphOrchestrator:
         logger.debug(f"[API] Возвращаем {len(result)} агентов с {sum(len(a['tools']) for a in result)} инструментами для фронтенда")
         return result
     
+    def get_available_agents(self) -> List[Dict[str, Any]]:
+        """
+        Получение списка доступных агентов (алиас для get_available_tools для совместимости)
+        
+        Returns:
+            List[Dict[str, Any]]: Список агентов с их инструментами
+        """
+        return self.get_available_tools()
+    
     def set_orchestrator_status(self, is_active: bool):
         """
         Установка статуса активности оркестратора
@@ -1153,10 +1125,8 @@ class LangGraphOrchestrator:
         # Маппинг agent_id -> список инструментов
         agent_tools_map = {
             "document_agent": ["search_documents"],
-            "web_search_agent": ["web_search"],
-            "calculation_agent": ["calculate"],
-            "memory_agent": ["save_memory"],
-            "prompt_engineer": ["prompt_engineering", "enhance_prompt", "improve_existing_prompt", "analyze_prompt_quality", "save_prompt_to_gallery"]
+            "prompt_enhancement_agent": ["enhance_prompt", "improve_existing_prompt", "analyze_prompt_quality", "save_prompt_to_gallery"],
+            "summarization_agent": ["summarize_text", "extract_key_points", "create_bullet_summary", "summarize_conversation"]
         }
         
         # Проверяем, это agent_id или tool_name
@@ -1182,6 +1152,16 @@ class LangGraphOrchestrator:
     def get_all_tool_statuses(self) -> Dict[str, bool]:
         """Получение статусов всех инструментов"""
         return self.tool_status.copy()
+    
+    def set_agent_status(self, agent_id: str, is_active: bool):
+        """
+        Установка статуса активности агента (алиас для set_tool_status для совместимости)
+        
+        Args:
+            agent_id: ID агента (например, "summarization_agent")
+            is_active: True - агент активен, False - отключен
+        """
+        self.set_tool_status(agent_id, is_active)
 
 
 # ============================================================================

@@ -1,7 +1,3 @@
-"""
-Репозиторий для работы с агентами в PostgreSQL
-"""
-
 import logging
 import json
 from typing import Optional, List, Tuple, Dict, Any
@@ -812,4 +808,3 @@ class AgentRepository:
         except Exception as e:
             logger.error(f"Ошибка при получении закладок: {e}")
             return [], 0
-
