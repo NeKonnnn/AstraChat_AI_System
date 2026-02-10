@@ -2,6 +2,12 @@ import React, { createContext, useContext, useEffect, useRef, useState, ReactNod
 import { io, Socket } from 'socket.io-client';
 import { useAppActions } from './AppContext';
 import { getSettings } from '../settings';
+import { 
+  showBrowserNotification, 
+  areNotificationsEnabled, 
+  isNotificationSupported,
+  requestNotificationPermission 
+} from '../utils/browserNotifications';
 
 interface SocketContextType {
   socket: Socket | null;
@@ -369,7 +375,17 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         break;
 
       case 'complete':
-        
+        // Показываем браузерное уведомление, если уведомления включены
+        if (areNotificationsEnabled() && isNotificationSupported()) {
+          try {
+            showBrowserNotification('Сообщение готово', {
+              body: 'Ассистент завершил генерацию ответа',
+              icon: '/favicon.ico',
+            });
+          } catch (error) {
+            console.error('Ошибка при показе уведомления:', error);
+          }
+        }
         
         // КРИТИЧЕСКИ ВАЖНО: ВСЕГДА сбрасываем состояние загрузки В ПЕРВУЮ ОЧЕРЕДЬ
         setLoading(false);

@@ -12,8 +12,17 @@ import {
 } from '@mui/material';
 import {
   Computer as ComputerIcon,
+  Notifications as NotificationsIcon,
+  HelpOutline as HelpOutlineIcon,
 } from '@mui/icons-material';
 import { useAppActions } from '../../contexts/AppContext';
+import { 
+  isNotificationSupported, 
+  requestNotificationPermission,
+  areNotificationsEnabled,
+  setNotificationsEnabled 
+} from '../../utils/browserNotifications';
+import { IconButton, Tooltip } from '@mui/material';
 
 export default function InterfaceSettings() {
   const [interfaceSettings, setInterfaceSettings] = useState(() => {
@@ -27,6 +36,7 @@ export default function InterfaceSettings() {
     const savedEnableNotification = localStorage.getItem('enable_notification');
     const savedShowModelSelectorInSettings = localStorage.getItem('show_model_selector_in_settings');
     const savedUseFoldersMode = localStorage.getItem('use_folders_mode');
+    const savedBrowserNotifications = localStorage.getItem('browser_notifications_enabled');
     return {
       autoGenerateTitles: savedAutoTitle !== null ? savedAutoTitle === 'true' : true,
       largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
@@ -38,12 +48,27 @@ export default function InterfaceSettings() {
       enableNotification: savedEnableNotification !== null ? savedEnableNotification === 'true' : false,
       showModelSelectorInSettings: savedShowModelSelectorInSettings !== null ? savedShowModelSelectorInSettings === 'true' : false,
       useFoldersMode: savedUseFoldersMode !== null ? savedUseFoldersMode === 'true' : true, // По умолчанию папки
+      browserNotifications: savedBrowserNotifications !== null ? savedBrowserNotifications === 'true' : false,
     };
   });
   
   const { showNotification } = useAppActions();
 
-  const handleInterfaceSettingChange = (key: keyof typeof interfaceSettings, value: boolean) => {
+  const handleInterfaceSettingChange = async (key: keyof typeof interfaceSettings, value: boolean) => {
+    // Для браузерных уведомлений запрашиваем разрешение при включении
+    if (key === 'browserNotifications' && value) {
+      if (!isNotificationSupported()) {
+        showNotification('warning', 'Браузерные уведомления не поддерживаются вашим браузером');
+        return;
+      }
+      
+      const permissionGranted = await requestNotificationPermission();
+      if (!permissionGranted) {
+        showNotification('warning', 'Разрешение на уведомления не было предоставлено');
+        return;
+      }
+    }
+    
     const newSettings = { ...interfaceSettings, [key]: value };
     setInterfaceSettings(newSettings);
     localStorage.setItem('auto_generate_titles', String(newSettings.autoGenerateTitles));
@@ -56,6 +81,8 @@ export default function InterfaceSettings() {
     localStorage.setItem('enable_notification', String(newSettings.enableNotification));
     localStorage.setItem('show_model_selector_in_settings', String(newSettings.showModelSelectorInSettings));
     localStorage.setItem('use_folders_mode', String(newSettings.useFoldersMode));
+    setNotificationsEnabled(newSettings.browserNotifications);
+    
     // Отправляем кастомное событие для обновления настроек в том же окне
     window.dispatchEvent(new Event('interfaceSettingsChanged'));
     showNotification('success', 'Настройки интерфейса сохранены');
@@ -196,7 +223,7 @@ export default function InterfaceSettings() {
 
             <Divider />
 
-            {/* Включить оповещение */}
+            {/* Включить оповещение (звуковое) */}
             <ListItem
               sx={{
                 px: 0,
@@ -207,15 +234,83 @@ export default function InterfaceSettings() {
               }}
             >
               <ListItemText
-                primary="Включить оповещение"
+                primary="Включить звуковое оповещение"
+                secondary="Звуковое оповещение при готовности сообщения"
                 primaryTypographyProps={{
                   variant: 'body1',
                   fontWeight: 500,
+                }}
+                secondaryTypographyProps={{
+                  variant: 'body2',
+                  sx: { mt: 0.5 }
                 }}
               />
               <Switch
                 checked={interfaceSettings.enableNotification}
                 onChange={(e) => handleInterfaceSettingChange('enableNotification', e.target.checked)}
+              />
+            </ListItem>
+
+            <Divider />
+
+            {/* Браузерные уведомления */}
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <ListItemText
+                primary={
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    Браузерные уведомления
+                    <Tooltip 
+                      title="Показывать всплывающие уведомления рядом с иконкой браузера, когда ассистент завершает генерацию ответа. Требуется разрешение браузера." 
+                      arrow
+                    >
+                      <IconButton 
+                        size="small" 
+                        sx={{ 
+                          p: 0,
+                          ml: 0.5,
+                          opacity: 0.7,
+                          '&:hover': {
+                            opacity: 1,
+                            '& .MuiSvgIcon-root': {
+                              color: 'primary.main',
+                            },
+                          },
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <HelpOutlineIcon fontSize="small" color="action" />
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
+                }
+                secondary={
+                  !isNotificationSupported() 
+                    ? 'Не поддерживается вашим браузером'
+                    : interfaceSettings.browserNotifications
+                    ? 'Уведомления включены'
+                    : 'Уведомления выключены'
+                }
+                primaryTypographyProps={{
+                  variant: 'body1',
+                  fontWeight: 500,
+                }}
+                secondaryTypographyProps={{
+                  variant: 'body2',
+                  sx: { mt: 0.5 }
+                }}
+              />
+              <Switch
+                checked={interfaceSettings.browserNotifications && isNotificationSupported()}
+                disabled={!isNotificationSupported()}
+                onChange={(e) => handleInterfaceSettingChange('browserNotifications', e.target.checked)}
               />
             </ListItem>
 
