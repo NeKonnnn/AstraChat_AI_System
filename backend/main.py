@@ -228,25 +228,17 @@ try:
 
 except ImportError as e:
     logger.error(f"Ошибка импорта memory_service: {e}")
-    logger.error("Попытка использовать старый memory модуль (JSON)...")
-    try:
-        from backend.memory import save_dialog_entry, load_dialog_history, clear_dialog_history, get_recent_dialog_history
-        logger.warning("Используется старый memory модуль (JSON)")
-        reset_conversation = None
-        get_or_create_conversation_id = None
-        remove_last_user_message = None
-    except:
-        logger.error("Ни один модуль памяти не доступен!")
-        save_dialog_entry = None
-        load_dialog_entry = None
-        load_dialog_history = None
-        clear_dialog_history = None
-        get_recent_dialog_history = None
-        reset_conversation = None
-        get_or_create_conversation_id = None
-        remove_last_user_message = None
+    logger.error("MongoDB memory_service недоступен! Приложение не сможет сохранять диалоги.")
+    save_dialog_entry = None
+    load_dialog_entry = None
+    load_dialog_history = None
+    clear_dialog_history = None
+    get_recent_dialog_history = None
+    reset_conversation = None
+    get_or_create_conversation_id = None
+    remove_last_user_message = None
 except Exception as e:
-    logger.error(f"Неожиданная ошибка при импорте memory: {e}")
+    logger.error(f"Неожиданная ошибка при импорте memory_service: {e}")
     import traceback
     logger.error(f"Traceback: {traceback.format_exc()}")
     save_dialog_entry = None
@@ -326,24 +318,6 @@ except Exception as e:
     import traceback
     logger.error(f"Traceback: {traceback.format_exc()}")
     UniversalTranscriber = None
-    
-try:
-    logger.info("Попытка импорта online_transcription...")
-    from backend.online_transcription import OnlineTranscriber
-    logger.info("online_transcription импортирован успешно")
-    if OnlineTranscriber:
-        logger.info("OnlineTranscriber класс доступен")
-    else:
-        logger.warning("OnlineTranscriber класс не доступен")
-except ImportError as e:
-    logger.error(f"Ошибка импорта online_transcription: {e}")
-    logger.error(f"Traceback: {traceback.format_exc()}")
-    print("Предупреждение: модуль online_transcription не найден")
-    OnlineTranscriber = None
-except Exception as e:
-    logger.error(f"Неожиданная ошибка при импорте online_transcription: {e}")
-    logger.error(f"Traceback: {traceback.format_exc()}")
-    OnlineTranscriber = None
 
 # Импорт агентной архитектуры
 try:
@@ -658,22 +632,6 @@ except Exception as e:
     logger.error(f"Ошибка инициализации UniversalTranscriber: {e}")
     logger.error(f"Traceback: {traceback.format_exc()}")
     transcriber = None
-
-try:
-    if OnlineTranscriber:
-        logger.info("Инициализация OnlineTranscriber...")
-        online_transcriber = OnlineTranscriber()
-        if online_transcriber:
-            logger.info("OnlineTranscriber инициализирован успешно")
-        else:
-            logger.warning("OnlineTranscriber не удалось создать")
-    else:
-        logger.warning("OnlineTranscriber класс не доступен")
-        online_transcriber = None
-except Exception as e:
-    logger.error(f"Ошибка инициализации OnlineTranscriber: {e}")
-    logger.error(f"Traceback: {traceback.format_exc()}")
-    online_transcriber = None
 
 logger.info("=== Инициализация сервисов завершена ===")
 
@@ -1585,7 +1543,7 @@ async def chat_with_ai(message: ChatMessage):
     if not ask_agent:
         raise HTTPException(status_code=503, detail="AI agent не доступен")
     if not save_dialog_entry:
-        raise HTTPException(status_code=503, detail="Memory module не доступен")
+        raise HTTPException(status_code=503, detail="Memory service не доступен")
         
     try:
         logger.info(f"Chat request: {message.message[:50]}...")
@@ -2385,108 +2343,42 @@ async def get_chat_history(limit: int = None):
     # Если лимит не указан, используем настройку памяти
     if limit is None:
         limit = memory_max_messages if 'memory_max_messages' in globals() else 20
-    """Получить историю диалогов"""
+    
     if not get_recent_dialog_history:
-        # Попытка прямого чтения файла если модуль memory недоступен
-        try:
-            import json
-            import os
-            from config import get_path
-            
-            MEMORY_PATH = get_path("memory_path")
-            dialog_file = os.path.join(MEMORY_PATH, "dialog_history_dialog.json")
-            
-            if os.path.exists(dialog_file):
-                with open(dialog_file, "r", encoding="utf-8") as f:
-                    history = json.load(f)
-                    # Ограничиваем количество записей настройкой памяти
-                    max_entries = memory_max_messages if 'memory_max_messages' in globals() else 20
-                    limited_history = history[-max_entries:] if len(history) > max_entries else history
-                    logger.info(f"Загружено {len(limited_history)} записей истории из файла (модуль memory недоступен, лимит: {max_entries})")
-                    return {
-                        "history": limited_history,
-                        "count": len(limited_history),
-                        "max_messages": max_entries,
-                        "timestamp": datetime.now().isoformat(),
-                        "source": "file_fallback"
-                    }
-            else:
-                logger.warning(f"Файл истории не найден: {dialog_file}")
-                return {
-                    "history": [],
-                    "count": 0,
-                    "max_messages": memory_max_messages if 'memory_max_messages' in globals() else 20,
-                    "timestamp": datetime.now().isoformat(),
-                    "source": "file_fallback",
-                    "message": "Файл истории не найден"
-                }
-        except Exception as e:
-            logger.error(f"Ошибка чтения истории из файла: {e}")
-            return {
-                "history": [],
-                "count": 0,
-                "max_messages": memory_max_messages if 'memory_max_messages' in globals() else 20,
-                "timestamp": datetime.now().isoformat(),
-                "source": "fallback_error",
-                "error": str(e)
-            }
+        logger.error("memory_service недоступен! Невозможно получить историю диалогов.")
+        raise HTTPException(status_code=503, detail="Memory service недоступен")
     
     try:
         history = await get_recent_dialog_history(max_entries=limit)
-        logger.info(f"Загружено {len(history)} записей истории через модуль memory")
+        logger.info(f"Загружено {len(history)} записей истории через memory_service")
         return {
             "history": history,
             "count": len(history),
             "max_messages": memory_max_messages,
             "timestamp": datetime.now().isoformat(),
-            "source": "memory_module"
+            "source": "memory_service"
         }
     except Exception as e:
-        logger.error(f"Ошибка получения истории через модуль memory: {e}")
+        logger.error(f"Ошибка получения истории через memory_service: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/history")
 async def clear_chat_history():
     """Очистить историю диалогов"""
     if not clear_dialog_history:
-        # Попытка прямого удаления файлов если модуль memory недоступен
-        try:
-            import os
-            from config import get_path
-            
-            MEMORY_PATH = get_path("memory_path")
-            dialog_file = os.path.join(MEMORY_PATH, "dialog_history_dialog.json")
-            memory_file = os.path.join(MEMORY_PATH, "dialog_history.txt")
-            
-            files_removed = []
-            if os.path.exists(dialog_file):
-                os.remove(dialog_file)
-                files_removed.append("dialog_history_dialog.json")
-            if os.path.exists(memory_file):
-                os.remove(memory_file)
-                files_removed.append("dialog_history.txt")
-            
-            logger.info(f"Удалены файлы истории: {files_removed} (модуль memory недоступен)")
-            return {
-                "message": f"История очищена (удалено файлов: {len(files_removed)})",
-                "success": True,
-                "files_removed": files_removed,
-                "source": "file_fallback"
-            }
-        except Exception as e:
-            logger.error(f"Ошибка удаления файлов истории: {e}")
-            raise HTTPException(status_code=500, detail=f"Ошибка очистки истории: {str(e)}")
+        logger.error("memory_service недоступен! Невозможно очистить историю диалогов.")
+        raise HTTPException(status_code=503, detail="Memory service недоступен")
     
     try:
         result = await clear_dialog_history()
-        logger.info(f"История очищена через модуль memory: {result}")
+        logger.info(f"История очищена через memory_service: {result}")
         return {
             "message": "История очищена", 
             "success": True,
-            "source": "memory_module"
+            "source": "memory_service"
         }
     except Exception as e:
-        logger.error(f"Ошибка очистки истории через модуль memory: {e}")
+        logger.error(f"Ошибка очистки истории через memory_service: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ================================
@@ -3068,7 +2960,7 @@ async def get_memory_status():
     """Получить статус памяти"""
     try:
         if not get_recent_dialog_history:
-            raise HTTPException(status_code=503, detail="Memory module не доступен")
+            raise HTTPException(status_code=503, detail="Memory service не доступен")
         
         # Получаем текущую историю
         history = await get_recent_dialog_history(max_entries=memory_max_messages)
@@ -3090,7 +2982,7 @@ async def clear_memory():
     """Очистить память"""
     try:
         if not clear_dialog_history:
-            raise HTTPException(status_code=503, detail="Memory module не доступен")
+            raise HTTPException(status_code=503, detail="Memory service не доступен")
         
         result = await clear_dialog_history()
         logger.info(f"Память очищена: {result}")
@@ -4087,8 +3979,7 @@ async def get_system_status():
             "transcription": {
                 "available": transcriber is not None,
                 "functions": {
-                    "universal_transcriber": UniversalTranscriber is not None,
-                    "online_transcriber": OnlineTranscriber is not None
+                    "universal_transcriber": UniversalTranscriber is not None
                 }
             },
             "document_processor": {

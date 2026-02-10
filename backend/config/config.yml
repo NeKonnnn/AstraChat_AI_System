@@ -96,10 +96,7 @@ agents:
   default_agent: "general"
   available_agents:
     - "general"
-    - "calculation"
     - "document"
-    - "web_search"
-    - "memory"
     - "mcp"
   
   # Настройки LangGraph оркестратора
@@ -113,10 +110,7 @@ agents:
 tools:
   enabled: true
   available_tools:
-    - "calculator"
-    - "web_search"
     - "file_operations"
-    - "memory_operations"
     - "mcp_tools"
 
 # Настройки логирования

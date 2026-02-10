@@ -1360,6 +1360,9 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         
       };
       
+      // Устанавливаем isProcessing в false когда начинается воспроизведение,
+      // чтобы синяя волна размышлений скрылась, а зеленая волна звука появилась
+      setIsProcessing(false);
       setIsSpeaking(true);
       await audio.play();
       
@@ -3562,7 +3565,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         )}
 
         {/* Индикатор речи */}
-        {isSpeaking && (
+        {isSpeaking && !isProcessing && (
           <Box sx={{ mb: 2, textAlign: 'center' }}>
             <Typography variant="body2" color="success.main" sx={{ mb: 1 }}>
             </Typography>

@@ -22,6 +22,7 @@ import {
   Palette as PaletteIcon,
   Person as PersonIcon,
   Chat as ChatIcon,
+  Computer as ComputerIcon,
 } from '@mui/icons-material';
 import {
   GeneralSettings,
@@ -30,7 +31,8 @@ import {
   AgentsSettings,
   TranscriptionSettings,
   AboutSettings,
-  ChatSettings
+  ChatSettings,
+  InterfaceSettings
 } from './settings';
 
 interface SettingsModalProps {
@@ -40,7 +42,7 @@ interface SettingsModalProps {
   onToggleTheme: () => void;
 }
 
-type SettingsSection = 'general' | 'profile' | 'models' | 'agents' | 'transcription' | 'chats' | 'about';
+type SettingsSection = 'general' | 'profile' | 'interface' | 'models' | 'agents' | 'transcription' | 'chats' | 'about';
 
 const settingsSections = [
   {
@@ -54,6 +56,12 @@ const settingsSections = [
     title: 'Профиль',
     icon: <PersonIcon />,
     description: 'Личная информация и аккаунт'
+  },
+  {
+    id: 'interface' as SettingsSection,
+    title: 'Интерфейс',
+    icon: <ComputerIcon />,
+    description: 'Настройки интерфейса приложения'
   },
   {
     id: 'chats' as SettingsSection,
@@ -102,6 +110,8 @@ export default function SettingsModal({ open, onClose, isDarkMode, onToggleTheme
         return <GeneralSettings isDarkMode={isDarkMode} onToggleTheme={onToggleTheme} />;
       case 'profile':
         return <ProfileSettings />;
+      case 'interface':
+        return <InterfaceSettings />;
       case 'models':
         return <ModelsSettings />;
       case 'agents':

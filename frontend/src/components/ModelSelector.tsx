@@ -225,39 +225,60 @@ export default function ModelSelector({ isDarkMode, onModelSelect }: ModelSelect
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Typography
-            variant="body1"
-            sx={{
-              color: isDarkMode ? 'white' : '#333',
-              fontSize: '1rem',
-              fontWeight: 400,
-            }}
-          >
-            {isLoadingModel ? 'Загрузка...' : 'Выбрать модель'}
-          </Typography>
-          {!isLoadingModel && (
-            <KeyboardArrowDownIcon 
-              fontSize="small" 
-              sx={{
-                color: isDarkMode ? 'white' : '#333',
-              }}
-            />
+          {isLoadingModel ? (
+            <>
+              <Typography
+                variant="body1"
+                sx={{
+                  color: isDarkMode ? 'white' : '#333',
+                  fontSize: '1rem',
+                  fontWeight: 400,
+                }}
+              >
+                Загрузка...
+              </Typography>
+              <CircularProgress size={16} />
+            </>
+          ) : hasSelectedModel ? (
+            <>
+              <Typography
+                variant="body1"
+                sx={{
+                  color: isDarkMode ? 'white' : '#333',
+                  fontSize: '1rem',
+                  fontWeight: 400,
+                }}
+              >
+                {currentModelName}
+              </Typography>
+              <KeyboardArrowDownIcon 
+                fontSize="small" 
+                sx={{
+                  color: isDarkMode ? 'white' : '#333',
+                }}
+              />
+            </>
+          ) : (
+            <>
+              <Typography
+                variant="body1"
+                sx={{
+                  color: isDarkMode ? 'white' : '#333',
+                  fontSize: '1rem',
+                  fontWeight: 400,
+                }}
+              >
+                Выбрать модель
+              </Typography>
+              <KeyboardArrowDownIcon 
+                fontSize="small" 
+                sx={{
+                  color: isDarkMode ? 'white' : '#333',
+                }}
+              />
+            </>
           )}
-          {isLoadingModel && <CircularProgress size={16} />}
         </Box>
-        {hasSelectedModel && !isLoadingModel && (
-          <Typography
-            variant="body2"
-            sx={{
-              color: isDarkMode ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.7)',
-              fontSize: '0.875rem',
-              fontWeight: 400,
-              ml: 0.5,
-            }}
-          >
-            {currentModelName}
-          </Typography>
-        )}
       </Box>
 
       <Menu

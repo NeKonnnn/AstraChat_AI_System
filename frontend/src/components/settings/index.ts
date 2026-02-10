@@ -5,6 +5,7 @@ export { default as AgentsSettings } from './AgentsSettings';
 export { default as TranscriptionSettings } from './TranscriptionSettings';
 export { default as AboutSettings } from './AboutSettings';
 export { default as ChatSettings } from './ChatSettings';
+export { default as InterfaceSettings } from './InterfaceSettings';
 
 
 

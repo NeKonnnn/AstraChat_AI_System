@@ -2593,7 +2593,7 @@ function AgentDialog({ open, onClose, onSave, agentForm, setAgentForm, allTags, 
                 label="Название инструмента"
                 fullWidth
                 size="small"
-                placeholder="Например: calculator, web_search"
+                placeholder="Например: search_documents"
                 onKeyPress={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault();

@@ -27,7 +27,7 @@ class Agent(BaseModel):
                 "description": "Агент для анализа данных и создания отчетов",
                 "system_prompt": "Ты - эксперт по анализу данных. Помогай пользователям анализировать данные...",
                 "config": {"temperature": 0.7, "max_tokens": 2000},
-                "tools": ["calculator", "web_search"],
+                "tools": ["search_documents"],
                 "author_id": "user123",
                 "author_name": "Иван Иванов",
                 "is_public": True

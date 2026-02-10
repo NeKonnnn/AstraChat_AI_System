@@ -5,13 +5,11 @@
 
 try:
     from backend.tools.agent_tools import AgentTools
-    from backend.tools.web_tools import WebTools
     from backend.tools.prompt_tools import PromptTools
     from backend.tools.summarization_tools import SummarizationTools
 except ModuleNotFoundError:
     # Если запущено из backend/, используем относительные импорты
     from tools.agent_tools import AgentTools
-    from tools.web_tools import WebTools
     from tools.prompt_tools import PromptTools
     from tools.summarization_tools import SummarizationTools
 
@@ -27,9 +25,6 @@ def get_all_tools():
     
     # Инструменты агентов (основные, приоритетные)
     all_tools.extend(AgentTools.get_tools())
-    
-    # Инструменты для веб-поиска
-    all_tools.extend(WebTools.get_tools())
     
     # Инструменты для работы с промптами
     all_tools.extend(PromptTools.get_tools())
@@ -49,7 +44,6 @@ def get_tool_categories():
     """
     return {
         "agents": AgentTools.get_tools(),
-        "web": WebTools.get_tools(),
         "prompts": PromptTools.get_tools(),
         "summarization": SummarizationTools.get_tools()
     }
@@ -68,7 +62,6 @@ def get_tools_info():
         "total_count": len(tools),
         "categories": {
             "agents": len(AgentTools.get_tools()),
-            "web": len(WebTools.get_tools()),
             "prompts": len(PromptTools.get_tools()),
             "summarization": len(SummarizationTools.get_tools())
         },
@@ -101,7 +94,6 @@ __all__ = [
     'get_tool_categories',
     'get_tools_info',
     'AgentTools',
-    'WebTools',
     'PromptTools',
     'SummarizationTools'
 ]

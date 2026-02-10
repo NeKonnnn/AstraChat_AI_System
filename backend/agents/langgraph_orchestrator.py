@@ -249,13 +249,13 @@ class LangGraphOrchestrator:
     "reasoning": "Нужен поиск идей в документах"
 }}
 
-3. Запрос: "Какая погода в Москве?"
+3. Запрос: "Улучши этот промпт"
 {{
     "needs_tools": true,
     "plan": [
-        {{"tool": "web_search", "input": "погода в Москве"}}
+        {{"tool": "enhance_prompt", "input": "{{'prompt': 'текст промпта'}}"}}
     ],
-    "reasoning": "Нужна актуальная информация из интернета"
+    "reasoning": "Нужно улучшить промпт с помощью инструмента"
 }}
 
 4. Запрос: "Посчитай 15 * 7 + 3"
@@ -395,12 +395,6 @@ class LangGraphOrchestrator:
                             agent_type = "PromptEnhancementAgent (Агент улучшения промптов)"
                         elif 'document' in tool_name.lower() or 'search_documents' in tool_name.lower():
                             agent_type = "DocumentAgent (Агент работы с документами)"
-                        elif 'web_search' in tool_name.lower() or 'search_web' in tool_name.lower():
-                            agent_type = "WebSearchAgent (Агент веб-поиска)"
-                        elif 'calculate' in tool_name.lower():
-                            agent_type = "CalculationAgent (Агент вычислений)"
-                        elif 'memory' in tool_name.lower() or 'save_memory' in tool_name.lower():
-                            agent_type = "MemoryAgent (Агент памяти)"
                         elif 'mcp' in tool_name.lower():
                             agent_type = "🔌 MCPAgent (MCP агент)"
                         
@@ -515,12 +509,6 @@ class LangGraphOrchestrator:
                     agent_type = "PromptEnhancementAgent (Агент улучшения промптов)"
                 elif 'document' in tool_name.lower() or 'search_documents' in tool_name.lower():
                     agent_type = "DocumentAgent (Агент работы с документами)"
-                elif 'web_search' in tool_name.lower() or 'search_web' in tool_name.lower():
-                    agent_type = "WebSearchAgent (Агент веб-поиска)"
-                elif 'calculate' in tool_name.lower():
-                    agent_type = "CalculationAgent (Агент вычислений)"
-                elif 'memory' in tool_name.lower() or 'save_memory' in tool_name.lower():
-                    agent_type = "MemoryAgent (Агент памяти)"
                 elif 'mcp' in tool_name.lower():
                     agent_type = "MCPAgent (MCP агент)"
                 
@@ -576,7 +564,7 @@ class LangGraphOrchestrator:
                 # Выполняем инструмент
                 try:
                     # Для инструментов агентов передаем контекст
-                    if tool_name in ["search_documents", "web_search", "calculate", "save_memory"]:
+                    if tool_name in ["search_documents"]:
                         # Эти инструменты используют агентов, которые могут нуждаться в контексте
                         result = tool.func(tool_input)
                     else:
@@ -1014,44 +1002,13 @@ class LangGraphOrchestrator:
                     "Поищи данные о машинном обучении",
                     "Найди все упоминания алгоритмов"
                 ]
-            elif "web_search" in tool_name or "search_web" in tool_name:
-                agent_id = "web_search_agent"
-                agent_name = "WebSearchAgent"
-                description = "Поиск информации в интернете"
-                capabilities = ["web_search"]
-                usage_examples = [
-                    "Какая погода в Москве?",
-                    "Найди последние новости о ИИ",
-                    "Какой курс доллара сегодня?"
-                ]
-            elif "calculate" in tool_name or "calculation" in tool_name.lower():
-                agent_id = "calculation_agent"
-                agent_name = "CalculationAgent"
-                description = "Выполнение математических вычислений"
-                capabilities = ["calculate"]
-                usage_examples = [
-                    "Посчитай 15 * 7 + 3",
-                    "Вычисли квадратный корень из 144",
-                    "Найди площадь круга с радиусом 5"
-                ]
-            elif "memory" in tool_name.lower() or "save_memory" in tool_name:
-                agent_id = "memory_agent"
-                agent_name = "MemoryAgent"
-                description = "Сохранение важной информации в долговременную память"
-                capabilities = ["save_memory"]
-                usage_examples = [
-                    "Запомни, что я работаю программистом",
-                    "Сохрани информацию о моих предпочтениях",
-                    "Запиши важные факты о проекте"
-                ]
             elif ("prompt" in tool_name.lower() and "file" not in tool_name.lower() and "system" not in tool_name.lower()) or \
-                 "prompt_engineering" in tool_name or \
                  "enhance_prompt" in tool_name or \
                  "improve_existing_prompt" in tool_name or \
                  "analyze_prompt" in tool_name or \
                  "save_prompt" in tool_name:
-                agent_id = "prompt_engineer"
-                agent_name = "PromptEngineer"
+                agent_id = "prompt_enhancement_agent"
+                agent_name = "PromptAgent"
                 description = "Создание, улучшение и анализ промптов для LLM"
                 capabilities = ["prompt_creation", "prompt_enhancement", "prompt_analysis", "prompt_optimization"]
                 usage_examples = [
@@ -1059,16 +1016,6 @@ class LangGraphOrchestrator:
                     "Улучши этот промпт: [текст промпта]",
                     "Проанализируй качество моего промпта",
                     "Помоги написать промпт для [задача]"
-                ]
-            elif "file" in tool_name.lower() or "read_file" in tool_name:
-                agent_id = "file_agent"
-                agent_name = "FileAgent"
-                description = "Работа с файлами и файловой системой"
-                capabilities = ["file_operations"]
-                usage_examples = [
-                    "Прочитай содержимое файла",
-                    "Создай новый файл",
-                    "Найди файлы по имени"
                 ]
             elif "system" in tool_name.lower() or "execute" in tool_name.lower():
                 agent_id = "system_agent"
@@ -1079,6 +1026,22 @@ class LangGraphOrchestrator:
                     "Выполни системную команду",
                     "Покажи информацию о системе",
                     "Проверь статус процессов"
+                ]
+            elif ("summarize" in tool_name.lower() or 
+                  "summary" in tool_name.lower() or 
+                  "extract_key" in tool_name.lower() or
+                  "bullet" in tool_name.lower() or
+                  "conversation" in tool_name.lower()):
+                agent_id = "summarization_agent"
+                agent_name = "SummarizationAgent"
+                description = "Суммаризация текстов, документов и извлечение ключевой информации"
+                capabilities = ["text_summarization", "document_summarization", "key_extraction", "conversation_summary"]
+                usage_examples = [
+                    "Сделай саммари этого документа",
+                    "Создай краткое резюме текста",
+                    "Извлеки ключевые моменты",
+                    "Подведи итоги нашего диалога",
+                    "Создай список основных пунктов"
                 ]
             else:
                 # Для неизвестных инструментов создаем общий агент
@@ -1131,6 +1094,15 @@ class LangGraphOrchestrator:
         logger.debug(f"[API] Возвращаем {len(result)} агентов с {sum(len(a['tools']) for a in result)} инструментами для фронтенда")
         return result
     
+    def get_available_agents(self) -> List[Dict[str, Any]]:
+        """
+        Получение списка доступных агентов (алиас для get_available_tools для совместимости)
+        
+        Returns:
+            List[Dict[str, Any]]: Список агентов с их инструментами
+        """
+        return self.get_available_tools()
+    
     def set_orchestrator_status(self, is_active: bool):
         """
         Установка статуса активности оркестратора
@@ -1153,10 +1125,8 @@ class LangGraphOrchestrator:
         # Маппинг agent_id -> список инструментов
         agent_tools_map = {
             "document_agent": ["search_documents"],
-            "web_search_agent": ["web_search"],
-            "calculation_agent": ["calculate"],
-            "memory_agent": ["save_memory"],
-            "prompt_engineer": ["prompt_engineering", "enhance_prompt", "improve_existing_prompt", "analyze_prompt_quality", "save_prompt_to_gallery"]
+            "prompt_enhancement_agent": ["enhance_prompt", "improve_existing_prompt", "analyze_prompt_quality", "save_prompt_to_gallery"],
+            "summarization_agent": ["summarize_text", "extract_key_points", "create_bullet_summary", "summarize_conversation"]
         }
         
         # Проверяем, это agent_id или tool_name
@@ -1182,6 +1152,16 @@ class LangGraphOrchestrator:
     def get_all_tool_statuses(self) -> Dict[str, bool]:
         """Получение статусов всех инструментов"""
         return self.tool_status.copy()
+    
+    def set_agent_status(self, agent_id: str, is_active: bool):
+        """
+        Установка статуса активности агента (алиас для set_tool_status для совместимости)
+        
+        Args:
+            agent_id: ID агента (например, "summarization_agent")
+            is_active: True - агент активен, False - отключен
+        """
+        self.set_tool_status(agent_id, is_active)
 
 
 # ============================================================================
