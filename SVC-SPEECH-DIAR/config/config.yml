@@ -1,0 +1,71 @@
+# Конфигурация сервера (ОРИГИНАЛ)
+server:
+  host: "0.0.0.0"
+  port: 8000
+  log_level: "INFO"
+  docs_url: "/docs"
+  redoc_url: "/redoc"
+
+# Настройки CORS (ОРИГИНАЛ)
+cors:
+  allowed_origins:
+    - "*"
+  allow_credentials: true
+  allow_methods: ["*"]
+  allow_headers: ["*"]
+
+# Настройки приложения
+app:
+  title: "astrachat Diarization Service"
+  description: "Microservice for Pyannote Speaker Diarization"
+  version: "1.0.0"
+
+# --- DIARIZATION (РАЗДЕЛЕНИЕ СПИКЕРОВ) ---
+# Настройки взяты из твоего оригинала
+diarization:
+  enabled: true
+  models_dir: "/app/models/diarization"  # Путь внутри контейнера
+  config_path: "/app/models/diarization/pyannote_diarization_config.yaml"
+  device: "auto"  # auto, cpu, cuda
+  min_speakers: 1
+  max_speakers: 10
+  min_duration: 1.0
+  max_file_size: 5368709120  # 5GB (для длинных записей)
+
+# --- ОСТАЛЬНЫЕ МОДУЛИ ОТКЛЮЧЕНЫ ---
+model:
+  path: "/dev/null"
+  name: "disabled"
+  ctx_size: 0
+  gpu_layers: 0
+  backend: "llama.cpp"
+
+generation:
+  default_temperature: 0.7
+  default_max_tokens: 1
+  stream: false
+
+vosk:
+  enabled: false
+  model_path: "/dev/null"
+
+silero:
+  enabled: false
+  models_dir: "/dev/null"
+
+whisperx:
+  enabled: false
+  models_dir: "/dev/null"
+
+surya:
+  enabled: false
+  models_dir: "/dev/null"
+
+nexus:
+  enabled: false
+security:
+  enabled: false
+monitoring:
+  enabled: false
+caching:
+  enabled: false
