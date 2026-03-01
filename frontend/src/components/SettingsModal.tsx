@@ -221,9 +221,9 @@ export default function SettingsModal({ open, onClose, isDarkMode, onToggleTheme
                     <ListItemIcon
                       sx={{
                         color: activeSection === section.id ? 'inherit' : theme.palette.text.secondary,
-                        minWidth: MENU_ICON_MIN_WIDTH,
+                        minWidth: `${MENU_ICON_MIN_WIDTH}px`,
                         marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`,
-                        '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX },
+                        '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` },
                       }}
                     >
                       {section.icon}

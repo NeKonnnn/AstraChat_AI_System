@@ -435,10 +435,11 @@
   transition: all 0.2s ease;
 }
 
-/* Стили для выпадающего меню — скругление из constants/menuStyles (переменная задаётся в App.tsx) */
-.MuiMenu-paper {
+/* Стили для выпадающего меню — скругление и ширина из constants/menuStyles (--menu-min-width задаётся в index.tsx и App.tsx) */
+.MuiMenu-paper,
+.MuiMenu-root .MuiPaper-root {
   border-radius: var(--menu-border-radius, 28px) !important;
-  min-width: 180px !important;
+  min-width: var(--menu-min-width, 172px) !important;
 }
 
 /* Подушечка: отступы по горизонтали и скругление — подсветка не во всю ширину (как на референсе) */
@@ -448,6 +449,15 @@
   border-radius: var(--menu-item-hover-radius, 8px) !important;
   padding: 8px 16px !important;
   font-size: 0.875rem !important;
+}
+
+/* Иконки в выпадающих меню: отступ от иконки до текста и размер из constants/menuStyles (переменные в App.tsx) */
+.MuiMenu-list .MuiListItemIcon-root {
+  min-width: var(--menu-icon-min-width, 24px) !important;
+  margin-right: var(--menu-icon-to-text-gap, 2px) !important;
+}
+.MuiMenu-list .MuiListItemIcon-root .MuiSvgIcon-root {
+  font-size: var(--menu-icon-font-size, 20px) !important;
 }
 
 /* Единый серый hover для всех меню (как в constants/menuStyles), переопределяется через --menu-item-hover в App.tsx */

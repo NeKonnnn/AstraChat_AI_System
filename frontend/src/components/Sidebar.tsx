@@ -80,7 +80,7 @@ import ArchiveModal from './ArchiveModal';
 import NewProjectModal from './NewProjectModal';
 import EditProjectModal from './EditProjectModal';
 import { useMoveToFolderAndProjectMenus, MoveToFolderAndProjectSubmenus } from './MoveToFolderAndProjectMenus';
-import { MENU_BORDER_RADIUS_PX, getMenuColors, MENU_ICON_MIN_WIDTH, MENU_ICON_TO_TEXT_GAP_PX, MENU_ICON_FONT_SIZE_PX, SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX, SIDEBAR_PROJECT_AVATAR_SIZE } from '../constants/menuStyles';
+import { MENU_BORDER_RADIUS_PX, getMenuColors, MENU_ICON_MIN_WIDTH, MENU_ICON_TO_TEXT_GAP_PX, MENU_ICON_FONT_SIZE_PX, MENU_MIN_WIDTH_PX, SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX, SIDEBAR_PROJECT_AVATAR_SIZE } from '../constants/menuStyles';
 
 // Задержки подменю «Справка» — как в MoveToFolderAndProjectMenus (убирает мигание)
 const HELP_SUBMENU_GRACE_PERIOD_MS = 280;
@@ -1088,7 +1088,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                     px: 2,
                   }}
                 >
-                  <ListItemIcon sx={{ color: 'white', minWidth: 24, marginRight: `${SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX}px` }}>
+                  <ListItemIcon sx={{ color: 'white', minWidth: `${SIDEBAR_PROJECT_AVATAR_SIZE + 4}px`, marginRight: `${SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX}px` }}>
                     <AddFolderIcon fontSize="small" />
                   </ListItemIcon>
                   <ListItemText
@@ -1112,16 +1112,16 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
               </ListItem>
               {projects.map((project) => {
                 const renderProjectIcon = () => {
-                  const size = SIDEBAR_PROJECT_AVATAR_SIZE;
-                  const iconFontSize = size - 4;
+                  const sizePx = SIDEBAR_PROJECT_AVATAR_SIZE;
+                  const iconFontSizePx = sizePx - 4;
                   if (project.iconType === 'emoji' && project.icon) {
                     return (
                       <Avatar
                         sx={{
-                          width: size,
-                          height: size,
+                          width: `${sizePx}px`,
+                          height: `${sizePx}px`,
                           bgcolor: project.iconColor === '#ffffff' ? 'rgba(255,255,255,0.1)' : project.iconColor || 'rgba(255,255,255,0.1)',
-                          fontSize: iconFontSize,
+                          fontSize: `${iconFontSizePx}px`,
                         }}
                       >
                         {project.icon}
@@ -1133,26 +1133,26 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                     return (
                       <Avatar
                         sx={{
-                          width: size,
-                          height: size,
+                          width: `${sizePx}px`,
+                          height: `${sizePx}px`,
                           bgcolor: project.iconColor === '#ffffff' ? 'rgba(255,255,255,0.1)' : project.iconColor || 'rgba(255,255,255,0.1)',
                           color: 'white',
                         }}
                       >
-                        <IconComponent sx={{ fontSize: iconFontSize }} />
+                        <IconComponent sx={{ fontSize: `${iconFontSizePx}px` }} />
                       </Avatar>
                     );
                   }
                   return (
                     <Avatar
                       sx={{
-                        width: size,
-                        height: size,
+                        width: `${sizePx}px`,
+                        height: `${sizePx}px`,
                         bgcolor: 'rgba(255,255,255,0.1)',
                         color: 'white',
                       }}
                     >
-                      <FolderIcon sx={{ fontSize: iconFontSize }} />
+                      <FolderIcon sx={{ fontSize: `${iconFontSizePx}px` }} />
                     </Avatar>
                   );
                 };
@@ -1197,7 +1197,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                             gap: 0.5,
                           }}
                         >
-                          <ListItemIcon sx={{ color: 'white', minWidth: SIDEBAR_PROJECT_AVATAR_SIZE + 4, marginRight: `${SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX}px` }}>
+                          <ListItemIcon sx={{ color: 'white', minWidth: `${SIDEBAR_PROJECT_AVATAR_SIZE + 4}px`, marginRight: `${SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX}px` }}>
                             {renderProjectIcon()}
                           </ListItemIcon>
                           <ListItemText
@@ -1274,7 +1274,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                                     }} 
                                   />
                                 )}
-                                <ListItemIcon sx={{ color: 'white', minWidth: 24, marginRight: `${SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX}px` }}>
+                                <ListItemIcon sx={{ color: 'white', minWidth: `${SIDEBAR_PROJECT_AVATAR_SIZE + 4}px`, marginRight: `${SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX}px` }}>
                                   <ChatIcon fontSize="small" />
                                 </ListItemIcon>
                               <ListItemText
@@ -1472,7 +1472,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                               px: 2,
                             }}
                           >
-                            <ListItemIcon sx={{ color: 'white', minWidth: 24, marginRight: `${SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX}px` }}>
+                            <ListItemIcon sx={{ color: 'white', minWidth: `${SIDEBAR_PROJECT_AVATAR_SIZE + 4}px`, marginRight: `${SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX}px` }}>
                               <ChatIcon fontSize="small" />
                             </ListItemIcon>
                             <ListItemText
@@ -1603,7 +1603,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                       px: 2,
                     }}
                   >
-                    <ListItemIcon sx={{ color: 'white', minWidth: 24, marginRight: `${SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX}px` }}>
+                    <ListItemIcon sx={{ color: 'white', minWidth: `${SIDEBAR_PROJECT_AVATAR_SIZE + 4}px`, marginRight: `${SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX}px` }}>
                       <ChatIcon fontSize="small" />
                     </ListItemIcon>
                     <ListItemText
@@ -1765,7 +1765,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                             px: 2,
                           }}
                         >
-                          <ListItemIcon sx={{ color: 'white', minWidth: 24, marginRight: `${SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX}px` }}>
+                          <ListItemIcon sx={{ color: 'white', minWidth: `${SIDEBAR_PROJECT_AVATAR_SIZE + 4}px`, marginRight: `${SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX}px` }}>
                             <ChatIcon fontSize="small" />
                           </ListItemIcon>
                           <ListItemText
@@ -1967,7 +1967,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             backdropFilter: 'blur(10px)',
             border: `1px solid ${menuBorder}`,
             borderRadius: `${MENU_BORDER_RADIUS_PX}px`,
-            minWidth: 200,
+            minWidth: `${MENU_MIN_WIDTH_PX}px`,
           },
         }}
         MenuListProps={{
@@ -1981,7 +1981,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             '&:hover': { backgroundColor: menuItemHover }
           }}
         >
-          <ListItemIcon sx={{ color: menuItemColor, minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <SettingsIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Настройки" />
@@ -1994,7 +1994,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             '&:hover': { backgroundColor: menuItemHover }
           }}
         >
-          <ListItemIcon sx={{ color: menuItemColor, minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <ArchiveIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Архив" />
@@ -2010,7 +2010,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             ...(showHelpSubmenu && { backgroundColor: menuItemHover }),
           }}
         >
-          <ListItemIcon sx={{ color: menuItemColor, minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <InfoIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Справка" />
@@ -2024,7 +2024,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             '&:hover': { backgroundColor: menuItemHover }
           }}
         >
-          <ListItemIcon sx={{ color: menuItemColor, minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <LogoutIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Выйти из аккаунта" />
@@ -2049,7 +2049,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             backdropFilter: 'blur(10px)',
             border: `1px solid ${menuBorder}`,
             borderRadius: `${MENU_BORDER_RADIUS_PX}px`,
-            minWidth: 200,
+            minWidth: `${MENU_MIN_WIDTH_PX}px`,
             zIndex: 1301,
           },
           onMouseEnter: () => {
@@ -2082,7 +2082,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           }}
           sx={{ color: menuItemColor, '&:hover': { backgroundColor: menuItemHover } }}
         >
-          <ListItemIcon sx={{ color: menuItemColor, minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <HelpOutlineIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Помощь" />
@@ -2095,7 +2095,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           }}
           sx={{ color: menuItemColor, '&:hover': { backgroundColor: menuItemHover } }}
         >
-          <ListItemIcon sx={{ color: menuItemColor, minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <KeyboardIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Сочетание клавиш" />
@@ -2224,7 +2224,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             backdropFilter: 'blur(10px)',
             border: `1px solid ${menuBorder}`,
             borderRadius: `${MENU_BORDER_RADIUS_PX}px`,
-            minWidth: 150,
+            minWidth: `${MENU_MIN_WIDTH_PX}px`,
             pointerEvents: 'auto',
           },
         }}
@@ -2245,7 +2245,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             '&:hover': { backgroundColor: menuItemHover }
           }}
         >
-          <ListItemIcon sx={{ color: menuItemColor, minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <PushPinIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary={
@@ -2267,7 +2267,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             '&:hover': { backgroundColor: menuItemHover }
           }}
         >
-          <ListItemIcon sx={{ color: menuItemColor, minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <EditIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Переименовать" />
@@ -2284,7 +2284,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             ...(moveToMenus.showMoveToFolderMenu && { backgroundColor: menuItemHover }),
           }}
         >
-          <ListItemIcon sx={{ color: menuItemColor, minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <FolderIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Переместить в папку" />
@@ -2303,7 +2303,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             ...(moveToMenus.showMoveToProjectMenu && { backgroundColor: menuItemHover }),
           }}
         >
-          <ListItemIcon sx={{ color: menuItemColor, minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <FolderIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Перенести в проект" />
@@ -2319,7 +2319,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             '&:hover': { backgroundColor: menuItemHover }
           }}
         >
-          <ListItemIcon sx={{ color: menuItemColor, minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <ArchiveIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Архив" />
@@ -2333,7 +2333,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
               '&:hover': { backgroundColor: menuItemHover }
             }}
           >
-            <ListItemIcon sx={{ color: menuItemColor, minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
+            <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
               <FolderIcon fontSize="small" />
             </ListItemIcon>
             <ListItemText primary="Перенести из проекта" />
@@ -2348,7 +2348,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             '&:hover': { backgroundColor: 'rgba(211, 47, 47, 0.1)' }
           }}
         >
-          <ListItemIcon sx={{ color: '#d32f2f', minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
+          <ListItemIcon sx={{ color: '#d32f2f', minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <DeleteIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Удалить" primaryTypographyProps={{ sx: { color: '#d32f2f' } }} />
@@ -2523,7 +2523,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             backdropFilter: 'blur(10px)',
             border: `1px solid ${menuBorder}`,
             borderRadius: `${MENU_BORDER_RADIUS_PX}px`,
-            minWidth: 200,
+            minWidth: `${MENU_MIN_WIDTH_PX}px`,
           },
         }}
         MenuListProps={{
@@ -2537,7 +2537,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             '&:hover': { backgroundColor: menuItemHover }
           }}
         >
-          <ListItemIcon sx={{ color: menuItemColor, minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <EditIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Переименовать" />
@@ -2550,7 +2550,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             '&:hover': { backgroundColor: menuItemHover }
           }}
         >
-          <ListItemIcon sx={{ color: menuItemColor, minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <ArchiveIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Архив" />
@@ -2563,7 +2563,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             '&:hover': { backgroundColor: 'rgba(211, 47, 47, 0.1)' }
           }}
         >
-          <ListItemIcon sx={{ color: '#d32f2f', minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
+          <ListItemIcon sx={{ color: '#d32f2f', minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <DeleteIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Удалить" primaryTypographyProps={{ sx: { color: '#d32f2f' } }} />
@@ -2818,7 +2818,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             backdropFilter: 'blur(10px)',
             border: `1px solid ${menuBorder}`,
             borderRadius: `${MENU_BORDER_RADIUS_PX}px`,
-            minWidth: 200,
+            minWidth: `${MENU_MIN_WIDTH_PX}px`,
           },
         }}
         MenuListProps={{
@@ -2832,7 +2832,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             '&:hover': { backgroundColor: menuItemHover }
           }}
         >
-          <ListItemIcon sx={{ color: menuItemColor, minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <EditIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Редактировать проект" />
@@ -2845,7 +2845,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             '&:hover': { backgroundColor: 'rgba(211, 47, 47, 0.1)' }
           }}
         >
-          <ListItemIcon sx={{ color: '#d32f2f', minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
+          <ListItemIcon sx={{ color: '#d32f2f', minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <DeleteIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Удалить проект" primaryTypographyProps={{ sx: { color: '#d32f2f' } }} />

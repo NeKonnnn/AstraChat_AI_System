@@ -20,7 +20,7 @@ import ProfilePage from './pages/ProfilePage';
 import ShareViewPage from './pages/ShareViewPage';
 import { initSettings } from './settings';
 import './App.css';
-import { MENU_ITEM_HOVER_DARK, MENU_ITEM_HOVER_LIGHT, MENU_BORDER_RADIUS_PX, MENU_ITEM_HOVER_RADIUS_PX, MENU_ITEM_HOVER_MARGIN_PX } from './constants/menuStyles';
+import { MENU_ITEM_HOVER_DARK, MENU_ITEM_HOVER_LIGHT, MENU_BORDER_RADIUS_PX, MENU_ITEM_HOVER_RADIUS_PX, MENU_ITEM_HOVER_MARGIN_PX, MENU_MIN_WIDTH_PX, MENU_ICON_MIN_WIDTH, MENU_ICON_TO_TEXT_GAP_PX, MENU_ICON_FONT_SIZE_PX } from './constants/menuStyles';
 
 const MENU_ITEM_MARGIN = MENU_ITEM_HOVER_MARGIN_PX;
 const MENU_ITEM_RADIUS = MENU_ITEM_HOVER_RADIUS_PX;
@@ -154,6 +154,10 @@ function App() {
     root.style.setProperty('--menu-border-radius', `${MENU_BORDER_RADIUS_PX}px`);
     root.style.setProperty('--menu-item-hover-radius', `${MENU_ITEM_HOVER_RADIUS_PX}px`);
     root.style.setProperty('--menu-item-hover-margin', `${MENU_ITEM_HOVER_MARGIN_PX}px`);
+    root.style.setProperty('--menu-min-width', `${MENU_MIN_WIDTH_PX}px`); /* дублируем из index.tsx при смене темы */
+    root.style.setProperty('--menu-icon-min-width', `${MENU_ICON_MIN_WIDTH}px`);
+    root.style.setProperty('--menu-icon-to-text-gap', `${MENU_ICON_TO_TEXT_GAP_PX}px`);
+    root.style.setProperty('--menu-icon-font-size', `${MENU_ICON_FONT_SIZE_PX}px`);
   }, [isDarkMode]);
 
   const theme = createAppTheme(isDarkMode);

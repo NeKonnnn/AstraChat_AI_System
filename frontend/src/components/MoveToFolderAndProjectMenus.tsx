@@ -12,7 +12,7 @@ import {
   ChatOutlined as ChatIcon,
 } from '@mui/icons-material';
 import type { Folder, Project } from '../contexts/AppContext';
-import { MENU_BORDER_RADIUS_PX, MENU_ICON_MIN_WIDTH, MENU_ICON_TO_TEXT_GAP_PX, MENU_ICON_FONT_SIZE_PX } from '../constants/menuStyles';
+import { MENU_BORDER_RADIUS_PX, MENU_ICON_MIN_WIDTH, MENU_ICON_TO_TEXT_GAP_PX, MENU_ICON_FONT_SIZE_PX, MENU_MIN_WIDTH_PX } from '../constants/menuStyles';
 
 // Включить логи подменю в консоль: в DevTools выполнить window.__SUBMENU_DEBUG__ = true и обновить страницу
 const SUBMENU_DEBUG = typeof window !== 'undefined' && (window as any).__SUBMENU_DEBUG__;
@@ -451,7 +451,7 @@ export function MoveToFolderAndProjectSubmenus(props: MoveToSubmenusProps) {
             backdropFilter: 'blur(10px)',
             border: `1px solid ${menuBorder}`,
             borderRadius: `${MENU_BORDER_RADIUS_PX}px`,
-            minWidth: 200,
+            minWidth: `${MENU_MIN_WIDTH_PX}px`,
             zIndex: 1301,
           },
           onMouseEnter: () => {
@@ -493,7 +493,7 @@ export function MoveToFolderAndProjectSubmenus(props: MoveToSubmenusProps) {
           }}
           sx={{ color: menuItemColor, '&:hover': { backgroundColor: menuItemHover } }}
         >
-          <ListItemIcon sx={{ color: menuItemColor, minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <AddFolderIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Новый проект" />
@@ -564,7 +564,7 @@ export function MoveToFolderAndProjectSubmenus(props: MoveToSubmenusProps) {
               }}
               disabled={isSelected}
             >
-              <ListItemIcon sx={{ color: isSelected ? menuDisabledColor : menuItemColor, minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
+              <ListItemIcon sx={{ color: isSelected ? menuDisabledColor : menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
                 {renderProjectIcon()}
               </ListItemIcon>
               <ListItemText primary={project.name} />
@@ -594,7 +594,7 @@ export function MoveToFolderAndProjectSubmenus(props: MoveToSubmenusProps) {
             backdropFilter: 'blur(10px)',
             border: `1px solid ${menuBorder}`,
             borderRadius: `${MENU_BORDER_RADIUS_PX}px`,
-            minWidth: 200,
+            minWidth: `${MENU_MIN_WIDTH_PX}px`,
             zIndex: 1301,
           },
           onMouseEnter: () => {
@@ -634,7 +634,7 @@ export function MoveToFolderAndProjectSubmenus(props: MoveToSubmenusProps) {
             }}
             sx={{ color: menuItemColor, '&:hover': { backgroundColor: menuItemHover } }}
           >
-            <ListItemIcon sx={{ color: menuItemColor, minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
+            <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
               <AddFolderIcon fontSize="small" />
             </ListItemIcon>
             <ListItemText primary="Создать папку" />
@@ -660,9 +660,9 @@ export function MoveToFolderAndProjectSubmenus(props: MoveToSubmenusProps) {
             <ListItemIcon
               sx={{
                 color: selectedChatId && !getChatFolder(selectedChatId) ? menuDisabledColor : menuItemColor,
-                minWidth: MENU_ICON_MIN_WIDTH,
+                minWidth: `${MENU_ICON_MIN_WIDTH}px`,
                 marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`,
-                '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX },
+                '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` },
               }}
             >
               <ChatIcon fontSize="small" />
@@ -690,7 +690,7 @@ export function MoveToFolderAndProjectSubmenus(props: MoveToSubmenusProps) {
                 }}
                 sx={{ color: menuItemColor, '&:hover': { backgroundColor: menuItemHover } }}
               >
-                <ListItemIcon sx={{ color: menuItemColor, minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
+                <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
                   <FolderIcon fontSize="small" />
                 </ListItemIcon>
                 <ListItemText primary={folder.name} />

@@ -670,7 +670,7 @@ export default function AgentsSettings() {
                       mb: 1,
                       bgcolor: 'background.default'
                     }}>
-                      <ListItemIcon sx={{ minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
+                      <ListItemIcon sx={{ minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
                         <AgentIcon color={agent.is_active ? 'primary' : 'disabled'} />
                       </ListItemIcon>
                       <ListItemText

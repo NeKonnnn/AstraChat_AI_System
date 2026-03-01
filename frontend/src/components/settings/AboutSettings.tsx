@@ -144,7 +144,7 @@ export default function AboutSettings() {
               </Typography>
               <List dense>
                 <ListItem sx={{ px: 0 }}>
-                  <ListItemIcon sx={{ minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
+                  <ListItemIcon sx={{ minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
                     <ComputerIcon fontSize="small" />
                   </ListItemIcon>
                   <ListItemText 
@@ -153,7 +153,7 @@ export default function AboutSettings() {
                   />
                 </ListItem>
                 <ListItem sx={{ px: 0 }}>
-                  <ListItemIcon sx={{ minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
+                  <ListItemIcon sx={{ minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
                     <LanguageIcon fontSize="small" />
                   </ListItemIcon>
                   <ListItemText 
@@ -162,7 +162,7 @@ export default function AboutSettings() {
                   />
                 </ListItem>
                 <ListItem sx={{ px: 0 }}>
-                  <ListItemIcon sx={{ minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
+                  <ListItemIcon sx={{ minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
                     <StorageIcon fontSize="small" />
                   </ListItemIcon>
                   <ListItemText 
