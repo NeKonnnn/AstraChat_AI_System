@@ -11,6 +11,7 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 # Установка Python 3.11 и системных зависимостей (ОРИГИНАЛ)
 # Добавлены libgl1 и libglib2.0-0 для работы OpenCV/Pillow, которые нужны Surya
+# Добавлены libldap2-dev и libsasl2-dev для сборки python-ldap
 RUN apt-get update && apt-get install -y \
     software-properties-common \
     tzdata \
@@ -34,6 +35,8 @@ RUN apt-get update && apt-get install -y \
     libsndfile1 \
     libgl1-mesa-glx \
     libglib2.0-0 \
+    libldap2-dev \
+    libsasl2-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Создание символической ссылки для python (ОРИГИНАЛ)
@@ -45,7 +48,7 @@ ENV CMAKE_ARGS="-DGGML_METAL=OFF -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS" \
     CFLAGS="-pthread -mcpu=native" \
     CXXFLAGS="-pthread -mcpu=native"
 
-# Установка Python зависимостей (ОРИГИНАЛ)
+# Установка Python зависимостей
 COPY requirements.txt .
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir --prefer-binary -r requirements.txt

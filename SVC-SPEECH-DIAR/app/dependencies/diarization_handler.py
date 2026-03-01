@@ -2,6 +2,8 @@ import os
 import logging
 import torch
 import yaml
+import tempfile
+import traceback
 from typing import Optional, Dict, Any
 from app.core.config import settings
 
@@ -10,125 +12,106 @@ logger = logging.getLogger(__name__)
 # Глобальные переменные для хранения моделей диаризации
 diarization_pipeline: Optional[Any] = None
 
+print(f"[Handler MODULE] Loaded, PID={os.getpid()}, id(module globals)={id(globals())}", flush=True)
+
+
+def _load_pipeline_sync():
+    """Синхронная загрузка пайплайна (вся тяжёлая работа)"""
+    print(f"[Handler] _load_pipeline_sync START, PID={os.getpid()}", flush=True)
+    
+    try:
+        from pyannote.audio import Pipeline
+        print("[Handler] pyannote.audio imported OK", flush=True)
+    except Exception as e:
+        print(f"[Handler] FAILED to import pyannote.audio: {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
+        return None
+    
+    config_path = settings.diarization.config_path
+    if not os.path.exists(config_path):
+        print(f"[Handler] Config NOT FOUND: {config_path}", flush=True)
+        return None
+    
+    device = settings.diarization.device
+    if device == "auto":
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"[Handler] Device: {device}", flush=True)
+    
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f.read())
+        print(f"[Handler] Config loaded, keys: {list(config.keys())}", flush=True)
+        
+        models_dir = settings.diarization.models_dir
+        if 'pipeline' in config and 'params' in config['pipeline']:
+            params = config['pipeline']['params']
+            
+            # Исправляем embedding путь
+            if 'embedding' in params and isinstance(params['embedding'], str):
+                ep = params['embedding']
+                if os.path.isabs(ep) or ':' in ep:
+                    params['embedding'] = os.path.join(models_dir, "models", os.path.basename(ep))
+                elif not os.path.isabs(ep):
+                    params['embedding'] = os.path.join(models_dir, ep)
+                print(f"[Handler] embedding path: {params['embedding']}", flush=True)
+                print(f"[Handler] embedding exists: {os.path.exists(params['embedding'])}", flush=True)
+            
+            # Исправляем segmentation путь
+            if 'segmentation' in params and isinstance(params['segmentation'], str):
+                sp = params['segmentation']
+                if os.path.isabs(sp) or ':' in sp:
+                    params['segmentation'] = os.path.join(models_dir, "models", os.path.basename(sp))
+                elif not os.path.isabs(sp):
+                    params['segmentation'] = os.path.join(models_dir, sp)
+                print(f"[Handler] segmentation path: {params['segmentation']}", flush=True)
+                print(f"[Handler] segmentation exists: {os.path.exists(params['segmentation'])}", flush=True)
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as tf:
+            yaml.dump(config, tf, default_flow_style=False)
+            tmp_path = tf.name
+        print(f"[Handler] Temp config: {tmp_path}", flush=True)
+        
+        print("[Handler] Calling Pipeline.from_pretrained ...", flush=True)
+        pipeline = Pipeline.from_pretrained(tmp_path)
+        print(f"[Handler] Pipeline loaded: {type(pipeline)}", flush=True)
+        
+        try:
+            os.unlink(tmp_path)
+        except:
+            pass
+        
+        if device == "cuda" and torch.cuda.is_available():
+            try:
+                pipeline = pipeline.to(torch.device("cuda"))
+                print("[Handler] Moved to CUDA", flush=True)
+            except Exception as cuda_err:
+                print(f"[Handler] CUDA failed ({cuda_err}), falling back to CPU", flush=True)
+                # Pipeline уже на CPU после from_pretrained, просто продолжаем
+        
+        print(f"[Handler] SUCCESS, pipeline={pipeline is not None}", flush=True)
+        return pipeline
+        
+    except Exception as e:
+        print(f"[Handler] EXCEPTION: {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
+        return None
+
 
 async def get_diarization_handler() -> Optional[Any]:
     """Получение экземпляра пайплайна диаризации"""
     global diarization_pipeline
     
+    print(f"[Handler] get_diarization_handler called, PID={os.getpid()}, pipeline is None: {diarization_pipeline is None}", flush=True)
+    
     if not settings.diarization.enabled:
-        logger.info("Диаризация отключена в конфигурации")
         return None
     
-    if diarization_pipeline is None:
-        try:
-            logger.info(f"Загрузка пайплайна диаризации из {settings.diarization.config_path}")
-            
-            # Проверяем доступность pyannote
-            try:
-                from pyannote.audio import Pipeline
-            except ImportError:
-                logger.error("pyannote.audio не установлен. Установите: pip install pyannote.audio")
-                return None
-            
-            # Проверяем существование конфигурации
-            if not os.path.exists(settings.diarization.config_path):
-                logger.error(f"Файл конфигурации диаризации не найден: {settings.diarization.config_path}")
-                return None
-            
-            # Определяем устройство
-            device = settings.diarization.device
-            if device == "auto":
-                device = "cuda" if torch.cuda.is_available() else "cpu"
-            
-            logger.info(f"Используется устройство для диаризации: {device}")
-            
-            # Сначала пытаемся загрузить из локальной конфигурации
-            logger.info("Попытка загрузки пайплайна из локальной конфигурации...")
-            try:
-                # Загружаем конфигурацию и исправляем пути
-                with open(settings.diarization.config_path, 'r', encoding='utf-8') as f:
-                    config_content = f.read()
-                    config = yaml.safe_load(config_content)
-                
-                # Исправляем пути на пути внутри контейнера
-                models_dir = settings.diarization.models_dir
-                if 'pipeline' in config and 'params' in config['pipeline']:
-                    params = config['pipeline']['params']
-                    # Исправляем путь к embedding модели
-                    if 'embedding' in params and isinstance(params['embedding'], str):
-                        embedding_path = params['embedding']
-                        # Если это абсолютный путь Windows или путь с диском - заменяем
-                        if os.path.isabs(embedding_path) or ':' in embedding_path:
-                            embedding_file = os.path.basename(embedding_path)
-                            params['embedding'] = os.path.join(models_dir, "models", embedding_file)
-                            logger.info(f"Исправлен путь embedding: {params['embedding']}")
-                        # Если это относительный путь - делаем абсолютным относительно models_dir
-                        elif not os.path.isabs(embedding_path):
-                            params['embedding'] = os.path.join(models_dir, embedding_path)
-                            logger.info(f"Преобразован относительный путь embedding: {params['embedding']}")
-                    
-                    # Исправляем путь к segmentation модели
-                    if 'segmentation' in params and isinstance(params['segmentation'], str):
-                        segmentation_path = params['segmentation']
-                        # Если это абсолютный путь Windows или путь с диском - заменяем
-                        if os.path.isabs(segmentation_path) or ':' in segmentation_path:
-                            segmentation_file = os.path.basename(segmentation_path)
-                            params['segmentation'] = os.path.join(models_dir, "models", segmentation_file)
-                            logger.info(f"Исправлен путь segmentation: {params['segmentation']}")
-                        # Если это относительный путь - делаем абсолютным относительно models_dir
-                        elif not os.path.isabs(segmentation_path):
-                            params['segmentation'] = os.path.join(models_dir, segmentation_path)
-                            logger.info(f"Преобразован относительный путь segmentation: {params['segmentation']}")
-                
-                # Сохраняем исправленную конфигурацию во временный файл
-                import tempfile
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as temp_config:
-                    yaml.dump(config, temp_config, default_flow_style=False)
-                    temp_config_path = temp_config.name
-                
-                # Загружаем пайплайн из исправленного конфига
-                diarization_pipeline = Pipeline.from_pretrained(temp_config_path)
-                
-                # Удаляем временный файл
-                try:
-                    os.unlink(temp_config_path)
-                except:
-                    pass
-                
-                # Перемещаем на нужное устройство
-                if device == "cuda" and torch.cuda.is_available():
-                    diarization_pipeline = diarization_pipeline.to(torch.device("cuda"))
-                
-                logger.info("Пайплайн диаризации успешно загружен из локальной конфигурации")
-                
-            except Exception as e:
-                logger.error(f"Ошибка загрузки с локальной конфигурацией: {str(e)}")
-                logger.info("Попытка загрузки из HuggingFace...")
-                
-                # Пытаемся загрузить из HuggingFace
-                try:
-                    # Получаем токен HuggingFace из переменных окружения
-                    hf_token = os.getenv("HUGGINGFACE_TOKEN") or os.getenv("HF_TOKEN")
-                    
-                    diarization_pipeline = Pipeline.from_pretrained(
-                        "pyannote/speaker-diarization-3.1",
-                        use_auth_token=hf_token if hf_token else None
-                    )
-                    
-                    # Перемещаем на нужное устройство
-                    if device == "cuda" and torch.cuda.is_available():
-                        diarization_pipeline = diarization_pipeline.to(torch.device("cuda"))
-                    
-                    logger.info("Пайплайн диаризации успешно загружен из HuggingFace")
-                    
-                except Exception as e2:
-                    logger.error(f"Ошибка загрузки из HuggingFace: {str(e2)}")
-                    if not hf_token:
-                        logger.error("Токен HuggingFace не найден. Установите HUGGINGFACE_TOKEN или HF_TOKEN")
-                    return None
-            
-        except Exception as e:
-            logger.error(f"Ошибка инициализации пайплайна диаризации: {str(e)}")
+    if diarization_pipeline is not None:
+        return diarization_pipeline
+    
+    # Ленивая загрузка
+    diarization_pipeline = _load_pipeline_sync()
+    print(f"[Handler] After load: pipeline is None: {diarization_pipeline is None}", flush=True)
     
     return diarization_pipeline
 

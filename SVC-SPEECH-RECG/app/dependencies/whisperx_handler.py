@@ -20,13 +20,14 @@ async def get_whisperx_handler() -> Dict[str, Any]:
     
     if not whisperx_models:
         try:
-            logger.info(f"Загрузка моделей WhisperX из {settings.whisperx.models_dir}")
+            print(f"[WhisperX] Загрузка моделей из {settings.whisperx.models_dir}", flush=True)
             
             # Проверяем доступность WhisperX
             try:
                 import whisperx
-            except ImportError:
-                logger.error("WhisperX не установлен. Установите: pip install whisperx")
+                print(f"[WhisperX] Библиотека whisperx импортирована OK", flush=True)
+            except ImportError as ie:
+                print(f"[WhisperX] ОШИБКА: whisperx не установлен: {ie}", flush=True)
                 return {}
             
             # Создаем директорию для моделей если не существует
@@ -37,46 +38,50 @@ async def get_whisperx_handler() -> Dict[str, Any]:
             if device == "auto":
                 device = "cuda" if torch.cuda.is_available() else "cpu"
             
-            logger.info(f"Используется устройство: {device}")
+            print(f"[WhisperX] Устройство: {device}, CUDA доступна: {torch.cuda.is_available()}", flush=True)
             
             # Определяем compute_type в зависимости от устройства
             compute_type = settings.whisperx.compute_type
             if compute_type == "float16" and device == "cpu":
-                logger.warning("float16 не поддерживается на CPU, переключаемся на int8")
+                print("[WhisperX] float16 не поддерживается на CPU, переключаемся на int8", flush=True)
                 compute_type = "int8"
             elif compute_type == "auto":
                 compute_type = "float16" if device == "cuda" else "int8"
             
-            logger.info(f"Используется compute_type: {compute_type}")
+            print(f"[WhisperX] compute_type: {compute_type}", flush=True)
             
-            # Проверяем доступность директории с моделями
-            if not os.path.exists(settings.whisperx.models_dir):
-                logger.error(f"Директория для моделей WhisperX не существует: {settings.whisperx.models_dir}")
+            # Проверяем содержимое директории
+            if os.path.exists(settings.whisperx.models_dir):
+                dir_contents = os.listdir(settings.whisperx.models_dir)
+                print(f"[WhisperX] Директория моделей ({len(dir_contents)} элементов): {dir_contents[:10]}", flush=True)
             else:
-                logger.info(f"Директория для моделей существует: {settings.whisperx.models_dir}")
-                # Проверяем содержимое директории
-                try:
-                    dir_contents = os.listdir(settings.whisperx.models_dir)
-                    logger.info(f"Содержимое директории моделей ({len(dir_contents)} элементов): {dir_contents[:10]}...")
-                except Exception as e:
-                    logger.warning(f"Не удалось прочитать содержимое директории: {e}")
+                print(f"[WhisperX] Директория НЕ СУЩЕСТВУЕТ: {settings.whisperx.models_dir}", flush=True)
             
-            # Загружаем модели для каждого поддерживаемого языка
-            for lang in settings.whisperx.supported_languages:
-                if lang == "auto":
-                    continue
-                    
+            # Проверяем права записи
+            test_file = os.path.join(settings.whisperx.models_dir, ".write_test")
+            try:
+                with open(test_file, "w") as f:
+                    f.write("test")
+                os.remove(test_file)
+                print("[WhisperX] Директория доступна для записи ✓", flush=True)
+            except Exception as we:
+                print(f"[WhisperX] ОШИБКА: директория НЕ доступна для записи: {we}", flush=True)
+            
+            langs = [l for l in settings.whisperx.supported_languages if l != "auto"]
+            print(f"[WhisperX] Языки для загрузки: {langs}", flush=True)
+            
+            # Загружаем только русскую модель для экономии памяти
+            for lang in langs:
                 try:
-                    logger.info(f"Начинаем загрузку модели WhisperX для языка: {lang}")
-                    logger.info(f"Параметры: device={device}, compute_type={compute_type}, download_root={settings.whisperx.models_dir}")
+                    print(f"[WhisperX] >>> Загрузка модели для '{lang}'...", flush=True)
+                    print(f"[WhisperX] Параметры: device={device}, compute_type={compute_type}, download_root={settings.whisperx.models_dir}", flush=True)
                     
-                    # Загружаем модель WhisperX с указанием папки для кэша
                     model = whisperx.load_model(
-                        "medium",  # Используем среднюю модель для лучшего качества
+                        "medium",
                         device=device,
                         compute_type=compute_type,
                         language=lang,
-                        download_root=settings.whisperx.models_dir  # Папка для кэша моделей
+                        download_root=settings.whisperx.models_dir
                     )
                     
                     whisperx_models[lang] = {
@@ -85,23 +90,20 @@ async def get_whisperx_handler() -> Dict[str, Any]:
                         "compute_type": compute_type
                     }
                     
-                    logger.info(f"Модель WhisperX {lang} успешно загружена")
+                    print(f"[WhisperX] ✅ Модель '{lang}' загружена успешно!", flush=True)
                     
                 except Exception as e:
-                    logger.error(f"Ошибка загрузки модели WhisperX {lang}: {str(e)}", exc_info=True)
+                    print(f"[WhisperX] ❌ Ошибка загрузки '{lang}': {e}", flush=True)
                     import traceback
-                    logger.error(f"Детали ошибки для {lang}: {traceback.format_exc()}")
+                    traceback.print_exc()
                     continue
             
-            if not whisperx_models:
-                logger.warning("Не удалось загрузить ни одной модели WhisperX")
-            
-            logger.info(f"Загружено {len(whisperx_models)} моделей WhisperX")
+            print(f"[WhisperX] Итого загружено моделей: {len(whisperx_models)}", flush=True)
             
         except Exception as e:
-            logger.error(f"Ошибка инициализации моделей WhisperX: {str(e)}", exc_info=True)
+            print(f"[WhisperX] ❌ КРИТИЧЕСКАЯ ОШИБКА: {e}", flush=True)
             import traceback
-            logger.error(f"Детали ошибки инициализации: {traceback.format_exc()}")
+            traceback.print_exc()
     
     return whisperx_models
 

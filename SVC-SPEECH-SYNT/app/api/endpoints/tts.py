@@ -1,9 +1,10 @@
 import io
 import re
+import html
 import torch
 import scipy.io.wavfile
 from fastapi import APIRouter, HTTPException, Form
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from app.dependencies.silero_handler import get_silero_handler
 from app.core.config import settings
 import logging
@@ -48,22 +49,43 @@ def split_text_into_chunks(text: str, max_chunk_size: int = 1000) -> list:
     return chunks
 
 
-def preprocess_text(text: str) -> str:
-    """Предобработка текста для улучшения качества синтеза"""
-    # Заменяем проблемные символы
-    text = text.replace(',', ' и ').replace('.', ' точка').replace('!', ' восклицательный знак')
-    text = text.replace('?', ' вопросительный знак').replace(':', ' двоеточие')
+def preprocess_text(text: str, language: str = "ru") -> str:
+    """Минимальная предобработка текста — Silero сам обрабатывает пунктуацию"""
+    # Декодируем HTML entities (&#34; → ", &amp; → &, &lt; → <, и т.д.)
+    text = html.unescape(text)
     
-    # Заменяем цифры на слова
-    replacements = {
-        '1': 'один', '2': 'два', '3': 'три', '4': 'четыре', '5': 'пять',
-        '6': 'шесть', '7': 'семь', '8': 'восемь', '9': 'девять', '0': 'ноль'
-    }
+    # Удаляем emoji и прочие нетекстовые символы Unicode
+    # Оставляем только: буквы, цифры, пунктуацию, пробелы
+    import unicodedata
+    cleaned = []
+    for ch in text:
+        cat = unicodedata.category(ch)
+        # So = Symbol Other (emoji), Sk = Symbol modifier, Sc = Symbol currency (оставляем)
+        if cat.startswith('So') or cat.startswith('Sk') or cat == 'Cn':
+            continue
+        cleaned.append(ch)
+    text = ''.join(cleaned)
     
-    for digit, word in replacements.items():
-        text = text.replace(digit, word)
+    # Для английской модели убираем кириллицу, для русской — латиницу оставляем (Silero ru её терпит)
+    if language == "en":
+        text = re.sub(r'[а-яА-ЯёЁіІїЇєЄґҐ]+', '', text)
     
-    return text
+    # Убираем символы, которые могут вызвать ошибки
+    text = text.replace('"', '').replace('«', '').replace('»', '')
+    text = text.replace('(', ', ').replace(')', ', ')
+    text = text.replace('*', '').replace('#', '').replace('`', '')
+    text = text.replace('&', ' и ' if language == 'ru' else ' and ')
+    text = text.replace('<', '').replace('>', '')
+    text = text.replace('{', '').replace('}', '')
+    text = text.replace('[', '').replace(']', '')
+    text = text.replace('\\', '')
+    text = text.replace('|', '')
+    text = text.replace('~', '')
+    text = text.replace('^', '')
+    text = text.replace('_', ' ')
+    # Убираем множественные пробелы
+    text = ' '.join(text.split())
+    return text.strip()
 
 
 @router.post("/synthesize")
@@ -123,13 +145,16 @@ async def synthesize_speech(
         # Получаем модели
         models = await get_silero_handler()
         
-        if language not in models:
+        if models is None or language not in models:
             raise HTTPException(status_code=503, detail=f"Модель для языка {language} не загружена")
         
         model = models[language]
         
         # Предобработка текста
-        processed_text = preprocess_text(text)
+        processed_text = preprocess_text(text, language=language)
+        
+        if not processed_text or len(processed_text.strip()) == 0:
+            raise HTTPException(status_code=400, detail="Текст пуст после предобработки (удалены emoji/спецсимволы)")
         
         # Разбиваем текст на части если он длинный
         chunks = split_text_into_chunks(processed_text)

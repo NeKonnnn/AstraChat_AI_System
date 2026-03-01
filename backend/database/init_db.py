@@ -301,6 +301,13 @@ def get_vector_repository():
     return vector_repo
 
 
+def reset_mongodb_globals():
+    """Сброс глобальных подключений MongoDB (для переинициализации в текущем event loop при 'Event loop is closed')."""
+    global mongodb_connection, conversation_repo
+    mongodb_connection = None
+    conversation_repo = None
+
+
 def get_prompt_repository():
     """Получение репозитория промптов"""
     if not postgresql_available:

@@ -120,6 +120,11 @@ class DiarizationConfig(BaseModel):
 class SuryaConfig(BaseModel):
     enabled: bool = True
     models_dir: str = os.environ.get("SURYA_MODELS_DIR", "/app/models/surya")
+    # Локальные чекпоинты (относительно models_dir) для офлайн-режима, например: text_detection/2025_02_28, text_recognition/2025_02_18
+    detection_checkpoint: Optional[str] = os.environ.get("SURYA_DETECTION_CHECKPOINT")
+    recognition_checkpoint: Optional[str] = os.environ.get("SURYA_RECOGNITION_CHECKPOINT")
+    # Не обращаться к интернету при загрузке моделей (использовать только кэш/локальные пути)
+    offline: bool = os.environ.get("SURYA_OFFLINE", "0").strip().lower() in ("1", "true", "yes")
     device: str = "cpu"  # cpu, cuda, auto
     max_file_size: int = 50 * 1024 * 1024  # 50MB
     supported_languages: List[str] = ["ru", "en", "hi", "es", "fr", "de", "it", "pt", "vi", "tr", "ar", "zh", "ja", "ko", "th", "ur", "fa", "ta", "te", "ml", "kn", "gu", "pa", "bn", "or", "as", "ne", "mr", "sa", "my", "ka", "si", "km", "lo", "bo", "dz", "ti", "am", "sw", "zu", "xh", "af", "sq", "az", "eu", "be", "bs", "bg", "ca", "hr", "cs", "da", "nl", "et", "fi", "gl", "el", "he", "hu", "is", "id", "ga", "kk", "ky", "lv", "lt", "lb", "mk", "ms", "mt", "mn", "no", "pl", "ro", "sr", "sk", "sl", "sv", "tg", "tk", "uk", "uz", "cy", "yi", "yo", "zu"]

@@ -2,18 +2,22 @@ import json
 import time
 import uuid
 import re
-from typing import List, Optional, AsyncGenerator, Dict, Any
+from typing import List, Optional, AsyncGenerator, Dict, Any, Callable
 from app.models.schemas import Message, ToolDefinition
 from .base_generator import BaseResponseGenerator
 from app.services.generators.tool_call_processor import ToolCallProcessor
 import logging
+
 logger = logging.getLogger(__name__)
+
 class StreamResponseGenerator(BaseResponseGenerator):
     """Генератор потоковых ответов с поддержкой tool calls для LibreChat"""
-    def __init__(self, args, **kwargs):
-        super().__init__(*args, **kwargs)
+    
+    def __init__(self, model_name: str, completion_caller: Callable):
+        super().__init__(model_name, completion_caller)
         self.tool_processor = ToolCallProcessor()
         self.tool_call_pattern = re.compile(r'<tool_call>\s(.*?)\s*</tool_call>', re.DOTALL)
+
     async def generate(
         self,
         messages: List[Message],
@@ -32,7 +36,7 @@ class StreamResponseGenerator(BaseResponseGenerator):
             params = self._prepare_generation_params(
                 messages, temperature, max_tokens, frequency_penalty, presence_penalty, tools
             )
-            async for chunk in self._completion_caller(session_id, **params):
+            async for chunk in self._completion_caller(session_id, params): # Убран ** так как в models_service передается словарь
                 delta = chunk.get('choices', [{}])[0].get('delta', {})
                 content = delta.get('content', '')
                 if not content:
@@ -45,7 +49,7 @@ class StreamResponseGenerator(BaseResponseGenerator):
                     buffer += content
                     tool_call_detected = True
                     if '</tool_call>' in buffer:
-                        tool_calls = self._parse_tool_calls_from_buffer(buffer)
+                        tool_calls = self.parse_tool_calls_from_buffer(buffer) # Исправлен вызов self
                         if tool_calls:
                             # Генерируем последовательность как OpenAI
                             async for tool_chunk in self._stream_tool_calls(response_id, tool_calls[0]):
@@ -58,9 +62,9 @@ class StreamResponseGenerator(BaseResponseGenerator):
         except Exception as e:
             logger.error(f"Streaming error: {str(e)}", exc_info=True)
             yield self._create_error_chunk(response_id, str(e))
+
     async def _stream_tool_calls(self, response_id: str, tool_call: dict) -> AsyncGenerator[str, None]:
         """Строгая имитация OpenAI streaming для LibreChat"""
-        # Чанк 1: role + инициализация tool call
         yield f"data: {json.dumps({
             'id': response_id,
             'object': 'chat.completion.chunk',
@@ -80,9 +84,8 @@ class StreamResponseGenerator(BaseResponseGenerator):
                 'finish_reason': None
             }]
         }, ensure_ascii=False)}\n\n"
-        # Чанк 2: аргументы (разбиваем на части для больших ответов)
+        
         args = tool_call['function']['arguments']
-        # Для простоты отправляем за 2 чанка
         mid = len(args) // 2
         if mid > 0:
             yield f"data: {json.dumps({
@@ -96,7 +99,7 @@ class StreamResponseGenerator(BaseResponseGenerator):
                     'finish_reason': None
                 }]
             }, ensure_ascii=False)}\n\n"
-        # Чанк 3: остаток аргументов + finish_reason
+        
         yield f"data: {json.dumps({
             'id': response_id,
             'object': 'chat.completion.chunk',
@@ -105,9 +108,10 @@ class StreamResponseGenerator(BaseResponseGenerator):
             'choices': [{
                 'index': 0,
                 'delta': {'tool_calls': [{'index': 0, 'function': {'arguments': args[mid:]}}]},
-                'finish_reason': 'tool_calls'  # ВАЖНО: здесь!
+                'finish_reason': 'tool_calls'
             }]
         }, ensure_ascii=False)}\n\n"
+
     def _create_chunk(self, response_id: str, content: str) -> str:
         return f"data: {json.dumps({
             'id': response_id,
@@ -116,8 +120,8 @@ class StreamResponseGenerator(BaseResponseGenerator):
             'model': self.model_name,
             'choices': [{'index': 0, 'delta': {'content': content}, 'finish_reason': None}]
         }, ensure_ascii=False)}\n\n"
+
     def _create_error_chunk(self, response_id: str, error_message: str) -> str:
-        """Создание чанка с ошибкой для потокового ответа"""
         return f"data: {json.dumps({
             'id': response_id,
             'object': 'chat.completion.chunk',
@@ -125,23 +129,22 @@ class StreamResponseGenerator(BaseResponseGenerator):
             'model': self.model_name,
             'choices': [{
                 'index': 0,
-                'delta': {
-                    'role': 'assistant',
-                    'content': f"Error: {error_message}"
-                },
+                'delta': {'role': 'assistant', 'content': f'Error: {error_message}'},
                 'finish_reason': 'stop'
             }]
         }, ensure_ascii=False)}\n\n"
+
     def parse_tool_calls_from_buffer(self, buffer: str) -> List[dict]:
         tool_calls = []
         for match in self.tool_call_pattern.findall(buffer):
             try:
+                match_data = json.loads(match)
                 tool_calls.append({
                     "id": f"call{int(time.time())}",
                     "type": "function",
                     "function": {
-                        "name": json.loads(match)['name'],
-                        "arguments": json.dumps(json.loads(match)['arguments'], ensure_ascii=False)
+                        "name": match_data['name'],
+                        "arguments": json.dumps(match_data['arguments'], ensure_ascii=False)
                     }
                 })
             except Exception as e:

@@ -1,0 +1,47 @@
+# SVC-RAG: логика RAG (парсинг, чанкинг, поиск). Модели — в SVC-RAG-MODELS.
+
+server:
+  host: "0.0.0.0"
+  port: 8000
+  log_level: "INFO"
+  docs_url: "/docs"
+  redoc_url: "/redoc"
+
+cors:
+  allowed_origins: ["*"]
+  allow_credentials: true
+  allow_methods: ["*"]
+  allow_headers: ["*"]
+
+app:
+  title: "astrachat RAG Service"
+  description: "Индексация документов и поиск (pgvector + BM25), эмбеддинги и реранкер через SVC-RAG-MODELS"
+  version: "1.0.0"
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# URL сервиса с моделями (эмбеддинг + реранкер)
+rag_models_client:
+  base_url: "http://rag-models:8000"
+  timeout: 60.0
+
+# PostgreSQL с pgvector (та же БД, что и у backend, или своя)
+postgresql:
+  host: "postgresql"
+  port: 5432
+  database: "memoai"
+  user: "admin"
+  password: "password"
+  embedding_dim: 384
+
+# Параметры поиска
+rag:
+  enabled: true
+  use_hybrid_search: true
+  hybrid_bm25_weight: 0.3
+  use_reranking: true
+  rerank_top_k: 20
+  chunk_size: 1000
+  chunk_overlap: 200

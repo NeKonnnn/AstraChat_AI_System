@@ -1,18 +1,16 @@
 """
-AstraChat Agent с поддержкой llm-svc
-Модифицированная версия agent.py для работы через llm-svc API
+AstraChat Agent с поддержкой микросервисов
+Модифицированная версия для работы через распределенную архитектуру (llm-service)
 """
 
-# Настройка кодировки для Windows
+# Настройка кодировки для Windows  
 import sys
 import os
 
-# Импортируем утилиту для исправления кодировки
 try:
     from utils.encoding_fix import fix_windows_encoding, safe_print
     fix_windows_encoding()
 except ImportError:
-    # Если утилита недоступна, используем базовую настройку
     if sys.platform == "win32":
         os.system("chcp 65001 >nul 2>&1")
         if hasattr(sys.stdout, 'reconfigure'):
@@ -24,26 +22,29 @@ import json
 import logging
 import asyncio
 from typing import List, Dict, Any, Optional, Callable
-from config import get_path
 
-# Получаем путь к моделям из конфига
-MODEL_PATH = get_path("model_path")
-from backend.context_prompts import context_prompt_manager
-from backend.llm_client import ask_agent_llm_svc, get_llm_service
+# Импорт путей и настроек
+try:
+    from backend.config.config import PROJECT_ROOT
+    from backend.context_prompts import context_prompt_manager
+    from backend.llm_client import ask_agent_llm_svc, get_llm_service
+except ImportError:
+    from config.config import PROJECT_ROOT
+    from context_prompts import context_prompt_manager
+    from llm_client import ask_agent_llm_svc, get_llm_service
 
-# Настройка логирования с поддержкой UTF-8
 logger = logging.getLogger(__name__)
 
-# Настройка кодировки для обработчиков логирования
+# Настройка кодировки логов  
 for handler in logging.root.handlers:
     if hasattr(handler, 'stream') and hasattr(handler.stream, 'reconfigure'):
         handler.stream.reconfigure(encoding='utf-8')
 
-# Класс для хранения настроек модели (совместимость)
 class ModelSettings:
+    """Класс для хранения настроек модели  """
     def __init__(self):
+        # Находим файл настроек относительно корня бэкенда
         self.settings_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "llm_settings.json")
-        # Настройки модели по умолчанию
         self.default_settings = {
             "context_size": 8192,
             "output_tokens": 1024,
@@ -67,31 +68,24 @@ class ModelSettings:
         self.load_settings()
     
     def load_settings(self):
-        """Загрузка настроек из файла"""
         try:
             if os.path.exists(self.settings_file):
                 with open(self.settings_file, 'r', encoding='utf-8') as f:
                     loaded_settings = json.load(f)
                     self.settings.update(loaded_settings)
-                print("Настройки модели загружены")
+                logger.info("Настройки LLM загружены из файла")
         except Exception as e:
-            print(f"Ошибка при загрузке настроек модели: {str(e)}")
+            logger.error(f"Ошибка загрузки настроек модели: {e}")
     
     def save_settings(self):
-        """Сохранение настроек в файл"""
         try:
             with open(self.settings_file, 'w', encoding='utf-8') as f:
                 json.dump(self.settings, f, indent=2, ensure_ascii=False)
-            print("Настройки модели сохранены")
         except Exception as e:
-            print(f"Ошибка при сохранении настроек модели: {str(e)}")
+            logger.error(f"Ошибка сохранения настроек модели: {e}")
     
-    def get(self, key, default=None):
-        """Получение значения настройки"""
-        return self.settings.get(key, default)
-    
+    def get(self, key, default=None): return self.settings.get(key, default)
     def set(self, key, value):
-        """Установка значения настройки"""
         if key in self.settings:
             self.settings[key] = value
             self.save_settings()
@@ -99,244 +93,154 @@ class ModelSettings:
         return False
     
     def reset_to_defaults(self):
-        """Сброс настроек к рекомендуемым значениям по умолчанию"""
         self.settings = self.default_settings.copy()
         self.save_settings()
-        print("Настройки сброшены к рекомендуемым значениям")
-    
-    def get_recommended_settings(self):
-        """Получение рекомендуемых настроек (без применения)"""
-        return self.default_settings.copy()
+
+    def get_recommended_settings(self): return self.default_settings.copy()
     
     def get_max_values(self):
-        """Получение максимальных значений для настроек"""
         return {
-            "context_size": 32768,
-            "output_tokens": 100000,  # Увеличено для снятия ограничения на длину генерации
-            "batch_size": 2048,
-            "n_threads": 24,
-            "temperature": 2.0,
-            "top_p": 1.0,
-            "repeat_penalty": 2.0,
-            "top_k": 200,
-            "min_p": 1.0,
-            "frequency_penalty": 2.0,
-            "presence_penalty": 2.0
+            "context_size": 32768, "output_tokens": 100000, "batch_size": 2048,
+            "n_threads": 24, "temperature": 2.0, "top_p": 1.0, "repeat_penalty": 2.0,
+            "top_k": 200, "min_p": 1.0, "frequency_penalty": 2.0, "presence_penalty": 2.0
         }
     
-    def get_all(self):
-        """Получение всех настроек"""
-        return self.settings.copy()
+    def get_all(self): return self.settings.copy()
 
-# Создаем экземпляр класса настроек
+# Инициализируем настройки  
 model_settings = ModelSettings()
-
-# Настройки модели
 MODEL_CONTEXT_SIZE = model_settings.get("context_size")
 DEFAULT_OUTPUT_TOKENS = model_settings.get("output_tokens")
 VERBOSE_OUTPUT = model_settings.get("verbose")
 
-# Флаг использования llm-svc
-USE_LLM_SVC = True  # Переключатель между прямой работой с llama-cpp и llm-svc
-
+# Включаем режим микросервисов принудительно
+USE_LLM_SVC = True
 def initialize_model():
-    """Инициализация модели (теперь через llm-svc)"""
+    """Инициализация модели через сетевой сервис  """
     if USE_LLM_SVC:
-        logger.info("Инициализация через llm-svc...")
+        logger.info("[SVC] Инициализация связи с llm-service...")
         try:
-            import asyncio
-            # Инициализируем llm-svc сервис
+            # Инициализируем сервис (  логики работы с loop)
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                # Если loop уже запущен, создаем новый в отдельном потоке
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, get_llm_service())
-                    service = future.result()
+                    future = executor.submit(lambda: asyncio.run(get_llm_service()))
+                    future.result()
             else:
-                service = loop.run_until_complete(get_llm_service())
+                loop.run_until_complete(get_llm_service())
             
-            logger.info("llm-svc сервис инициализирован успешно")
+            logger.info("[SVC] Связь с сервисом LLM подтверждена")
             return True
         except Exception as e:
-            logger.error(f"Ошибка инициализации llm-svc: {e}")
+            logger.error(f"[SVC] Ошибка инициализации: {e}")
             return False
     else:
-        # Fallback к оригинальной инициализации
-        logger.info("Используется оригинальная инициализация модели")
         return True
 
 def update_model_settings(new_settings):
-    """Обновление настроек модели"""
+    """Обновление настроек """
     global model_settings, MODEL_CONTEXT_SIZE, DEFAULT_OUTPUT_TOKENS, VERBOSE_OUTPUT
-    
-    # Обновляем настройки
     for key, value in new_settings.items():
         model_settings.set(key, value)
-    
-    # Обновляем глобальные переменные
     MODEL_CONTEXT_SIZE = model_settings.get("context_size")
     DEFAULT_OUTPUT_TOKENS = model_settings.get("output_tokens")
     VERBOSE_OUTPUT = model_settings.get("verbose")
-    
-    logger.info("Настройки модели обновлены")
     return True
 
-# Глобальная переменная для хранения выбранной модели
+# Глобальная переменная для выбранной модели  
 _selected_model_name = None
 
 def reload_model_by_path(model_path):
-    """Перезагрузка модели с новым файлом модели (через llm-svc)"""
+    """Выбор модели в распределенной системе  """
     global _selected_model_name
-    
     if USE_LLM_SVC:
-        # Проверяем, что путь не является директорией
-        if os.path.isdir(model_path):
-            logger.warning(f"Передан путь к директории вместо файла модели: {model_path}. Пропускаем загрузку.")
-            return False
+        if os.path.isdir(model_path): return False
         
-        # Проверяем, является ли путь llm-svc путем
+        # Если путь начинается с llm-svc://, извлекаем ID модели
         if model_path.startswith("llm-svc://"):
-            # Извлекаем имя модели из пути
             model_name = model_path.replace("llm-svc://", "")
             _selected_model_name = model_name
-            logger.info(f"Выбрана модель из llm-svc: {model_name}. Модель будет использоваться при следующем запросе.")
+            logger.info(f"[SVC] Выбрана модель: {model_name}")
             return True
         
-        # Если путь к локальному файлу, но мы используем llm-svc, предупреждаем
-        if os.path.exists(model_path) and model_path.endswith('.gguf'):
-            logger.warning(f"Передан путь к локальному файлу модели {model_path}, но используется llm-svc. Модель должна быть доступна через llm-svc.")
-            return True
-        
-        logger.info(f"Перезагрузка модели через llm-svc: {model_path}")
-        # В llm-svc перезагрузка модели происходит через конфигурацию
-        # Здесь мы можем обновить настройки или перезапустить сервис
-        logger.info("Для смены модели в llm-svc обновите конфигурацию и перезапустите сервис")
+        logger.warning(f"[SVC] Запрос локального пути {model_path} в режиме микросервисов")
         return True
-    else:
-        # Fallback к оригинальной логике
-        logger.info("Используется оригинальная перезагрузка модели")
-        return True
+    return True
 
 def get_model_info():
-    """Получение информации о текущей модели (через llm-svc)"""
+    """Получение информации о модели через API"""
     global _selected_model_name
-    
     if USE_LLM_SVC:
         try:
-            import asyncio
-            
-            async def _get_model_info_async():
-                """Вспомогательная асинхронная функция для получения информации о модели"""
+            async def _get_info():
                 service = await get_llm_service()
                 health = await service.client.health_check()
                 return service, health
             
-            # Получаем event loop
+            # Запуск асинхронки в синхронном контексте  
             try:
                 loop = asyncio.get_event_loop()
             except RuntimeError:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
             
-            # Выполняем асинхронную функцию
             if loop.is_running():
-                # Если loop уже запущен, используем ThreadPoolExecutor
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, _get_model_info_async())
-                    service, health = future.result()
+                    service, health = executor.submit(lambda: asyncio.run(_get_info())).result()
             else:
-                # Если loop не запущен, используем run_until_complete
-                service, health = loop.run_until_complete(_get_model_info_async())
+                service, health = loop.run_until_complete(_get_info())
             
             if health and health.get("status") == "healthy":
-                # Используем выбранную модель, если она есть, иначе используем модель из health
-                if _selected_model_name:
-                    model_name = _selected_model_name
-                    model_path = f"llm-svc://{_selected_model_name}"
-                else:
-                    model_name = health.get("model_name") or getattr(service, "model_name", "Unknown")
-                    model_path = "llm-svc"
-                
+                model_name = _selected_model_name or health.get("model_name") or getattr(service, "model_name", "Unknown")
                 return {
                     "loaded": health.get("model_loaded", True),
                     "name": model_name,
-                    "metadata": {
-                        "general.name": model_name,
-                        "general.architecture": "LLM-SVC",
-                        "general.size_label": "Unknown"
-                    },
-                    "path": model_path,
+                    "metadata": {"general.architecture": "Distributed LLM-SVC"},
+                    "path": f"llm-svc://{model_name}",
                     "n_ctx": MODEL_CONTEXT_SIZE,
-                    "n_gpu_layers": 0
+                    "n_gpu_layers": -1
                 }
-            else:
-                return {
-                    "loaded": False,
-                    "error": "llm-svc недоступен",
-                    "path": "llm-svc"
-                }
+            return {"loaded": False, "error": "llm-svc unreachable"}
         except Exception as e:
-            logger.error(f"Ошибка получения информации о модели: {e}")
-            return {
-                "loaded": False,
-                "error": str(e),
-                "path": "llm-svc"
-            }
-    else:
-        # Fallback к оригинальной логике
-        return {
-            "loaded": True,
-            "metadata": {"general.name": "Local Model"},
-            "path": MODEL_PATH
-        }
+            logger.error(f"Error get_model_info: {e}")
+            return {"loaded": False, "error": str(e)}
+    return {"loaded": True, "name": "Local Mode", "path": "local"}
 
 def prepare_prompt(text, system_prompt=None, history=None, model_path=None, custom_prompt_id=None):
-    """Подготовка промпта в правильном формате с поддержкой истории диалога и контекстных промптов"""
+    """Сборка промпта в формате IM  """
     if system_prompt is None:
-        # Используем контекстный промпт для модели, если доступен
         if model_path:
             system_prompt = context_prompt_manager.get_effective_prompt(model_path, custom_prompt_id)
         else:
             system_prompt = context_prompt_manager.get_global_prompt()
     
-    # Базовый шаблон для чата
-    prompt_parts = []
-    
-    # Добавляем системный промпт только если он не пустой
+    parts = []
     if system_prompt and system_prompt.strip():
-        prompt_parts.append(f"<|im_start|>system\n{system_prompt}\n<|im_end|>")
+        parts.append(f"<|im_start|>system\n{system_prompt}\n<|im_end|>")
     
-    # Добавляем историю диалога, если она есть
     if history:
         for entry in history:
             role = entry.get("role", "user")
             content = entry.get("content", "")
-            if role == "user":
-                prompt_parts.append(f"<|im_start|>user\n{content}\n<|im_end|>")
-            elif role == "assistant":
-                prompt_parts.append(f"<|im_start|>assistant\n{content}\n<|im_end|>")
+            parts.append(f"<|im_start|>{role}\n{content}\n<|im_end|>")
     
-    # Добавляем текущий запрос пользователя
-    prompt_parts.append(f"<|im_start|>user\n{text.strip()}\n<|im_end|>")
-    prompt_parts.append("<|im_start|>assistant\n")
-    
-    return "".join(prompt_parts)
+    parts.append(f"<|im_start|>user\n{text.strip()}\n<|im_end|>")
+    parts.append("<|im_start|>assistant\n")
+    return "".join(parts)
 
-def ask_agent(prompt, history=None, max_tokens=None, streaming=False, stream_callback=None, model_path=None, custom_prompt_id=None, images=None):
-    """Основная функция для работы с AI агентом через llm-svc"""
+def ask_agent(prompt, history=None, max_tokens=None, streaming=False, stream_callback=None, 
+              model_path=None, custom_prompt_id=None, images=None, system_prompt=None):
+    """Главная функция-точка входа для агентов"""
     
     if USE_LLM_SVC:
-        # Используем llm-svc
-        logger.info("Используется llm-svc для генерации ответа")
-        
-        # Если не указано количество токенов, берем из настроек
+        logger.info(f"[SVC] Вызов ask_agent, streaming={streaming}")
         if max_tokens is None:
             max_tokens = model_settings.get("output_tokens")
         
         try:
-            # Используем llm_client для генерации
+            # Вызываем обертку из llm_client.py
             response = ask_agent_llm_svc(
                 prompt=prompt,
                 history=history,
@@ -345,29 +249,23 @@ def ask_agent(prompt, history=None, max_tokens=None, streaming=False, stream_cal
                 stream_callback=stream_callback,
                 model_path=model_path,
                 custom_prompt_id=custom_prompt_id,
-                images=images
+                images=images,
+                system_prompt=system_prompt
             )
             
-            # Проверяем, не была ли генерация отменена
             if response is None:
-                logger.warning("Генерация была отменена пользователем")
-                return None  # Возвращаем None при отмене
-            
+                logger.warning("Генерация прервана пользователем")
+                return None
             return response
             
         except asyncio.CancelledError:
-            logger.warning("Генерация была отменена (asyncio.CancelledError)")
-            return None  # Возвращаем None при отмене
+            return None
         except Exception as e:
-            logger.error(f"Ошибка генерации через llm-svc: {e}")
-            return f"Извините, произошла ошибка при генерации ответа: {str(e)}"
-    
+            logger.error(f"Ошибка ask_agent: {e}")
+            return f"Извините, произошла ошибка: {str(e)}"
     else:
-        # Fallback к оригинальной логике (если llm-svc недоступен)
-        logger.warning("llm-svc недоступен, используется fallback режим")
-        return "llm-svc недоступен. Пожалуйста, запустите llm-svc сервис."
+        logger.warning("Режим локальной работы отключен. Запустите микросервисы.")
+        return "Ошибка: llm-service недоступен."
 
-# Инициализация НЕ происходит автоматически при импорте модуля!
-# Это позволяет избежать двойной загрузки модели.
-# Инициализация будет выполнена явно из main.py при первом использовании.
-logger.info("Модуль agent_llm_svc импортирован (инициализация отложена)")
+# Логирование загрузки модуля
+logger.info("Модуль agent_llm_svc (микросервисная версия) загружен")

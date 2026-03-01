@@ -29,14 +29,19 @@ RUN apt-get update && apt-get install -y \
     git \
     pkg-config \
     ffmpeg \
+    libavformat-dev \
+    libavcodec-dev \
+    libavdevice-dev \
+    libavutil-dev \
+    libavfilter-dev \
+    libswscale-dev \
+    libswresample-dev \
     wget \
     unzip \
     libsndfile1 \
     libsndfile1-dev \
     libsox-dev \
     sox \
-    libldap2-dev \
-    libsasl2-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Создание символической ссылки для python (ОРИГИНАЛ)
@@ -67,12 +72,8 @@ ENV MKL_NUM_THREADS=8
 COPY app/ ./app/
 COPY config/ ./config/
 
-# Создание директории для моделей
-RUN mkdir -p /app/models
-
-# --- СПЕЦИФИКА STT: Копируем папки с моделями в образ ---
-COPY vosk_models/ /app/models/vosk/
-COPY whisperx_models/ /app/models/whisperx_models/
+# Создание директории для моделей (модели монтируются томами, копирование не требуется)
+RUN mkdir -p /app/models/vosk /app/models/whisperx_models
 
 # Создание непривилегированного пользователя (ОРИГИНАЛ)
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app

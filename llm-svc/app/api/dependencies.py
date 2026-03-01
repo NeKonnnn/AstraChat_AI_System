@@ -24,12 +24,24 @@ async def get_llama_service_handler(
             detail="LLM model is not loaded",
         )
     # Проверяем, есть ли свободные инстансы для обработки запроса
-    if not llama_service.is_available:
+    pool = llama_service.model_pool
+    if pool.available_count <= 0:
+        # Если все контексты заняты - 503; если активных 0, но нет свободных - ждём переинициализации
+        if pool.active_requests_count >= pool.max_concurrent_requests:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Service is busy. Maximum concurrent requests: {pool.max_concurrent_requests}, "
+                       f"Current active requests: {pool.active_requests_count}, "
+                       f"Total instances: {pool.total_count}"
+            )
+        if pool.active_requests_count == 0 and pool.total_count > 0:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Service is reinitializing. Please retry in a few seconds."
+            )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Service is busy. Maximum concurrent requests: {llama_service.model_pool.max_concurrent_requests}, "
-                   f"Current active requests: {llama_service.model_pool.active_requests_count}, "
-                   f"Total instances: {llama_service.model_pool.total_count}"
+            detail="No model instances available."
         )
     # Дополнительная проверка: если сервис почти перегружен, предупреждаем
     if llama_service.model_pool.active_requests_count >= llama_service.model_pool.max_concurrent_requests:

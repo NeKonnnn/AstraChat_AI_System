@@ -27,14 +27,14 @@ class BaseResponseGenerator(ABC):
         """Проверка необходимости использования инструментов"""
         return tools is not None and len(tools) > 0
     def _convert_messages_to_dict(self, messages: List[Message]) -> List[Dict[str, Any]]:
-        """Конвертация сообщений в словари"""
+        """Конвертация сообщений в словари (сохраняем content как list для мультимодальных сообщений)."""
         result = []
         for message in messages:
-            # Базовый словарь для всех сообщений
-            message_dict = {
-                "role": message.role.value,
-                "content": message.content
-            }
+            # Используем model_dump(), чтобы сохранить content в виде списка (text + image_url)
+            message_dict = message.model_dump()
+            # Приводим role к строке, если пришёл enum
+            if hasattr(message_dict.get("role"), "value"):
+                message_dict["role"] = message_dict["role"].value
             # Особые поля для разных типов сообщений
             if isinstance(message, AssistantMessage) and message.tool_calls:
                 message_dict["tool_calls"] = [
@@ -72,7 +72,7 @@ class BaseResponseGenerator(ABC):
             "frequency_penalty": frequency_penalty,
             "presence_penalty": presence_penalty,
         }
-        # Добавляем инструменты, если они переданы (без tool_choice!)
+        # Добавляем инструменты, если они переданы
         if self._should_use_tools(tools):
             params["tools"] = [tool.model_dump() for tool in tools]
             logger.info(f"Tools enabled: {[tool.function.name for tool in tools]}")

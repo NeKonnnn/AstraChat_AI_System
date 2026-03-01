@@ -1,16 +1,12 @@
-"""
-API endpoints module [STT Service Version].
-"""
-
+# GPB-CORSUR-SVC-SPEACH-RECG/app/api/__init__.py
 from fastapi import APIRouter
-# Импортируем только те эндпоинты, которые мы скопировали в этот проект
 from .endpoints import transcription, whisperx
 
-# Создаем основной роутер API
 router = APIRouter()
 
-# Включаем роутеры только для распознавания речи
-# Vosk
-router.include_router(transcription.router, tags=["Transcription (Vosk)"])
-# WhisperX
-router.include_router(whisperx.router, tags=["Transcription (WhisperX)"])
+# Vosk будет доступен по /v1/transcribe
+router.include_router(transcription.router) 
+
+# WhisperX будет доступен по /v1/whisperx/transcribe
+# ВАЖНО: здесь добавляем префикс /whisperx
+router.include_router(whisperx.router, prefix="/whisperx")

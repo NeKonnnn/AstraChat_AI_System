@@ -24,7 +24,11 @@ app:
 # Настройки взяты из твоего оригинала
 surya:
   enabled: true
-  models_dir: "/app/models/surya"  # Путь внутри контейнера
+  models_dir: "/app/models/surya"  # Каталог с моделями (внутри: text_detection/..., text_recognition/...)
+  # Для офлайн-режима укажи локальные чекпоинты (подпапки внутри models_dir):
+  # detection_checkpoint: "text_detection/2025_02_28"
+  # recognition_checkpoint: "text_recognition/2025_02_18"
+  # offline: true  # Не качать модели из интернета
   device: "auto"  # auto, cpu, cuda
   max_file_size: 52428800  # 50MB
   supported_languages:

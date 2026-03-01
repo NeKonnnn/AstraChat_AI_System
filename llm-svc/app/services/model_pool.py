@@ -39,11 +39,16 @@ class ModelPool:
                     else:
                         self._available.append(self._contexts[i])
                         successful_init += 1
+                
                 if successful_init == 0:
-                    self._initialization_failed = True
-                    raise ServiceUnavailableError("No models could be initialized")
-                self._initialized = True
-                self._max_active_requests = successful_init  # Обновляем максимум на основе успешных инициализаций
+                    logger.warning("No models initialized successfully. Service will start in degraded mode.")
+                    # self._initialization_failed = True # Не ставим флаг сбоя, чтобы не падал main.py
+                    # raise ServiceUnavailableError("No models could be initialized") # Не рейзим ошибку
+                    self._initialized = True # Считаем инициализированным (но пустым)
+                else:
+                    self._initialized = True
+                
+                self._max_active_requests = successful_init
                 logger.info(f"Model pool initialized with {successful_init}/{self.pool_size} instances")
             except Exception as e:
                 self._initialization_failed = True
@@ -93,6 +98,18 @@ class ModelPool:
                 # Гарантируем уменьшение счетчика даже при ошибке
                 self._active_requests = max(0, self._active_requests - 1)
         logger.info(f"Released model context [Ctx-{context.context_id}]. Active requests: {self._active_requests}")
+
+    async def _reinitialize_context(self, context: ModelContext) -> None:
+        """Переинициализация контекста и возврат в пул (контекст не в _in_use)."""
+        try:
+            await context.initialize()
+            async with self._lock:
+                if context not in self._in_use:
+                    self._available.append(context)
+                    logger.info(f"Context [Ctx-{context.context_id}] reinitialized and returned to pool")
+        except Exception as e:
+            logger.error(f"Failed to reinitialize context [Ctx-{context.context_id}]: {e}")
+
     async def cleanup(self) -> None:
         """Очистка пула"""
         async with self._lock:

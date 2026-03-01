@@ -51,15 +51,22 @@ async def lifespan(app: FastAPI):
                 raise RuntimeError("Failed to download model from Nexus")
         
         # Инициализируем обработчик диаризации (если включен)
+        logger.info("diarization.enabled=%s, config_path=%s", settings.diarization.enabled, getattr(settings.diarization, "config_path", "?"))
         if settings.diarization.enabled:
             print("\n" + "=" * 80)
             print("👥 STARTING DIARIZATION SERVICE")
             print("=" * 80 + "\n")
-            await get_diarization_handler()
-            logger.info("Diarization handler initialized")
-            print("\n" + "=" * 80)
-            print("✅ DIARIZATION SERVICE READY")
-            print("=" * 80 + "\n")
+            pipeline_result = await get_diarization_handler()
+            if pipeline_result is None:
+                logger.error("❌ FAILED TO INITIALIZE DIARIZATION PIPELINE")
+                print("\n" + "=" * 80)
+                print("❌ FAILED TO INITIALIZE DIARIZATION PIPELINE")
+                print("=" * 80 + "\n")
+            else:
+                logger.info("Diarization handler initialized")
+                print("\n" + "=" * 80)
+                print("✅ DIARIZATION SERVICE READY")
+                print("=" * 80 + "\n")
         else:
             logger.warning("Diarization is DISABLED in config!")
         

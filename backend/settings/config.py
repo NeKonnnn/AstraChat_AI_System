@@ -121,26 +121,30 @@ class UrlsConfig(BaseModel):
     Все значения должны быть заданы в YAML или ENV
     """
     # Frontend адреса
-    frontend_port_1: str
-    frontend_port_1_ipv4: str
-    frontend_port_2: str
-    frontend_port_2_ipv4: str
-    frontend_port_3: str
-    frontend_port_3_ipv4: str
+    frontend_port_1: Optional[str] = "http://localhost:3000"
+    frontend_port_1_ipv4: Optional[str] = "http://127.0.0.1:3000"
+    frontend_port_2: Optional[str] = None
+    frontend_port_2_ipv4: Optional[str] = None
+    frontend_port_3: Optional[str] = None
+    frontend_port_3_ipv4: Optional[str] = None
     
     # Backend адреса
-    backend_port_1: str
-    backend_port_1_ipv4: str
-    backend_port_2: str
-    backend_port_2_ipv4: str
+    backend_port_1: Optional[str] = "http://localhost:8000"
+    backend_port_1_ipv4: Optional[str] = "http://127.0.0.1:8000"
+    backend_port_2: Optional[str] = None
+    backend_port_2_ipv4: Optional[str] = None
     
     # LLM Service адреса
-    llm_service_port: str
+    llm_service_port: Optional[str] = "http://localhost:8002"
     
     # Docker внутренние адреса
-    frontend_docker: str
-    backend_docker: str
-    llm_service_docker: str
+    frontend_docker: Optional[str] = "http://astrachat-frontend:3000"
+    backend_docker: Optional[str] = "http://astrachat-backend:8000"
+    llm_service_docker: Optional[str] = "http://llm-service:8000"
+    stt_service_docker: Optional[str] = "http://stt-service:8000"
+    tts_service_docker: Optional[str] = "http://tts-service:8000"
+    ocr_service_docker: Optional[str] = "http://ocr-service:8000"
+    diarization_service_docker: Optional[str] = "http://diarization-service:8000"
     
     @model_validator(mode='before')
     @classmethod
@@ -151,13 +155,10 @@ class UrlsConfig(BaseModel):
         
         result = {}
         required_keys = [
-            "frontend_port_1", "frontend_port_1_ipv4",
-            "frontend_port_2", "frontend_port_2_ipv4",
-            "frontend_port_3", "frontend_port_3_ipv4",
-            "backend_port_1", "backend_port_1_ipv4",
-            "backend_port_2", "backend_port_2_ipv4",
-            "llm_service_port",
-            "frontend_docker", "backend_docker", "llm_service_docker",
+            # "frontend_port_1", "frontend_port_1_ipv4",
+            # "backend_port_1", "backend_port_1_ipv4",
+            # "llm_service_port",
+            # "frontend_docker", "backend_docker", "llm_service_docker",
         ]
         
         for key in required_keys:

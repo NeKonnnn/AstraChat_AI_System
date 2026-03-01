@@ -62,12 +62,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 COPY app/ ./app/
 COPY config/ ./config/
 
-# Создание директории для моделей
-RUN mkdir -p /app/models
-
-# --- СПЕЦИФИКА DIARIZATION: Копируем папку моделей в образ ---
-# В .env мы указали DIARIZATION_MODELS_DIR=/app/models/diarization
-COPY diarize_models/ /app/models/diarization/
+# Создание директории для моделей (модели монтируются томом, копирование не требуется)
+RUN mkdir -p /app/models/diarization
 
 # Создание непривилегированного пользователя (ОРИГИНАЛ)
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
@@ -79,5 +75,5 @@ USER appuser
 
 EXPOSE 8000
 
-# Запуск
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Запуск (один воркер — пайплайн грузится при старте и должен быть в том же процессе, что и запросы)
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

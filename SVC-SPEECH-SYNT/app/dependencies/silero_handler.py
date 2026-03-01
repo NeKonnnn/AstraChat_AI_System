@@ -69,6 +69,7 @@ async def get_silero_handler() -> Optional[Dict[str, any]]:
             # Проверяем что хотя бы одна модель загружена
             if not silero_models or len(silero_models) == 0:
                 logger.error("Ни одна модель Silero TTS не была загружена!")
+                silero_models = None  # Сбрасываем, чтобы следующий вызов попытался загрузить снова
                 return None
             
             logger.info(f"Модели Silero TTS успешно загружены: {list(silero_models.keys())}")

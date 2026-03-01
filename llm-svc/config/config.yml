@@ -1,0 +1,77 @@
+# Конфигурация сервера
+server:
+  host: "0.0.0.0"
+  port: 8000
+  log_level: "INFO"
+  docs_url: "/docs"
+  redoc_url: "/redoc"
+# Настройки CORS
+cors:
+  allowed_origins:
+    - "http://localhost:3080"
+    - "http://localhost:8000"
+  allow_credentials: true
+  allow_methods: ["*"]
+  allow_headers: ["*"]
+# Настройки модели LLM
+model:
+  path: "/app/models/llm/qwen2.5-7b-instruct-q3_k_m.gguf"
+  name: "qwen2.5-7b-instruct"
+  chat_format: "chatml"
+  ctx_size: 8192
+  gpu_layers: 0
+  verbose: false
+  pool_size: 1  # Размер пула моделей
+  n_thread: 4  # Количество потоков для CPU
+  n_threads_batch: 4  # Количество потоков для батчей
+  n_batch: 512  # Размер батча
+  n_ubatch: 512  # Размер микро-батча
+# Настройки генерации
+generation:
+  default_temperature: 0.7
+  default_max_tokens: 256
+  stream: false
+# Настройки приложения
+app:
+  title: "Llama CPP API Service"
+  description: "API service for Llama-based models compatible with OpenAI API"
+  version: "1.0.0"
+# Настройки метрик и мониторинга
+monitoring:
+  enabled: false
+  prometheus_port: 9090
+  metrics_path: "/metrics"
+# Настройки логирования
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: null  # Если указано, логи будут записываться в файл
+  max_size: 10485760  # 10MB
+  backup_count: 5
+# Настройки кэширования
+caching:
+  enabled: true
+  ttl: 300  # Время жизни кэша в секундах
+  max_size: 1000  # Максимальное количество элементов в кэше
+# Настройки безопасности
+security:
+  enabled: false  # Отключаем проверку API ключа для локальной разработки
+  api_key: null  # API ключ для аутентификации (если null, аутентификация отключена). Может быть задан через переменную окружения API_KEY
+  api_key_header: "X-API-Key"  # Название заголовка для API ключа
+# Настройки Vault (опционально, для корпоративного контура)
+vault:
+  role_id: null
+  approle_name: null
+  verify: true
+  tuz_username: null
+  tuz_password: null
+  cert_path: null
+  path: null
+# Настройки Nexus
+nexus:
+  enabled: false  # Включить/выключить загрузку моделей из Nexus
+  url: ""  # URL файла Nexus
+  # Параметры аутентификации (могут быть заданы через переменные окружения: NEXUS_LOGIN, NEXUS_PASSWORD, NEXUS_CERT_PATH)
+  login: null  # Логин для аутентификации в Nexus (опционально)
+  password: null  # Пароль для аутентификации в Nexus (опционально)
+  cert_path: null  # Путь к сертификату для SSL аутентификации (опционально)

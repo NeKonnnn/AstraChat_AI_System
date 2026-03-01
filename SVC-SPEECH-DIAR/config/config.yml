@@ -26,7 +26,7 @@ diarization:
   enabled: true
   models_dir: "/app/models/diarization"  # Путь внутри контейнера
   config_path: "/app/models/diarization/pyannote_diarization_config.yaml"
-  device: "auto"  # auto, cpu, cuda
+  device: "cpu"  # cpu, cuda, auto (RTX 5070 Ti sm_120 не поддерживается PyTorch 2.1.x)
   min_speakers: 1
   max_speakers: 10
   min_duration: 1.0

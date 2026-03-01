@@ -67,12 +67,8 @@ ENV MKL_NUM_THREADS=8
 COPY app/ ./app/
 COPY config/ ./config/
 
-# Создание директории для моделей
-RUN mkdir -p /app/models
-
-# --- СПЕЦИФИКА TTS: Копируем локальную папку моделей в образ ---
-# Мы кладем их по пути, который указали в .env и config.yml
-COPY silero_models/ /app/models/silero/
+# Создание директории для моделей (модели монтируются томом, копирование не требуется)
+RUN mkdir -p /app/models/silero
 
 # Создание непривилегированного пользователя (ОРИГИНАЛ)
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app

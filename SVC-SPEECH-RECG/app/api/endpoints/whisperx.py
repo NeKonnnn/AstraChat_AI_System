@@ -85,7 +85,7 @@ async def transcribe_audio_whisperx(
             raise HTTPException(status_code=503, detail="WhisperX транскрипция отключена")
         
         # Проверяем размер файла
-        if file.size > settings.whisperx.max_file_size:
+        if file.size and file.size > settings.whisperx.max_file_size:
             raise HTTPException(
                 status_code=413,
                 detail=f"Файл слишком большой. Максимальный размер: {settings.whisperx.max_file_size} байт"

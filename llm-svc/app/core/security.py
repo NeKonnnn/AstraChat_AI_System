@@ -1,8 +1,12 @@
 import logging
 from fastapi import HTTPException, status, Depends, Header
 from app.core.config import get_settings
-from dmkfr_vault_interface.interface import VaultInterface
-from typing import Dict
+from typing import Dict, Optional
+
+try:
+    from dmkfr_vault_interface.interface import VaultInterface  
+except ImportError:
+    VaultInterface = None 
 logger = logging.getLogger(__name__)
 _settings = get_settings()
 def _handle_critical_failure(message: str, exc: Exception) -> None:
@@ -18,11 +22,16 @@ def _handle_critical_failure(message: str, exc: Exception) -> None:
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail=f"External Security Service Unavailable: {message.split(':')[0]}"
     )
-def _get_vault_interface() -> VaultInterface:
+def _get_vault_interface() -> "VaultInterface":
     """
     Получение инстанса интерфейса для работы с Vault
     :return: Инстанс Vault интерфейса
     """
+    if VaultInterface is None:
+        _handle_critical_failure(
+            "Vault client library is not available (dmkfr_vault_interface missing)",
+            ImportError("dmkfr_vault_interface not installed")
+        )
     vault_config = _settings.vault
     # Не предоставлен ID или название роли для подключения к Vault
     if not (vault_config.role_id and vault_config.approle_name):

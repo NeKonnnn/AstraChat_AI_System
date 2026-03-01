@@ -1,8 +1,12 @@
 import asyncio
 from typing import Dict, Any, Optional, Callable
 from pathlib import Path
-from llama_cpp import Llama
-from llama_cpp.llama_chat_format import Jinja2ChatFormatter
+try:
+    from llama_cpp import Llama
+    from llama_cpp.llama_chat_format import Jinja2ChatFormatter
+except ImportError:
+    Llama = None  
+    Jinja2ChatFormatter = None 
 from app.core.config import settings
 import logging
 logger = logging.getLogger(__name__)
@@ -14,6 +18,8 @@ class ModelContext:
         self._lock = asyncio.Lock()
     async def initialize(self) -> None:
         """Инициализация модели"""
+        if Llama is None:
+            raise RuntimeError(f"[Ctx-{self.context_id}] llama_cpp is not installed; LLM service is disabled in this build.")
         async with self._lock:
             if self._model is not None:
                 return
@@ -60,6 +66,8 @@ class ModelContext:
                     self._model = None
     def _load_chat_handler(self) -> Any:
         """Загрузка chat handler из шаблона"""
+        if Jinja2ChatFormatter is None:
+            return None
         chat_template_path = getattr(settings.model, 'chat_template_path', None)
         if not chat_template_path:
             return None

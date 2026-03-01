@@ -34,14 +34,13 @@ vosk:
 whisperx:
   enabled: true
   models_dir: "/app/models/whisperx_models" # Путь внутри контейнера
-  device: "auto"  # auto, cpu, cuda
-  compute_type: "int8"  # int8 для CPU, float16 для CUDA
+  device: "cpu"  # cpu — PyTorch 2.1.2 не поддерживает RTX 5070 Ti (sm_120)
+  compute_type: "int8"  # int8 для CPU
   language: "ru"
   batch_size: 16
   max_file_size: 5368709120  # 5GB
   supported_languages:
     - "ru"
-    - "en"
     - "auto"
 
 # --- ОСТАЛЬНЫЕ МОДУЛИ ОТКЛЮЧЕНЫ ---

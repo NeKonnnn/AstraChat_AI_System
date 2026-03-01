@@ -62,17 +62,26 @@ async def diarize_audio(
     Диаризация аудио файла (разделение по спикерам) - ОРИГИНАЛЬНАЯ ЛОГИКА
     """
     try:
+        # Отладка: гарантированный вывод в консоль (логи роутера могут не показываться)
+        import sys
+        print("[diarize] enabled=%s" % getattr(settings.diarization, "enabled", "?"), flush=True)
+        sys.stdout.flush()
         if not settings.diarization.enabled:
+            print("[diarize] 503: Диаризация отключена в настройках", flush=True)
+            logger.warning("503: Диаризация отключена в настройках (diarization.enabled=%s)", settings.diarization.enabled)
             raise HTTPException(status_code=503, detail="Диаризация отключена")
         
-        if file.size > settings.diarization.max_file_size:
+        if file.size and file.size > settings.diarization.max_file_size:
             raise HTTPException(
                 status_code=413,
                 detail=f"Файл слишком большой. Максимальный размер: {settings.diarization.max_file_size} байт"
             )
         
         pipeline = await get_diarization_handler()
+        print("[diarize] pipeline is None: %s" % (pipeline is None), flush=True)
         if pipeline is None:
+            print("[diarize] 503: Пайплайн не загружен в этом процессе", flush=True)
+            logger.warning("503: get_diarization_handler() вернул None — пайплайн не загружен в этом процессе")
             raise HTTPException(status_code=503, detail="Пайплайн диаризации не загружен")
         
         with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{file.filename}") as temp_file:

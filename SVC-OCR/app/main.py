@@ -52,14 +52,17 @@ async def lifespan(app: FastAPI):
         
         # Инициализируем обработчик Surya OCR (если включен)
         if settings.surya.enabled:
-            print("\n" + "=" * 80)
-            print("👁️ STARTING SURYA OCR SERVICE")
-            print("=" * 80 + "\n")
-            await get_surya_handler()
-            logger.info("Surya OCR handler initialized")
-            print("\n" + "=" * 80)
-            print("✅ OCR SERVICE READY")
-            print("=" * 80 + "\n")
+            print("\n" + "=" * 80, flush=True)
+            print("👁️ STARTING SURYA OCR SERVICE", flush=True)
+            print(f"   models_dir={settings.surya.models_dir} exists={os.path.exists(settings.surya.models_dir)}", flush=True)
+            print("=" * 80 + "\n", flush=True)
+            surya = await get_surya_handler()
+            if surya is None:
+                logger.error("Surya OCR handler returned None — проверьте логи выше: директория моделей, импорт surya-ocr, загрузка моделей")
+                print("❌ OCR NOT READY: get_surya_handler() returned None. Check logs above (models_dir, surya-ocr import, model load).", flush=True)
+            else:
+                logger.info("Surya OCR handler initialized")
+                print("✅ OCR SERVICE READY", flush=True)
         else:
             logger.warning("Surya OCR is DISABLED in config!")
         

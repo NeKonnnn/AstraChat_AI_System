@@ -11,7 +11,7 @@ import logging.config
 from app.core.config import settings
 from app.api import router as api_router
 from app.dependencies import get_llama_service, cleanup_llama_service
-from app.middleware.logging_middleware import LoggingMiddleware
+from app.middleware.logging_midleware import LoggingMiddleware
 from app.services.nexus_client import download_model_from_nexus_if_needed
 from fastapi import Request
 # Настройка логирования

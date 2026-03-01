@@ -54,11 +54,13 @@ class LlamaService:
         """Создание non-stream completion"""
         context = await self.model_pool.acquire()
         try:
-            return await context.generate(kwargs)
+            return await context.generate(**kwargs)
         finally:
             await self.model_pool.release(context)
-    async def _create_completion_stream(self, session_id: str, **kwargs) -> AsyncGenerator[dict, None]:
+    async def _create_completion_stream(self, session_id: str, kwargs: dict = None) -> AsyncGenerator[dict, None]:
         """Создание stream completion с неблокирующей итерацией."""
+        if kwargs is None:
+            kwargs = {}
         loop = asyncio.get_running_loop()
         queue = asyncio.Queue()
         context = await self.model_pool.acquire()

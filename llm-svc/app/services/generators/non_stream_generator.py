@@ -1,15 +1,23 @@
 import time
 import uuid
-from typing import List, Optional
+from typing import List, Optional, Callable, Dict, Any
 from app.models.schemas import (
     Message, ToolDefinition, ChatCompletionResponse,
     UsageInfo, MessageRole, ChatCompletionResponseChoice, AssistantMessage
 )
 from .base_generator import BaseResponseGenerator
+from app.services.generators.tool_call_processor import ToolCallProcessor # Добавлен импорт
 import logging
+
 logger = logging.getLogger(__name__)
+
 class NonStreamResponseGenerator(BaseResponseGenerator):
     """Генератор не-потоковых ответов"""
+
+    def __init__(self, model_name: str, completion_caller: Callable):
+            super().__init__(model_name, completion_caller)
+            self.tool_processor = ToolCallProcessor()
+
     async def generate(
             self,
             messages: List[Message],
@@ -30,8 +38,8 @@ class NonStreamResponseGenerator(BaseResponseGenerator):
                 messages, temperature, max_tokens, frequency_penalty, presence_penalty, tools
             )
             logger.info(f"Calling model completion for session {session_id}")
-            # Вызываем completion с session_id через _completion_caller
-            response = await self._completion_caller(session_id, **params)
+            # Убран ** так как models_service передает словарь параметров
+            response = await self._completion_caller(session_id, params)
             logger.info(f"Model response received, processing...")
             # Обрабатываем ответ
             processed_response = self._process_response(response, tools, response_id)
@@ -41,6 +49,7 @@ class NonStreamResponseGenerator(BaseResponseGenerator):
         except Exception as e:
             logger.error(f"Non-stream generation error: {str(e)}", exc_info=True)
             return self._create_error_response(response_id, str(e))
+
     def _process_response(
             self,
             response: dict,
@@ -86,6 +95,7 @@ class NonStreamResponseGenerator(BaseResponseGenerator):
                 total_tokens=response.get('usage', {}).get('total_tokens', 0)
             )
         )
+
     def _create_error_response(self, response_id: str, error_message: str) -> ChatCompletionResponse:
         """Создает ответ с ошибкой"""
         return ChatCompletionResponse(
