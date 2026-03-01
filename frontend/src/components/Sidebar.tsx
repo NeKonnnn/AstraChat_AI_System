@@ -1114,16 +1114,18 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                 const renderProjectIcon = () => {
                   const sizePx = SIDEBAR_PROJECT_AVATAR_SIZE;
                   const iconFontSizePx = sizePx - 4;
+                  const iconColor = project.iconColor || '#9ca3af';
+                  const outlineStyle = {
+                    width: `${sizePx}px`,
+                    height: `${sizePx}px`,
+                    bgcolor: 'transparent',
+                    border: '1.5px solid',
+                    borderColor: iconColor,
+                    color: iconColor,
+                  };
                   if (project.iconType === 'emoji' && project.icon) {
                     return (
-                      <Avatar
-                        sx={{
-                          width: `${sizePx}px`,
-                          height: `${sizePx}px`,
-                          bgcolor: project.iconColor === '#ffffff' ? 'rgba(255,255,255,0.1)' : project.iconColor || 'rgba(255,255,255,0.1)',
-                          fontSize: `${iconFontSizePx}px`,
-                        }}
-                      >
+                      <Avatar sx={{ ...outlineStyle, fontSize: `${iconFontSizePx}px` }}>
                         {project.icon}
                       </Avatar>
                     );
@@ -1131,27 +1133,13 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                   if (project.iconType === 'icon' && project.icon) {
                     const IconComponent = projectIconMap[project.icon] || FolderIcon;
                     return (
-                      <Avatar
-                        sx={{
-                          width: `${sizePx}px`,
-                          height: `${sizePx}px`,
-                          bgcolor: project.iconColor === '#ffffff' ? 'rgba(255,255,255,0.1)' : project.iconColor || 'rgba(255,255,255,0.1)',
-                          color: 'white',
-                        }}
-                      >
+                      <Avatar sx={outlineStyle}>
                         <IconComponent sx={{ fontSize: `${iconFontSizePx}px` }} />
                       </Avatar>
                     );
                   }
                   return (
-                    <Avatar
-                      sx={{
-                        width: `${sizePx}px`,
-                        height: `${sizePx}px`,
-                        bgcolor: 'rgba(255,255,255,0.1)',
-                        color: 'white',
-                      }}
-                    >
+                    <Avatar sx={outlineStyle}>
                       <FolderIcon sx={{ fontSize: `${iconFontSizePx}px` }} />
                     </Avatar>
                   );

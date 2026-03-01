@@ -171,17 +171,18 @@ export default function ProjectPage() {
 
   const renderProjectIcon = () => {
     if (!project) return null;
-    
+    const iconColor = project.iconColor || '#9ca3af';
+    const outlineStyle = {
+      width: 32,
+      height: 32,
+      bgcolor: 'transparent',
+      border: '1.5px solid',
+      borderColor: iconColor,
+      color: iconColor,
+    };
     if (project.iconType === 'emoji' && project.icon) {
       return (
-        <Avatar
-          sx={{
-            width: 32,
-            height: 32,
-            bgcolor: project.iconColor === '#ffffff' ? 'rgba(255,255,255,0.1)' : project.iconColor || 'rgba(255,255,255,0.1)',
-            fontSize: 18,
-          }}
-        >
+        <Avatar sx={{ ...outlineStyle, fontSize: 18 }}>
           {project.icon}
         </Avatar>
       );
@@ -189,27 +190,13 @@ export default function ProjectPage() {
     if (project.iconType === 'icon' && project.icon) {
       const IconComponent = projectIconMap[project.icon] || FolderIcon;
       return (
-        <Avatar
-          sx={{
-            width: 32,
-            height: 32,
-            bgcolor: project.iconColor === '#ffffff' ? 'rgba(255,255,255,0.1)' : project.iconColor || 'rgba(255,255,255,0.1)',
-            color: 'white',
-          }}
-        >
+        <Avatar sx={outlineStyle}>
           <IconComponent sx={{ fontSize: 18 }} />
         </Avatar>
       );
     }
     return (
-      <Avatar
-        sx={{
-          width: 32,
-          height: 32,
-          bgcolor: 'rgba(255,255,255,0.1)',
-          color: 'white',
-        }}
-      >
+      <Avatar sx={outlineStyle}>
         <FolderIcon sx={{ fontSize: 18 }} />
       </Avatar>
     );

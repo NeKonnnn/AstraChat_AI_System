@@ -186,16 +186,18 @@ export default function EditProjectModal({ open, onClose, project, onSave }: Edi
   };
 
   const renderIcon = () => {
+    const iconColor = selectedColor === '#ffffff' ? '#9ca3af' : selectedColor;
+    const outlineStyle = {
+      width: 48,
+      height: 48,
+      bgcolor: 'transparent',
+      border: '1.5px solid',
+      borderColor: iconColor,
+      color: iconColor,
+    };
     if (iconType === 'emoji' && selectedEmoji) {
       return (
-        <Avatar
-          sx={{
-            width: 48,
-            height: 48,
-            bgcolor: selectedColor === '#ffffff' ? 'rgba(255,255,255,0.1)' : selectedColor,
-            fontSize: 24,
-          }}
-        >
+        <Avatar sx={{ ...outlineStyle, fontSize: 24 }}>
           {selectedEmoji}
         </Avatar>
       );
@@ -203,27 +205,13 @@ export default function EditProjectModal({ open, onClose, project, onSave }: Edi
     if (iconType === 'icon' && selectedIcon) {
       const IconComponent = iconOptions.find((opt) => opt.name === selectedIcon)?.icon || FolderIcon;
       return (
-        <Avatar
-          sx={{
-            width: 48,
-            height: 48,
-            bgcolor: selectedColor === '#ffffff' ? 'rgba(255,255,255,0.1)' : selectedColor,
-            color: selectedColor === '#ffffff' ? 'white' : 'white',
-          }}
-        >
+        <Avatar sx={outlineStyle}>
           <IconComponent />
         </Avatar>
       );
     }
     return (
-      <Avatar
-        sx={{
-          width: 48,
-          height: 48,
-          bgcolor: 'rgba(255,255,255,0.1)',
-          color: 'white',
-        }}
-      >
+      <Avatar sx={outlineStyle}>
         <MoneyIcon />
       </Avatar>
     );

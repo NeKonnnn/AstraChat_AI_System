@@ -500,17 +500,18 @@ export function MoveToFolderAndProjectSubmenus(props: MoveToSubmenusProps) {
         </MenuItem>
         {projects.map((project) => {
           const renderProjectIcon = () => {
-            const avatarBg = isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)';
+            const iconColor = project.iconColor || '#9ca3af';
+            const outlineStyle = {
+              width: 20,
+              height: 20,
+              bgcolor: 'transparent',
+              border: '1.5px solid',
+              borderColor: iconColor,
+              color: iconColor,
+            };
             if (project.iconType === 'emoji' && project.icon) {
               return (
-                <Avatar
-                  sx={{
-                    width: 20,
-                    height: 20,
-                    bgcolor: project.iconColor === '#ffffff' ? avatarBg : project.iconColor || avatarBg,
-                    fontSize: 12,
-                  }}
-                >
+                <Avatar sx={{ ...outlineStyle, fontSize: 12 }}>
                   {project.icon}
                 </Avatar>
               );
@@ -518,27 +519,13 @@ export function MoveToFolderAndProjectSubmenus(props: MoveToSubmenusProps) {
             if (project.iconType === 'icon' && project.icon) {
               const IconComponent = projectIconMap[project.icon] || FolderIcon;
               return (
-                <Avatar
-                  sx={{
-                    width: 20,
-                    height: 20,
-                    bgcolor: project.iconColor === '#ffffff' ? avatarBg : project.iconColor || avatarBg,
-                    color: menuItemColor,
-                  }}
-                >
+                <Avatar sx={outlineStyle}>
                   <IconComponent sx={{ fontSize: 12 }} />
                 </Avatar>
               );
             }
             return (
-              <Avatar
-                sx={{
-                  width: 20,
-                  height: 20,
-                  bgcolor: avatarBg,
-                  color: menuItemColor,
-                }}
-              >
+              <Avatar sx={outlineStyle}>
                 <FolderIcon sx={{ fontSize: 12 }} />
               </Avatar>
             );
