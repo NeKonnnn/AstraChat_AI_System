@@ -72,10 +72,15 @@ import {
   PushPin as PushPinIcon,
   Close as CloseIcon,
   Settings as SettingsIcon,
+  Refresh as RefreshIcon,
+  Clear as ClearIcon,
 } from '@mui/icons-material';
 import { useAppContext, useAppActions } from '../contexts/AppContext';
 import { useSocket } from '../contexts/SocketContext';
+import VoiceChatDialog from '../components/VoiceChatDialog';
+import ChatInputBar from '../components/ChatInputBar';
 import { useTheme } from '@mui/material/styles';
+import { MENU_BORDER_RADIUS_PX } from '../constants/menuStyles';
 
 const projectIconMap: Record<string, React.ComponentType<any>> = {
   folder: FolderIcon,
@@ -114,12 +119,13 @@ export default function ProjectPage() {
   const navigate = useNavigate();
   const theme = useTheme();
   const { state } = useAppContext();
-  const { getProjectById, setCurrentChat, createChat, moveChatToProject, updateChatTitle, deleteChat, archiveChat, getChatById, moveChatToFolder, togglePinInProject } = useAppActions();
+  const { getProjectById, setCurrentChat, createChat, moveChatToProject, updateChatTitle, deleteChat, archiveChat, getChatById, moveChatToFolder, togglePinInProject, showNotification } = useAppActions();
   const { sendMessage, isConnected } = useSocket();
   const [chatsExpanded, setChatsExpanded] = useState(true);
   const [inputMessage, setInputMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [chatMenuAnchor, setChatMenuAnchor] = useState<null | HTMLElement>(null);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -128,6 +134,19 @@ export default function ProjectPage() {
   const [uploadedFiles, setUploadedFiles] = useState<Array<{ name: string; type: string }>>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
+  const [transcriptionModalOpen, setTranscriptionModalOpen] = useState(false);
+  const [chatInputStyle, setChatInputStyle] = useState<'compact' | 'classic'>(() =>
+    (localStorage.getItem('chat_input_style') as 'compact' | 'classic') || 'compact'
+  );
+
+  // Слушаем изменение стиля поля ввода через настройки
+  React.useEffect(() => {
+    const handler = () => {
+      setChatInputStyle((localStorage.getItem('chat_input_style') as 'compact' | 'classic') || 'compact');
+    };
+    window.addEventListener('interfaceSettingsChanged', handler);
+    return () => window.removeEventListener('interfaceSettingsChanged', handler);
+  }, []);
 
   const project = projectId ? getProjectById(projectId) : null;
   
@@ -407,222 +426,50 @@ export default function ProjectPage() {
         </Box>
 
         {/* Объединенное поле ввода с кнопками */}
-        <Box
-          sx={{
-            width: '100%',
-            maxWidth: '800px',
+        <ChatInputBar
+          value={inputMessage}
+          onChange={setInputMessage}
+          onKeyPress={handleKeyPress}
+          placeholder={
+            !isConnected
+              ? 'Нет соединения с сервером'
+              : isSending
+                ? 'Отправка сообщения...'
+                : 'Чем я могу помочь вам сегодня?'
+          }
+          inputDisabled={!isConnected || isSending}
+          inputRef={inputRef}
+          isDarkMode={theme.palette.mode === 'dark'}
+          styleVariant={chatInputStyle}
+          containerSx={{
             mb: 3,
-            p: 2,
-            borderRadius: 2,
-            bgcolor: theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)',
-            border: `1px solid ${theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'}`,
+            p: chatInputStyle === 'classic' ? 0 : 1.5,
+            px: chatInputStyle === 'classic' ? 0 : 2,
+            borderRadius: chatInputStyle === 'classic' ? '28px' : '28px',
+            maxWidth: '800px',
+            width: '100%',
+            mx: 'auto',
           }}
-        >
-          {/* Скрытый input для выбора файла */}
-          <input
-            type="file"
-            accept=".pdf,.docx,.xlsx,.txt,.jpg,.jpeg,.png,.webp"
-            style={{ display: 'none' }}
-          />
-
-          {/* Прикрепленные файлы */}
-          {uploadedFiles.length > 0 && (
-            <Box sx={{ mb: 2 }}>
-              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-                {uploadedFiles.map((file, index) => (
-                  <Box
-                    key={index}
-                    sx={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 1,
-                      p: 1,
-                      borderRadius: 2,
-                      maxWidth: '300px',
-                      bgcolor: theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
-                      border: `1px solid ${theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)'}`,
-                    }}
-                  >
-                    <Typography 
-                      variant="caption" 
-                      sx={{ 
-                        color: theme.palette.mode === 'dark' ? 'white' : '#333',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap'
-                      }}
-                    >
-                      {file.name}
-                    </Typography>
-                    <IconButton
-                      size="small"
-                      onClick={() => handleRemoveFile(index)}
-                      sx={{ 
-                        color: theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.7)',
-                        p: 0.5,
-                      }}
-                    >
-                      <CloseIcon fontSize="small" />
-                    </IconButton>
-                  </Box>
-                ))}
-              </Box>
-            </Box>
-          )}
-
-          {/* Индикатор загрузки файла */}
-          {isUploading && (
-            <Box sx={{ mb: 2, p: 1 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <CircularProgress size={16} sx={{ color: theme.palette.mode === 'dark' ? 'white' : '#333' }} />
-                <Typography variant="caption" sx={{ color: theme.palette.mode === 'dark' ? 'white' : '#333' }}>
-                  Загрузка документа...
-                </Typography>
-              </Box>
-            </Box>
-          )}
-
-          {/* Поле ввода текста */}
-          <TextField
-            inputRef={inputRef}
-            fullWidth
-            multiline
-            maxRows={4}
-            value={inputMessage}
-            onChange={(e) => setInputMessage(e.target.value)}
-            onKeyPress={handleKeyPress}
-            placeholder={
-              !isConnected
-                ? "Нет соединения с сервером" 
-                : isSending
-                  ? "Отправка сообщения..."
-                  : "Чем я могу помочь вам сегодня?"
+          fileInputRef={fileInputRef}
+          onAttachClick={() => fileInputRef.current?.click()}
+          onFileSelect={(files) => {
+            if (files?.length) {
+              setUploadedFiles(prev => [...prev, ...Array.from(files).map(f => ({ name: f.name, type: f.type }))]);
             }
-            variant="outlined"
-            size="small"
-            disabled={!isConnected || isSending}
-            sx={{
-              mb: 1.5,
-              '& .MuiOutlinedInput-root': {
-                bgcolor: 'transparent',
-                border: 'none',
-                fontSize: '0.875rem',
-                '& fieldset': {
-                  border: 'none',
-                },
-                '&:hover fieldset': {
-                  border: 'none',
-                },
-                '&.Mui-focused fieldset': {
-                  border: 'none',
-                },
-                '&:hover': {
-                  bgcolor: 'transparent',
-                },
-                '&.Mui-focused': {
-                  bgcolor: 'transparent',
-                }
-              }
-            }}
-          />
-
-          {/* Кнопки снизу */}
-          <Box
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 0.5,
-              justifyContent: 'space-between',
-            }}
-          >
-            {/* Левая группа кнопок */}
-            <Box sx={{ display: 'flex', gap: 0.5 }}>
-              {/* Кнопка загрузки документов */}
-              <Tooltip title="Загрузить документ">
-                <IconButton
-                  sx={{ 
-                    color: '#2196f3',
-                    bgcolor: theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
-                    '&:hover': {
-                      bgcolor: theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)',
-                    },
-                  }}
-                  disabled={isUploading || isSending}
-                >
-                  <AttachFileIcon sx={{ fontSize: '1.2rem' }} />
-                </IconButton>
-              </Tooltip>
-
-              {/* Кнопка меню с шестеренкой */}
-              <Tooltip title="Дополнительные действия">
-                <IconButton
-                  onClick={handleMenuOpen}
-                  disabled={isSending}
-                  sx={{ 
-                    color: theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.7)',
-                    bgcolor: theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
-                    '&:hover': {
-                      bgcolor: theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)',
-                    },
-                  }}
-                >
-                  <SettingsIcon sx={{ fontSize: '1.2rem' }} />
-                </IconButton>
-              </Tooltip>
-            </Box>
-
-            {/* Правая группа кнопок */}
-            <Box sx={{ display: 'flex', gap: 0.5 }}>
-              {/* Кнопка отправки */}
-              <Tooltip title="Отправить">
-                <span>
-                  <IconButton
-                    onClick={handleSendMessage}
-                    disabled={!inputMessage.trim() || !isConnected || isSending}
-                    color="primary"
-                    sx={{
-                      bgcolor: 'primary.main',
-                      color: 'white',
-                      '&:hover': {
-                        bgcolor: 'primary.dark',
-                      },
-                      '&:disabled': {
-                        bgcolor: theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.12)',
-                        color: theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.6)' : 'rgba(0, 0, 0, 0.26)',
-                      }
-                    }}
-                  >
-                    {isSending ? (
-                      <CircularProgress size={20} sx={{ color: 'inherit' }} />
-                    ) : (
-                      <SendIcon sx={{ fontSize: '1.2rem' }} />
-                    )}
-                  </IconButton>
-                </span>
-              </Tooltip>
-
-              {/* Кнопка голосового ввода */}
-              <Tooltip title="Голосовой ввод">
-                <IconButton
-                  disabled={isSending}
-                  sx={{
-                    bgcolor: 'secondary.main',
-                    color: 'white',
-                    '&:hover': { 
-                      bgcolor: 'secondary.dark' 
-                    },
-                    '&:disabled': {
-                      bgcolor: theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.12)',
-                      color: theme.palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.6)' : 'rgba(0, 0, 0, 0.26)',
-                    }
-                  }}
-                >
-                  <MicIcon sx={{ fontSize: '1.2rem' }} />
-                </IconButton>
-              </Tooltip>
-            </Box>
-          </Box>
-        </Box>
+          }}
+          uploadedFiles={uploadedFiles}
+          onFileRemove={(_, index) => handleRemoveFile(index)}
+          isUploading={isUploading}
+          attachDisabled={isUploading || isSending}
+          onSettingsClick={handleMenuOpen}
+          settingsDisabled={isSending}
+          onSendClick={handleSendMessage}
+          sendDisabled={!inputMessage.trim() || !isConnected || isSending}
+          isSending={isSending}
+          onVoiceClick={() => setTranscriptionModalOpen(true)}
+          voiceDisabled={isSending}
+          voiceTooltip="Голосовой ввод"
+        />
 
         {/* Список чатов */}
         {projectChats.length > 0 && (
@@ -792,7 +639,7 @@ export default function ProjectPage() {
                   bgcolor: theme.palette.mode === 'dark' ? 'rgba(30, 30, 30, 0.95)' : 'rgba(255, 255, 255, 0.95)',
                   backdropFilter: 'blur(10px)',
                   border: `1px solid ${theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}`,
-                  borderRadius: 2,
+                  borderRadius: `${MENU_BORDER_RADIUS_PX}px`,
                   minWidth: 180,
                 },
               }}
@@ -859,90 +706,112 @@ export default function ProjectPage() {
               <MenuItem
                 onClick={() => handleChatMenuAction('delete')}
                 sx={{
-                  color: '#ff6b6b',
+                  color: '#d32f2f',
                   '&:hover': {
-                    bgcolor: theme.palette.mode === 'dark' ? 'rgba(255, 107, 107, 0.1)' : 'rgba(255, 107, 107, 0.1)',
+                    bgcolor: 'rgba(211, 47, 47, 0.1)',
                   },
                 }}
               >
-                <ListItemIcon sx={{ color: '#ff6b6b', minWidth: 36 }}>
+                <ListItemIcon sx={{ color: '#d32f2f', minWidth: 36 }}>
                   <DeleteIcon fontSize="small" />
                 </ListItemIcon>
-                <ListItemText primary="Удалить" />
+                <ListItemText primary="Удалить" primaryTypographyProps={{ sx: { color: '#d32f2f' } }} />
               </MenuItem>
             </Menu>
 
-            {/* Меню дополнительных действий (шестеренка) */}
-            <Menu
-              anchorEl={anchorEl}
-              open={Boolean(anchorEl)}
-              onClose={handleMenuClose}
-              PaperProps={{
-                sx: {
-                  bgcolor: theme.palette.mode === 'dark' ? 'rgba(30, 30, 30, 0.95)' : 'rgba(255, 255, 255, 0.95)',
-                  backdropFilter: 'blur(10px)',
-                  border: `1px solid ${theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}`,
-                  borderRadius: 2,
-                  minWidth: 180,
-                },
-              }}
-            >
-              <MenuItem
-                onClick={() => {
-                  handleMenuClose();
-                }}
-                sx={{
-                  color: theme.palette.mode === 'dark' ? 'white' : '#333',
-                  '&:hover': {
-                    bgcolor: theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)',
-                  },
-                }}
-              >
-                <ListItemText primary="Настройки" />
-              </MenuItem>
-            </Menu>
-
-            {/* Диалог подтверждения удаления */}
-            <Dialog
-              open={showDeleteDialog}
-              onClose={() => setShowDeleteDialog(false)}
-              PaperProps={{
-                sx: {
-                  bgcolor: theme.palette.mode === 'dark' ? 'rgba(30, 30, 30, 0.95)' : 'rgba(255, 255, 255, 0.95)',
-                  backdropFilter: 'blur(10px)',
-                  border: `1px solid ${theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}`,
-                  borderRadius: 2,
-                },
-              }}
-            >
-              <DialogTitle sx={{ color: theme.palette.mode === 'dark' ? 'white' : '#333' }}>
-                Удалить чат?
-              </DialogTitle>
-              <DialogContent>
-                <Typography sx={{ color: theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.7)' }}>
-                  Это действие нельзя отменить. Чат будет удален навсегда.
-                </Typography>
-              </DialogContent>
-              <DialogActions>
-                <Button
-                  onClick={() => setShowDeleteDialog(false)}
-                  sx={{
-                    color: theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.7)',
-                  }}
-                >
-                  Отмена
-                </Button>
-                <Button
-                  onClick={handleConfirmDelete}
-                  color="error"
-                  variant="contained"
-                >
-                  Удалить
-                </Button>
-              </DialogActions>
-            </Dialog>
           </Box>
         )}
+
+        {/* Меню дополнительных действий (шестеренка) — всегда доступно */}
+        <Menu
+          anchorEl={anchorEl}
+          open={Boolean(anchorEl)}
+          onClose={handleMenuClose}
+          anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
+          transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+          PaperProps={{
+            sx: {
+              bgcolor: theme.palette.mode === 'dark' ? 'rgba(30, 30, 30, 0.95)' : 'rgba(255, 255, 255, 0.95)',
+              backdropFilter: 'blur(10px)',
+              border: `1px solid ${theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}`,
+              borderRadius: `${MENU_BORDER_RADIUS_PX}px`,
+              minWidth: 180,
+            },
+          }}
+        >
+          <MenuItem
+            onClick={() => {
+              setInputMessage('');
+              handleMenuClose();
+            }}
+            sx={{
+              color: theme.palette.mode === 'dark' ? 'white' : '#333',
+              gap: 1,
+              '&:hover': {
+                bgcolor: theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)',
+              },
+            }}
+          >
+            <ClearIcon fontSize="small" />
+            <ListItemText primary="Очистить поле ввода" />
+          </MenuItem>
+        </Menu>
+
+        <VoiceChatDialog
+          open={transcriptionModalOpen}
+          onClose={() => setTranscriptionModalOpen(false)}
+        />
+
+        {/* Диалог подтверждения удаления (как в сайдбаре) */}
+        <Dialog
+          open={showDeleteDialog}
+          onClose={() => setShowDeleteDialog(false)}
+          maxWidth="sm"
+          fullWidth
+          PaperProps={{
+            sx: {
+              backgroundColor: theme.palette.mode === 'dark' ? '#1e1e1e' : '#ffffff',
+              color: theme.palette.mode === 'dark' ? 'white' : '#333',
+              borderRadius: 2,
+            },
+          }}
+        >
+          <DialogTitle sx={{ color: theme.palette.mode === 'dark' ? 'white' : '#333', fontWeight: 'bold' }}>
+            Удалить чат
+          </DialogTitle>
+          <DialogContent>
+            <Typography sx={{ color: theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.8)', mt: 1 }}>
+              Это действие навсегда удалит выбранный чат и не может быть отменено.
+              Пожалуйста, подтвердите для продолжения.
+            </Typography>
+          </DialogContent>
+          <DialogActions sx={{ p: 2, gap: 1 }}>
+            <Button
+              onClick={() => setShowDeleteDialog(false)}
+              sx={{
+                backgroundColor: theme.palette.mode === 'dark' ? 'black' : 'rgba(0,0,0,0.08)',
+                color: theme.palette.mode === 'dark' ? 'white' : '#333',
+                '&:hover': { backgroundColor: theme.palette.mode === 'dark' ? 'rgba(0,0,0,0.8)' : 'rgba(0,0,0,0.12)' },
+                textTransform: 'none',
+                px: 3,
+              }}
+            >
+              Отменить
+            </Button>
+            <Button
+              onClick={handleConfirmDelete}
+              sx={{
+                backgroundColor: '#d32f2f',
+                color: 'white',
+                '&:hover': { backgroundColor: '#b71c1c' },
+                textTransform: 'none',
+                px: 3,
+              }}
+            >
+              Удалить
+            </Button>
+          </DialogActions>
+        </Dialog>
       </Box>
     </Box>
   );

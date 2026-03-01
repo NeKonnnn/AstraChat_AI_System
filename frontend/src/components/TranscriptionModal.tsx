@@ -3,7 +3,6 @@ import {
   Dialog,
   DialogTitle,
   DialogContent,
-  DialogActions,
   Box,
   Typography,
   Card,
@@ -18,6 +17,7 @@ import {
   useTheme,
   useMediaQuery,
   Paper,
+  Tooltip,
 } from '@mui/material';
 import { getApiUrl, API_ENDPOINTS } from '../config/api';
 import {
@@ -795,31 +795,7 @@ export default function TranscriptionModal({
         scroll="paper"
       >
         <DialogTitle>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Typography variant="h6">Результат транскрибации</Typography>
-            <Box>
-              {extractSpeakers(transcriptionResult || '').length > 0 && (
-              <IconButton 
-                onClick={handleOpenSpeakerSettings}
-                title="Настроить имена спикеров"
-                color="primary"
-              >
-                <PersonIcon />
-              </IconButton>
-              )}
-              <IconButton onClick={handleCopyTranscription} title="Копировать">
-                <CopyIcon />
-              </IconButton>
-              <IconButton onClick={handleDownloadTranscription} title="Скачать">
-                <DownloadIcon />
-              </IconButton>
-              {onInsertToChat && (
-                <IconButton onClick={handleInsertToChat} title="Вставить в чат" color="primary">
-                  <SendIcon />
-                </IconButton>
-              )}
-            </Box>
-          </Box>
+          <Typography variant="h6">Результат транскрибации</Typography>
         </DialogTitle>
         <DialogContent>
           {showSpeakerSettings && (
@@ -957,28 +933,152 @@ export default function TranscriptionModal({
               variant="outlined"
             />
           </Box>
+
+          {/* Кнопки действий — в стиле кнопок под сообщениями в чате */}
+          <Box
+            sx={{
+              display: 'flex',
+              justifyContent: 'center',
+              alignItems: 'center',
+              gap: 0.5,
+              mt: 2,
+              pt: 2,
+              borderTop: 1,
+              borderColor: 'divider',
+              minHeight: 28,
+            }}
+          >
+            {extractSpeakers(transcriptionResult || '').length > 0 && (
+              <Tooltip title="Настроить имя спикера">
+                <IconButton
+                  size="small"
+                  onClick={handleOpenSpeakerSettings}
+                  sx={{
+                    opacity: 0.7,
+                    p: 0.5,
+                    borderRadius: '6px',
+                    minWidth: '28px',
+                    width: '28px',
+                    height: '28px',
+                    '&:hover': {
+                      opacity: 1,
+                      '& .MuiSvgIcon-root': { color: 'primary.main' },
+                    },
+                    '& .MuiSvgIcon-root': {
+                      fontSize: '18px !important',
+                      width: '18px !important',
+                      height: '18px !important',
+                    },
+                  }}
+                >
+                  <PersonIcon />
+                </IconButton>
+              </Tooltip>
+            )}
+            <Tooltip title="Копировать">
+              <IconButton
+                size="small"
+                onClick={handleCopyTranscription}
+                sx={{
+                  opacity: 0.7,
+                  p: 0.5,
+                  borderRadius: '6px',
+                  minWidth: '28px',
+                  width: '28px',
+                  height: '28px',
+                  '&:hover': {
+                    opacity: 1,
+                    '& .MuiSvgIcon-root': { color: 'primary.main' },
+                  },
+                  '& .MuiSvgIcon-root': {
+                    fontSize: '18px !important',
+                    width: '18px !important',
+                    height: '18px !important',
+                  },
+                }}
+              >
+                <CopyIcon />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="Скачать">
+              <IconButton
+                size="small"
+                onClick={handleDownloadTranscription}
+                sx={{
+                  opacity: 0.7,
+                  p: 0.5,
+                  borderRadius: '6px',
+                  minWidth: '28px',
+                  width: '28px',
+                  height: '28px',
+                  '&:hover': {
+                    opacity: 1,
+                    '& .MuiSvgIcon-root': { color: 'primary.main' },
+                  },
+                  '& .MuiSvgIcon-root': {
+                    fontSize: '18px !important',
+                    width: '18px !important',
+                    height: '18px !important',
+                  },
+                }}
+              >
+                <DownloadIcon />
+              </IconButton>
+            </Tooltip>
+            {onInsertToChat && (
+              <Tooltip title="Вставить в чат">
+                <IconButton
+                  size="small"
+                  onClick={handleInsertToChat}
+                  sx={{
+                    opacity: 0.7,
+                    p: 0.5,
+                    borderRadius: '6px',
+                    minWidth: '28px',
+                    width: '28px',
+                    height: '28px',
+                    '&:hover': {
+                      opacity: 1,
+                      '& .MuiSvgIcon-root': { color: 'primary.main' },
+                    },
+                    '& .MuiSvgIcon-root': {
+                      fontSize: '18px !important',
+                      width: '18px !important',
+                      height: '18px !important',
+                    },
+                  }}
+                >
+                  <SendIcon />
+                </IconButton>
+              </Tooltip>
+            )}
+            <Tooltip title="Закрыть">
+              <IconButton
+                size="small"
+                onClick={() => setShowResult(false)}
+                sx={{
+                  opacity: 0.7,
+                  p: 0.5,
+                  borderRadius: '6px',
+                  minWidth: '28px',
+                  width: '28px',
+                  height: '28px',
+                  '&:hover': {
+                    opacity: 1,
+                    '& .MuiSvgIcon-root': { color: 'primary.main' },
+                  },
+                  '& .MuiSvgIcon-root': {
+                    fontSize: '18px !important',
+                    width: '18px !important',
+                    height: '18px !important',
+                  },
+                }}
+              >
+                <CloseIcon />
+              </IconButton>
+            </Tooltip>
+          </Box>
         </DialogContent>
-        <DialogActions>
-          <Button onClick={handleCopyTranscription} startIcon={<CopyIcon />}>
-            Копировать
-          </Button>
-          <Button onClick={handleDownloadTranscription} startIcon={<DownloadIcon />}>
-            Скачать
-          </Button>
-          {onInsertToChat && (
-            <Button 
-              onClick={handleInsertToChat} 
-              startIcon={<SendIcon />}
-              variant="outlined"
-              color="primary"
-            >
-              Вставить в чат
-            </Button>
-          )}
-          <Button onClick={() => setShowResult(false)} variant="contained">
-            Закрыть
-          </Button>
-        </DialogActions>
       </Dialog>
     </>
   );

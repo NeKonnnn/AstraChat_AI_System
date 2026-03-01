@@ -123,12 +123,20 @@ export default function ShareViewPage() {
     return null;
   }
 
+  // Явные цвета тёмной темы, чтобы при открытии по ссылке (без сохранённой темы в localStorage) вид всегда был как в основном приложении
+  const pageBg = '#121212';
+  const cardBg = '#1e1e1e';
+  const textPrimary = '#e8e8e8';
+  const textSecondary = '#b0b0b0';
+  const userBubbleBg = '#1976d2';
+  const userBubbleText = '#ffffff';
+
   return (
     <Box
       sx={{
         minHeight: '100vh',
-        backgroundColor: '#121212',
-        color: 'white',
+        backgroundColor: pageBg,
+        color: textPrimary,
         py: 4,
       }}
     >
@@ -138,14 +146,15 @@ export default function ShareViewPage() {
           sx={{
             p: 3,
             mb: 4,
-            backgroundColor: '#1e1e1e',
+            backgroundColor: cardBg,
             backgroundImage: 'none',
+            color: textPrimary,
           }}
         >
-          <Typography variant="h5" gutterBottom>
+          <Typography variant="h5" gutterBottom sx={{ color: textPrimary }}>
             Публичная беседа
           </Typography>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" sx={{ color: textSecondary }}>
             Создано: {formatTimestamp(conversation.created_at)}
           </Typography>
         </Paper>
@@ -168,8 +177,8 @@ export default function ShareViewPage() {
                   sx={{
                     maxWidth: '75%',
                     minWidth: '200px',
-                    backgroundColor: isUser ? 'primary.main' : '#1e1e1e',
-                    color: isUser ? 'primary.contrastText' : 'text.primary',
+                    backgroundColor: isUser ? userBubbleBg : cardBg,
+                    color: isUser ? userBubbleText : textPrimary,
                     boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)',
                   }}
                 >
@@ -180,7 +189,7 @@ export default function ShareViewPage() {
                           width: 24,
                           height: 24,
                           mr: 1,
-                          bgcolor: isUser ? 'primary.dark' : 'transparent',
+                          bgcolor: isUser ? 'rgba(0,0,0,0.2)' : 'transparent',
                         }}
                         src={isUser ? undefined : '/astra.png'}
                       >
@@ -188,21 +197,21 @@ export default function ShareViewPage() {
                       </Avatar>
                       <Typography
                         variant="caption"
-                        sx={{ opacity: 0.8, fontSize: '0.75rem', fontWeight: 500 }}
+                        sx={{ color: 'inherit', opacity: 0.9, fontSize: '0.75rem', fontWeight: 500 }}
                       >
                         {isUser ? 'Пользователь' : 'AstraChat'}
                       </Typography>
                       {message.timestamp && (
                         <Typography
                           variant="caption"
-                          sx={{ ml: 'auto', opacity: 0.6, fontSize: '0.7rem' }}
+                          sx={{ ml: 'auto', opacity: 0.7, fontSize: '0.7rem', color: 'inherit' }}
                         >
                           {formatTimestamp(message.timestamp)}
                         </Typography>
                       )}
                     </Box>
                     
-                    <Box sx={{ width: '100%' }}>
+                    <Box sx={{ width: '100%', color: 'inherit', '& *': { color: 'inherit' } }}>
                       <MessageRenderer content={message.content} isStreaming={false} />
                     </Box>
 
@@ -212,8 +221,9 @@ export default function ShareViewPage() {
                         sx={{
                           display: 'block',
                           mt: 1,
-                          opacity: 0.6,
+                          opacity: 0.7,
                           fontSize: '0.7rem',
+                          color: 'inherit',
                         }}
                       >
                         Модель: {message.model}
@@ -228,7 +238,7 @@ export default function ShareViewPage() {
 
         {/* Футер */}
         <Box sx={{ mt: 6, textAlign: 'center' }}>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" sx={{ color: textSecondary }}>
             Создано с помощью AstraChat
           </Typography>
         </Box>

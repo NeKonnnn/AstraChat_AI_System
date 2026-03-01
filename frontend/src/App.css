@@ -400,9 +400,8 @@
 
 
 
-/* Стили для кнопок в объединенном поле ввода */
+/* Стили для кнопок в объединенном поле ввода (форма задаётся в ChatInputBar по styleVariant: compact → круг, classic → скруглённый квадрат) */
 .chat-input-area .MuiIconButton-root {
-  border-radius: 8px;
   transition: all 0.2s ease;
   color: white;
   minHeight: 36px;
@@ -436,19 +435,35 @@
   transition: all 0.2s ease;
 }
 
-/* Стили для выпадающего меню */
+/* Стили для выпадающего меню — скругление из constants/menuStyles (переменная задаётся в App.tsx) */
 .MuiMenu-paper {
-  border-radius: 8px !important;
+  border-radius: var(--menu-border-radius, 28px) !important;
   min-width: 180px !important;
 }
 
+/* Подушечка: отступы по горизонтали и скругление — подсветка не во всю ширину (как на референсе) */
 .MuiMenuItem-root {
+  margin-left: var(--menu-item-hover-margin, 4px) !important;
+  margin-right: var(--menu-item-hover-margin, 4px) !important;
+  border-radius: var(--menu-item-hover-radius, 8px) !important;
   padding: 8px 16px !important;
   font-size: 0.875rem !important;
 }
 
+/* Единый серый hover для всех меню (как в constants/menuStyles), переопределяется через --menu-item-hover в App.tsx */
 .MuiMenuItem-root:hover {
-  background-color: rgba(33, 150, 243, 0.1) !important;
+  background-color: var(--menu-item-hover, rgba(255, 255, 255, 0.1)) !important;
+}
+
+/* Та же подушечка для ListItemButton внутри меню/выпадающих списков */
+.MuiMenu-list .MuiListItemButton-root {
+  margin-left: var(--menu-item-hover-margin, 4px) !important;
+  margin-right: var(--menu-item-hover-margin, 4px) !important;
+  border-radius: var(--menu-item-hover-radius, 8px) !important;
+}
+
+.MuiMenu-list .MuiListItemButton-root:hover {
+  background-color: var(--menu-item-hover, rgba(255, 255, 255, 0.1)) !important;
 }
 
 /* Стили для кнопки шестеренки */
@@ -681,13 +696,36 @@
   color: #1565c0;
 }
 
-/* Адаптация кнопки копирования для светлой темы */
-.message-copy-button[data-theme="light"] {
-  color: rgba(0, 0, 0, 0.6) !important;
+/* Адаптация кнопок под сообщениями для светлой темы (как в диалоговых окнах) */
+.message-copy-button[data-theme="light"],
+.message-edit-button[data-theme="light"],
+.message-regenerate-button[data-theme="light"],
+.message-speak-button[data-theme="light"],
+.message-share-button[data-theme="light"] {
+  color: rgba(0, 0, 0, 0.85) !important;
 }
 
-.message-copy-button[data-theme="light"]:hover {
-  color: rgba(0, 0, 0, 0.8) !important;
-  background-color: rgba(0, 0, 0, 0.1) !important;
-  /* Кнопка остается на месте без изменений */
+.message-copy-button[data-theme="light"] .MuiSvgIcon-root,
+.message-edit-button[data-theme="light"] .MuiSvgIcon-root,
+.message-regenerate-button[data-theme="light"] .MuiSvgIcon-root,
+.message-speak-button[data-theme="light"] .MuiSvgIcon-root,
+.message-share-button[data-theme="light"] .MuiSvgIcon-root {
+  color: rgba(0, 0, 0, 0.85) !important;
+}
+
+.message-copy-button[data-theme="light"]:hover,
+.message-edit-button[data-theme="light"]:hover,
+.message-regenerate-button[data-theme="light"]:hover,
+.message-speak-button[data-theme="light"]:hover:not(:disabled),
+.message-share-button[data-theme="light"]:hover {
+  background-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+/* При наведении иконка синяя, как в тёмной схеме (primary) */
+.message-copy-button[data-theme="light"]:hover .MuiSvgIcon-root,
+.message-edit-button[data-theme="light"]:hover .MuiSvgIcon-root,
+.message-regenerate-button[data-theme="light"]:hover .MuiSvgIcon-root,
+.message-speak-button[data-theme="light"]:hover:not(:disabled) .MuiSvgIcon-root,
+.message-share-button[data-theme="light"]:hover .MuiSvgIcon-root {
+  color: var(--mui-palette-primary-main, #1976d2) !important;
 }

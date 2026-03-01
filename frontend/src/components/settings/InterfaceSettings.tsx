@@ -11,6 +11,12 @@ import {
   Divider,
 } from '@mui/material';
 import {
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem as SelectMenuItem,
+} from '@mui/material';
+import {
   Computer as ComputerIcon,
   Notifications as NotificationsIcon,
   HelpOutline as HelpOutlineIcon,
@@ -37,6 +43,8 @@ export default function InterfaceSettings() {
     const savedShowModelSelectorInSettings = localStorage.getItem('show_model_selector_in_settings');
     const savedUseFoldersMode = localStorage.getItem('use_folders_mode');
     const savedBrowserNotifications = localStorage.getItem('browser_notifications_enabled');
+    const savedShowDialoguesPanel = localStorage.getItem('show_dialogues_panel');
+    const savedChatInputStyle = localStorage.getItem('chat_input_style');
     return {
       autoGenerateTitles: savedAutoTitle !== null ? savedAutoTitle === 'true' : true,
       largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
@@ -49,10 +57,20 @@ export default function InterfaceSettings() {
       showModelSelectorInSettings: savedShowModelSelectorInSettings !== null ? savedShowModelSelectorInSettings === 'true' : false,
       useFoldersMode: savedUseFoldersMode !== null ? savedUseFoldersMode === 'true' : true, // По умолчанию папки
       browserNotifications: savedBrowserNotifications !== null ? savedBrowserNotifications === 'true' : false,
+      showDialoguesPanel: savedShowDialoguesPanel !== null ? savedShowDialoguesPanel === 'true' : true,
+      chatInputStyle: (savedChatInputStyle as 'compact' | 'classic') || 'compact',
     };
   });
   
   const { showNotification } = useAppActions();
+
+  const handleChatInputStyleChange = (value: 'compact' | 'classic') => {
+    const newSettings = { ...interfaceSettings, chatInputStyle: value };
+    setInterfaceSettings(newSettings);
+    localStorage.setItem('chat_input_style', value);
+    window.dispatchEvent(new Event('interfaceSettingsChanged'));
+    showNotification('success', 'Стиль поля ввода изменён');
+  };
 
   const handleInterfaceSettingChange = async (key: keyof typeof interfaceSettings, value: boolean) => {
     // Для браузерных уведомлений запрашиваем разрешение при включении
@@ -81,6 +99,7 @@ export default function InterfaceSettings() {
     localStorage.setItem('enable_notification', String(newSettings.enableNotification));
     localStorage.setItem('show_model_selector_in_settings', String(newSettings.showModelSelectorInSettings));
     localStorage.setItem('use_folders_mode', String(newSettings.useFoldersMode));
+    localStorage.setItem('show_dialogues_panel', String(newSettings.showDialoguesPanel));
     setNotificationsEnabled(newSettings.browserNotifications);
     
     // Отправляем кастомное событие для обновления настроек в том же окне
@@ -423,6 +442,68 @@ export default function InterfaceSettings() {
               <Switch
                 checked={interfaceSettings.useFoldersMode}
                 onChange={(e) => handleInterfaceSettingChange('useFoldersMode', e.target.checked)}
+              />
+            </ListItem>
+
+            <Divider />
+
+            {/* Стиль поля ввода */}
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: 2,
+              }}
+            >
+              <ListItemText
+                primary="Стиль поля ввода"
+                primaryTypographyProps={{ variant: 'body1', fontWeight: 500 }}
+                secondary="Компактный — пилюльная форма с кнопками внутри. Классический — прямоугольник с тулбаром кнопок снизу."
+                secondaryTypographyProps={{ variant: 'body2', sx: { mt: 0.5 } }}
+              />
+              <FormControl size="small" sx={{ minWidth: 180, flexShrink: 0 }}>
+                <InputLabel>Стиль</InputLabel>
+                <Select
+                  value={interfaceSettings.chatInputStyle}
+                  label="Стиль"
+                  onChange={(e) => handleChatInputStyleChange(e.target.value as 'compact' | 'classic')}
+                >
+                  <SelectMenuItem value="compact">Компактный</SelectMenuItem>
+                  <SelectMenuItem value="classic">Классический</SelectMenuItem>
+                </Select>
+              </FormControl>
+            </ListItem>
+
+            <Divider />
+
+            {/* Панель с диалогами (навигация по сообщениям) */}
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <ListItemText
+                primary="Панель с диалогами"
+                primaryTypographyProps={{
+                  variant: 'body1',
+                  fontWeight: 500,
+                }}
+                secondary="Вертикальная панель справа со списком вопросов для навигации по сообщениям"
+                secondaryTypographyProps={{
+                  variant: 'body2',
+                  sx: { mt: 0.5 }
+                }}
+              />
+              <Switch
+                checked={interfaceSettings.showDialoguesPanel}
+                onChange={(e) => handleInterfaceSettingChange('showDialoguesPanel', e.target.checked)}
               />
             </ListItem>
           </List>

@@ -14,15 +14,16 @@ import {
   Paper,
 } from '@mui/material';
 import {
-  Info as InfoIcon,
-  Computer as ComputerIcon,
-  Language as LanguageIcon,
-  Storage as StorageIcon,
-  Speed as SpeedIcon,
-  Security as SecurityIcon,
+  InfoOutlined as InfoIcon,
+  ComputerOutlined as ComputerIcon,
+  LanguageOutlined as LanguageIcon,
+  StorageOutlined as StorageIcon,
+  SpeedOutlined as SpeedIcon,
+  SecurityOutlined as SecurityIcon,
   Refresh as RefreshIcon,
-  Download as DownloadIcon,
+  DownloadOutlined as DownloadIcon,
 } from '@mui/icons-material';
+import { MENU_ICON_MIN_WIDTH, MENU_ICON_TO_TEXT_GAP_PX, MENU_ICON_FONT_SIZE_PX } from '../../constants/menuStyles';
 
 interface SystemInfo {
   version: string;
@@ -143,7 +144,7 @@ export default function AboutSettings() {
               </Typography>
               <List dense>
                 <ListItem sx={{ px: 0 }}>
-                  <ListItemIcon sx={{ minWidth: 36 }}>
+                  <ListItemIcon sx={{ minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
                     <ComputerIcon fontSize="small" />
                   </ListItemIcon>
                   <ListItemText 
@@ -152,7 +153,7 @@ export default function AboutSettings() {
                   />
                 </ListItem>
                 <ListItem sx={{ px: 0 }}>
-                  <ListItemIcon sx={{ minWidth: 36 }}>
+                  <ListItemIcon sx={{ minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
                     <LanguageIcon fontSize="small" />
                   </ListItemIcon>
                   <ListItemText 
@@ -161,7 +162,7 @@ export default function AboutSettings() {
                   />
                 </ListItem>
                 <ListItem sx={{ px: 0 }}>
-                  <ListItemIcon sx={{ minWidth: 36 }}>
+                  <ListItemIcon sx={{ minWidth: MENU_ICON_MIN_WIDTH, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: MENU_ICON_FONT_SIZE_PX } }}>
                     <StorageIcon fontSize="small" />
                   </ListItemIcon>
                   <ListItemText 

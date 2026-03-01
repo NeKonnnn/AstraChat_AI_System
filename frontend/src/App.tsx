@@ -20,6 +20,10 @@ import ProfilePage from './pages/ProfilePage';
 import ShareViewPage from './pages/ShareViewPage';
 import { initSettings } from './settings';
 import './App.css';
+import { MENU_ITEM_HOVER_DARK, MENU_ITEM_HOVER_LIGHT, MENU_BORDER_RADIUS_PX, MENU_ITEM_HOVER_RADIUS_PX, MENU_ITEM_HOVER_MARGIN_PX } from './constants/menuStyles';
+
+const MENU_ITEM_MARGIN = MENU_ITEM_HOVER_MARGIN_PX;
+const MENU_ITEM_RADIUS = MENU_ITEM_HOVER_RADIUS_PX;
 
 // Создаем тему Material-UI
 const createAppTheme = (isDark: boolean) => createTheme({
@@ -38,6 +42,9 @@ const createAppTheme = (isDark: boolean) => createTheme({
     background: {
       default: isDark ? '#121212' : '#fafafa',
       paper: isDark ? '#1e1e1e' : '#ffffff',
+    },
+    action: {
+      hover: isDark ? MENU_ITEM_HOVER_DARK : MENU_ITEM_HOVER_LIGHT,
     },
   },
   typography: {
@@ -66,6 +73,41 @@ const createAppTheme = (isDark: boolean) => createTheme({
         root: {
           boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
         },
+      },
+    },
+    // Единый цвет подсветки при наведении + округлая подушечка (не во всю ширину)
+    MuiMenuItem: {
+      styleOverrides: {
+        root: ({ theme }) => ({
+          marginLeft: MENU_ITEM_MARGIN,
+          marginRight: MENU_ITEM_MARGIN,
+          borderRadius: MENU_ITEM_RADIUS,
+          '&:hover': {
+            backgroundColor: theme.palette.action.hover,
+          },
+        }),
+      },
+    },
+    MuiListItemButton: {
+      styleOverrides: {
+        root: ({ theme }) => ({
+          marginLeft: MENU_ITEM_MARGIN,
+          marginRight: MENU_ITEM_MARGIN,
+          borderRadius: MENU_ITEM_RADIUS,
+          '&:hover': {
+            backgroundColor: theme.palette.action.hover,
+          },
+        }),
+      },
+    },
+    // Опции в Select и Autocomplete — тот же серый hover
+    MuiAutocomplete: {
+      styleOverrides: {
+        listbox: ({ theme }) => ({
+          '& .MuiMenuItem-root:hover': {
+            backgroundColor: theme.palette.action.hover,
+          },
+        }),
       },
     },
   },
@@ -104,6 +146,15 @@ function App() {
   useEffect(() => {
     localStorage.setItem('sidebarHidden', String(sidebarHidden));
   }, [sidebarHidden]);
+
+  // CSS-переменные для меню: единый серый hover, скругление, подушечка подсветки (перебивают глобальные стили в App.css)
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty('--menu-item-hover', isDarkMode ? MENU_ITEM_HOVER_DARK : MENU_ITEM_HOVER_LIGHT);
+    root.style.setProperty('--menu-border-radius', `${MENU_BORDER_RADIUS_PX}px`);
+    root.style.setProperty('--menu-item-hover-radius', `${MENU_ITEM_HOVER_RADIUS_PX}px`);
+    root.style.setProperty('--menu-item-hover-margin', `${MENU_ITEM_HOVER_MARGIN_PX}px`);
+  }, [isDarkMode]);
 
   const theme = createAppTheme(isDarkMode);
 
