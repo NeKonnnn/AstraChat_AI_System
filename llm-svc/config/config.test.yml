@@ -2,7 +2,6 @@ server:
   host: "0.0.0.0"
   port: 8001
   log_level: "ERROR"  # Уменьшаем уровень логирования для тестов
-
 cors:
   allowed_origins:
     - "http://localhost:3080"
@@ -10,34 +9,34 @@ cors:
   allow_credentials: true
   allow_methods: ["*"]
   allow_headers: ["*"]
-
 model:
   path: "/dev/null"  # Фейковый путь для тестов
   name: "test-model"  # Важно: это значение должно совпадать с тестами
+  chat_format: "chatml"
+  chat_template_path: "/app/services/chat-format-template/qwen3_chat_format_template.jinja"
   ctx_size: 512
   gpu_layers: 0
   verbose: false
-
+  pool_size: 1  # Размер пула моделей
+  n_thread: 4  # Количество потоков для CPU
+  n_threads_batch: 4  # Количество потоков для батчей
+  n_batch: 512  # Размер батча
+  n_ubatch: 512  # Размер микро-батча
 generation:
   default_temperature: 0.7
   default_max_tokens: 128
   stream: false
-
 app:
   title: "Test API Service"
   description: "Test API service"
   version: "1.0.0-test"
-
 monitoring:
   enabled: false
-
 logging:
   level: "ERROR"
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-
 caching:
   enabled: false
-
 security:
   enabled: false
   api_key: null

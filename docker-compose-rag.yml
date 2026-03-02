@@ -1,0 +1,46 @@
+services:
+  rag-models:
+    build:
+      context: ./SVC-RAG-MODELS
+      dockerfile: Dockerfile
+    ports:
+      - "8010:8000"
+    volumes:
+      - ./models:/app/models:ro        # models/rag/* внутри контейнера
+      - ./SVC-RAG-MODELS/config:/app/config:ro
+    environment:
+      - CONFIG_PATH=/app/config/config.yml
+    restart: unless-stopped
+    networks:
+      - astrachat-network
+
+  svc-rag:
+    build:
+      context: ./SVC-RAG
+      dockerfile: Dockerfile
+    ports:
+      - "8011:8000"
+    volumes:
+      - ./SVC-RAG/config:/app/config:ro
+    environment:
+      - CONFIG_PATH=/app/config/config.yml
+      - RAG_MODELS_URL=http://rag-models:8000
+      - POSTGRES_HOST=${POSTGRES_HOST:-postgresql}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - POSTGRES_DB=${POSTGRES_DB:-astrachat}
+      - POSTGRES_USER=${POSTGRES_USER:-admin}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}
+      - RAG_EMBEDDING_DIM=384
+      - SVC_OCR_URL=http://ocr-service:8000
+      - SVC_LLM_URL=http://llm-service:8000
+    depends_on:
+      rag-models:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - astrachat-network
+
+networks:
+  astrachat-network:
+    driver: bridge
+

@@ -1,0 +1,35 @@
+# ===== SVC-OCR: OCR Service (Surya) =====
+
+# Web framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+starlette>=0.40.0
+pydantic>=2.10.0
+pydantic-settings>=2.0.0
+python-multipart>=0.0.18
+python-dotenv>=1.0.0
+
+# HTTP клиент
+httpx>=0.27.0
+requests>=2.31.0
+
+# Конфигурация
+pyyaml>=6.0.2
+
+# Surya OCR
+surya-ocr>=0.17.0,<1.0.0
+transformers>=4.40.0,<5.0.0
+
+# PyTorch (Surya использует torch)
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Обработка изображений
+Pillow>=10.0.0
+
+# Научные библиотеки
+numpy>=1.24.3,<2.0.0
+
+# Утилиты
+anyio>=4.0.0
+tqdm>=4.66.0

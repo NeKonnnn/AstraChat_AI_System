@@ -1,0 +1,16 @@
+# SVC-RAG-MODELS: Embedding + Reranker (MiniLM-L12, MiniLM-L6)
+
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+pydantic>=2.10.0
+python-dotenv>=1.0.0
+pyyaml>=6.0.2
+
+# Embedding and Reranker (sentence-transformers)
+sentence-transformers>=3.0.0
+
+# PyTorch
+torch>=2.0.0
+
+# Scientific
+numpy>=1.24.3,<2.0.0

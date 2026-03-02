@@ -1,0 +1,38 @@
+# SVC-RAG-MODELS: Embedding and Reranker models
+
+server:
+  host: "0.0.0.0"
+  port: 8000
+  log_level: "INFO"
+  docs_url: "/docs"
+  redoc_url: "/redoc"
+
+cors:
+  allowed_origins: ["*"]
+  allow_credentials: true
+  allow_methods: ["*"]
+  allow_headers: ["*"]
+
+app:
+  title: "astrachat RAG Models Service"
+  description: "Embedding (MiniLM-L12) and Reranker (MiniLM-L6) for RAG"
+  version: "1.0.0"
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# --- RAG MODELS (embedding + reranker) ---
+# models_dir — путь ВНУТРИ КОНТЕЙНЕРА. На хосте кладите модели в КОРЕНЬ ПРОЕКТА: models/rag/
+# (рядом с models/ для LLM). В docker-compose: volumes: - ./models:/app/models
+# Тогда в контейнере /app/models/rag = host models/rag/
+# Структура: models/rag/paraphrase-multilingual-MiniLM-L12-v2/, models/rag/ms-marco-MiniLM-L-6-v2/
+rag_models:
+  enabled: true
+  models_dir: "/app/models/rag"
+  # Subfolder names under models_dir (same as Hugging Face snapshot folder names)
+  # Если папки нет, сервис попытается скачать модель с Hugging Face в models_dir.
+  embedding_model: "paraphrase-multilingual-MiniLM-L12-v2"
+  reranker_model: "ms-marco-MiniLM-L-6-v2"
+  offline: true   # только локальные модели, без запросов к HuggingFace (избегаем 401/503)
+  device: "cpu"

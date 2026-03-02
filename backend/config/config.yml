@@ -1,11 +1,11 @@
 # Конфигурация astrachat Backend
-# Теперь все модели работают через llm-svc микросервис
+# Теперь каждая модель вынесена в отдельный изолированный микросервис
 
 # Основные настройки приложения
 app:
   name: "astrachat Backend"
   version: "1.0.0"
-  description: "Backend service for astrachat with microservice architecture"
+  description: "Backend service with distributed AI microservices"
   debug: false
 
 # Настройки сервера
@@ -16,192 +16,80 @@ server:
   workers: 1
 
 # Настройки CORS
-# Примечание: allowed_origins теперь читаются из секции urls в коде
-# Измените значения в секции urls, чтобы обновить все URL
 cors:
-  allowed_origins: []  # Используются значения из секции urls
+  allowed_origins: 
+    - "http://localhost:3000"
+    - "http://127.0.0.1:3000"
   allow_credentials: true
   allow_methods: ["*"]
   allow_headers: ["*"]
 
-# Настройки микросервисов
+# ========================================================
+# НАСТРОЙКИ МИКРОСЕРВИСОВ (ML Services)
+# ========================================================
 microservices:
-  # LLM Service (включает LLM, Vosk, Silero, WhisperX, Diarization)
-  llm_svc:
+  # 1. Сервис генерации текста (LLM)
+  llm:
     enabled: true
-    # Примечание: base_url и external_url теперь читаются из секции urls в коде
-    # Измените значения в секции urls, чтобы обновить все URL
-    base_url: ""  # Используется docker_llm_svc из секции urls
-    external_url: ""  # Используется localhost_8001 из секции urls
-    timeout: 300  # 5 минут таймаут
-    retry_attempts: 3
-    retry_delay: 1  # секунды между попытками
-    
-    # Настройки моделей LLM
+    url: "http://llm-service:8000"
+    timeout: 300
     models:
-      default: "qwen-coder-30b"
-      fallback: "deepseek-coder-6.7b"
-      auto_select: true  # Автоматический выбор модели
-      
-    # Настройки транскрипции (Vosk)
-    transcription:
+      default: "qvikhr-2.5b"
+      fallback: "qwen-coder-30b"
+
+  # 2. Сервис распознавания речи (STT)
+  stt:
+    enabled: true
+    url: "http://stt-service:8000"
+    timeout: 900
+    vosk:
       enabled: true
-      default_language: "ru"
-      supported_languages: ["ru", "en"]
-      max_file_size: 52428800  # 50MB
-      
-    # Настройки синтеза речи (Silero)
-    tts:
-      enabled: true
-      default_language: "ru"
-      default_speaker: "baya"
-      supported_languages: ["ru", "en"]
-      supported_speakers:
-        ru: ["baya", "kseniya", "xenia", "eugene", "aidar"]
-        en: ["v3_en"]
-      max_text_length: 5000
-      default_sample_rate: 48000
-      
-    # Настройки продвинутой транскрипции (WhisperX)
     whisperx:
       enabled: true
-      default_language: "ru"
-      supported_languages: ["ru", "en", "auto"]
-      device: "auto"  # auto, cpu, cuda
-      compute_type: "float16"  # float16, int8, int8_float16
-      batch_size: 16
-      max_file_size: 104857600  # 100MB
-      
-    # Настройки диаризации (разделение по спикерам)
-    diarization:
-      enabled: true
-      min_speakers: 1
-      max_speakers: 10
-      min_duration: 1.0  # секунды
-      max_file_size: 104857600  # 100MB
-      device: "auto"  # auto, cpu, cuda
+      compute_type: "int8"
 
-# Настройки памяти и истории
+  # 3. Сервис синтеза речи (TTS)
+  tts:
+    enabled: true
+    url: "http://tts-service:8000"
+    timeout: 300
+
+  # 4. Сервис диаризации (Diarization)
+  diarization:
+    enabled: true
+    url: "http://diarization-service:8000"
+    timeout: 3600
+
+  # 5. Сервис распознавания текста (OCR)
+  ocr:
+    enabled: true
+    url: "http://ocr-service:8000"
+    timeout: 300
+
+# ========================================================
+# ПАМЯТЬ И БАЗЫ ДАННЫХ
+# ========================================================
 memory:
   enabled: true
-  storage_type: "file"  # file, redis, database
+  storage_type: "file"
   file_path: "/app/memory"
   max_history_length: 100
-  auto_save: true
-  save_interval: 30  # секунды
 
-# Настройки агентов
-agents:
-  enabled: true
-  default_agent: "general"
-  available_agents:
-    - "general"
-    - "document"
-    - "mcp"
-  
-  # Настройки LangGraph оркестратора
-  orchestrator:
-    enabled: true
-    max_iterations: 10
-    timeout: 60  # секунды
-    parallel_execution: false
-
-# Настройки инструментов
-tools:
-  enabled: true
-  available_tools:
-    - "file_operations"
-    - "mcp_tools"
-
-# Настройки логирования
-logging:
-  level: "INFO"
-  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  file: "/app/logs/backend.log"
-  max_size: 10485760  # 10MB
-  backup_count: 5
-  console: true
-
-# Настройки безопасности
-security:
-  enabled: false  # Отключено для локальной разработки
-  api_key: null
-  api_key_header: "X-API-Key"
-  rate_limiting:
-    enabled: false
-    requests_per_minute: 60
-
-# Настройки мониторинга
-monitoring:
-  enabled: false
-  health_check_interval: 30  # секунды
-  metrics_enabled: false
-  prometheus_port: 9091
-
-# Настройки кэширования
-caching:
-  enabled: true
-  type: "memory"  # memory, redis
-  ttl: 300  # секунды
-  max_size: 1000
-
-# Настройки WebSocket
-websocket:
-  enabled: true
-  ping_interval: 30  # секунды
-  ping_timeout: 10  # секунды
-  max_connections: 100
-
-# Настройки файлов
-files:
-  upload_dir: "/app/uploads"
-  max_file_size: 104857600  # 100MB
-  allowed_extensions: [".txt", ".md", ".pdf", ".docx", ".wav", ".mp3", ".mp4", ".m4a", ".flac", ".ogg"]
-  temp_dir: "/tmp/astrachat"
-
-# Настройки для разработки
-development:
-  hot_reload: true
-  debug_toolbar: false
-  profiling: false
-  mock_llm: false  # Использовать заглушку вместо реального LLM
-
-# Пути к моделям и папкам
-paths:
-  # Пути к папкам с моделями (относительно корня проекта)
-  whisperx_models_dir: "whisperx_models"
-  diarize_models_dir: "diarize_models"
-  
-  # Названия моделей
-  whisperx_base_model: "base"
-  whisperx_small_model: "small"
-  diarize_model: "pyannote/speaker-diarization-3.1"
-  
-  # Пути для других модулей
-  model_path: "models"  # Путь к конкретной модели LLM
-  memory_path: "memory"  # Путь к папке с памятью диалогов
-
-# Настройки баз данных
-# MongoDB - для хранения диалогов
 mongodb:
-  host: "mongodb"  # В Docker: "mongodb"
+  host: "mongodb"
   port: 27017
   database: "memoai"
-  # user: ""  # Опционально
-  # password: ""  # Опционально
 
-# PostgreSQL + pgvector - для RAG системы
 postgresql:
-  host: "postgresql"  # В Docker: "postgresql"
+  host: "postgresql"
   port: 5432
   database: "memoai"
   user: "admin"
   password: "password"
-  embedding_dim: 384  # Размерность векторов для эмбеддингов
+  embedding_dim: 384
 
-# MinIO - для хранения файлов
 minio:
-  endpoint: "minio"  # В Docker: "minio"
+  endpoint: "minio"
   port: 9000
   access_key: "minioadmin"
   secret_key: "minioadmin"
@@ -209,34 +97,36 @@ minio:
   bucket_name: "memoai-temp"
   documents_bucket_name: "astrachat-documents"
 
-# URL-адреса для использования в приложении
-# Измените эти значения, чтобы обновить все URL во всем приложении
-# Названия переменных нейтральные и не привязаны к localhost или конкретным IP
+# ========================================================
+# ПУТИ И СИСТЕМНЫЕ НАСТРОЙКИ
+# ========================================================
+paths:
+  # В режиме микросервисов эти пути на бэкенде могут быть пустыми, 
+  # так как модели лежат в своих контейнерах.
+  whisperx_models_dir: "whisperx_models"
+  diarize_models_dir: "diarize_models"
+  model_path: "models"
+  memory_path: "memory"
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "/app/logs/backend.log"
+  max_size: 10485760
+  backup_count: 5
+
+# ========================================================
+# СЕТЕВЫЕ АДРЕСА (Service Discovery)
+# ========================================================
 urls:
-  # Frontend адреса
+  # Docker внутренние адреса (используются для общения между контейнерами)
+  llm_service_docker: "http://llm-service:8000"
+  stt_service_docker: "http://stt-service:8000"
+  tts_service_docker: "http://tts-service:8000"
+  ocr_service_docker: "http://ocr-service:8000"
+  diarization_docker: "http://diarization-service:8000"
+  
+  # Внешние адреса для отладки
+  backend_port_1: "http://localhost:8000"
   frontend_port_1: "http://localhost:3000"
   frontend_port_1_ipv4: "http://127.0.0.1:3000"
-  
-  # Frontend альтернативный порт
-  frontend_port_2: "http://localhost:3001"
-  frontend_port_2_ipv4: "http://127.0.0.1:3001"
-  
-  # Frontend Vite dev server
-  frontend_port_3: "http://localhost:5173"
-  frontend_port_3_ipv4: "http://127.0.0.1:5173"
-  
-  # Backend адреса 
-  backend_port_1: "http://localhost:8000"
-  backend_port_1_ipv4: "http://127.0.0.1:8000"
-  
-  # LLM Service адреса
-  llm_service_port: "http://localhost:8001"
-  
-  # Backend альтернативный порт 
-  backend_port_2: "http://localhost:8080"
-  backend_port_2_ipv4: "http://127.0.0.1:8080"
-  
-  # Docker внутренние адреса
-  frontend_docker: "http://astrachat-frontend:3000"
-  backend_docker: "http://astrachat-backend:8000"
-  llm_service_docker: "http://llm-svc:8000"

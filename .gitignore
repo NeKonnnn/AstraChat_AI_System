@@ -40,8 +40,13 @@ MANIFEST
 model_small/
 models/
 diarize_models/
+diarize_models
 silero_models/
 whisperx_models/
+surya_models/
+vosk_models/
+rag_models/
+venv_surya/
 
 # Model files (большие файлы моделей)
 *.gguf
@@ -53,6 +58,10 @@ whisperx_models/
 *.h5
 *.pb
 *.tflite
+
+# Архивы моделей (Vosk и др.)
+*.zip
+!**/testdata/*.zip
 
 # Кэш моделей
 .cache/
@@ -138,4 +147,20 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
+# Бэкапы и временные копии
+*.bak
+*.backup
+*.orig
 
+# Docker override и локальные данные
+docker-compose.override.yml
+docker-compose.*.local.yml
+data/
+postgres_data/
+minio_data/
+
+# Cursor (опционально)
+.cursor/
+
+# Симлинк backend/backend (Docker/скрипт), Git на Windows не индексирует
+backend/backend

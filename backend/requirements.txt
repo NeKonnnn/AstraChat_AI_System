@@ -1,68 +1,77 @@
-fastapi==0.116.1
-uvicorn==0.35.0
-websockets==15.0.1
-python-multipart==0.0.20
-aiofiles==24.1.0
-pydantic==2.11.7
-python-socketio==5.13.0
-python-engineio==4.12.3
-aiohttp==3.9.1
-starlette==0.47.2
-# Зависимости для document_processor
-python-docx==1.2.0
-PyPDF2==3.0.1
-openpyxl==3.1.5
-pdfplumber==0.11.7
-langchain==0.3.27
-langchain-community==0.3.27
-langchain-core>=0.3.72
-langgraph==0.6.10
-faiss-cpu==1.12.0
-sentence-transformers==5.1.0
-# Зависимости для обработки изображений (OCR)
-Pillow==11.3.0
-pytesseract==0.3.13
+# ===== Backend: Main Application =====
 
-# Зависимости для изменения темпа аудио
-librosa==0.11.0
+# Web framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+starlette>=0.40.0
+pydantic>=2.10.0
+pydantic-settings>=2.0.0
+python-multipart>=0.0.18
+python-dotenv>=1.0.0
 
-# Зависимости для llm-svc интеграции
-httpx==0.28.1
+# WebSocket / Real-time
+websockets>=12.0
+python-socketio>=5.10.0
+python-engineio>=4.9.0
+aiohttp>=3.9.0
 
-# Зависимости для работы с локальными LLM моделями
+# HTTP клиент
+httpx>=0.27.0
+requests>=2.31.0
+
+# Конфигурация
+pyyaml>=6.0.2
+
+# Асинхронные утилиты
+aiofiles>=24.0.0
+anyio>=4.0.0
+
+# Документы
+python-docx>=1.1.0
+PyPDF2>=3.0.0
+openpyxl>=3.1.0
+pdfplumber>=0.10.0
+Pillow>=10.0.0
+
+# LangChain + RAG
+langchain>=0.3.0
+langchain-community>=0.3.0
+langchain-core>=0.3.0
+langchain-huggingface>=0.1.0
+langchain-text-splitters>=0.3.0
+langgraph>=0.2.0
+faiss-cpu>=1.8.0
+sentence-transformers>=3.0.0
+rank-bm25>=0.2.2
+
+# LLM интеграция
 llama-cpp-python==0.3.16
 
-# Дополнительные зависимости
-psutil==7.0.0
+# Аудио (для клиентской части)
+sounddevice>=0.4.6
+librosa>=0.10.0
+
+# Базы данных
+# MongoDB
+motor>=3.3.0
+pymongo>=4.6.0,<5.0
+
+# PostgreSQL
+asyncpg>=0.29.0
+psycopg2-binary>=2.9.9
+SQLAlchemy>=2.0.0
+
+# MinIO (S3-совместимое хранилище)
+minio>=7.2.0
+
+# Научные библиотеки
+numpy>=1.24.3,<2.0.0
+scipy>=1.10.0
 
 # Аутентификация
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-python-ldap==3.4.4
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
 
-# Зависимости для TTS и распознавания речи
-sounddevice==0.5.2
-pyaudio==0.2.14
-vosk==0.3.45
-pyttsx3==2.90
-
-# Зависимости для баз данных
-# MongoDB
-motor==3.3.2  # Асинхронный драйвер для MongoDB
-pymongo==4.6.1  # Синхронный драйвер для MongoDB
-
-# PostgreSQL + pgvector
-asyncpg==0.29.0  # Асинхронный драйвер для PostgreSQL
-psycopg2-binary==2.9.9  # Синхронный драйвер для PostgreSQL
-
-# Для работы с векторами
-numpy==1.26.3
-
-# MinIO для хранения файлов
-minio==7.2.3
-
-# Обновленная версия HuggingFaceEmbeddings
-langchain-huggingface==0.1.0
-
-# Гибридный поиск (BM25)
-rank-bm25==0.2.2
+# Утилиты
+psutil>=5.9.0
+tqdm>=4.66.0
