@@ -158,29 +158,34 @@ async def save_dialog_entry_mongodb(role: str, content: str, metadata: Optional[
 async def save_dialog_entry(role: str, content: str, metadata: Optional[Dict[str, Any]] = None, message_id: Optional[str] = None, conversation_id: Optional[str] = None):
     """
     Сохранение сообщения в MongoDB (файловый режим отключен)
-    
-    Args:
-        role: Роль отправителя
-        content: Содержание сообщения
-        metadata: Дополнительные метаданные
-        message_id: ID сообщения (опционально)
-        conversation_id: ID диалога (опционально)
+    При "Event loop is closed" переинициализирует MongoDB в текущем loop и повторяет попытку.
     """
-    # Проверяем реальную доступность MongoDB
     if not _check_mongodb_available():
         logger.error("MongoDB недоступен! Сообщение не будет сохранено.")
         raise RuntimeError("MongoDB недоступен. Невозможно сохранить сообщение.")
-    
-    try:
-        success = await save_dialog_entry_mongodb(role, content, metadata, message_id, conversation_id)
-        if not success:
-            raise RuntimeError("Не удалось сохранить сообщение в MongoDB")
-    except RuntimeError:
-        # Пробрасываем RuntimeError как есть
-        raise
-    except Exception as e:
-        logger.error(f"Ошибка при сохранении сообщения: {e}")
-        raise RuntimeError(f"Ошибка при сохранении сообщения: {e}")
+
+    for attempt in range(2):
+        try:
+            success = await save_dialog_entry_mongodb(role, content, metadata, message_id, conversation_id)
+            if not success:
+                raise RuntimeError("Не удалось сохранить сообщение в MongoDB")
+            return
+        except RuntimeError:
+            raise
+        except Exception as e:
+            if attempt == 0 and "Event loop is closed" in str(e):
+                logger.warning("MongoDB создан в другом event loop, переинициализируем в текущем...")
+                try:
+                    global conversation_repo
+                    from backend.database.init_db import reset_mongodb_globals, init_mongodb, get_conversation_repository
+                    reset_mongodb_globals()
+                    await init_mongodb()
+                    conversation_repo = get_conversation_repository()
+                except Exception as init_e:
+                    logger.error(f"Не удалось переинициализировать MongoDB: {init_e}")
+                continue
+            logger.error(f"Ошибка при сохранении сообщения: {e}")
+            raise RuntimeError(f"Ошибка при сохранении сообщения: {e}")
 
 
 async def load_dialog_history_mongodb(conversation_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -282,20 +287,31 @@ async def get_recent_dialog_history(max_entries: Optional[int] = None, conversat
         max_entries: Максимальное количество сообщений
         conversation_id: ID диалога (если None, используется текущий)
     """
-    # Проверяем реальную доступность MongoDB
     if not _check_mongodb_available():
         logger.warning("MongoDB недоступен! Возвращаем пустую историю.")
         return []
-    
-    try:
-        # Если conversation_id не передан, используем текущий
-        if conversation_id is None:
-            conversation_id = get_or_create_conversation_id()
-        
-        return await get_recent_dialog_history_mongodb(max_entries, conversation_id)
-    except Exception as e:
-        logger.error(f"Ошибка при получении последних сообщений: {e}")
-        return []
+
+    if conversation_id is None:
+        conversation_id = get_or_create_conversation_id()
+
+    for attempt in range(2):
+        try:
+            return await get_recent_dialog_history_mongodb(max_entries, conversation_id)
+        except Exception as e:
+            if attempt == 0 and "Event loop is closed" in str(e):
+                logger.warning("MongoDB создан в другом event loop, переинициализируем в текущем...")
+                try:
+                    global conversation_repo
+                    from backend.database.init_db import reset_mongodb_globals, init_mongodb, get_conversation_repository
+                    reset_mongodb_globals()
+                    await init_mongodb()
+                    conversation_repo = get_conversation_repository()
+                except Exception as init_e:
+                    logger.error(f"Не удалось переинициализировать MongoDB: {init_e}")
+                continue
+            logger.error(f"Ошибка при получении последних сообщений: {e}")
+            return []
+    return []
 
 
 async def clear_dialog_history_mongodb() -> str:

@@ -1,0 +1,21 @@
+{
+  "automatedSystemCode": "llm_svc",
+  "projectCodeDevOps": "DMNCS",
+  "name": "llm_svc",
+  "title": "llm_svc",
+  "type": "application",
+  "valueStreamMaintainer": "DMKFR",
+  "valueStreamContributors": [
+    "DMKFR"
+  ],
+  "jiraDevProject": "PPR",
+  "jiraDevComponent": "SOME_COMPONENT",
+  "confluenceUrl": "https://confluence.int.gazprombank.ru/pages/viewpage.action?pageId=1486169593", 
+  "emailItLeader": "aleksey.trofimov@gazprombank.ru",
+  "emailTechDevLeader": "Artem.Ugrin@gazprombank.ru",
+  "emailDevOps": "dev_ops@gazprombank.ru",
+  "emailEnterpriseArchitect": null,
+  "emailOperations": null,
+  "emailSolutionArchitect": null,
+  "description": "llm_svc"
+}

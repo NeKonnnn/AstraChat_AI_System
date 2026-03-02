@@ -23,6 +23,13 @@ else:
     Model = None
     KaldiRecognizer = None
     print("Используется llm-svc для Vosk транскрипции")
+
+# Импорт клиента
+try:
+    from backend.llm_client import transcribe_audio_llm_svc
+except ImportError:
+    transcribe_audio_llm_svc = None
+
 try:
     from moviepy.editor import VideoFileClip
     MOVIEPY_AVAILABLE = True
@@ -197,7 +204,6 @@ class Transcriber:
             self.logger.error(f"Ошибка при загрузке модели: {str(e)}")
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             return False
-        
     def _check_ffmpeg_availability(self):
         """Проверка доступности FFmpeg в системе"""
         try:
@@ -220,6 +226,10 @@ class Transcriber:
         
     def load_model(self, model_path=None):
         """Загрузка модели для транскрибации"""
+        # Если используем llm-svc, не загружаем локальную модель
+        if USE_LLM_SVC:
+            return True
+
         if model_path:
             self.model_size = model_path
             self.logger.debug(f"Установлен новый путь к модели: {model_path}")
@@ -250,6 +260,7 @@ class Transcriber:
             
             # Загружаем модель
             self.logger.info("Инициализация модели Vosk...")
+            from vosk import Model
             self.model = Model(self.model_size)
             self.logger.info("Модель Vosk успешно загружена")
             return True
@@ -265,8 +276,31 @@ class Transcriber:
         
         # Обновляем прогресс
         self.update_progress(20)
+
+        if USE_LLM_SVC:
+            try:
+                self.logger.info("[SVC] Отправка файла на микросервис STT...")
+                with open(audio_path, 'rb') as f:
+                    audio_data = f.read()
+                
+                # Вызов сетевой обертки
+                text = transcribe_audio_llm_svc(
+                    audio_data, 
+                    filename=os.path.basename(audio_path), 
+                    language="ru"
+                )
+                
+                if text:
+                    self.logger.info(f"[SVC] Транскрипция завершена, длина: {len(text)}")
+                    self.update_progress(100)
+                    return True, text
+                else:
+                    self.logger.error("[SVC] Пустой текст от сервиса")
+                    return False, "Микросервис вернул пустой результат"
+            except Exception as e:
+                self.logger.error(f"[SVC] Ошибка: {e}")
+                return False, f"Ошибка сервиса: {str(e)}"
         
-        # Проверяем, что модель загружена
         if not self.model:
             self.logger.warning("Модель не загружена, загружаем...")
             success = self.load_model()
@@ -310,8 +344,7 @@ class Transcriber:
                     if not success:
                         return False, wav_path
                 self.update_progress(40)
-            
-            # Проверяем файл перед открытием
+                # Проверяем файл перед открытием
             if not os.path.exists(wav_path):
                 return False, f"Ошибка: WAV файл не был создан: {wav_path}"
                 
@@ -324,6 +357,7 @@ class Transcriber:
                       f"сэмплов={wf.getnframes()}, длительность={wf.getnframes()/wf.getframerate():.2f} сек")
                 
                 # Создаем распознаватель с точным указанием параметров
+                from vosk import KaldiRecognizer
                 rec = KaldiRecognizer(self.model, wf.getframerate())
                 
                 # Проверяем, что распознаватель создан успешно
@@ -433,7 +467,6 @@ class Transcriber:
         except subprocess.CalledProcessError as e:
             stderr = e.stderr.decode('utf-8', errors='ignore')
             return False, f"Ошибка FFmpeg: {stderr}"
-            
     def _convert_with_sounddevice(self, input_path, output_path):
         """Использует sounddevice и soundfile для конвертации аудио"""
         try:
@@ -540,177 +573,109 @@ class Transcriber:
                             return False, "Аудиофайл не был создан"
                     else:
                         print(f"Ошибка FFmpeg: {result.stderr}")
-                        return False, f"Ошибка FFmpeg: {result.stderr}"
-                        
                 except Exception as e:
                     print(f"Ошибка при выполнении FFmpeg: {e}")
-                    return False, f"Ошибка при выполнении FFmpeg: {e}"
-            else:
-                # Используем альтернативный метод без ffmpeg
-                try:
-                    # Загружаем видео
-                    print("Загрузка видео...")
-                    self.update_progress(75)
-                    video = VideoFileClip(video_path)
-                    
-                    if video.audio is None:
-                        return False, "В видеофайле нет аудиодорожки"
-                    
-                    print(f"Видео загружено. Длительность: {video.duration:.2f} сек")
-                    self.update_progress(80)
-                    
-                    # Извлекаем аудио
-                    print("Извлечение аудиодорожки...")
-                    
-                    # Пытаемся получить аудиодорожку через MoviePy
-                    try:
-                        # Получаем аудиоданные в виде NumPy массива
-                        # Используем стандартный метод с более крупным буфером
-                        audio_data = video.audio.to_soundarray(fps=16000, nbytes=2, buffersize=20000)
-                        
-                        # Преобразуем в моно, если стерео
-                        if len(audio_data.shape) > 1 and audio_data.shape[1] > 1:
-                            audio_data = np.mean(audio_data, axis=1)
-                        
-                        # Сохраняем в WAV файл
-                        sf.write(audio_path, audio_data, 16000, subtype='PCM_16')
-                        print(f"Аудио успешно извлечено и сохранено в {audio_path}")
-                        self.update_progress(90)
-                        
-                        # Проверяем, что файл создан
-                        if os.path.exists(audio_path):
-                            print(f"Аудио успешно извлечено: {audio_path}")
-                            return True, audio_path
-                        else:
-                            return False, "Файл аудио не был создан"
-                        
-                    except Exception as audio_err:
-                        print(f"Ошибка при извлечении аудио напрямую: {audio_err}")
-                        
-                        # Пробуем через непосредственное использование moviepy без настройки ffmpeg
-                        print("Попытка извлечения с помощью нативной функциональности moviepy...")
-                        self.update_progress(82)
-                        
-                        try:
-                            # Используем метод write_audiofile с минимальными аргументами
-                            video.audio.write_audiofile(
-                                audio_path,
-                                fps=16000,         # Частота 16 кГц
-                                nbytes=2,          # 16 бит
-                                verbose=False,     # Без подробного вывода
-                                logger=None        # Без логирования
-                            )
-                            print(f"Аудио успешно извлечено и сохранено в {audio_path}")
-                            self.update_progress(90)
-                            
-                            # Проверяем, что файл создан
-                            if os.path.exists(audio_path):
-                                print(f"Аудио успешно извлечено: {audio_path}")
-                                return True, audio_path
-                            else:
-                                return False, "Файл аудио не был создан"
-                            
-                        except Exception as alt_err:
-                            print(f"Ошибка при извлечении аудио: {alt_err}")
-                            self.update_progress(84)
-                            
-                            # Еще один метод - попытка использовать numpy напрямую
-                            print("Пробуем еще один альтернативный метод...")
-                            
-                            try:
-                                # Создаем очень короткий временный WAV файл
-                                test_audio_path = os.path.join(self.temp_dir, "test_audio.wav")
-                                
-                                # Создаем тишину длительностью 1 секунда
-                                rate = 16000
-                                silence = np.zeros(rate, dtype=np.int16)
-                                sf.write(test_audio_path, silence, rate)
-                                
-                                # Проверяем наличие аудиодорожки
-                                if video.audio is None:
-                                    # Если нет аудио, создаем тестовый файл с тишиной
-                                    sf.write(audio_path, np.zeros(int(video.duration * 16000), dtype=np.int16), 16000)
-                                    print("Создан пустой аудиофайл, так как видео не содержит аудиодорожки")
-                                else:
-                                    # Используем блочную обработку вместо одной большой операции
-                                    print("Извлечение аудио блоками...")
-                                    # Разбиваем видео на 10-секундные блоки
-                                    block_duration = 10  # секунд
-                                    num_blocks = int(np.ceil(video.duration / block_duration))
-                                    
-                                    # Создаем массив для хранения всего аудио
-                                    full_audio = np.array([], dtype=np.float32)
-                                    
-                                    for i in range(num_blocks):
-                                        start_time = i * block_duration
-                                        end_time = min((i + 1) * block_duration, video.duration)
-                                        
-                                        print(f"Обработка блока {i+1}/{num_blocks}: {start_time:.1f}-{end_time:.1f} сек")
-                                        
-                                        # Создаем подклип для текущего блока
-                                        block_clip = video.subclip(start_time, end_time)
-                                        
-                                        try:
-                                            # Извлекаем аудио из блока
-                                            block_audio = block_clip.audio.to_soundarray(fps=16000, nbytes=2)
-                                            
-                                            # Если стерео, преобразуем в моно
-                                            if len(block_audio.shape) > 1 and block_audio.shape[1] > 1:
-                                                block_audio = np.mean(block_audio, axis=1)
-                                                
-                                            # Добавляем к полному аудио
-                                            full_audio = np.append(full_audio, block_audio)
-                                            
-                                        except Exception as block_err:
-                                            print(f"Ошибка при обработке блока {i+1}: {block_err}")
-                                            # Добавляем тишину вместо ошибочного блока
-                                            silence_duration = end_time - start_time
-                                            full_audio = np.append(full_audio, np.zeros(int(silence_duration * 16000), dtype=np.float32))
-                                        
-                                        # Закрываем подклип
-                                        block_clip.close()
-                                        
-                                        # Обновляем прогресс (от 85% до 90%)
-                                        progress = 85 + int((i + 1) * 5 / num_blocks)
-                                        self.update_progress(progress)
-                                    
-                                    # Сохраняем полное аудио
-                                    sf.write(audio_path, full_audio, 16000, subtype='PCM_16')
-                                    print(f"Аудио успешно извлечено блочным методом и сохранено в {audio_path}")
-                                    
-                                    # Проверяем, что файл создан
-                                    if os.path.exists(audio_path):
-                                        print(f"Аудио успешно извлечено: {audio_path}")
-                                        return True, audio_path
-                                    else:
-                                        return False, "Файл аудио не был создан"
-                            
-                            except Exception as np_err:
-                                print(f"Все методы извлечения аудио не удались: {np_err}")
-                                return False, f"Не удалось извлечь аудио из видео: {np_err}"
-                    
-                    video.close()
-                    
-                except Exception as ve:
-                    print(f"Ошибка при извлечении аудио из видео: {str(ve)}")
-                    return False, f"Не удалось извлечь аудио из видео: {str(ve)}"
             
-            # Проверяем, что файл был создан
+            # --- ИСПОЛЬЗУЕМ MOVIEPY (ЕСЛИ FFMPEG НЕ СРАБОТАЛ) ---
+            try:
+                # Загружаем видео
+                print("Загрузка видео...")
+                self.update_progress(75)
+                video = VideoFileClip(video_path)
+                
+                if video.audio is None:
+                    return False, "В видеофайле нет аудиодорожки"
+                
+                print(f"Видео загружено. Длительность: {video.duration:.2f} сек")
+                self.update_progress(80)
+                
+                # Извлекаем аудио
+                print("Извлечение аудиодорожки...")
+                
+                # Пытаемся получить аудиодорожку через MoviePy
+                try:
+                    # Получаем аудиоданные в виде NumPy массива
+                    audio_data = video.audio.to_soundarray(fps=16000, nbytes=2, buffersize=20000)
+                    
+                    # Преобразуем в моно, если стерео
+                    if len(audio_data.shape) > 1 and data.shape[1] > 1:
+                        audio_data = np.mean(audio_data, axis=1)
+                    
+                    # Сохраняем в WAV файл
+                    sf.write(audio_path, audio_data, 16000, subtype='PCM_16')
+                    print(f"Аудио успешно извлечено и сохранено в {audio_path}")
+                    self.update_progress(90)
+                    
+                    if os.path.exists(audio_path):
+                        print(f"Аудио успешно извлечено: {audio_path}")
+                        return True, audio_path
+                    else:
+                        return False, "Файл аудио не был создан"
+                        
+                except Exception as audio_err:
+                    print(f"Ошибка при извлечении аудио напрямую: {audio_err}")
+                    self.update_progress(82)
+                    
+                    try:
+                        # Попытка 2: нативный write_audiofile
+                        video.audio.write_audiofile(
+                            audio_path,
+                            fps=16000, nbytes=2,
+                            verbose=False, logger=None
+                        )
+                        self.update_progress(90)
+                        return True, audio_path
+                            
+                    except Exception as alt_err:
+                        print(f"Ошибка при извлечении аудио: {alt_err}")
+                        self.update_progress(84)
+                        
+                        # Попытка 3: Блочная обработка (numpy напрямую)
+                        print("Пробуем еще один альтернативный метод...")
+                        try:
+                            # Используем блочную обработку вместо одной большой операции
+                            print("Извлечение аудио блоками...")
+                            block_duration = 10  # секунд
+                            num_blocks = int(np.ceil(video.duration / block_duration))
+                            full_audio = np.array([], dtype=np.float32)
+                            
+                            for i in range(num_blocks):
+                                start_time = i * block_duration
+                                end_time = min((i + 1) * block_duration, video.duration)
+                                print(f"Обработка блока {i+1}/{num_blocks}: {start_time:.1f}-{end_time:.1f} сек")
+                                block_clip = video.subclip(start_time, end_time)
+                                try:
+                                    block_audio = block_clip.audio.to_soundarray(fps=16000, nbytes=2)
+                                    if len(block_audio.shape) > 1 and block_audio.shape[1] > 1:
+                                        block_audio = np.mean(block_audio, axis=1)
+                                    full_audio = np.append(full_audio, block_audio)
+                                except Exception as block_err:
+                                    print(f"Ошибка при обработке блока {i+1}: {block_err}")
+                                    silence_duration = end_time - start_time
+                                    full_audio = np.append(full_audio, np.zeros(int(silence_duration * 16000), dtype=np.float32))
+                                
+                                block_clip.close()
+                                progress = 85 + int((i + 1) * 5 / num_blocks)
+                                self.update_progress(progress)
+                            
+                            sf.write(audio_path, full_audio, 16000, subtype='PCM_16')
+                            return True, audio_path
+                        except Exception as np_err:
+                            return False, f"Все методы извлечения аудио не удались: {np_err}"
+                
+                video.close()
+            except Exception as ve:
+                print(f"Ошибка при извлечении аудио из видео: {str(ve)}")
+                return False, f"Не удалось извлечь аудио из видео: {str(ve)}"
+            
             if not os.path.exists(audio_path):
                 return False, f"Не удалось создать аудиофайл: {audio_path}"
-            
-            # Проверяем, что файл не пуст
-            if os.path.getsize(audio_path) == 0:
-                return False, "Созданный аудиофайл пуст"
                 
-            print(f"Аудио успешно извлечено, размер файла: {os.path.getsize(audio_path)/1024/1024:.2f} МБ")
             return True, audio_path
         except Exception as e:
-            print(f"Ошибка при извлечении аудио из видео: {str(e)}")
             return False, f"Ошибка при извлечении аудио: {str(e)}"
-    
     def transcribe_video(self, video_path):
-        """Транскрибация видео файла"""
+        """Транскрибация видео файла \\"""
         # Проверяем существование файла
         if not os.path.exists(video_path):
             return False, f"Видеофайл не найден: {video_path}"
@@ -730,6 +695,7 @@ class Transcriber:
             
             # Шаг 2: Транскрибируем полученное аудио
             print("\nШаг 2: Транскрибация аудио")
+            # Важно: вызываем локальный метод, который сам решит — идти в сервис или локально
             return self.transcribe_audio(audio_path)
         except Exception as e:
             print(f"Ошибка при обработке видео: {str(e)}")
@@ -756,13 +722,12 @@ class Transcriber:
             print("Получение информации о видео...")
             self.update_progress(15)
             
-            # Добавляем обработку ошибок сети с повтором
+            # Добавляем обработку ошибок сети с повторомъ
             max_retries = 3
             connection_error = None
             yt = None
             
             # Настройка прокси для обхода возможных блокировок API
-            # Используем только если есть проблемы с соединением
             proxies = None
             
             for retry in range(max_retries):
@@ -778,22 +743,18 @@ class Transcriber:
                     if yt.title:
                         break
                 except pytubefix.exceptions.RegexMatchError as e:
-                    # Проблема с форматом URL
                     return False, f"Неверный формат URL: {str(e)}"
                 except pytubefix.exceptions.VideoUnavailable as e:
-                    # Видео недоступно
                     return False, f"Видео недоступно: {str(e)}"
                 except (pytubefix.exceptions.PytubeError, Exception) as e:
                     connection_error = str(e)
                     if "HTTP Error 400" in connection_error or "Bad Request" in connection_error:
-                        # Возможно, блокировка API, пробуем с другими параметрами
                         if retry == 0:
                             print("Получен HTTP Error 400, пробуем альтернативные методы доступа...")
                     else:
                         print(f"Ошибка при подключении (попытка {retry+1}/{max_retries}): {connection_error}")
                     
-                    # При повторе пытаемся использовать другие параметры
-                    time.sleep(2 * (retry + 1))  # Увеличиваем задержку с каждой попыткой
+                    time.sleep(2 * (retry + 1))
             
             if yt is None:
                 return False, f"Не удалось подключиться к YouTube после {max_retries} попыток: {connection_error}"
@@ -812,7 +773,6 @@ class Transcriber:
             self.update_progress(25)
             
             try:
-                # Устанавливаем повторы для получения потоков
                 stream = None
                 streams_error = None
                 
@@ -821,14 +781,11 @@ class Transcriber:
                         # Сначала пробуем прогрессивные потоки (с аудио)
                         video_streams = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution')
                         
-                        # Ищем самое качественное видео с аудио
                         stream = video_streams.last()
                         if not stream:
-                            # Если не нашли прогрессивный поток, попробуем любой с аудио
                             stream = yt.streams.filter(only_audio=False).first()
                             
                         if not stream:
-                            # Если всё ещё нет подходящего потока, возьмем только аудио
                             stream = yt.streams.filter(only_audio=True).first()
                         
                         if stream:
@@ -847,7 +804,7 @@ class Transcriber:
                 print(f"Ошибка при получении потоков: {stream_err}")
                 return False, f"Ошибка при получении форматов видео: {stream_err}"
             
-            # Устанавливаем обработчик прогресса
+            # Устанавливаем обработчик прогресса 
             def progress_callback(stream, chunk, bytes_remaining):
                 total_size = stream.filesize
                 bytes_downloaded = total_size - bytes_remaining
@@ -857,10 +814,8 @@ class Transcriber:
                 self.update_progress(progress_value)
                 print(f"\rЗагрузка видео: {percentage:.1f}%", end="")
             
-            # Регистрируем обработчик
             yt.register_on_progress_callback(progress_callback)
             
-            # Загружаем видео
             print("Начинаю загрузку видео...")
             try:
                 stream.download(output_path=self.temp_dir, filename="youtube_video.mp4")
@@ -870,7 +825,6 @@ class Transcriber:
                 print(f"\nОшибка при загрузке видео: {download_err}")
                 return False, f"Ошибка при загрузке видео: {download_err}"
             
-            # Проверяем, что файл был загружен
             if not os.path.exists(video_path):
                 return False, "Не удалось загрузить видео с YouTube"
                 
@@ -884,59 +838,38 @@ class Transcriber:
             
     def normalize_youtube_url(self, url):
         """Нормализует URL YouTube для корректной обработки"""
-        # Очищаем URL от лишних пробелов
         url = url.strip()
-        
-        # Проверяем базовые шаблоны YouTube URL
         youtube_patterns = [
             r'(https?://)?(www\.)?(youtube\.com|youtu\.be|youtube-nocookie\.com)',
             r'(https?://)?(www\.)?m\.youtube\.com',
         ]
         
-        # Проверяем, соответствует ли URL хотя бы одному шаблону
         if not any(re.match(pattern, url) for pattern in youtube_patterns):
-            # Если URL не соответствует шаблонам, проверим, не является ли это просто ID видео
             video_id_pattern = r'^[a-zA-Z0-9_-]{11}$'
             if re.match(video_id_pattern, url):
-                # Если это похоже на ID видео, добавляем стандартный префикс
                 return f'https://www.youtube.com/watch?v={url}'
             else:
-                # Не удалось распознать как URL YouTube
                 return None
         
-        # Извлекаем ID видео из URL
         video_id = None
-        
-        # Для формата youtu.be/ID
         if 'youtu.be' in url:
             match = re.search(r'youtu\.be/([a-zA-Z0-9_-]+)', url)
-            if match:
-                video_id = match.group(1)
-        # Для формата youtube.com/watch?v=ID
+            if match: video_id = match.group(1)
         elif 'youtube.com/watch' in url:
             match = re.search(r'[?&]v=([a-zA-Z0-9_-]+)', url)
-            if match:
-                video_id = match.group(1)
-        # Для формата youtube.com/v/ID
+            if match: video_id = match.group(1)
         elif '/v/' in url:
             match = re.search(r'/v/([a-zA-Z0-9_-]+)', url)
-            if match:
-                video_id = match.group(1)
-        # Для формата youtube.com/embed/ID
+            if match: video_id = match.group(1)
         elif '/embed/' in url:
             match = re.search(r'/embed/([a-zA-Z0-9_-]+)', url)
-            if match:
-                video_id = match.group(1)
+            if match: video_id = match.group(1)
         
-        # Если ID видео найден, формируем стандартный URL
         if video_id:
             return f'https://www.youtube.com/watch?v={video_id}'
-        
-        # Если не удалось извлечь ID, возвращаем исходный URL (pytube попытается его обработать)
         return url
-    
     def transcribe_youtube(self, url):
-        """Транскрибация видео с YouTube"""
+        """Транскрибация видео с YouTube """
         # Сбрасываем прогресс
         self.update_progress(5)
         
@@ -987,7 +920,7 @@ class Transcriber:
         return self.transcribe_video(zoom_recording_path)
     
     def transcribe_streaming_audio(self, audio_stream_url):
-        """Транскрибация потокового аудио"""
+        """Транскрибация потокового аудио """
         try:
             # Сохраняем поток во временный файл
             temp_audio_file = os.path.join(self.temp_dir, "stream_audio.wav")
@@ -1007,8 +940,7 @@ class Transcriber:
                 # Запускаем команду
                 subprocess.run(command, check=True)
             else:
-                # Используем sounddevice для записи и сохранения потока
-                # Это временное решение, без настоящего потока
+                # Используем sounddevice для записи и сохранения потока (fallback)
                 print("Запись аудио с микрофона на 10 секунд...")
                 
                 # Запись аудио с микрофона
@@ -1030,7 +962,7 @@ class Transcriber:
             return False, f"Ошибка при транскрибации потока: {str(e)}"
     
     def process_audio_file(self, file_path):
-        """Обработка аудио файла"""
+        """Обработка аудио файла """
         # Проверяем расширение файла
         file_extension = os.path.splitext(file_path)[1].lower()
         
@@ -1049,7 +981,12 @@ class Transcriber:
         print(f"Установлен язык транскрибации: {language_code}")
         
     def set_model_size(self, model_size):
-        """Установка размера модели Vosk"""
+        """Установка размера модели Vosk """
+        # Если используем llm-svc, настройка локальной модели не имеет смысла
+        if USE_LLM_SVC:
+            print(f"Размер модели изменен на {model_size} (в режиме микросервиса)")
+            return True
+
         # Проверяем, является ли входной параметр одним из стандартных размеров модели
         standard_sizes = ["tiny", "base", "small", "medium", "large"]
         
@@ -1152,4 +1089,5 @@ class Transcriber:
                 self.progress_callback(progress)
         except Exception as e:
             # Игнорируем ошибки прогресса
-            pass 
+            pass
+    

@@ -1,0 +1,24 @@
+services:
+  llm-service:
+    build:
+      context: ./llm-svc
+      dockerfile: Dockerfile
+    ports:
+      - "8002:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ./models:/app/models:ro  # Прокидываем GGUF модели
+      - ./llm-svc/config:/app/config:ro
+    restart: unless-stopped
+    networks:
+      - astrachat-network
+
+networks:
+  astrachat-network:
+    driver: bridge

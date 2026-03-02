@@ -24,63 +24,39 @@ class DocumentAgent(BaseAgent):
     async def process_message(self, message: str, context: Dict[str, Any] = None) -> str:
         """Обработка запросов по документам"""
         try:
-            # Получаем doc_processor из контекста или из main
-            doc_processor = context.get("doc_processor") if context else None
-            
-            if not doc_processor:
-                # Пытаемся получить из main.py
-                try:
-                    import backend.main as main_module
-                    doc_processor = getattr(main_module, 'doc_processor', None)
-                except:
-                    pass
-            
-            if not doc_processor:
-                return "DocumentProcessor недоступен. Пожалуйста, убедитесь, что система инициализирована."
-            
-            # Проверяем состояние документов
-            doc_list = doc_processor.get_document_list()
-            logger.info(f"[DocumentAgent] doc_processor ID: {id(doc_processor)}")
-            logger.info(f"[DocumentAgent] doc_list: {doc_list}")
-            logger.info(f"[DocumentAgent] doc_names: {doc_processor.doc_names}")
-            logger.info(f"[DocumentAgent] documents count: {len(doc_processor.documents) if doc_processor.documents else 0}")
-            logger.info(f"[DocumentAgent] vectorstore exists: {doc_processor.vectorstore is not None}")
-            
-            if not doc_list or len(doc_list) == 0:
-                return "Документы не загружены. Пожалуйста, загрузите документы через веб-интерфейс (кнопка 'Загрузить документ')."
-            
-            if not doc_processor.vectorstore:
-                return f"Векторное хранилище не инициализировано, хотя документы загружены ({len(doc_list)} документов). Попробуйте перезагрузить документы."
-            
-            # Поиск в векторном хранилище через новый API
-            logger.info(f"Поиск в векторном хранилище: {message}")
-            docs = await doc_processor.query_documents_async(message, k=3)
-            
-            # Проверяем, что результат - это список, а не строка с ошибкой
-            if isinstance(docs, str):
-                logger.error(f"Ошибка при поиске документов: {docs}")
-                return f"Ошибка при поиске в документах: {docs}"
-            
-            if not docs or len(docs) == 0:
+            # Получаем клиента SVC-RAG из backend.main
+            try:
+                import backend.main as main_module
+                rag_client = getattr(main_module, "rag_client", None)
+                current_rag_strategy = getattr(main_module, "current_rag_strategy", "auto")
+            except Exception:
+                rag_client = None
+                current_rag_strategy = "auto"
+
+            if not rag_client:
+                return "Сервис поиска по документам (SVC-RAG) недоступен. Пожалуйста, убедитесь, что система инициализирована."
+
+            # Выполняем поиск по документам через SVC-RAG
+            logger.info(f"[DocumentAgent] Поиск в документах через SVC-RAG: {message}")
+            hits = await rag_client.search(message, k=3, strategy=current_rag_strategy)
+
+            if not hits:
                 return "В загруженных документах не найдено информации по вашему запросу."
-            
-            logger.info(f"Найдено документов: {len(docs)}")
-            
+
+            logger.info(f"[DocumentAgent] Найдено фрагментов: {len(hits)}")
+
             # Формируем контекст из найденных документов
-            # Новый API возвращает список словарей с ключами: content, source, chunk, similarity
             context_parts = []
-            for i, doc in enumerate(docs, 1):
-                source = doc.get('source', 'Неизвестный источник')
-                content = doc.get('content', '')
-                chunk = doc.get('chunk', 0)
-                similarity = doc.get('similarity', 0.0)
-                context_parts.append(f"Фрагмент {i} (из документа '{source}', чанк {chunk}, релевантность: {similarity:.2f}):\n{content}\n")
+            for i, (content, score, doc_id, chunk_idx) in enumerate(hits, 1):
+                context_parts.append(
+                    f"Фрагмент {i} (document_id={doc_id}, чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
+                )
             
             document_context = "\n".join(context_parts)
             
             # Используем LLM для формирования ответа на основе контекста
             from backend.agent_llm_svc import ask_agent
-            
+
             prompt = f"""На основе предоставленного контекста из документов ответь на вопрос пользователя.
 Если информации в контексте недостаточно, укажи это.
 Отвечай только на основе информации из контекста. Не придумывай информацию.
@@ -92,21 +68,18 @@ class DocumentAgent(BaseAgent):
 Вопрос пользователя: {message}
 
 Ответ:"""
-            
-            # Получаем историю из контекста
-            history = context.get("history", []) if context else []
-            
+
             # Проверяем, выбрана ли модель
             selected_model = context.get("selected_model") if context else None
-            
+
             logger.info("Отправляем запрос к LLM с контекстом документов...")
             if selected_model:
                 logger.info(f"DocumentAgent использует модель: {selected_model}")
                 response = ask_agent(prompt, history=[], streaming=False, model_path=selected_model)
             else:
-                logger.info(f"DocumentAgent использует модель по умолчанию")
+                logger.info("DocumentAgent использует модель по умолчанию")
                 response = ask_agent(prompt, history=[], streaming=False)
-            
+
             logger.info(f"Получен ответ от LLM, длина: {len(response)} символов")
             
             return response

@@ -45,6 +45,113 @@ except ImportError as e:
     PGDocument = None
     DocumentVector = None
 
+
+def _run_pgvector_check_in_thread(timeout: float = 15.0) -> tuple:
+    """
+    Проверка pgvector в отдельном потоке с собственным event loop и подключением.
+    Нужно, т.к. пул asyncpg создаётся в другом потоке при init_databases(),
+    и вызов acquire() из основного loop приводит к таймауту.
+    Возвращает (extension_ok: bool, connection_ok: bool).
+    """
+    import threading
+    result_holder = []
+
+    def _run():
+        import asyncio
+        try:
+            from backend.settings import get_settings
+            from backend.database.postgresql.connection import PostgreSQLConnection
+        except ImportError:
+            result_holder.append((False, False))
+            return
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            async def _check():
+                settings = get_settings()
+                pg = settings.postgresql
+                conn = PostgreSQLConnection(
+                    host=pg.host, port=pg.port, database=pg.database,
+                    user=pg.user, password=pg.password
+                )
+                if not await conn.connect(min_size=1, max_size=1):
+                    return False, False
+                try:
+                    async with conn.pool.acquire() as c:
+                        ext = await c.fetchval(
+                            "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'vector')"
+                        )
+                        if not ext:
+                            return False, False
+                        await c.fetchval("SELECT 1")
+                        return True, True
+                finally:
+                    await conn.disconnect()
+
+            ext_ok, conn_ok = loop.run_until_complete(asyncio.wait_for(_check(), timeout=timeout))
+            result_holder.append((ext_ok, conn_ok))
+        except Exception as e:
+            logger.debug(f"pgvector check in thread: {e}")
+            result_holder.append((False, False))
+        finally:
+            loop.close()
+
+    t = threading.Thread(target=_run)
+    t.start()
+    t.join(timeout=timeout + 5)
+    if not result_holder:
+        return False, False
+    return result_holder[0]
+
+
+def _run_load_documents_from_db_in_thread(timeout: float = 45.0):
+    """Загрузка списка документов из БД в отдельном потоке с собственным подключением. Возвращает (list[doc], need_bm25)."""
+    import threading
+    result_holder = []
+
+    def _run():
+        import asyncio
+        try:
+            from backend.settings import get_settings
+            from backend.database.postgresql.connection import PostgreSQLConnection
+            from backend.database.init_db import DocumentRepository
+        except ImportError:
+            result_holder.append(([], False))
+            return
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            async def _load():
+                settings = get_settings()
+                pg = settings.postgresql
+                conn = PostgreSQLConnection(
+                    host=pg.host, port=pg.port, database=pg.database,
+                    user=pg.user, password=pg.password
+                )
+                if not await conn.connect(min_size=1, max_size=2):
+                    return [], False
+                try:
+                    doc_repo = DocumentRepository(conn)
+                    docs = await doc_repo.get_all_documents(limit=1000)
+                    return list(docs), len(docs) > 0
+                finally:
+                    await conn.disconnect()
+
+            docs, need_bm25 = loop.run_until_complete(asyncio.wait_for(_load(), timeout=timeout))
+            result_holder.append((docs, need_bm25))
+        except Exception as e:
+            logger.debug(f"load_documents in thread: {e}")
+            result_holder.append(([], False))
+        finally:
+            loop.close()
+
+    t = threading.Thread(target=_run)
+    t.start()
+    t.join(timeout=timeout + 10)
+    if not result_holder:
+        return [], False
+    return result_holder[0]
+
 class DocumentProcessor:
     def __init__(self):
         print("Инициализируем DocumentProcessor...")
@@ -261,8 +368,18 @@ class DocumentProcessor:
                 return
             
             # Проверяем наличие расширения pgvector
+            # Если основной event loop уже запущен (uvicorn), пул asyncpg создан в другом потоке —
+            # проверку выполняем в отдельном потоке с собственным подключением.
             logger.info("Проверка наличия расширения pgvector...")
-            pgvector_extension_available = asyncio.run(self._check_pgvector_extension())
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    ext_ok, _ = _run_pgvector_check_in_thread(timeout=20.0)
+                    pgvector_extension_available = ext_ok
+                else:
+                    pgvector_extension_available = loop.run_until_complete(self._check_pgvector_extension())
+            except RuntimeError:
+                pgvector_extension_available = asyncio.run(self._check_pgvector_extension())
             
             if not pgvector_extension_available:
                 logger.error("PGVECTOR НЕ УСТАНОВЛЕН В POSTGRESQL")
@@ -278,9 +395,17 @@ class DocumentProcessor:
                 self.vectorstore = None
                 return
             
-            # Проверяем работоспособность
+            # Проверяем работоспособность (тот же приём: при запущенном loop — проверка в потоке)
             logger.info("Проверка работоспособности pgvector...")
-            is_working = asyncio.run(self._test_pgvector_connection())
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    _, conn_ok = _run_pgvector_check_in_thread(timeout=20.0)
+                    is_working = conn_ok
+                else:
+                    is_working = loop.run_until_complete(self._test_pgvector_connection())
+            except RuntimeError:
+                is_working = asyncio.run(self._test_pgvector_connection())
             
             if is_working:
                 self.vectorstore = True  # Флаг, что pgvector используется
@@ -497,15 +622,19 @@ class DocumentProcessor:
             self.reranker = None
     
     def _load_documents_from_db(self):
-        """Загрузка документов из базы данных при инициализации"""
+        """Загрузка документов из базы данных при инициализации. При запущенном loop выполняется в отдельном потоке с собственным подключением (пул создаётся в другом потоке)."""
         if not self.document_repo:
             logger.warning("DocumentRepository недоступен, пропускаем загрузку документов")
             return
         
         try:
             logger.info("Загрузка документов из базы данных...")
-            # Получаем все документы из БД (синхронный вызов async метода)
-            pg_documents = asyncio.run(self.document_repo.get_all_documents(limit=1000))
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                pg_documents, need_bm25 = _run_load_documents_from_db_in_thread(timeout=45)
+            else:
+                pg_documents = loop.run_until_complete(self.document_repo.get_all_documents(limit=1000))
+                need_bm25 = False
             
             loaded_count = 0
             for pg_doc in pg_documents:
@@ -515,17 +644,17 @@ class DocumentProcessor:
                     loaded_count += 1
                 self.filename_to_id[filename] = pg_doc.id
                 
-                # Загружаем метаданные если есть
-                if pg_doc.metadata:
-                    if "confidence_data" in pg_doc.metadata:
-                        self.confidence_data[filename] = pg_doc.metadata["confidence_data"]
+                if pg_doc.metadata and "confidence_data" in pg_doc.metadata:
+                    self.confidence_data[filename] = pg_doc.metadata["confidence_data"]
             
             if loaded_count > 0:
                 logger.info(f"Загружено {loaded_count} новых документов из базы данных")
                 logger.info(f"Всего документов в системе: {len(self.doc_names)}")
-                # Перестраиваем BM25 индекс, если используется гибридный поиск
-                if self.use_hybrid_search and self.vector_repo:
-                    asyncio.run(self._build_bm25_index())
+                if self.use_hybrid_search and self.vector_repo and need_bm25:
+                    if loop.is_running():
+                        asyncio.run_coroutine_threadsafe(self._build_bm25_index(), loop).result(timeout=120)
+                    else:
+                        loop.run_until_complete(self._build_bm25_index())
             else:
                 logger.info("Документы в базе данных уже загружены или база пуста")
         except Exception as e:
@@ -690,13 +819,17 @@ class DocumentProcessor:
         return result
     
     def extract_text_from_pdf_bytes(self, file_data: bytes):
-        """Извлечение текста из PDF файла из bytes с информацией об уверенности"""
+        """
+        Извлечение текста из PDF: сначала текстовый слой (pdfplumber/PyPDF2),
+        при его отсутствии — OCR по растрированным страницам (Surya).
+        Встроенные в PDF картинки (рисунки, скриншоты) не извлекаются и не отправляются в OCR —
+        индексируется только текст из текстового слоя и, для сканов, распознанный по страницам текст.
+        """
         print(f"Извлекаем текст из PDF файла (размер: {len(file_data)} байт)")
         text = ""
         confidence_scores = []
         total_chars = 0
         
-        # Используем PDFPlumber для более точного извлечения текста
         try:
             with pdfplumber.open(BytesIO(file_data)) as pdf:
                 for page_num, page in enumerate(pdf.pages):
@@ -851,28 +984,42 @@ class DocumentProcessor:
             return result
 
     def extract_text_from_image_bytes(self, file_data: bytes):
-        """Извлечение текста из изображения из bytes с помощью Surya OCR через llm-svc API с информацией об уверенности"""
+        """Извлечение текста из изображения (OCR). Вызов идёт в ocr-service (Surya), не в LLM."""
         print(f"Извлекаем текст из изображения с помощью Surya OCR (размер: {len(file_data)} байт)")
-        print(f"DEBUG: Начинаем вызов OCR через llm-svc API...")
+        print(f"DEBUG: Вызов OCR сервиса (ocr-service)...")
         try:
-            # Импортируем функцию для работы с OCR через llm-svc
             from backend.llm_client import recognize_text_from_image_llm_svc
             from PIL import Image
             
             # Определяем имя файла на основе формата изображения
-            img = Image.open(BytesIO(file_data))
+            img = Image.open(BytesIO(file_data)).convert("RGB")
             filename = "image.jpg"
             if img.format:
                 filename = f"image.{img.format.lower()}"
             
             print(f"DEBUG: Изображение открыто, формат: {img.format}, размер: {img.size}")
             
-            # Вызываем OCR через llm-svc API
-            print("Отправляем запрос на распознавание текста через llm-svc...")
-            print(f"DEBUG: Вызываем recognize_text_from_image_llm_svc с filename={filename}, languages=ru,en")
+            # Увеличиваем мелкие изображения перед OCR — Surya лучше распознаёт при достаточном разрешении
+            # (документация: при слишком маленьком тексте лучше увеличить разрешение; не более 2048 по ширине)
+            MIN_SIDE_FOR_OCR = 1024
+            w, h = img.size
+            if max(w, h) < MIN_SIDE_FOR_OCR and max(w, h) > 0:
+                scale = MIN_SIDE_FOR_OCR / max(w, h)
+                new_w = max(1, int(round(w * scale)))
+                new_h = max(1, int(round(h * scale)))
+                img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                print(f"DEBUG: Изображение увеличено для OCR: {w}x{h} -> {new_w}x{new_h}")
+            
+            buf = BytesIO()
+            img.save(buf, format="PNG")
+            image_to_send = buf.getvalue()
+            
+            # Вызов ocr-service (Surya) по URL из настроек (SVC_OCR_URL / ocr-service:8000)
+            print("Отправляем запрос на распознавание текста в ocr-service (Surya)...")
+            print(f"DEBUG: recognize_text_from_image: filename={filename}, languages=ru,en")
             try:
                 result = recognize_text_from_image_llm_svc(
-                    image_file=file_data,
+                    image_file=image_to_send,
                     filename=filename,
                     languages="ru,en"
                 )
