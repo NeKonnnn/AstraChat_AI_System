@@ -124,20 +124,21 @@ export default function ChatInputBar({
 
   const isClassic = styleVariant === 'classic';
 
-  // В компактном режиме: одна строка — кнопки по бокам; со 2-й строки — кнопки снизу
+  // В компактном режиме: одна строка — кнопки по бокам; со 2-й строки — кнопки снизу.
+  // Переключение по числу символов + гистерезис, чтобы не скакало (scrollHeight давал дребезг).
+  const CHARS_FIRST_LINE = 52;   // примерно столько символов влезает в одну строку (шрифт 0.875rem, кнопки по бокам)
+  const CHARS_SINGLE_BACK = 45;  // обратно в одну строку только когда короче (гистерезис)
   const [compactMultiline, setCompactMultiline] = useState(false);
   useEffect(() => {
     if (isClassic) return;
-    const el = inputRef?.current;
-    if (!el) return;
-    const raf = requestAnimationFrame(() => {
-      const textarea = inputRef?.current;
-      if (!textarea || typeof textarea.scrollHeight !== 'number') return;
-      // одна строка ~24–28px; порог ниже, чтобы переключение было уже со 2-й строки
-      setCompactMultiline(textarea.scrollHeight > 38);
+    const hasNewline = value.includes('\n');
+    const len = value.length;
+    setCompactMultiline((prev) => {
+      if (hasNewline || len > CHARS_FIRST_LINE) return true;
+      if (len <= CHARS_SINGLE_BACK) return false;
+      return prev; // между 45 и 52 — не переключаем
     });
-    return () => cancelAnimationFrame(raf);
-  }, [value, isClassic, inputRef]);
+  }, [value, isClassic]);
 
   // ─── Переиспользуемые кнопки ────────────────────────────────────────────────
 
@@ -442,8 +443,11 @@ export default function ChatInputBar({
   }
 
   // ─── КОМПАКТНЫЙ стиль: 1 строка — кнопки по бокам; со 2-й строки — кнопки снизу ─
+  // Один TextField всегда в DOM: при смене compactMultiline меняется только order и обёртка кнопок, фокус и перенос по ширине сохраняются
   const textFieldSx = {
     minWidth: 0,
+    flex: compactMultiline ? undefined : 1,
+    order: compactMultiline ? 0 : 1,
     '& .MuiOutlinedInput-root': {
       bgcolor: 'transparent',
       border: 'none',
@@ -453,6 +457,7 @@ export default function ChatInputBar({
       '& fieldset': { border: 'none' },
       '&:hover': { bgcolor: 'transparent' },
       '&.Mui-focused': { bgcolor: 'transparent', '& fieldset': { border: 'none' } },
+      '& textarea': { resize: 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
     },
   };
 
@@ -473,24 +478,35 @@ export default function ChatInputBar({
       {filesSection}
       {uploadingSection}
 
-      {compactMultiline ? (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, minHeight: 40 }}>
-          <TextField
-            inputRef={inputRef}
-            multiline
-            maxRows={8}
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            onKeyPress={onKeyPress}
-            onPaste={onPaste}
-            placeholder={placeholder}
-            variant="outlined"
-            size="small"
-            disabled={inputDisabled}
-            fullWidth
-            sx={textFieldSx}
-          />
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'nowrap' }}>
+      <Box
+        sx={{
+          display: 'flex',
+          flexDirection: compactMultiline ? 'column' : 'row',
+          alignItems: compactMultiline ? 'stretch' : 'center',
+          gap: 0.5,
+          flexWrap: 'nowrap',
+          minHeight: 40,
+        }}
+      >
+        {/* Один TextField на всё время — не переключаем разметку через два разных инпута, чтобы не терять фокус и курсор */}
+        <TextField
+          inputRef={inputRef}
+          multiline
+          minRows={1}
+          maxRows={8}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyPress={onKeyPress}
+          onPaste={onPaste}
+          placeholder={placeholder}
+          variant="outlined"
+          size="small"
+          disabled={inputDisabled}
+          fullWidth={compactMultiline}
+          sx={textFieldSx}
+        />
+        {compactMultiline ? (
+          <Box sx={{ order: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'nowrap' }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
               {attachBtn}
               {settingsBtn}
@@ -502,31 +518,21 @@ export default function ChatInputBar({
               {voiceBtn}
             </Box>
           </Box>
-        </Box>
-      ) : (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'nowrap', minHeight: 40 }}>
-          {attachBtn}
-          <TextField
-            inputRef={inputRef}
-            multiline
-            maxRows={8}
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            onKeyPress={onKeyPress}
-            onPaste={onPaste}
-            placeholder={placeholder}
-            variant="outlined"
-            size="small"
-            disabled={inputDisabled}
-            sx={{ flex: 1, ...textFieldSx }}
-          />
-          {reportBtn}
-          {settingsBtn}
-          {extraActions}
-          {stopOrSendBtn}
-          {voiceBtn}
-        </Box>
-      )}
+        ) : (
+          <>
+            <Box sx={{ order: 0, display: 'flex', alignItems: 'center', gap: 0.25 }}>
+              {attachBtn}
+              {settingsBtn}
+              {extraActions}
+            </Box>
+            <Box sx={{ order: 2, display: 'flex', alignItems: 'center', gap: 0.25 }}>
+              {reportBtn}
+              {stopOrSendBtn}
+              {voiceBtn}
+            </Box>
+          </>
+        )}
+      </Box>
     </Box>
   );
 }
