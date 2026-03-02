@@ -81,6 +81,7 @@ import NewProjectModal from './NewProjectModal';
 import EditProjectModal from './EditProjectModal';
 import { useMoveToFolderAndProjectMenus, MoveToFolderAndProjectSubmenus } from './MoveToFolderAndProjectMenus';
 import { MENU_BORDER_RADIUS_PX, getMenuColors, MENU_ICON_MIN_WIDTH, MENU_ICON_TO_TEXT_GAP_PX, MENU_ICON_FONT_SIZE_PX, MENU_MIN_WIDTH_PX, SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX, SIDEBAR_PROJECT_AVATAR_SIZE } from '../constants/menuStyles';
+import { getSidebarPanelBackground } from '../constants/sidebarPanelColor';
 
 // Задержки подменю «Справка» — как в MoveToFolderAndProjectMenus (убирает мигание)
 const HELP_SUBMENU_GRACE_PERIOD_MS = 280;
@@ -202,8 +203,15 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
   const [renamingFolderName, setRenamingFolderName] = React.useState('');
   const [showDeleteFolderDialog, setShowDeleteFolderDialog] = React.useState(false);
   const [deleteWithContent, setDeleteWithContent] = React.useState(false);
+  const [sidebarPanelBg, setSidebarPanelBg] = React.useState(() => getSidebarPanelBackground());
   const searchInputRef = React.useRef<HTMLInputElement>(null);
   const menuOpen = Boolean(anchorEl);
+
+  React.useEffect(() => {
+    const onColorChanged = () => setSidebarPanelBg(getSidebarPanelBackground());
+    window.addEventListener('sidebarColorChanged', onColorChanged);
+    return () => window.removeEventListener('sidebarColorChanged', onColorChanged);
+  }, []);
   const chatMenuOpen = Boolean(chatMenuAnchor);
   const folderMenuOpen = Boolean(folderMenuAnchor);
   const projectMenuOpen = Boolean(projectMenuAnchor);
@@ -742,7 +750,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           width: open ? 280 : 64,
           boxSizing: 'border-box',
           background: open 
-            ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
+            ? sidebarPanelBg
             : 'background.default',
           color: open ? 'white' : 'text.primary',
           borderRight: '1px solid',

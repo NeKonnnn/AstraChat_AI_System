@@ -64,6 +64,7 @@ import MessageNavigationBar from '../components/MessageNavigationBar';
 import ShareConfirmDialog from '../components/ShareConfirmDialog';
 import ChatInputBar from '../components/ChatInputBar';
 import VoiceChatDialog from '../components/VoiceChatDialog';
+import { getSidebarPanelBackground } from '../constants/sidebarPanelColor';
 
 interface UnifiedChatPageProps {
   isDarkMode: boolean;
@@ -97,7 +98,14 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     const saved = localStorage.getItem('rightSidebarHidden');
     return saved !== null ? saved === 'true' : false;
   });
-  
+  const [rightSidebarPanelBg, setRightSidebarPanelBg] = useState(() => getSidebarPanelBackground());
+
+  useEffect(() => {
+    const onColorChanged = () => setRightSidebarPanelBg(getSidebarPanelBackground());
+    window.addEventListener('sidebarColorChanged', onColorChanged);
+    return () => window.removeEventListener('sidebarColorChanged', onColorChanged);
+  }, []);
+
   // Состояние для отображения выбора модели
   const [showModelSelectorInSettings, setShowModelSelectorInSettings] = useState(() => {
     const saved = localStorage.getItem('show_model_selector_in_settings');
@@ -2899,7 +2907,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
             width: rightSidebarOpen ? 280 : 64,
             boxSizing: 'border-box',
             background: rightSidebarOpen 
-              ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
+              ? rightSidebarPanelBg
               : 'background.default',
             color: rightSidebarOpen ? 'white' : 'text.primary',
             borderLeft: '1px solid',
