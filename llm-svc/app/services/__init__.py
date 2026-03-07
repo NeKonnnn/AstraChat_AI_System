@@ -1,5 +1,7 @@
 """
 Services module.
 """
-from .models_service import LlamaService
-__all__ = ["LlamaService"]
+
+from .llama_handler import LlamaHandler
+
+__all__ = ["LlamaHandler"]

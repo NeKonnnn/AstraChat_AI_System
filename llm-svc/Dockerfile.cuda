@@ -1,0 +1,69 @@
+# Сборка llm-svc с поддержкой GPU (CUDA) для llama.cpp.
+# Использование: docker compose build --build-arg LLM_SVC_DOCKERFILE=Dockerfile.cuda llm-svc
+# Требуется: NVIDIA GPU + NVIDIA Container Toolkit (nvidia-docker2).
+
+ARG CUDA_VERSION=12.2
+FROM nvidia/cuda:${CUDA_VERSION}.0-runtime-ubuntu22.04
+
+WORKDIR /app
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+RUN apt-get update && apt-get install -y \
+    software-properties-common \
+    tzdata \
+    curl \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y \
+    python3.11 \
+    python3.11-dev \
+    python3.11-distutils \
+    python3-pip \
+    build-essential \
+    cmake \
+    gcc \
+    g++ \
+    libopenblas-dev \
+    git \
+    pkg-config \
+    ffmpeg \
+    wget \
+    unzip \
+    libsndfile1 \
+    libsndfile1-dev \
+    libsox-dev \
+    sox \
+    libldap2-dev \
+    libsasl2-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN ln -sf /usr/bin/python3.11 /usr/bin/python && \
+    ln -sf /usr/bin/python3.11 /usr/bin/python3
+
+# Сначала ставим все зависимости (в т.ч. llama-cpp-python по умолчанию — CPU)
+COPY requirements.txt .
+ENV PIP_NO_CACHE_DIR=1
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Затем принудительно ставим llama-cpp-python с CUDA 12.2 (перезаписывает CPU-сборку)
+RUN pip install --no-cache-dir --force-reinstall --no-deps "llama-cpp-python" \
+    --extra-index-url "https://abetlen.github.io/llama-cpp-python/whl/cu122"
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    OMP_NUM_THREADS=8 \
+    OPENBLAS_NUM_THREADS=8
+
+COPY app/ ./app/
+COPY config/ ./config/
+RUN mkdir -p /app/models
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+RUN chmod -R 755 /app/models
+
+USER appuser
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
