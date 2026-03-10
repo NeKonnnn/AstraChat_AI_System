@@ -7,6 +7,7 @@ import {
   List,
   ListItem,
   ListItemButton,
+  ListItemIcon,
   ListItemText,
   Typography,
   IconButton,
@@ -15,16 +16,17 @@ import {
 } from '@mui/material';
 import {
   Close as CloseIcon,
-  Settings as SettingsIcon,
-  SmartToy as SmartToyIcon,
-  Mic as MicIcon,
-  Info as InfoIcon,
-  Palette as PaletteIcon,
-  Person as PersonIcon,
-  Chat as ChatIcon,
-  Computer as ComputerIcon,
-  Search as SearchIcon,
+  SettingsOutlined as SettingsIcon,
+  SmartToyOutlined as SmartToyIcon,
+  MicOutlined as MicIcon,
+  InfoOutlined as InfoIcon,
+  PaletteOutlined as PaletteIcon,
+  PersonOutlined as PersonIcon,
+  ChatOutlined as ChatIcon,
+  ComputerOutlined as ComputerIcon,
+  SearchOutlined as SearchIcon,
 } from '@mui/icons-material';
+import { MENU_ICON_MIN_WIDTH, MENU_ICON_TO_TEXT_GAP_PX, MENU_ICON_FONT_SIZE_PX } from '../constants/menuStyles';
 import {
   GeneralSettings,
   ProfileSettings,
@@ -216,20 +218,23 @@ export default function SettingsModal({ open, onClose, isDarkMode, onToggleTheme
                       }
                     }}
                   >
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, width: '100%' }}>
-                      <Box sx={{ color: activeSection === section.id ? 'inherit' : theme.palette.text.secondary }}>
-                        {section.icon}
-                      </Box>
-                      <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <ListItemText
-                          primary={section.title}
-                          primaryTypographyProps={{
-                            fontSize: '0.875rem',
-                            fontWeight: activeSection === section.id ? 600 : 400,
-                          }}
-                        />
-                      </Box>
-                    </Box>
+                    <ListItemIcon
+                      sx={{
+                        color: activeSection === section.id ? 'inherit' : theme.palette.text.secondary,
+                        minWidth: `${MENU_ICON_MIN_WIDTH}px`,
+                        marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`,
+                        '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` },
+                      }}
+                    >
+                      {section.icon}
+                    </ListItemIcon>
+                    <ListItemText
+                      primary={section.title}
+                      primaryTypographyProps={{
+                        fontSize: '0.875rem',
+                        fontWeight: activeSection === section.id ? 600 : 400,
+                      }}
+                    />
                   </ListItemButton>
                 </ListItem>
               </React.Fragment>

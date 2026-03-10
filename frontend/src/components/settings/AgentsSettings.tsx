@@ -6,8 +6,6 @@ import {
   CardContent,
   FormControl,
   FormControlLabel,
-  RadioGroup,
-  Radio,
   Button,
   Alert,
   CircularProgress,
@@ -25,19 +23,22 @@ import {
   DialogContent,
   DialogActions,
   Tooltip,
+  Select,
+  MenuItem as SelectMenuItem,
 } from '@mui/material';
 import {
-  SmartToy as AgentIcon,
-  Computer as DirectIcon,
+  SmartToyOutlined as AgentIcon,
+  ComputerOutlined as DirectIcon,
   Refresh as RefreshIcon,
   CheckCircle as CheckIcon,
   Error as ErrorIcon,
   ExpandMore as ExpandMoreIcon,
   ExpandLess as ExpandLessIcon,
-  ViewModule as MultiLLMIcon,
+  ViewModuleOutlined as MultiLLMIcon,
   HelpOutline as HelpOutlineIcon,
 } from '@mui/icons-material';
 import { getApiUrl } from '../../config/api';
+import { MENU_ICON_MIN_WIDTH, MENU_ICON_TO_TEXT_GAP_PX, MENU_ICON_FONT_SIZE_PX } from '../../constants/menuStyles';
 
 
 interface AgentStatus {
@@ -184,6 +185,32 @@ export default function AgentsSettings() {
       }
     } catch (err) {
       // Ошибка загрузки статуса LangGraph
+    }
+  };
+
+  type AgentMode = 'direct' | 'agent' | 'multi-llm';
+  const getModeLabel = (mode: AgentMode): string => {
+    switch (mode) {
+      case 'direct': return 'Прямой режим';
+      case 'agent': return 'Агентный режим';
+      case 'multi-llm': return 'Прямой режим с несколькими LLM';
+      default: return 'Прямой режим';
+    }
+  };
+  const getModeDescription = (mode: AgentMode): string => {
+    switch (mode) {
+      case 'direct': return 'Общение с моделью напрямую без использования агентов. Подходит для простых диалогов и задач.';
+      case 'agent': return 'Использование специализированных агентов для решения задач. Каждый агент отвечает за свою область.';
+      case 'multi-llm': return 'Параллельная генерация ответов от нескольких моделей одновременно. Сравнивайте результаты разных LLM.';
+      default: return '';
+    }
+  };
+  const getModeUseCase = (mode: AgentMode): string => {
+    switch (mode) {
+      case 'direct': return 'Используйте для обычных диалогов, когда не нужны специализированные агенты.';
+      case 'agent': return 'Используйте когда нужны агенты с разными возможностями (поиск, расчёты, код и т.д.).';
+      case 'multi-llm': return 'Используйте для сравнения ответов разных моделей или ансамблевых сценариев.';
+      default: return '';
     }
   };
 
@@ -343,12 +370,6 @@ export default function AgentsSettings() {
 
       if (response.ok) {
         setAgentStatus(prev => prev ? { ...prev, mode } : null);
-        const modeNames = {
-          'direct': 'прямой',
-          'agent': 'агентный',
-          'multi-llm': 'прямой с несколькими LLM'
-        };
-        setSuccess(`Режим переключен на ${modeNames[mode]}`);
         
         // Если переключаемся на агентный режим, загружаем агентов
         if (mode === 'agent') {
@@ -357,8 +378,6 @@ export default function AgentsSettings() {
           
           // Принудительно обновляем статус LangGraph
           await loadLanggraphStatus();
-          
-          setSuccess('Агентный режим активирован');
         } else if (mode === 'multi-llm') {
           // Загружаем список моделей
           await loadAvailableModels();
@@ -434,159 +453,137 @@ export default function AgentsSettings() {
 
           {agentStatus ? (
             <Box>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-                <CheckIcon color="success" />
-                <Typography variant="body1" fontWeight="500">
-                  Агентная архитектура активна
-                </Typography>
-                <Chip 
-                  label={`${agentStatus.available_agents} агентов`} 
-                  size="small" 
-                  color="primary" 
+              <List sx={{ p: 0 }}>
+                <ListItem
+                  sx={{
+                    px: 0,
+                    py: 2,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                  }}
+                >
+                  <ListItemText
+                    primary={
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                        Режим работы
+                        <Tooltip
+                          title="Выберите режим работы: прямой (только модель), агентный (специализированные агенты) или прямой с несколькими LLM."
+                          arrow
+                        >
+                          <IconButton
+                            size="small"
+                            sx={{
+                              p: 0,
+                              ml: 0.5,
+                              opacity: 0.7,
+                              '&:hover': {
+                                opacity: 1,
+                                '& .MuiSvgIcon-root': {
+                                  color: 'primary.main',
+                                },
+                              },
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <HelpOutlineIcon fontSize="small" color="action" />
+                          </IconButton>
+                        </Tooltip>
+                      </Box>
+                    }
+                    primaryTypographyProps={{
+                      variant: 'body1',
+                      fontWeight: 500,
+                    }}
+                  />
+                  <FormControl variant="outlined" size="small" sx={{ minWidth: 280 }}>
+                    <Select
+                      value={agentStatus.mode}
+                      onChange={(e) => switchMode(e.target.value as AgentMode)}
+                      disabled={isLoading}
+                      sx={{ textTransform: 'none' }}
+                    >
+                      <SelectMenuItem value="direct">Прямой режим</SelectMenuItem>
+                      <SelectMenuItem value="agent">Агентный режим</SelectMenuItem>
+                      <SelectMenuItem value="multi-llm">Прямой режим с несколькими LLM</SelectMenuItem>
+                    </Select>
+                  </FormControl>
+                </ListItem>
+              </List>
+
+              <Alert
+                severity="info"
+                sx={{
+                  mt: 2,
+                  '& .MuiAlert-message': { width: '100%' },
+                }}
+              >
+                <Box>
+                  <Typography variant="subtitle2" fontWeight="600" gutterBottom>
+                    {getModeLabel(agentStatus.mode as AgentMode)}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                    {getModeDescription(agentStatus.mode as AgentMode)}
+                  </Typography>
+                  <Typography variant="body2" fontWeight="500" sx={{ mt: 1 }}>
+                    {getModeUseCase(agentStatus.mode as AgentMode)}
+                  </Typography>
+                </Box>
+              </Alert>
+
+              <Divider />
+
+              <ListItem
+                sx={{
+                  px: 0,
+                  py: 2,
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                }}
+              >
+                <ListItemText
+                  primary={
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      Оркестратор
+                      <Tooltip
+                        title="Оркестратор автоматически выберет лучшего агента для решения вашей задачи."
+                        arrow
+                      >
+                        <IconButton
+                          size="small"
+                          sx={{
+                            p: 0,
+                            ml: 0.5,
+                            opacity: 0.7,
+                            '&:hover': {
+                              opacity: 1,
+                              '& .MuiSvgIcon-root': {
+                                color: 'primary.main',
+                              },
+                            },
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <HelpOutlineIcon fontSize="small" color="action" />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                  }
+                  primaryTypographyProps={{
+                    variant: 'body1',
+                    fontWeight: 500,
+                  }}
                 />
-              </Box>
+                <Switch
+                  checked={langgraphStatus?.orchestrator_active ?? agentStatus?.orchestrator_active ?? false}
+                  disabled={!langgraphStatus?.is_active}
+                  onChange={(e) => handleOrchestratorToggle(e.target.checked)}
+                  color="primary"
+                />
+              </ListItem>
 
-              <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 2, mb: 2 }}>
-                <Box>
-                  <Typography variant="subtitle2" color="text.secondary">
-                    Режим работы
-                  </Typography>
-                  <Typography variant="body1" fontWeight="500">
-                    {agentStatus.mode === 'direct' ? 'Прямой режим' : 'Агентный режим'}
-                  </Typography>
-                </Box>
-                <Box>
-                  <Typography variant="subtitle2" color="text.secondary">
-                    Доступно агентов
-                  </Typography>
-                  <Typography variant="body1" fontWeight="500">
-                    {agentStatus.available_agents}
-                  </Typography>
-                </Box>
-                <Box>
-                  <Typography variant="subtitle2" color="text.secondary">
-                    Оркестратор
-                  </Typography>
-                  <Typography variant="body1" fontWeight="500">
-                    {agentStatus.orchestrator_active ? 'Активен' : 'Неактивен'}
-                  </Typography>
-                </Box>
-              </Box>
-
-              {/* Переключение режима */}
-              <Box sx={{ mb: 2 }}>
-                <Typography variant="subtitle1" gutterBottom>
-                  Режим работы
-                </Typography>
-                <FormControl component="fieldset">
-                  <RadioGroup
-                    value={agentStatus.mode}
-                    onChange={(e) => switchMode(e.target.value as 'direct' | 'agent' | 'multi-llm')}
-                  >
-                    <FormControlLabel
-                      value="direct"
-                      control={<Radio />}
-                      label={
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <DirectIcon fontSize="small" />
-                          <Typography variant="body2" fontWeight="500">
-                            Прямой режим
-                          </Typography>
-                          <Tooltip 
-                            title="Общение с моделью напрямую без использования агентов" 
-                            arrow
-                          >
-                            <IconButton 
-                              size="small" 
-                              sx={{ 
-                                ml: 0.5,
-                                opacity: 0.7,
-                                '&:hover': {
-                                  opacity: 1,
-                                  '& .MuiSvgIcon-root': {
-                                    color: 'primary.main',
-                                  },
-                                },
-                              }}
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <HelpOutlineIcon fontSize="small" color="action" />
-                            </IconButton>
-                          </Tooltip>
-                        </Box>
-                      }
-                    />
-                    <FormControlLabel
-                      value="agent"
-                      control={<Radio />}
-                      label={
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <AgentIcon fontSize="small" />
-                          <Typography variant="body2" fontWeight="500">
-                            Агентный режим
-                          </Typography>
-                          <Tooltip 
-                            title="Использование специализированных агентов для решения задач" 
-                            arrow
-                          >
-                            <IconButton 
-                              size="small" 
-                              sx={{ 
-                                ml: 0.5,
-                                opacity: 0.7,
-                                '&:hover': {
-                                  opacity: 1,
-                                  '& .MuiSvgIcon-root': {
-                                    color: 'primary.main',
-                                  },
-                                },
-                              }}
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <HelpOutlineIcon fontSize="small" color="action" />
-                            </IconButton>
-                          </Tooltip>
-                        </Box>
-                      }
-                    />
-                    <FormControlLabel
-                      value="multi-llm"
-                      control={<Radio />}
-                      label={
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <MultiLLMIcon fontSize="small" />
-                          <Typography variant="body2" fontWeight="500">
-                            Прямой режим с несколькими LLM
-                          </Typography>
-                          <Tooltip 
-                            title="Параллельная генерация ответов от нескольких моделей одновременно" 
-                            arrow
-                          >
-                            <IconButton 
-                              size="small" 
-                              sx={{ 
-                                ml: 0.5,
-                                opacity: 0.7,
-                                '&:hover': {
-                                  opacity: 1,
-                                  '& .MuiSvgIcon-root': {
-                                    color: 'primary.main',
-                                  },
-                                },
-                              }}
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <HelpOutlineIcon fontSize="small" color="action" />
-                            </IconButton>
-                          </Tooltip>
-                        </Box>
-                      }
-                    />
-                  </RadioGroup>
-                </FormControl>
-              </Box>
-
-              <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+              <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mt: 1 }}>
                 <Button
                   variant="outlined"
                   startIcon={<RefreshIcon />}
@@ -621,163 +618,9 @@ export default function AgentsSettings() {
         </CardContent>
       </Card>
 
-      {/* Статус MCP серверов */}
-      {mcpStatus && (
-        <Card sx={{ mb: 3 }}>
-          <CardContent>
-            <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              MCP Серверы
-              <Tooltip 
-                title="В агентном режиме рекомендуется подключить MCP серверы для расширенной функциональности агентов." 
-                arrow
-              >
-                <IconButton 
-                  size="small" 
-                  sx={{ 
-                    ml: 0.5,
-                    opacity: 0.7,
-                    '&:hover': {
-                      opacity: 1,
-                      '& .MuiSvgIcon-root': {
-                        color: 'primary.main',
-                      },
-                    },
-                  }}
-                >
-                  <HelpOutlineIcon fontSize="small" color="action" />
-                </IconButton>
-              </Tooltip>
-            </Typography>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1 }}>
-              {(mcpStatus.servers_connected || 0) > 0 ? (
-                <CheckIcon color="success" />
-              ) : (
-                <ErrorIcon color="error" />
-              )}
-              <Typography variant="body1">
-                Подключено: {mcpStatus.servers_connected || 0} из {mcpStatus.total_servers || 0}
-              </Typography>
-            </Box>
-            {mcpStatus.active_servers && mcpStatus.active_servers.length > 0 && (
-              <Box>
-                <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                  Активные серверы:
-                </Typography>
-                {mcpStatus.active_servers.map((server, index) => (
-                  <Chip key={index} label={server} size="small" sx={{ mr: 1, mb: 1 }} />
-                ))}
-              </Box>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Статус LangGraph */}
-      <Card sx={{ mb: 3 }}>
-        <CardContent>
-          <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            LangGraph Оркестратор
-            <Tooltip 
-              title="Оркестратор автоматически выберет лучшего агента для решения вашей задачи." 
-              arrow
-            >
-              <IconButton 
-                size="small" 
-                sx={{ 
-                  ml: 0.5,
-                  opacity: 0.7,
-                  '&:hover': {
-                    opacity: 1,
-                    '& .MuiSvgIcon-root': {
-                      color: 'primary.main',
-                    },
-                  },
-                }}
-              >
-                <HelpOutlineIcon fontSize="small" color="action" />
-              </IconButton>
-            </Tooltip>
-          </Typography>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1 }}>
-              {langgraphStatus?.orchestrator_active ? (
-                <CheckIcon color="success" />
-              ) : (
-                <ErrorIcon color="error" />
-              )}
-              <Typography variant="body1">
-                {langgraphStatus?.orchestrator_active ? 'Активен' : 'Неактивен'}
-              </Typography>
-              {agentStatus?.mode === 'agent' && !langgraphStatus?.is_active && (
-                <Chip 
-                  label="Требуется активация" 
-                  size="small" 
-                  color="warning" 
-                  variant="outlined"
-                />
-              )}
-            </Box>
-            
-            {/* Переключатель оркестратора */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-              <Typography variant="body2" color="text.secondary">
-                Оркестратор:
-              </Typography>
-              <Switch
-                checked={langgraphStatus?.orchestrator_active || false}
-                disabled={!langgraphStatus?.is_active}
-                onChange={(e) => {
-                  const isActive = e.target.checked;
-                  handleOrchestratorToggle(isActive);
-                }}
-                color="primary"
-              />
-              <Typography variant="body2" color="text.secondary">
-                {langgraphStatus?.orchestrator_active ? 'Включен' : 'Отключен'}
-              </Typography>
-              {!langgraphStatus?.is_active && (
-                <Chip 
-                  label="LangGraph не активен" 
-                  size="small" 
-                  color="error" 
-                  variant="outlined"
-                />
-              )}
-            </Box>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Память: {langgraphStatus?.memory_enabled ? 'Включена' : 'Отключена'}
-            </Typography>
-            {langgraphStatus?.graph_compiled !== undefined && (
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                Граф: {langgraphStatus.graph_compiled ? 'Скомпилирован' : 'Не скомпилирован'}
-              </Typography>
-            )}
-            
-            {!langgraphStatus?.is_active && agentStatus?.mode === 'agent' && (
-              <Alert severity="info" sx={{ mt: 2 }}>
-                <Typography variant="body2">
-                  <strong>Информация:</strong> Оркестратор неактивен. В агентном режиме агенты будут работать напрямую без оркестратора.
-                </Typography>
-              </Alert>
-            )}
-            
-            {langgraphStatus?.is_active && agentStatus?.mode === 'agent' && !langgraphStatus?.orchestrator_active && (
-              <Alert 
-                severity="warning" 
-                sx={{ mt: 2 }}
-              >
-                <Typography variant="body2">
-                  <strong>Режим прямого управления:</strong>
-                  {' '}
-                  Вы должны самостоятельно выбирать подходящего агента для каждой задачи.
-                </Typography>
-              </Alert>
-            )}
-          </CardContent>
-        </Card>
-
       {/* Список агентов */}
       {agentStatus?.mode === 'agent' && availableAgents && availableAgents.length > 0 && (
-        <Card>
+        <Card sx={{ mb: 3 }}>
           <CardContent>
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -827,7 +670,7 @@ export default function AgentsSettings() {
                       mb: 1,
                       bgcolor: 'background.default'
                     }}>
-                      <ListItemIcon>
+                      <ListItemIcon sx={{ minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
                         <AgentIcon color={agent.is_active ? 'primary' : 'disabled'} />
                       </ListItemIcon>
                       <ListItemText
@@ -890,7 +733,6 @@ export default function AgentsSettings() {
                                     '&:hover': { bgcolor: 'action.hover' }
                                   }}
                                   onClick={() => {
-                                    // Переключаем состояние развернутости инструментов для этого агента
                                     setAvailableAgents(prev => 
                                       prev.map(a => 
                                         a.agent_id === agent.agent_id 
@@ -957,7 +799,7 @@ export default function AgentsSettings() {
 
       {/* Сообщение если агенты не загружены */}
       {agentStatus?.mode === 'agent' && (!availableAgents || availableAgents.length === 0) && (
-        <Card>
+        <Card sx={{ mb: 3 }}>
           <CardContent>
             <Box sx={{ textAlign: 'center', py: 3 }}>
               <AgentIcon sx={{ fontSize: 48, color: 'text.secondary', mb: 2 }} />
@@ -975,6 +817,57 @@ export default function AgentsSettings() {
                 Загрузить агентов
               </Button>
             </Box>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Статус MCP серверов */}
+      {mcpStatus && (
+        <Card sx={{ mb: 3 }}>
+          <CardContent>
+            <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              MCP Серверы
+              <Tooltip 
+                title="В агентном режиме рекомендуется подключить MCP серверы для расширенной функциональности агентов." 
+                arrow
+              >
+                <IconButton 
+                  size="small" 
+                  sx={{ 
+                    ml: 0.5,
+                    opacity: 0.7,
+                    '&:hover': {
+                      opacity: 1,
+                      '& .MuiSvgIcon-root': {
+                        color: 'primary.main',
+                      },
+                    },
+                  }}
+                >
+                  <HelpOutlineIcon fontSize="small" color="action" />
+                </IconButton>
+              </Tooltip>
+            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1 }}>
+              {(mcpStatus.servers_connected || 0) > 0 ? (
+                <CheckIcon color="success" />
+              ) : (
+                <ErrorIcon color="error" />
+              )}
+              <Typography variant="body1">
+                Подключено: {mcpStatus.servers_connected || 0} из {mcpStatus.total_servers || 0}
+              </Typography>
+            </Box>
+            {mcpStatus.active_servers && mcpStatus.active_servers.length > 0 && (
+              <Box>
+                <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                  Активные серверы:
+                </Typography>
+                {mcpStatus.active_servers.map((server, index) => (
+                  <Chip key={index} label={server} size="small" sx={{ mr: 1, mb: 1 }} />
+                ))}
+              </Box>
+            )}
           </CardContent>
         </Card>
       )}

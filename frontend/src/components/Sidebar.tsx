@@ -24,24 +24,23 @@ import {
   Tooltip,
 } from '@mui/material';
 import {
-  Chat as ChatIcon,
-  Settings as SettingsIcon,
-  Info as InfoIcon,
+  ChatOutlined as ChatIcon,
+  SettingsOutlined as SettingsIcon,
+  InfoOutlined as InfoIcon,
   Add as AddIcon,
-  Delete as DeleteIcon,
-  Edit as EditIcon,
+  DeleteOutlined as DeleteIcon,
+  EditOutlined as EditIcon,
   MoreVert as MoreVertIcon,
-  BarChart as BarChartIcon,
   ExpandMore as ExpandMoreIcon,
   Search as SearchIcon,
-  Folder as FolderIcon,
-  CreateNewFolder as AddFolderIcon,
+  FolderOutlined as FolderIcon,
+  CreateNewFolderOutlined as AddFolderIcon,
   Menu as MenuIcon,
-  Logout as LogoutIcon,
+  LogoutOutlined as LogoutIcon,
   ChevronLeft as ChevronLeftIcon,
   ChevronRight as ChevronRightIcon,
-  Archive as ArchiveIcon,
-  PushPin as PushPinIcon,
+  ArchiveOutlined as ArchiveIcon,
+  PushPinOutlined as PushPinIcon,
   AttachMoney as MoneyIcon,
   Assignment as AssignmentIcon,
   Favorite as FavoriteIcon,
@@ -69,6 +68,9 @@ import {
   VolumeUp as SpeakerIcon,
   Assessment as ChartIcon,
   Email as MailIcon,
+  KeyboardOutlined as KeyboardIcon,
+  HelpOutline as HelpOutlineIcon,
+  Close as CloseIcon,
 } from '@mui/icons-material';
 import { useAppContext, useAppActions } from '../contexts/AppContext';
 import { useSocket } from '../contexts/SocketContext';
@@ -76,15 +78,14 @@ import { useAuth } from '../contexts/AuthContext';
 import SettingsModal from './SettingsModal';
 import ArchiveModal from './ArchiveModal';
 import NewProjectModal from './NewProjectModal';
+import EditProjectModal from './EditProjectModal';
+import { useMoveToFolderAndProjectMenus, MoveToFolderAndProjectSubmenus } from './MoveToFolderAndProjectMenus';
+import { MENU_BORDER_RADIUS_PX, getMenuColors, MENU_ICON_MIN_WIDTH, MENU_ICON_TO_TEXT_GAP_PX, MENU_ICON_FONT_SIZE_PX, MENU_MIN_WIDTH_PX, SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX, SIDEBAR_PROJECT_AVATAR_SIZE } from '../constants/menuStyles';
+import { getSidebarPanelBackground } from '../constants/sidebarPanelColor';
 
-// Функция для оценки количества токенов в тексте (дублируем из AppContext)
-function estimateTokens(text: string): number {
-  if (!text) return 0;
-  const baseTokens = Math.ceil(text.length / 4);
-  const specialChars = (text.match(/[^\w\sа-яё]/g) || []).length;
-  const newlines = (text.match(/\n/g) || []).length;
-  return baseTokens + Math.ceil(specialChars / 2) + Math.ceil(newlines / 2);
-}
+// Задержки подменю «Справка» — как в MoveToFolderAndProjectMenus (убирает мигание)
+const HELP_SUBMENU_GRACE_PERIOD_MS = 280;
+const HELP_SUBMENU_CLOSE_CHECK_DELAY_MS = 120;
 
 interface SidebarProps {
   open: boolean;
@@ -169,7 +170,15 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
   const [editingChatId, setEditingChatId] = React.useState<string | null>(null);
   const [editingTitle, setEditingTitle] = React.useState('');
   const [anchorEl, setAnchorEl] = React.useState<null | HTMLElement>(null);
-  const [showStatsDialog, setShowStatsDialog] = React.useState(false);
+  const [showHelpSubmenu, setShowHelpSubmenu] = React.useState(false);
+  const [helpSubmenuAnchor, setHelpSubmenuAnchor] = React.useState<HTMLElement | null>(null);
+  const [showHelpDialog, setShowHelpDialog] = React.useState(false);
+  const [showShortcutsDialog, setShowShortcutsDialog] = React.useState(false);
+  const submenuHelpOpenedAtRef = React.useRef(0);
+  const helpSubmenuOpenRef = React.useRef(false);
+  const helpMenuAnchorRef = React.useRef<HTMLElement | null>(null);
+  const closeHelpTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const helpSubmenuMousePositionRef = React.useRef({ clientX: 0, clientY: 0 });
   const [chatMenuAnchor, setChatMenuAnchor] = React.useState<null | HTMLElement>(null);
   const [selectedChatId, setSelectedChatId] = React.useState<string | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = React.useState(false);
@@ -183,26 +192,71 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
   const [projectMenuAnchor, setProjectMenuAnchor] = React.useState<null | HTMLElement>(null);
   const [selectedProjectId, setSelectedProjectId] = React.useState<string | null>(null);
   const [showDeleteProjectDialog, setShowDeleteProjectDialog] = React.useState(false);
+  const [showEditProjectModal, setShowEditProjectModal] = React.useState(false);
+  const [projectIdToEdit, setProjectIdToEdit] = React.useState<string | null>(null);
   const [searchQuery, setSearchQuery] = React.useState('');
   const [showCreateFolderDialog, setShowCreateFolderDialog] = React.useState(false);
   const [newFolderName, setNewFolderName] = React.useState('');
-  const [showMoveToFolderMenu, setShowMoveToFolderMenu] = React.useState(false);
-  const [showMoveToProjectMenu, setShowMoveToProjectMenu] = React.useState(false);
-  const [projectMenuAnchorForChat, setProjectMenuAnchorForChat] = React.useState<null | HTMLElement>(null);
-  const [folderMenuAnchorForChat, setFolderMenuAnchorForChat] = React.useState<null | HTMLElement>(null);
-  const folderMenuCloseTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
-  const projectMenuCloseTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
   const [folderMenuAnchor, setFolderMenuAnchor] = React.useState<null | HTMLElement>(null);
   const [selectedFolderId, setSelectedFolderId] = React.useState<string | null>(null);
   const [showRenameFolderDialog, setShowRenameFolderDialog] = React.useState(false);
   const [renamingFolderName, setRenamingFolderName] = React.useState('');
   const [showDeleteFolderDialog, setShowDeleteFolderDialog] = React.useState(false);
   const [deleteWithContent, setDeleteWithContent] = React.useState(false);
+  const [sidebarPanelBg, setSidebarPanelBg] = React.useState(() => getSidebarPanelBackground());
   const searchInputRef = React.useRef<HTMLInputElement>(null);
   const menuOpen = Boolean(anchorEl);
+
+  React.useEffect(() => {
+    const onColorChanged = () => setSidebarPanelBg(getSidebarPanelBackground());
+    window.addEventListener('sidebarColorChanged', onColorChanged);
+    return () => window.removeEventListener('sidebarColorChanged', onColorChanged);
+  }, []);
   const chatMenuOpen = Boolean(chatMenuAnchor);
   const folderMenuOpen = Boolean(folderMenuAnchor);
   const projectMenuOpen = Boolean(projectMenuAnchor);
+
+  const { menuBg, menuBorder, menuItemColor, menuItemHover, menuDividerBorder, menuDisabledColor } = getMenuColors(isDarkMode);
+
+  // Отслеживание позиции мыши при открытом меню пользователя (для подменю «Справка» — как в MoveToFolderAndProjectMenus)
+  React.useEffect(() => {
+    if (!menuOpen) return;
+    const onMove = (e: MouseEvent) => {
+      helpSubmenuMousePositionRef.current = { clientX: e.clientX, clientY: e.clientY };
+    };
+    window.addEventListener('mousemove', onMove);
+    return () => window.removeEventListener('mousemove', onMove);
+  }, [menuOpen]);
+
+  // При открытом подменю «Справка»: закрывать, если курсор над другим пунктом основного меню (как в MoveToFolderAndProjectMenus)
+  React.useEffect(() => {
+    if (!showHelpSubmenu) return;
+    const onMove = () => {
+      if (!helpSubmenuOpenRef.current) return;
+      const anchor = helpMenuAnchorRef.current;
+      const menu = anchor?.closest('[role="menu"]') as HTMLElement | null;
+      if (!menu) return;
+      const { clientX, clientY } = helpSubmenuMousePositionRef.current;
+      const elements = document.elementsFromPoint(clientX, clientY);
+      for (const el of elements) {
+        if (!menu.contains(el)) continue;
+        const item = (el as HTMLElement).closest?.('[role="menuitem"]');
+        if (!item) continue;
+        if (item.getAttribute?.('data-submenu-trigger') === 'help') break;
+        if (closeHelpTimerRef.current) {
+          clearTimeout(closeHelpTimerRef.current);
+          closeHelpTimerRef.current = null;
+        }
+        helpSubmenuOpenRef.current = false;
+        helpMenuAnchorRef.current = null;
+        setShowHelpSubmenu(false);
+        setHelpSubmenuAnchor(null);
+        break;
+      }
+    };
+    const id = setInterval(onMove, 80);
+    return () => clearInterval(id);
+  }, [showHelpSubmenu]);
   
   // Получаем проекты
   const projects = getProjects();
@@ -309,9 +363,102 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
     setAnchorEl(event.currentTarget);
   };
 
+  const closeHelpSubmenu = React.useCallback(() => {
+    if (closeHelpTimerRef.current) {
+      clearTimeout(closeHelpTimerRef.current);
+      closeHelpTimerRef.current = null;
+    }
+    helpSubmenuOpenRef.current = false;
+    helpMenuAnchorRef.current = null;
+    setShowHelpSubmenu(false);
+    setHelpSubmenuAnchor(null);
+  }, []);
+
   const handleMenuClose = () => {
+    closeHelpSubmenu();
     setAnchorEl(null);
   };
+
+  const handleHelpSubmenuEnter = React.useCallback((e: React.MouseEvent<HTMLElement>) => {
+    const target = e.currentTarget;
+    if (helpSubmenuOpenRef.current && helpMenuAnchorRef.current === target) return;
+    helpMenuAnchorRef.current = target;
+    helpSubmenuOpenRef.current = true;
+    submenuHelpOpenedAtRef.current = Date.now();
+    setHelpSubmenuAnchor(target);
+    setShowHelpSubmenu(true);
+  }, []);
+
+  const handleHelpSubmenuLeave = React.useCallback((e: React.MouseEvent<HTMLElement>) => {
+    const to = e.relatedTarget as HTMLElement | null;
+    const currentTarget = e.currentTarget;
+    const mainMenu = currentTarget.closest('[role="menu"]') as HTMLElement | null;
+    const targetMenu = to?.closest?.('[role="menu"]');
+    const msSinceOpen = Date.now() - submenuHelpOpenedAtRef.current;
+    if (!showHelpSubmenu) {
+      helpSubmenuOpenRef.current = false;
+      helpMenuAnchorRef.current = null;
+      setShowHelpSubmenu(false);
+      setHelpSubmenuAnchor(null);
+      return;
+    }
+    if (closeHelpTimerRef.current) {
+      clearTimeout(closeHelpTimerRef.current);
+      closeHelpTimerRef.current = null;
+    }
+    if (msSinceOpen < HELP_SUBMENU_GRACE_PERIOD_MS) return;
+    const toMenuItem = to?.closest?.('[role="menuitem"]');
+    const wentToOurTrigger = toMenuItem?.getAttribute?.('data-submenu-trigger') === 'help';
+    const wentToOtherMainMenuItem =
+      to && mainMenu?.contains(to) && toMenuItem !== currentTarget && !wentToOurTrigger;
+    if (wentToOtherMainMenuItem) {
+      helpSubmenuOpenRef.current = false;
+      helpMenuAnchorRef.current = null;
+      setShowHelpSubmenu(false);
+      setHelpSubmenuAnchor(null);
+      return;
+    }
+    if (targetMenu && targetMenu !== mainMenu) return;
+    const closeHelpSubmenuLocal = () => {
+      helpSubmenuOpenRef.current = false;
+      helpMenuAnchorRef.current = null;
+      setShowHelpSubmenu(false);
+      setHelpSubmenuAnchor(null);
+    };
+    const checkPosition = () => {
+      closeHelpTimerRef.current = null;
+      const { clientX, clientY } = helpSubmenuMousePositionRef.current;
+      const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+      if (!el) {
+        closeHelpSubmenuLocal();
+        return;
+      }
+      if (el.closest('[data-help-submenu]')) return;
+      if (mainMenu?.contains(el)) {
+        const underMenuItem = el.closest('[role="menuitem"]');
+        if (underMenuItem === currentTarget) return;
+        if (underMenuItem && underMenuItem.getAttribute?.('data-submenu-trigger') !== 'help') {
+          closeHelpSubmenuLocal();
+          return;
+        }
+      }
+      closeHelpSubmenuLocal();
+    };
+    const scheduleCheck = () => {
+      const { clientX, clientY } = helpSubmenuMousePositionRef.current;
+      const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+      if (el && mainMenu?.contains(el)) {
+        const underMenuItem = el.closest('[role="menuitem"]');
+        if (underMenuItem && underMenuItem.getAttribute?.('data-submenu-trigger') !== 'help') {
+          closeHelpSubmenuLocal();
+          return;
+        }
+      }
+      if (closeHelpTimerRef.current) clearTimeout(closeHelpTimerRef.current);
+      closeHelpTimerRef.current = setTimeout(checkPosition, HELP_SUBMENU_CLOSE_CHECK_DELAY_MS);
+    };
+    requestAnimationFrame(scheduleCheck);
+  }, [showHelpSubmenu]);
 
   const handleMenuAction = (action: string) => {
     handleMenuClose();
@@ -324,10 +471,6 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         break;
       case 'prompts':
         navigate('/prompts');
-        break;
-      case 'statistics':
-        // Показываем статистику в диалоге
-        setShowStatsDialog(true);
         break;
       case 'logout':
         logout();
@@ -347,6 +490,12 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
     // Не сбрасываем selectedChatId сразу, чтобы не потерять его при редактировании
     // Он будет сброшен после завершения редактирования
   };
+
+  const moveToMenus = useMoveToFolderAndProjectMenus({
+    chatMenuOpen,
+    moveChatToFolder,
+    handleChatMenuClose,
+  });
 
   const handleChatMenuAction = (action: string) => {
     if (!selectedChatId) {
@@ -471,18 +620,6 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
     toggleFolder(folderId);
   };
 
-  const handleMoveToFolder = (chatId: string, folderId: string) => {
-    moveChatToFolder(chatId, folderId);
-    setShowMoveToFolderMenu(false);
-    handleChatMenuClose(); // Закрываем основное меню чата после перемещения
-  };
-
-  const handleRemoveFromFolder = (chatId: string) => {
-    moveChatToFolder(chatId, null);
-    setShowMoveToFolderMenu(false);
-    handleChatMenuClose(); // Закрываем основное меню чата после удаления из папки
-  };
-
   // Функции для управления папками
   const handleFolderMenuClick = (event: React.MouseEvent<HTMLElement>, folderId: string) => {
     event.stopPropagation();
@@ -577,8 +714,9 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
     
     switch (action) {
       case 'edit':
+        setProjectIdToEdit(projectIdToAction);
         handleProjectMenuClose();
-        // Здесь можно добавить логику редактирования проекта
+        setShowEditProjectModal(true);
         break;
       case 'delete':
         handleProjectMenuClose();
@@ -612,7 +750,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           width: open ? 280 : 64,
           boxSizing: 'border-box',
           background: open 
-            ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
+            ? sidebarPanelBg
             : 'background.default',
           color: open ? 'white' : 'text.primary',
           borderRight: '1px solid',
@@ -958,7 +1096,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                     px: 2,
                   }}
                 >
-                  <ListItemIcon sx={{ color: 'white', minWidth: 28 }}>
+                  <ListItemIcon sx={{ color: 'white', minWidth: `${SIDEBAR_PROJECT_AVATAR_SIZE + 4}px`, marginRight: `${SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX}px` }}>
                     <AddFolderIcon fontSize="small" />
                   </ListItemIcon>
                   <ListItemText
@@ -982,16 +1120,20 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
               </ListItem>
               {projects.map((project) => {
                 const renderProjectIcon = () => {
+                  const sizePx = SIDEBAR_PROJECT_AVATAR_SIZE;
+                  const iconFontSizePx = sizePx - 4;
+                  const iconColor = project.iconColor || '#9ca3af';
+                  const outlineStyle = {
+                    width: `${sizePx}px`,
+                    height: `${sizePx}px`,
+                    bgcolor: 'transparent',
+                    border: '1.5px solid',
+                    borderColor: iconColor,
+                    color: iconColor,
+                  };
                   if (project.iconType === 'emoji' && project.icon) {
                     return (
-                      <Avatar
-                        sx={{
-                          width: 24,
-                          height: 24,
-                          bgcolor: project.iconColor === '#ffffff' ? 'rgba(255,255,255,0.1)' : project.iconColor || 'rgba(255,255,255,0.1)',
-                          fontSize: 14,
-                        }}
-                      >
+                      <Avatar sx={{ ...outlineStyle, fontSize: `${iconFontSizePx}px` }}>
                         {project.icon}
                       </Avatar>
                     );
@@ -999,28 +1141,14 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                   if (project.iconType === 'icon' && project.icon) {
                     const IconComponent = projectIconMap[project.icon] || FolderIcon;
                     return (
-                      <Avatar
-                        sx={{
-                          width: 24,
-                          height: 24,
-                          bgcolor: project.iconColor === '#ffffff' ? 'rgba(255,255,255,0.1)' : project.iconColor || 'rgba(255,255,255,0.1)',
-                          color: 'white',
-                        }}
-                      >
-                        <IconComponent sx={{ fontSize: 14 }} />
+                      <Avatar sx={outlineStyle}>
+                        <IconComponent sx={{ fontSize: `${iconFontSizePx}px` }} />
                       </Avatar>
                     );
                   }
                   return (
-                    <Avatar
-                      sx={{
-                        width: 24,
-                        height: 24,
-                        bgcolor: 'rgba(255,255,255,0.1)',
-                        color: 'white',
-                      }}
-                    >
-                      <FolderIcon sx={{ fontSize: 14 }} />
+                    <Avatar sx={outlineStyle}>
+                      <FolderIcon sx={{ fontSize: `${iconFontSizePx}px` }} />
                     </Avatar>
                   );
                 };
@@ -1062,10 +1190,10 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                             alignItems: 'center',
                             flex: 1,
                             cursor: 'pointer',
-                            gap: 1,
+                            gap: 0.5,
                           }}
                         >
-                          <ListItemIcon sx={{ color: 'white', minWidth: 28 }}>
+                          <ListItemIcon sx={{ color: 'white', minWidth: `${SIDEBAR_PROJECT_AVATAR_SIZE + 4}px`, marginRight: `${SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX}px` }}>
                             {renderProjectIcon()}
                           </ListItemIcon>
                           <ListItemText
@@ -1142,7 +1270,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                                     }} 
                                   />
                                 )}
-                                <ListItemIcon sx={{ color: 'white', minWidth: 28 }}>
+                                <ListItemIcon sx={{ color: 'white', minWidth: `${SIDEBAR_PROJECT_AVATAR_SIZE + 4}px`, marginRight: `${SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX}px` }}>
                                   <ChatIcon fontSize="small" />
                                 </ListItemIcon>
                               <ListItemText
@@ -1340,7 +1468,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                               px: 2,
                             }}
                           >
-                            <ListItemIcon sx={{ color: 'white', minWidth: 28 }}>
+                            <ListItemIcon sx={{ color: 'white', minWidth: `${SIDEBAR_PROJECT_AVATAR_SIZE + 4}px`, marginRight: `${SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX}px` }}>
                               <ChatIcon fontSize="small" />
                             </ListItemIcon>
                             <ListItemText
@@ -1471,7 +1599,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                       px: 2,
                     }}
                   >
-                    <ListItemIcon sx={{ color: 'white', minWidth: 28 }}>
+                    <ListItemIcon sx={{ color: 'white', minWidth: `${SIDEBAR_PROJECT_AVATAR_SIZE + 4}px`, marginRight: `${SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX}px` }}>
                       <ChatIcon fontSize="small" />
                     </ListItemIcon>
                     <ListItemText
@@ -1633,7 +1761,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                             px: 2,
                           }}
                         >
-                          <ListItemIcon sx={{ color: 'white', minWidth: 28 }}>
+                          <ListItemIcon sx={{ color: 'white', minWidth: `${SIDEBAR_PROJECT_AVATAR_SIZE + 4}px`, marginRight: `${SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX}px` }}>
                             <ChatIcon fontSize="small" />
                           </ListItemIcon>
                           <ListItemText
@@ -1818,6 +1946,9 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         anchorEl={anchorEl}
         open={menuOpen}
         onClose={handleMenuClose}
+        disableAutoFocus
+        disableEnforceFocus
+        disableAutoFocusItem
         anchorOrigin={{
           vertical: 'top',
           horizontal: 'right',
@@ -1828,22 +1959,25 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         }}
         PaperProps={{
           sx: {
-            backgroundColor: 'rgba(30, 30, 30, 0.95)',
+            backgroundColor: menuBg,
             backdropFilter: 'blur(10px)',
-            border: '1px solid rgba(255,255,255,0.1)',
-            borderRadius: 2,
-            minWidth: 200,
+            border: `1px solid ${menuBorder}`,
+            borderRadius: `${MENU_BORDER_RADIUS_PX}px`,
+            minWidth: `${MENU_MIN_WIDTH_PX}px`,
           },
+        }}
+        MenuListProps={{
+          sx: { '& .MuiListItemText-root': { marginLeft: 0 } },
         }}
       >
         <MenuItem 
           onClick={() => handleMenuAction('settings')}
           sx={{ 
-            color: 'white',
-            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+            color: menuItemColor,
+            '&:hover': { backgroundColor: menuItemHover }
           }}
         >
-          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <SettingsIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Настройки" />
@@ -1852,163 +1986,216 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         <MenuItem 
           onClick={() => handleMenuAction('archive')}
           sx={{ 
-            color: 'white',
-            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+            color: menuItemColor,
+            '&:hover': { backgroundColor: menuItemHover }
           }}
         >
-          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <ArchiveIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Архив" />
         </MenuItem>
         
-        <MenuItem 
-          onClick={() => handleMenuAction('statistics')}
+        <MenuItem
+          data-submenu-trigger="help"
+          onMouseEnter={handleHelpSubmenuEnter}
+          onMouseLeave={handleHelpSubmenuLeave}
           sx={{ 
-            color: 'white',
-            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+            color: menuItemColor,
+            '&:hover': { backgroundColor: menuItemHover },
+            ...(showHelpSubmenu && { backgroundColor: menuItemHover }),
           }}
         >
-          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
-            <BarChartIcon fontSize="small" />
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
+            <InfoIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary="Статистика" />
+          <ListItemText primary="Справка" />
+          <ChevronRightIcon sx={{ ml: 'auto', fontSize: '1rem' }} />
         </MenuItem>
         
         <MenuItem 
           onClick={() => handleMenuAction('logout')}
           sx={{ 
-            color: 'white',
-            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+            color: menuItemColor,
+            '&:hover': { backgroundColor: menuItemHover }
           }}
         >
-          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <LogoutIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Выйти из аккаунта" />
         </MenuItem>
       </Menu>
 
-      {/* Диалог статистики */}
+      {/* Подменю «Справка» */}
+      <Menu
+        anchorEl={helpSubmenuAnchor}
+        open={showHelpSubmenu}
+        onClose={closeHelpSubmenu}
+        anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+        slotProps={{
+          root: { sx: { zIndex: 1301 } },
+          backdrop: { style: { pointerEvents: 'none' } },
+        }}
+        PaperProps={{
+          'data-help-submenu': true,
+          sx: {
+            backgroundColor: menuBg,
+            backdropFilter: 'blur(10px)',
+            border: `1px solid ${menuBorder}`,
+            borderRadius: `${MENU_BORDER_RADIUS_PX}px`,
+            minWidth: `${MENU_MIN_WIDTH_PX}px`,
+            zIndex: 1301,
+          },
+          onMouseEnter: () => {
+            if (closeHelpTimerRef.current) {
+              clearTimeout(closeHelpTimerRef.current);
+              closeHelpTimerRef.current = null;
+            }
+          },
+          onMouseLeave: (e: React.MouseEvent<HTMLDivElement>) => {
+            const to = e.relatedTarget as HTMLElement;
+            const mainPaper = helpSubmenuAnchor?.closest('.MuiPopover-paper');
+            if (mainPaper?.contains(to)) return;
+            setShowHelpSubmenu(false);
+            setHelpSubmenuAnchor(null);
+          },
+        }}
+        MenuListProps={{
+          sx: { '& .MuiListItemText-root': { marginLeft: 0 } },
+        }}
+        disableAutoFocusItem
+        disableAutoFocus
+        disableEnforceFocus
+        disableScrollLock
+      >
+        <MenuItem
+          onClick={() => {
+            closeHelpSubmenu();
+            handleMenuClose();
+            setShowHelpDialog(true);
+          }}
+          sx={{ color: menuItemColor, '&:hover': { backgroundColor: menuItemHover } }}
+        >
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
+            <HelpOutlineIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText primary="Помощь" />
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            closeHelpSubmenu();
+            handleMenuClose();
+            setShowShortcutsDialog(true);
+          }}
+          sx={{ color: menuItemColor, '&:hover': { backgroundColor: menuItemHover } }}
+        >
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
+            <KeyboardIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText primary="Сочетание клавиш" />
+        </MenuItem>
+      </Menu>
+
+      {/* Диалог «Помощь» */}
       <Dialog
-        open={showStatsDialog}
-        onClose={() => setShowStatsDialog(false)}
+        open={showHelpDialog}
+        onClose={() => setShowHelpDialog(false)}
         maxWidth="sm"
         fullWidth
         PaperProps={{
           sx: {
-            backgroundColor: 'background.paper',
-            color: 'text.primary',
+            backgroundColor: isDarkMode ? '#1e1e1e' : '#ffffff',
+            color: isDarkMode ? 'white' : '#333',
+            borderRadius: 2,
           }
         }}
       >
-        <DialogTitle>
+        <DialogTitle
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            p: 2,
+            borderBottom: `1px solid ${isDarkMode ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)'}`,
+            backgroundColor: isDarkMode ? '#2a2a2a' : '#f5f5f5',
+          }}
+        >
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <BarChartIcon />
-            Статистика
+            <HelpOutlineIcon />
+            <Typography component="span" variant="h6" fontWeight="600">
+              Помощь
+            </Typography>
           </Box>
+          <IconButton
+            onClick={() => setShowHelpDialog(false)}
+            size="small"
+            sx={{
+              color: isDarkMode ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.6)',
+              '&:hover': {
+                backgroundColor: isDarkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)',
+              },
+            }}
+          >
+            <CloseIcon />
+          </IconButton>
         </DialogTitle>
         <DialogContent>
-          <Box sx={{ mb: 3 }}>
-            <Typography variant="h6" sx={{ mb: 2 }}>
-              Текущий чат
-        </Typography>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
-          <Box>
-                <Typography variant="h4" fontWeight="bold" color="primary">
-                  {currentChat?.messages.length || 0}
-            </Typography>
-                <Typography variant="body2" color="text.secondary">
-              Сообщений
-            </Typography>
-          </Box>
-          <Box>
-                <Typography variant="h4" fontWeight="bold" color="secondary">
-                  {currentChat?.messages.reduce((total, msg) => total + estimateTokens(msg.content), 0) || 0}
+          <Typography sx={{ color: isDarkMode ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.8)' }}>
+            Раздел помощи. Здесь можно разместить инструкции и ответы на частые вопросы.
           </Typography>
-                <Typography variant="body2" color="text.secondary">
-              Токенов
-            </Typography>
-          </Box>
-        </Box>
-      </Box>
-
-          <Divider sx={{ my: 2 }} />
-
-          <Box sx={{ mb: 3 }}>
-            <Typography variant="h6" sx={{ mb: 2 }}>
-              Общая статистика
-        </Typography>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
-          <Box>
-                <Typography variant="h4" fontWeight="bold" color="primary">
-                  {state.chats.length}
-            </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Всего чатов
-            </Typography>
-          </Box>
-          <Box>
-                <Typography variant="h4" fontWeight="bold" color="secondary">
-                  {state.stats.totalMessages}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Всего сообщений
-                </Typography>
-              </Box>
-            </Box>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-              <Box>
-                <Typography variant="h4" fontWeight="bold" color="success.main">
-              {state.stats.totalTokens}
-            </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Всего токенов
-                </Typography>
-              </Box>
-              <Box>
-                <Typography variant="h4" fontWeight="bold" color="info.main">
-                  {state.stats.sessionsToday}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Сессий сегодня
-            </Typography>
-          </Box>
-        </Box>
-      </Box>
-
-          <Divider sx={{ my: 2 }} />
-
-          <Box>
-            <Typography variant="h6" sx={{ mb: 2 }}>
-              Информация о модели
-            </Typography>
-            {state.currentModel?.loaded ? (
-              <Box>
-                <Typography variant="body1" fontWeight="500">
-                  {state.currentModel.metadata?.['general.name'] || 'Загружена'}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  {state.currentModel.metadata?.['general.architecture'] || 'Неизвестная архитектура'}
-                </Typography>
-                {state.currentModel.metadata?.['general.size_label'] && (
-                  <Typography variant="body2" color="text.secondary">
-                    Размер: {state.currentModel.metadata['general.size_label']}
-                  </Typography>
-                )}
-              </Box>
-            ) : (
-              <Typography variant="body2" color="text.secondary">
-                Модель не загружена
-              </Typography>
-            )}
-            </Box>
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setShowStatsDialog(false)}>
-            Закрыть
-          </Button>
-        </DialogActions>
+      </Dialog>
+
+      {/* Диалог «Сочетание клавиш» */}
+      <Dialog
+        open={showShortcutsDialog}
+        onClose={() => setShowShortcutsDialog(false)}
+        maxWidth="sm"
+        fullWidth
+        PaperProps={{
+          sx: {
+            backgroundColor: isDarkMode ? '#1e1e1e' : '#ffffff',
+            color: isDarkMode ? 'white' : '#333',
+            borderRadius: 2,
+          }
+        }}
+      >
+        <DialogTitle
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            p: 2,
+            borderBottom: `1px solid ${isDarkMode ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)'}`,
+            backgroundColor: isDarkMode ? '#2a2a2a' : '#f5f5f5',
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <KeyboardIcon />
+            <Typography component="span" variant="h6" fontWeight="600">
+              Сочетание клавиш
+            </Typography>
+          </Box>
+          <IconButton
+            onClick={() => setShowShortcutsDialog(false)}
+            size="small"
+            sx={{
+              color: isDarkMode ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.6)',
+              '&:hover': {
+                backgroundColor: isDarkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)',
+              },
+            }}
+          >
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent>
+          <Typography sx={{ color: isDarkMode ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.8)' }}>
+            Список горячих клавиш приложения. Раздел в разработке.
+          </Typography>
+        </DialogContent>
       </Dialog>
 
       {/* Выпадающее меню для чатов */}
@@ -2016,11 +2203,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         anchorEl={chatMenuAnchor}
         open={chatMenuOpen}
         onClose={(event, reason) => {
-          // Закрываем подменю при закрытии основного меню
-          setShowMoveToFolderMenu(false);
-          setShowMoveToProjectMenu(false);
-          setFolderMenuAnchorForChat(null);
-          setProjectMenuAnchorForChat(null);
+          moveToMenus.closeSubmenus();
           handleChatMenuClose();
         }}
         anchorOrigin={{
@@ -2033,17 +2216,18 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         }}
         PaperProps={{
           sx: {
-            backgroundColor: 'rgba(30, 30, 30, 0.95)',
+            backgroundColor: menuBg,
             backdropFilter: 'blur(10px)',
-            border: '1px solid rgba(255,255,255,0.1)',
-            borderRadius: 2,
-            minWidth: 150,
+            border: `1px solid ${menuBorder}`,
+            borderRadius: `${MENU_BORDER_RADIUS_PX}px`,
+            minWidth: `${MENU_MIN_WIDTH_PX}px`,
             pointerEvents: 'auto',
           },
         }}
         MenuListProps={{
           sx: {
             pointerEvents: 'auto',
+            '& .MuiListItemText-root': { marginLeft: 0 },
           },
         }}
         disableAutoFocus
@@ -2051,19 +2235,13 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
       >
         <MenuItem
           onClick={() => handleChatMenuAction('pin')}
-          onMouseEnter={() => {
-            // Закрываем подменю при наведении на другие пункты меню
-            setShowMoveToFolderMenu(false);
-            setShowMoveToProjectMenu(false);
-            setFolderMenuAnchorForChat(null);
-            setProjectMenuAnchorForChat(null);
-          }}
+          onMouseEnter={moveToMenus.closeSubmenus}
           sx={{
-            color: 'white',
-            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+            color: menuItemColor,
+            '&:hover': { backgroundColor: menuItemHover }
           }}
         >
-          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <PushPinIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary={
@@ -2079,19 +2257,13 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         
         <MenuItem
           onClick={() => handleChatMenuAction('edit')}
-          onMouseEnter={() => {
-            // Закрываем подменю при наведении на другие пункты меню
-            setShowMoveToFolderMenu(false);
-            setShowMoveToProjectMenu(false);
-            setFolderMenuAnchorForChat(null);
-            setProjectMenuAnchorForChat(null);
-          }}
+          onMouseEnter={moveToMenus.closeSubmenus}
           sx={{
-            color: 'white',
-            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+            color: menuItemColor,
+            '&:hover': { backgroundColor: menuItemHover }
           }}
         >
-          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <EditIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Переименовать" />
@@ -2099,100 +2271,16 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         
         {useFoldersMode && (
         <MenuItem
-          onMouseEnter={(e) => {
-            // Отменяем закрытие подменю, если курсор вернулся на пункт меню
-            if (folderMenuCloseTimeoutRef.current) {
-              clearTimeout(folderMenuCloseTimeoutRef.current);
-              folderMenuCloseTimeoutRef.current = null;
-            }
-            
-            const target = e.currentTarget;
-            // Устанавливаем anchor и открываем меню одновременно
-            setFolderMenuAnchorForChat(target);
-            setShowMoveToFolderMenu(true);
-            // Закрываем подменю проекта, если оно было открыто
-            setShowMoveToProjectMenu(false);
-            setProjectMenuAnchorForChat(null);
-          }}
-          onMouseLeave={(e) => {
-            // Очищаем предыдущий таймер, если он был
-            if (folderMenuCloseTimeoutRef.current) {
-              clearTimeout(folderMenuCloseTimeoutRef.current);
-              folderMenuCloseTimeoutRef.current = null;
-            }
-            
-            // Проверяем, переходит ли курсор к подменю или другому пункту меню
-            const relatedTarget = e.relatedTarget as HTMLElement;
-            if (relatedTarget) {
-              // Если курсор переходит к подменю, не закрываем
-              const submenu = relatedTarget.closest('[role="menu"]');
-              const currentMenu = e.currentTarget.closest('[role="menu"]');
-              if (submenu && submenu !== currentMenu) {
-                return;
-              }
-              // Если курсор переходит к другому пункту меню в основном меню, закрываем подменю сразу
-              const menuItem = relatedTarget.closest('[role="menuitem"]');
-              if (menuItem && menuItem !== e.currentTarget && currentMenu?.contains(menuItem)) {
-                setShowMoveToFolderMenu(false);
-                setFolderMenuAnchorForChat(null);
-                return;
-              }
-            }
-            
-            // Если relatedTarget null, проверяем сразу, где находится курсор
-            const activeElement = document.elementFromPoint(
-              e.clientX || 0,
-              e.clientY || 0
-            ) as HTMLElement;
-            
-            if (activeElement) {
-              const currentMenu = e.currentTarget.closest('[role="menu"]');
-              const submenu = activeElement.closest('[role="menu"]');
-              
-              // Если курсор на подменю, не закрываем
-              if (submenu && submenu !== currentMenu) {
-                return;
-              }
-              
-              // Если курсор на другом пункте меню в основном меню, закрываем подменю сразу
-              const menuItem = activeElement.closest('[role="menuitem"]');
-              if (menuItem && menuItem !== e.currentTarget && currentMenu?.contains(menuItem)) {
-                setShowMoveToFolderMenu(false);
-                setFolderMenuAnchorForChat(null);
-                return;
-              }
-              
-              // Если курсор на текущем пункте меню, не закрываем
-              if (activeElement.closest('[role="menuitem"]') === e.currentTarget) {
-                return;
-              }
-            }
-            
-            // Если курсор не на подменю и не на пункте меню, используем небольшую задержку
-            // Это позволяет курсору перейти на подменю, если он движется в его сторону
-            folderMenuCloseTimeoutRef.current = setTimeout(() => {
-              const checkElement = document.elementFromPoint(
-                e.clientX || 0,
-                e.clientY || 0
-              ) as HTMLElement;
-              if (checkElement) {
-                const submenu = checkElement.closest('[role="menu"]');
-                const currentMenu = e.currentTarget.closest('[role="menu"]');
-                if (submenu && submenu !== currentMenu) {
-                  return;
-                }
-              }
-              setShowMoveToFolderMenu(false);
-              setFolderMenuAnchorForChat(null);
-              folderMenuCloseTimeoutRef.current = null;
-            }, 100);
-          }}
+          data-submenu-trigger="folder"
+          onMouseEnter={moveToMenus.handleFolderSubmenuEnter}
+          onMouseLeave={moveToMenus.handleFolderSubmenuLeave}
           sx={{
-            color: 'white',
-            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+            color: menuItemColor,
+            '&:hover': { backgroundColor: menuItemHover },
+            ...(moveToMenus.showMoveToFolderMenu && { backgroundColor: menuItemHover }),
           }}
         >
-          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <FolderIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Переместить в папку" />
@@ -2202,100 +2290,16 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         
         {!useFoldersMode && (
         <MenuItem
-          onMouseEnter={(e) => {
-            // Отменяем закрытие подменю, если курсор вернулся на пункт меню
-            if (projectMenuCloseTimeoutRef.current) {
-              clearTimeout(projectMenuCloseTimeoutRef.current);
-              projectMenuCloseTimeoutRef.current = null;
-            }
-            
-            const target = e.currentTarget;
-            // Устанавливаем anchor и открываем меню одновременно
-            setProjectMenuAnchorForChat(target);
-            setShowMoveToProjectMenu(true);
-            // Закрываем подменю папки, если оно было открыто
-            setShowMoveToFolderMenu(false);
-            setFolderMenuAnchorForChat(null);
-          }}
-          onMouseLeave={(e) => {
-            // Очищаем предыдущий таймер, если он был
-            if (projectMenuCloseTimeoutRef.current) {
-              clearTimeout(projectMenuCloseTimeoutRef.current);
-              projectMenuCloseTimeoutRef.current = null;
-            }
-            
-            // Проверяем, переходит ли курсор к подменю или другому пункту меню
-            const relatedTarget = e.relatedTarget as HTMLElement;
-            if (relatedTarget) {
-              // Если курсор переходит к подменю, не закрываем
-              const submenu = relatedTarget.closest('[role="menu"]');
-              const currentMenu = e.currentTarget.closest('[role="menu"]');
-              if (submenu && submenu !== currentMenu) {
-                return;
-              }
-              // Если курсор переходит к другому пункту меню в основном меню, закрываем подменю сразу
-              const menuItem = relatedTarget.closest('[role="menuitem"]');
-              if (menuItem && menuItem !== e.currentTarget && currentMenu?.contains(menuItem)) {
-                setShowMoveToProjectMenu(false);
-                setProjectMenuAnchorForChat(null);
-                return;
-              }
-            }
-            
-            // Если relatedTarget null, проверяем сразу, где находится курсор
-            const activeElement = document.elementFromPoint(
-              e.clientX || 0,
-              e.clientY || 0
-            ) as HTMLElement;
-            
-            if (activeElement) {
-              const currentMenu = e.currentTarget.closest('[role="menu"]');
-              const submenu = activeElement.closest('[role="menu"]');
-              
-              // Если курсор на подменю, не закрываем
-              if (submenu && submenu !== currentMenu) {
-                return;
-              }
-              
-              // Если курсор на другом пункте меню в основном меню, закрываем подменю сразу
-              const menuItem = activeElement.closest('[role="menuitem"]');
-              if (menuItem && menuItem !== e.currentTarget && currentMenu?.contains(menuItem)) {
-                setShowMoveToProjectMenu(false);
-                setProjectMenuAnchorForChat(null);
-                return;
-              }
-              
-              // Если курсор на текущем пункте меню, не закрываем
-              if (activeElement.closest('[role="menuitem"]') === e.currentTarget) {
-                return;
-              }
-            }
-            
-            // Если курсор не на подменю и не на пункте меню, используем небольшую задержку
-            // Это позволяет курсору перейти на подменю, если он движется в его сторону
-            projectMenuCloseTimeoutRef.current = setTimeout(() => {
-              const checkElement = document.elementFromPoint(
-                e.clientX || 0,
-                e.clientY || 0
-              ) as HTMLElement;
-              if (checkElement) {
-                const submenu = checkElement.closest('[role="menu"]');
-                const currentMenu = e.currentTarget.closest('[role="menu"]');
-                if (submenu && submenu !== currentMenu) {
-                  return;
-                }
-              }
-              setShowMoveToProjectMenu(false);
-              setProjectMenuAnchorForChat(null);
-              projectMenuCloseTimeoutRef.current = null;
-            }, 100);
-          }}
+          data-submenu-trigger="project"
+          onMouseEnter={moveToMenus.handleProjectSubmenuEnter}
+          onMouseLeave={moveToMenus.handleProjectSubmenuLeave}
           sx={{
-            color: 'white',
-            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+            color: menuItemColor,
+            '&:hover': { backgroundColor: menuItemHover },
+            ...(moveToMenus.showMoveToProjectMenu && { backgroundColor: menuItemHover }),
           }}
         >
-          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <FolderIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Перенести в проект" />
@@ -2305,19 +2309,13 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         
         <MenuItem
           onClick={() => handleChatMenuAction('archive')}
-          onMouseEnter={() => {
-            // Закрываем подменю при наведении на другие пункты меню
-            setShowMoveToFolderMenu(false);
-            setShowMoveToProjectMenu(false);
-            setFolderMenuAnchorForChat(null);
-            setProjectMenuAnchorForChat(null);
-          }}
+          onMouseEnter={moveToMenus.closeSubmenus}
           sx={{
-            color: 'white',
-            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+            color: menuItemColor,
+            '&:hover': { backgroundColor: menuItemHover }
           }}
         >
-          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <ArchiveIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Архив" />
@@ -2325,211 +2323,57 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         {!useFoldersMode && selectedChatId && getChatById(selectedChatId)?.projectId && (
           <MenuItem
             onClick={() => handleChatMenuAction('removeFromProject')}
-            onMouseEnter={() => {
-              // Закрываем подменю при наведении на другие пункты меню
-              setShowMoveToFolderMenu(false);
-              setShowMoveToProjectMenu(false);
-              setFolderMenuAnchorForChat(null);
-              setProjectMenuAnchorForChat(null);
-            }}
+            onMouseEnter={moveToMenus.closeSubmenus}
             sx={{
-              color: 'white',
-              '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+              color: menuItemColor,
+              '&:hover': { backgroundColor: menuItemHover }
             }}
           >
-            <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+            <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
               <FolderIcon fontSize="small" />
             </ListItemIcon>
             <ListItemText primary="Перенести из проекта" />
           </MenuItem>
         )}
-        <Divider sx={{ my: 0.5, borderColor: 'rgba(255,255,255,0.1)' }} />
+        <Divider sx={{ my: 0.5, borderColor: menuDividerBorder }} />
         <MenuItem
           onClick={() => handleChatMenuAction('delete')}
-          onMouseEnter={() => {
-            // Закрываем подменю при наведении на другие пункты меню
-            setShowMoveToFolderMenu(false);
-            setShowMoveToProjectMenu(false);
-            setFolderMenuAnchorForChat(null);
-            setProjectMenuAnchorForChat(null);
-          }}
+          onMouseEnter={moveToMenus.closeSubmenus}
           sx={{
-            color: 'white',
-            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+            color: '#d32f2f',
+            '&:hover': { backgroundColor: 'rgba(211, 47, 47, 0.1)' }
           }}
         >
-          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+          <ListItemIcon sx={{ color: '#d32f2f', minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <DeleteIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary="Удалить" />
+          <ListItemText primary="Удалить" primaryTypographyProps={{ sx: { color: '#d32f2f' } }} />
         </MenuItem>
       </Menu>
 
-      {/* Подменю для перемещения в проект */}
-      <Menu
-        anchorEl={projectMenuAnchorForChat}
-        open={showMoveToProjectMenu}
-        onClose={(event, reason) => {
-          setShowMoveToProjectMenu(false);
-          setProjectMenuAnchorForChat(null);
-        }}
-        anchorOrigin={{
-          vertical: 'top',
-          horizontal: 'right',
-        }}
-        transformOrigin={{
-          vertical: 'top',
-          horizontal: 'left',
-        }}
-        PaperProps={{
-          sx: {
-            backgroundColor: 'rgba(30, 30, 30, 0.95)',
-            backdropFilter: 'blur(10px)',
-            border: '1px solid rgba(255,255,255,0.1)',
-            borderRadius: 2,
-            minWidth: 200,
-            pointerEvents: 'auto',
-          },
-          onMouseEnter: () => {
-            // Держим подменю открытым, когда курсор на нем
-            setShowMoveToProjectMenu(true);
-          },
-          onMouseLeave: (e: React.MouseEvent<HTMLDivElement>) => {
-            // Проверяем, не переходит ли курсор обратно к кнопке или основному меню
-            const relatedTarget = e.relatedTarget as HTMLElement;
-            if (relatedTarget) {
-              // Если курсор переходит к основному меню или кнопке, не закрываем
-              if (relatedTarget.closest('[role="menu"]') ||
-                  relatedTarget === projectMenuAnchorForChat ||
-                  relatedTarget.closest('[role="menuitem"]') === projectMenuAnchorForChat) {
-                return;
-              }
-            }
-            // Курсор покидает подменю и не переходит к основному меню - закрываем
-            setShowMoveToProjectMenu(false);
-            setProjectMenuAnchorForChat(null);
-          },
-        }}
-        MenuListProps={{
-          onMouseEnter: () => {
-            // Держим подменю открытым, когда курсор на нем
-            setShowMoveToProjectMenu(true);
-          },
-          onMouseLeave: (e: React.MouseEvent<HTMLUListElement>) => {
-            // Проверяем, не переходит ли курсор обратно к кнопке или основному меню
-            const relatedTarget = e.relatedTarget as HTMLElement;
-            if (relatedTarget) {
-              // Если курсор переходит к основному меню или кнопке, не закрываем
-              if (relatedTarget.closest('[role="menu"]') ||
-                  relatedTarget === projectMenuAnchorForChat ||
-                  relatedTarget.closest('[role="menuitem"]') === projectMenuAnchorForChat) {
-                return;
-              }
-            }
-            // Курсор покидает подменю и не переходит к основному меню - закрываем
-            setShowMoveToProjectMenu(false);
-            setProjectMenuAnchorForChat(null);
-          },
-        }}
-        disableAutoFocusItem
-        disableAutoFocus
-        disableEnforceFocus
-      >
-        <MenuItem
-          onClick={() => {
-            if (selectedChatId) {
-              setPendingChatIdForProject(selectedChatId);
-              setShowNewProjectModal(true);
-              setShowMoveToProjectMenu(false);
-              setProjectMenuAnchorForChat(null);
-              handleChatMenuClose();
-            }
-          }}
-          sx={{
-            color: 'white',
-            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
-          }}
-        >
-          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
-            <AddFolderIcon fontSize="small" />
-          </ListItemIcon>
-          <ListItemText primary="Новый проект" />
-        </MenuItem>
-        {projects.map((project) => {
-          const renderProjectIcon = () => {
-            if (project.iconType === 'emoji' && project.icon) {
-              return (
-                <Avatar
-                  sx={{
-                    width: 20,
-                    height: 20,
-                    bgcolor: project.iconColor === '#ffffff' ? 'rgba(255,255,255,0.1)' : project.iconColor || 'rgba(255,255,255,0.1)',
-                    fontSize: 12,
-                  }}
-                >
-                  {project.icon}
-                </Avatar>
-              );
-            }
-            if (project.iconType === 'icon' && project.icon) {
-              const IconComponent = projectIconMap[project.icon] || FolderIcon;
-              return (
-                <Avatar
-                  sx={{
-                    width: 20,
-                    height: 20,
-                    bgcolor: project.iconColor === '#ffffff' ? 'rgba(255,255,255,0.1)' : project.iconColor || 'rgba(255,255,255,0.1)',
-                    color: 'white',
-                  }}
-                >
-                  <IconComponent sx={{ fontSize: 12 }} />
-                </Avatar>
-              );
-            }
-            return (
-              <Avatar
-                sx={{
-                  width: 20,
-                  height: 20,
-                  bgcolor: 'rgba(255,255,255,0.1)',
-                  color: 'white',
-                }}
-              >
-                <FolderIcon sx={{ fontSize: 12 }} />
-              </Avatar>
-            );
-          };
+      <MoveToFolderAndProjectSubmenus
+        moveTo={moveToMenus}
+        menuBg={menuBg}
+        menuBorder={menuBorder}
+        menuItemColor={menuItemColor}
+        menuItemHover={menuItemHover}
+        menuDisabledColor={menuDisabledColor}
+        folders={folders}
+        projects={projects}
+        selectedChatId={selectedChatId}
+        getChatFolder={getChatFolder}
+        chats={state.chats}
+        isDarkMode={isDarkMode}
+        useFoldersMode={useFoldersMode}
+        projectIconMap={projectIconMap}
+        setShowCreateFolderDialog={setShowCreateFolderDialog}
+        setPendingChatIdForProject={setPendingChatIdForProject}
+        setShowNewProjectModal={setShowNewProjectModal}
+        handleChatMenuClose={handleChatMenuClose}
+        moveChatToProject={moveChatToProject}
+      />
 
-          const chat = selectedChatId ? state.chats.find(c => c.id === selectedChatId) : null;
-          const isSelected = chat?.projectId === project.id;
-
-          return (
-            <MenuItem
-              key={project.id}
-              onClick={() => {
-                if (selectedChatId) {
-                  moveChatToProject(selectedChatId, isSelected ? null : project.id);
-                  setShowMoveToProjectMenu(false);
-                  setProjectMenuAnchorForChat(null);
-                  handleChatMenuClose();
-                }
-              }}
-              sx={{
-                color: isSelected ? 'rgba(255,255,255,0.5)' : 'white',
-                '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
-              }}
-              disabled={isSelected}
-            >
-              <ListItemIcon sx={{ color: isSelected ? 'rgba(255,255,255,0.5)' : 'white', minWidth: 36 }}>
-                {renderProjectIcon()}
-              </ListItemIcon>
-              <ListItemText primary={project.name} />
-            </MenuItem>
-          );
-        })}
-      </Menu>
-
-      {/* Диалог подтверждения удаления */}
+      {/* Диалог подтверждения удаления (адаптивный к светлой/тёмной теме, как в проекте) */}
       <Dialog
         open={showDeleteDialog}
         onClose={() => setShowDeleteDialog(false)}
@@ -2537,18 +2381,18 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         fullWidth
         PaperProps={{
           sx: {
-            backgroundColor: '#1e1e1e',
-            color: 'white',
+            backgroundColor: isDarkMode ? '#1e1e1e' : '#ffffff',
+            color: isDarkMode ? 'white' : '#333',
             borderRadius: 2,
           }
         }}
       >
-        <DialogTitle sx={{ color: 'white', fontWeight: 'bold' }}>
+        <DialogTitle sx={{ color: isDarkMode ? 'white' : '#333', fontWeight: 'bold' }}>
           Удалить чат
         </DialogTitle>
         <DialogContent>
-          <Typography sx={{ color: 'white', mt: 1 }}>
-            Это действие навсегда удалит выбранный чат и не может быть отменено. 
+          <Typography sx={{ color: isDarkMode ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.8)', mt: 1 }}>
+            Это действие навсегда удалит выбранный чат и не может быть отменено.
             Пожалуйста, подтвердите для продолжения.
           </Typography>
         </DialogContent>
@@ -2556,9 +2400,9 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           <Button
             onClick={() => setShowDeleteDialog(false)}
             sx={{
-              backgroundColor: 'black',
-              color: 'white',
-              '&:hover': { backgroundColor: 'rgba(0,0,0,0.8)' },
+              backgroundColor: isDarkMode ? 'black' : 'rgba(0,0,0,0.08)',
+              color: isDarkMode ? 'white' : '#333',
+              '&:hover': { backgroundColor: isDarkMode ? 'rgba(0,0,0,0.8)' : 'rgba(0,0,0,0.12)' },
               textTransform: 'none',
               px: 3,
             }}
@@ -2568,9 +2412,9 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           <Button
             onClick={handleConfirmDelete}
             sx={{
-              backgroundColor: '#f44336',
+              backgroundColor: '#d32f2f',
               color: 'white',
-              '&:hover': { backgroundColor: '#d32f2f' },
+              '&:hover': { backgroundColor: '#b71c1c' },
               textTransform: 'none',
               px: 3,
             }}
@@ -2656,159 +2500,6 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         </DialogActions>
       </Dialog>
 
-      {/* Меню перемещения в папку */}
-      <Menu
-        anchorEl={folderMenuAnchorForChat}
-        open={showMoveToFolderMenu}
-        onClose={(event, reason) => {
-          setShowMoveToFolderMenu(false);
-          setFolderMenuAnchorForChat(null);
-        }}
-        anchorOrigin={{
-          vertical: 'top',
-          horizontal: 'right',
-        }}
-        transformOrigin={{
-          vertical: 'top',
-          horizontal: 'left',
-        }}
-        PaperProps={{
-          sx: {
-            backgroundColor: 'rgba(30, 30, 30, 0.95)',
-            backdropFilter: 'blur(10px)',
-            border: '1px solid rgba(255,255,255,0.1)',
-            borderRadius: 2,
-            minWidth: 200,
-            pointerEvents: 'auto',
-          },
-          onMouseEnter: () => {
-            // Держим подменю открытым, когда курсор на нем
-            setShowMoveToFolderMenu(true);
-          },
-          onMouseLeave: (e: React.MouseEvent<HTMLDivElement>) => {
-            // Проверяем, не переходит ли курсор обратно к кнопке или основному меню
-            const relatedTarget = e.relatedTarget as HTMLElement;
-            if (relatedTarget) {
-              // Если курсор переходит к основному меню или кнопке, не закрываем
-              if (relatedTarget.closest('[role="menu"]') ||
-                  relatedTarget === folderMenuAnchorForChat ||
-                  relatedTarget.closest('[role="menuitem"]') === folderMenuAnchorForChat) {
-                return;
-              }
-            }
-            // Курсор покидает подменю и не переходит к основному меню - закрываем
-            setShowMoveToFolderMenu(false);
-            setFolderMenuAnchorForChat(null);
-          },
-        }}
-        MenuListProps={{
-          onMouseEnter: () => {
-            // Держим подменю открытым, когда курсор на нем
-            setShowMoveToFolderMenu(true);
-          },
-          onMouseLeave: (e: React.MouseEvent<HTMLUListElement>) => {
-            // Проверяем, не переходит ли курсор обратно к кнопке или основному меню
-            const relatedTarget = e.relatedTarget as HTMLElement;
-            if (relatedTarget) {
-              // Если курсор переходит к основному меню или кнопке, не закрываем
-              if (relatedTarget.closest('[role="menu"]') ||
-                  relatedTarget === folderMenuAnchorForChat ||
-                  relatedTarget.closest('[role="menuitem"]') === folderMenuAnchorForChat) {
-                return;
-              }
-            }
-            // Курсор покидает подменю и не переходит к основному меню - закрываем
-            setShowMoveToFolderMenu(false);
-            setFolderMenuAnchorForChat(null);
-          },
-        }}
-        disableAutoFocusItem
-        disableAutoFocus
-        disableEnforceFocus
-      >
-        {/* Создать папку */}
-        {useFoldersMode && (
-        <MenuItem
-          onClick={() => {
-            setShowCreateFolderDialog(true);
-            setShowMoveToFolderMenu(false);
-            setFolderMenuAnchorForChat(null);
-            handleChatMenuClose();
-          }}
-          sx={{
-            color: 'white',
-            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
-          }}
-        >
-          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
-            <AddFolderIcon fontSize="small" />
-          </ListItemIcon>
-          <ListItemText primary="Создать папку" />
-        </MenuItem>
-        )}
-        
-        {/* Опция перемещения в ЧАТЫ */}
-        {useFoldersMode && (
-        <MenuItem
-          onClick={() => {
-            if (selectedChatId) {
-              handleRemoveFromFolder(selectedChatId);
-              setShowMoveToFolderMenu(false);
-              setFolderMenuAnchorForChat(null);
-              handleChatMenuClose();
-            }
-          }}
-          sx={{
-            color: selectedChatId && !getChatFolder(selectedChatId) ? 'rgba(255,255,255,0.5)' : 'white',
-            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
-          }}
-          disabled={selectedChatId ? !getChatFolder(selectedChatId) : false}
-        >
-          <ListItemIcon sx={{ color: selectedChatId && !getChatFolder(selectedChatId) ? 'rgba(255,255,255,0.5)' : 'white', minWidth: 36 }}>
-            <ChatIcon fontSize="small" />
-          </ListItemIcon>
-          <ListItemText primary="Все чаты" />
-        </MenuItem>
-        )}
-        
-        {useFoldersMode && folders
-          .filter(folder => {
-            // Исключаем папку, в которой уже находится чат
-            const currentFolder = selectedChatId ? getChatFolder(selectedChatId) : null;
-            return !currentFolder || folder.id !== currentFolder.id;
-          })
-          .map((folder) => (
-            <MenuItem
-              key={folder.id}
-              onClick={() => {
-                if (selectedChatId) {
-                  handleMoveToFolder(selectedChatId, folder.id);
-                  setShowMoveToFolderMenu(false);
-                  setFolderMenuAnchorForChat(null);
-                  handleChatMenuClose();
-                }
-              }}
-              sx={{
-                color: 'white',
-                '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
-              }}
-            >
-              <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
-                <FolderIcon fontSize="small" />
-              </ListItemIcon>
-              <ListItemText primary={folder.name} />
-            </MenuItem>
-          ))}
-        {folders.filter(folder => {
-          const currentFolder = selectedChatId ? getChatFolder(selectedChatId) : null;
-          return !currentFolder || folder.id !== currentFolder.id;
-        }).length === 0 && (
-          <MenuItem disabled sx={{ color: 'rgba(255,255,255,0.5)' }}>
-            <ListItemText primary="Нет доступных папок" />
-          </MenuItem>
-        )}
-      </Menu>
-
       {/* Меню папки */}
       <Menu
         anchorEl={folderMenuAnchor}
@@ -2824,22 +2515,25 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         }}
         PaperProps={{
           sx: {
-            backgroundColor: 'rgba(30, 30, 30, 0.95)',
+            backgroundColor: menuBg,
             backdropFilter: 'blur(10px)',
-            border: '1px solid rgba(255,255,255,0.1)',
-            borderRadius: 2,
-            minWidth: 200,
+            border: `1px solid ${menuBorder}`,
+            borderRadius: `${MENU_BORDER_RADIUS_PX}px`,
+            minWidth: `${MENU_MIN_WIDTH_PX}px`,
           },
+        }}
+        MenuListProps={{
+          sx: { '& .MuiListItemText-root': { marginLeft: 0 } },
         }}
       >
         <MenuItem
           onClick={() => handleFolderMenuAction('rename')}
           sx={{
-            color: 'white',
-            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+            color: menuItemColor,
+            '&:hover': { backgroundColor: menuItemHover }
           }}
         >
-          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <EditIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Переименовать" />
@@ -2848,11 +2542,11 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         <MenuItem
           onClick={() => handleFolderMenuAction('archive')}
           sx={{
-            color: 'white',
-            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+            color: menuItemColor,
+            '&:hover': { backgroundColor: menuItemHover }
           }}
         >
-          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <ArchiveIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Архив" />
@@ -2861,14 +2555,14 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         <MenuItem
           onClick={() => handleFolderMenuAction('delete')}
           sx={{
-            color: 'white',
-            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+            color: '#d32f2f',
+            '&:hover': { backgroundColor: 'rgba(211, 47, 47, 0.1)' }
           }}
         >
-          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+          <ListItemIcon sx={{ color: '#d32f2f', minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <DeleteIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary="Удалить" />
+          <ListItemText primary="Удалить" primaryTypographyProps={{ sx: { color: '#d32f2f' } }} />
         </MenuItem>
       </Menu>
 
@@ -3036,9 +2730,9 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           <Button
             onClick={handleDeleteFolder}
             sx={{
-              backgroundColor: '#f44336',
+              backgroundColor: '#d32f2f',
               color: 'white',
-              '&:hover': { backgroundColor: '#d32f2f' },
+              '&:hover': { backgroundColor: '#b71c1c' },
               textTransform: 'none',
               px: 3,
             }}
@@ -3064,6 +2758,20 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
       />
 
       {/* Модальное окно создания проекта */}
+      <EditProjectModal
+        open={showEditProjectModal}
+        onClose={() => {
+          setShowEditProjectModal(false);
+          setProjectIdToEdit(null);
+        }}
+        project={projectIdToEdit ? (projects.find((p) => p.id === projectIdToEdit) ?? null) : null}
+        onSave={(projectId, updates) => {
+          updateProject(projectId, updates);
+          setShowEditProjectModal(false);
+          setProjectIdToEdit(null);
+        }}
+      />
+
       <NewProjectModal
         open={showNewProjectModal}
         onClose={() => {
@@ -3102,22 +2810,25 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         }}
         PaperProps={{
           sx: {
-            backgroundColor: 'rgba(30, 30, 30, 0.95)',
+            backgroundColor: menuBg,
             backdropFilter: 'blur(10px)',
-            border: '1px solid rgba(255,255,255,0.1)',
-            borderRadius: 2,
-            minWidth: 200,
+            border: `1px solid ${menuBorder}`,
+            borderRadius: `${MENU_BORDER_RADIUS_PX}px`,
+            minWidth: `${MENU_MIN_WIDTH_PX}px`,
           },
+        }}
+        MenuListProps={{
+          sx: { '& .MuiListItemText-root': { marginLeft: 0 } },
         }}
       >
         <MenuItem
           onClick={() => handleProjectMenuAction('edit')}
           sx={{
-            color: 'white',
-            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+            color: menuItemColor,
+            '&:hover': { backgroundColor: menuItemHover }
           }}
         >
-          <ListItemIcon sx={{ color: 'white', minWidth: 36 }}>
+          <ListItemIcon sx={{ color: menuItemColor, minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <EditIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText primary="Редактировать проект" />
@@ -3126,14 +2837,14 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         <MenuItem
           onClick={() => handleProjectMenuAction('delete')}
           sx={{
-            color: 'white',
-            '&:hover': { backgroundColor: 'rgba(255,255,255,0.1)' }
+            color: '#d32f2f',
+            '&:hover': { backgroundColor: 'rgba(211, 47, 47, 0.1)' }
           }}
         >
-          <ListItemIcon sx={{ color: '#f44336', minWidth: 36 }}>
+          <ListItemIcon sx={{ color: '#d32f2f', minWidth: `${MENU_ICON_MIN_WIDTH}px`, marginRight: `${MENU_ICON_TO_TEXT_GAP_PX}px`, '& .MuiSvgIcon-root': { fontSize: `${MENU_ICON_FONT_SIZE_PX}px` } }}>
             <DeleteIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary="Удалить проект" primaryTypographyProps={{ sx: { color: '#f44336' } }} />
+          <ListItemText primary="Удалить проект" primaryTypographyProps={{ sx: { color: '#d32f2f' } }} />
         </MenuItem>
       </Menu>
 
@@ -3176,9 +2887,9 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           <Button
             onClick={handleConfirmDeleteProject}
             sx={{
-              backgroundColor: '#f44336',
+              backgroundColor: '#d32f2f',
               color: 'white',
-              '&:hover': { backgroundColor: '#d32f2f' },
+              '&:hover': { backgroundColor: '#b71c1c' },
               textTransform: 'none',
               px: 3,
             }}

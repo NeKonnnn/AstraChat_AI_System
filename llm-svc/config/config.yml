@@ -1,77 +1,261 @@
+# Конфигурация llm-svc для интеграции с astrachat
+# ВАЖНО: Обновите путь к модели в разделе model.path
+
 # Конфигурация сервера
 server:
   host: "0.0.0.0"
-  port: 8000
+  port: 8000  # Внутри контейнера используем порт 8000, пробрасывается как 8001:8000
   log_level: "INFO"
   docs_url: "/docs"
   redoc_url: "/redoc"
-# Настройки CORS
+
+# Настройки CORS для интеграции с astrachat
 cors:
   allowed_origins:
-    - "http://localhost:3080"
-    - "http://localhost:8000"
+    - "http://localhost:3000"    # React dev server
+    - "http://localhost:8000"    # astrachat backend
+    - "http://127.0.0.1:3000"
+    - "http://127.0.0.1:8000"
   allow_credentials: true
   allow_methods: ["*"]
   allow_headers: ["*"]
+
 # Настройки модели LLM
+# ВАЖНО: Обновите путь к вашей модели!
 model:
-  path: "/app/models/llm/qwen2.5-7b-instruct-q3_k_m.gguf"
-  name: "qwen2.5-7b-instruct"
-  chat_format: "chatml"
-  ctx_size: 8192
-  gpu_layers: 0
+  # Локальная модель (путь в контейнере)
+  # Для GGUF моделей (llama.cpp):
+  # path: "/app/models/llm/Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf"
+  path: "/app/models/llm/QVikhr-2.5-1.5B-Instruct-SMPO-Q8_0.gguf"
+  
+  # Для HuggingFace моделей (vLLM) - указывайте путь к папке с моделью:
+  # Альтернатива: Qwen3-VL поддерживается vLLM
+  # path: "/app/models/llm/Qwen3-Omni-30B-A3B-Instruct-AWQ-4bit"  
+  # path: "/app/models/llm/Qwen3-VL-30B-A3B-Instruct-AWQ" 
+  
+  # Облачная модель (раскомментируйте и настройте при необходимости)
+  # path: "s3://your-bucket/models/Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf"
+  # path: "gs://your-bucket/models/Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf"
+  # path: "https://your-server.com/models/Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf"
+  
+  # name: "qwen-coder-30b"
+  name: "qvikhr-2.5b"
+  ctx_size: 4096
+  # gpu_layers: 0 = только CPU. Для моделей 30B+ на CPU нужно ~32 ГБ RAM, иначе загрузка может зависнуть.
+  # Если есть NVIDIA GPU — укажите gpu_layers: -1 (все слои на GPU) для быстрой загрузки и работы.
+  gpu_layers: -1  # -1 = все слои на GPU
   verbose: false
-  pool_size: 1  # Размер пула моделей
-  n_thread: 4  # Количество потоков для CPU
-  n_threads_batch: 4  # Количество потоков для батчей
-  n_batch: 512  # Размер батча
-  n_ubatch: 512  # Размер микро-батча
+  # name: "qwen3-vl-30b-awq"  # Изменено на Qwen3-VL (поддерживается vLLM)
+  # # Выбор бэкенда: "llama.cpp" или "vllm"
+  # # llama.cpp - для GGUF моделей (квантованные модели)
+  # # vllm - для оригинальных моделей HuggingFace (включая AWQ, GPTQ и другие форматы)
+  backend: "llama.cpp"  # vllm или "llama.cpp"
+  
+  # ctx_size: 32768  # Размер контекста для модели (можно увеличить при необходимости)
+  # gpu_layers: 0  # Установите -1 для использования всех слоев на GPU (только для llama.cpp)
+  # verbose: false
+  
+  # Параметры для vLLM (используются только если backend: "vllm")
+  tensor_parallel_size: 1  # Количество GPU для параллельной обработки
+  gpu_memory_utilization: 0.9  # Использование памяти GPU (0.0 - 1.0)
+  trust_remote_code: true  # Нужно для многих MoE/HF-моделей
+  quantization: null  # "awq", "gptq", "fp8", "compressed-tensors" или null
+
 # Настройки генерации
 generation:
   default_temperature: 0.7
-  default_max_tokens: 256
-  stream: false
+  default_max_tokens: 1024
+  stream: true
+
 # Настройки приложения
 app:
-  title: "Llama CPP API Service"
-  description: "API service for Llama-based models compatible with OpenAI API"
+  title: "astrachat AI Models Service"
+  description: "Unified AI service for LLM, Speech Recognition and Text-to-Speech"
   version: "1.0.0"
-# Настройки метрик и мониторинга
+
+# Настройки мониторинга
 monitoring:
   enabled: false
   prometheus_port: 9090
   metrics_path: "/metrics"
+
 # Настройки логирования
 logging:
   level: "INFO"
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  file: null  # Если указано, логи будут записываться в файл
+  file: null
   max_size: 10485760  # 10MB
   backup_count: 5
+
 # Настройки кэширования
 caching:
   enabled: true
   ttl: 300  # Время жизни кэша в секундах
   max_size: 1000  # Максимальное количество элементов в кэше
+
 # Настройки безопасности
 security:
-  enabled: false  # Отключаем проверку API ключа для локальной разработки
-  api_key: null  # API ключ для аутентификации (если null, аутентификация отключена). Может быть задан через переменную окружения API_KEY
-  api_key_header: "X-API-Key"  # Название заголовка для API ключа
-# Настройки Vault (опционально, для корпоративного контура)
-vault:
-  role_id: null
-  approle_name: null
-  verify: true
-  tuz_username: null
-  tuz_password: null
-  cert_path: null
-  path: null
-# Настройки Nexus
+  enabled: false  # Отключено для локальной разработки
+  api_key: null
+  api_key_header: "X-API-Key"
+
+# Настройки Vosk (распознавание речи)
+vosk:
+  enabled: true
+  model_path: "/app/models/vosk"  # Монтируется из ./model_small
+  sample_rate: 16000
+  max_file_size: 52428800  # 50MB
+  supported_languages:
+    - "ru"
+    - "en"
+
+# Настройки Silero (синтез речи)
+silero:
+  enabled: true
+  models_dir: "/app/models/silero"
+  sample_rate: 48000
+  max_text_length: 5000
+  supported_languages:
+    - "ru"
+    - "en"
+  supported_speakers:
+    ru:
+      - "baya"
+      - "kseniya"
+      - "xenia"
+      - "eugene"
+      - "aidar"
+    en:
+      - "v3_en"
+
+# Настройки WhisperX (продвинутая транскрипция)
+whisperx:
+  enabled: true # false
+  models_dir: "/app/models/whisperx_models"
+  device: "auto"  # auto, cpu, cuda
+  compute_type: "int8"  # int8 для CPU, float16 для CUDA
+  language: "ru"
+  batch_size: 16
+  max_file_size: 5368709120  # 5GB
+  supported_languages:
+    - "ru"
+    - "en"
+    - "auto"
+
+# Настройки диаризации (разделение по спикерам)
+diarization:
+  enabled: true # false
+  models_dir: "/app/models/diarize_models"
+  config_path: "/app/models/diarize_models/pyannote_diarization_config.yaml"
+  device: "auto"  # auto, cpu, cuda
+  min_speakers: 1
+  max_speakers: 10
+  min_duration: 1.0  # секунды
+  max_file_size: 5368709120  # 5GB
+
+# Настройки Surya OCR (распознавание текста с изображений)
+surya:
+  enabled: false
+  models_dir: "/app/models/surya"  # Веса должны находиться в models/surya
+  device: "auto"  # auto, cpu, cuda
+  max_file_size: 52428800  # 50MB
+  supported_languages:
+    - "ru"
+    - "en"
+    - "hi"
+    - "es"
+    - "fr"
+    - "de"
+    - "it"
+    - "pt"
+    - "vi"
+    - "tr"
+    - "ar"
+    - "zh"
+    - "ja"
+    - "ko"
+    - "th"
+    - "ur"
+    - "fa"
+    - "ta"
+    - "te"
+    - "ml"
+    - "kn"
+    - "gu"
+    - "pa"
+    - "bn"
+    - "or"
+    - "as"
+    - "ne"
+    - "mr"
+    - "sa"
+    - "my"
+    - "ka"
+    - "si"
+    - "km"
+    - "lo"
+    - "bo"
+    - "dz"
+    - "ti"
+    - "am"
+    - "sw"
+    - "zu"
+    - "xh"
+    - "af"
+    - "sq"
+    - "az"
+    - "eu"
+    - "be"
+    - "bs"
+    - "bg"
+    - "ca"
+    - "hr"
+    - "cs"
+    - "da"
+    - "nl"
+    - "et"
+    - "fi"
+    - "gl"
+    - "el"
+    - "he"
+    - "hu"
+    - "is"
+    - "id"
+    - "ga"
+    - "kk"
+    - "ky"
+    - "lv"
+    - "lt"
+    - "lb"
+    - "mk"
+    - "ms"
+    - "mt"
+    - "mn"
+    - "no"
+    - "pl"
+    - "ro"
+    - "sr"
+    - "sk"
+    - "sl"
+    - "sv"
+    - "tg"
+    - "tk"
+    - "uk"
+    - "uz"
+    - "cy"
+    - "yi"
+    - "yo"
+    - "zu"
+
+# Настройки Nexus (для загрузки моделей из репозитория)
 nexus:
-  enabled: false  # Включить/выключить загрузку моделей из Nexus
-  url: ""  # URL файла Nexus
-  # Параметры аутентификации (могут быть заданы через переменные окружения: NEXUS_LOGIN, NEXUS_PASSWORD, NEXUS_CERT_PATH)
-  login: null  # Логин для аутентификации в Nexus (опционально)
-  password: null  # Пароль для аутентификации в Nexus (опционально)
-  cert_path: null  # Путь к сертификату для SSL аутентификации (опционально)
+  enabled: false
+  url: ""
+  repo: ""
+  name: ""
+  id: ""
+  version: ""
+  file_name: ""
+  login: null
+  password: null
+  cert_path: null

@@ -13,6 +13,7 @@ import {
 } from '@mui/icons-material';
 import { useAppActions } from '../contexts/AppContext';
 import { getApiUrl } from '../config/api';
+import { MENU_BORDER_RADIUS_PX } from '../constants/menuStyles';
 
 
 interface Model {
@@ -292,7 +293,7 @@ export default function ModelSelector({ isDarkMode, onModelSelect }: ModelSelect
             maxWidth: 600,
             maxHeight: 500,
             mt: 1,
-            borderRadius: 2,
+            borderRadius: `${MENU_BORDER_RADIUS_PX}px`,
             border: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'}`,
             boxShadow: isDarkMode 
               ? '0 8px 32px rgba(0, 0, 0, 0.4)'

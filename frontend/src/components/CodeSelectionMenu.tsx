@@ -20,6 +20,7 @@ import {
   Send as SendIcon,
   Close as CloseIcon,
 } from '@mui/icons-material';
+import { MENU_BORDER_RADIUS_PX } from '../constants/menuStyles';
 
 interface CodeSelectionMenuProps {
   anchorEl: HTMLElement | null;
@@ -377,6 +378,7 @@ export default function CodeSelectionMenu({
               minWidth: 250,
               maxHeight: 300,
               overflow: 'auto',
+              borderRadius: `${MENU_BORDER_RADIUS_PX}px`,
             },
           }}
         >

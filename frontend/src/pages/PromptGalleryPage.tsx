@@ -62,6 +62,7 @@ import {
 } from '@mui/icons-material';
 import { getApiUrl, API_ENDPOINTS } from '../config/api';
 import { useAuth } from '../contexts/AuthContext';
+import { getSidebarPanelBackground } from '../constants/sidebarPanelColor';
 import { useTheme } from '@mui/material/styles';
 import { useNavigate } from 'react-router-dom';
 
@@ -158,6 +159,13 @@ export default function PromptGalleryPage() {
   const [filtersAnchorEl, setFiltersAnchorEl] = useState<null | HTMLElement>(null);
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
   const [rightSidebarHidden, setRightSidebarHidden] = useState(false);
+  const [rightSidebarPanelBg, setRightSidebarPanelBg] = useState(() => getSidebarPanelBackground());
+
+  useEffect(() => {
+    const onColorChanged = () => setRightSidebarPanelBg(getSidebarPanelBackground());
+    window.addEventListener('sidebarColorChanged', onColorChanged);
+    return () => window.removeEventListener('sidebarColorChanged', onColorChanged);
+  }, []);
 
   // Состояние для создания/редактирования
   const [promptForm, setPromptForm] = useState({
@@ -1352,7 +1360,7 @@ export default function PromptGalleryPage() {
             width: rightSidebarOpen ? 280 : 64,
             boxSizing: 'border-box',
             background: rightSidebarOpen 
-              ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
+              ? rightSidebarPanelBg
               : 'background.default',
             color: rightSidebarOpen ? 'white' : 'text.primary',
             borderLeft: '1px solid',

@@ -41,18 +41,13 @@ import {
   Edit as EditIcon,
   Mic as MicIcon,
   VolumeUp as VolumeUpIcon,
-  AttachFile as AttachFileIcon,
   Close as CloseIcon,
   Upload as UploadIcon,
-  Description as DocumentIcon,
-  PictureAsPdf as PdfIcon,
-  TableChart as ExcelIcon,
   Settings as SettingsIcon,
   Square as SquareIcon,
   ChevronLeft as ChevronLeftIcon,
   ChevronRight as ChevronRightIcon,
   Add as AddIcon,
-  Assessment as AssessmentIcon,
   Menu as MenuIcon,
   Transcribe as TranscribeIcon,
   AutoAwesome as PromptsIcon,
@@ -67,6 +62,9 @@ import TranscriptionModal from '../components/TranscriptionModal';
 import ModelSelector from '../components/ModelSelector';
 import MessageNavigationBar from '../components/MessageNavigationBar';
 import ShareConfirmDialog from '../components/ShareConfirmDialog';
+import ChatInputBar from '../components/ChatInputBar';
+import VoiceChatDialog from '../components/VoiceChatDialog';
+import { getSidebarPanelBackground } from '../constants/sidebarPanelColor';
 
 interface UnifiedChatPageProps {
   isDarkMode: boolean;
@@ -100,18 +98,33 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     const saved = localStorage.getItem('rightSidebarHidden');
     return saved !== null ? saved === 'true' : false;
   });
-  
+  const [rightSidebarPanelBg, setRightSidebarPanelBg] = useState(() => getSidebarPanelBackground());
+
+  useEffect(() => {
+    const onColorChanged = () => setRightSidebarPanelBg(getSidebarPanelBackground());
+    window.addEventListener('sidebarColorChanged', onColorChanged);
+    return () => window.removeEventListener('sidebarColorChanged', onColorChanged);
+  }, []);
+
   // Состояние для отображения выбора модели
   const [showModelSelectorInSettings, setShowModelSelectorInSettings] = useState(() => {
     const saved = localStorage.getItem('show_model_selector_in_settings');
     return saved !== null ? saved === 'true' : false;
   });
+
+  // Состояние для панели с диалогами (навигация по сообщениям)
+  const [showDialoguesPanel, setShowDialoguesPanel] = useState(() => {
+    const saved = localStorage.getItem('show_dialogues_panel');
+    return saved !== null ? saved === 'true' : true;
+  });
   
   // Слушаем изменения настроек
   useEffect(() => {
     const handleSettingsChange = () => {
-      const saved = localStorage.getItem('show_model_selector_in_settings');
-      setShowModelSelectorInSettings(saved !== null ? saved === 'true' : false);
+      const savedModel = localStorage.getItem('show_model_selector_in_settings');
+      setShowModelSelectorInSettings(savedModel !== null ? savedModel === 'true' : false);
+      const savedPanel = localStorage.getItem('show_dialogues_panel');
+      setShowDialoguesPanel(savedPanel !== null ? savedPanel === 'true' : true);
     };
     
     window.addEventListener('interfaceSettingsChanged', handleSettingsChange);
@@ -141,48 +154,8 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
   const [editText, setEditText] = useState('');
   
-  // Состояние для голосового чата
-  const [isRecording, setIsRecording] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [isSpeaking, setIsSpeaking] = useState(false);
-  const [audioLevel, setAudioLevel] = useState(0);
-  const [recordedText, setRecordedText] = useState('');
-  const [recordingTime, setRecordingTime] = useState(0);
-  const [voiceSettings, setVoiceSettings] = useState(() => {
-    // Загружаем сохраненные настройки голоса из localStorage
-    const savedVoiceSpeaker = localStorage.getItem('voice_speaker');
-    const savedVoiceId = localStorage.getItem('voice_id');
-    const savedSpeechRate = localStorage.getItem('speech_rate');
-    
-    const settings = {
-      voice_id: savedVoiceId || 'ru',
-      speech_rate: savedSpeechRate ? parseFloat(savedSpeechRate) : 1.0,
-      voice_speaker: savedVoiceSpeaker || 'baya',
-    };
-    
-    return settings;
-  });
   const [showVoiceDialog, setShowVoiceDialog] = useState(false);
-  
-  // Состояние для отслеживания тестируемого голоса
-  const [currentTestVoice, setCurrentTestVoice] = useState<string | null>(null);
-  
-  // Предзаписанные тестовые сообщения для каждого голоса
-  const voiceTestMessages = {
-    baya: "Привет! Я Астра Чат И И. Что обсудим?",
-    xenia: "Привет! Я Астра Чат И И. Что обсудим?",
-    kseniya: "Привет! Я Астра Чат И И. Что обсудим?",
-    aidar: "Привет! Я Астра Чат И И. Что обсудим?",
-    eugene: "Привет! Я Астра Чат И И. Что обсудим?"
-  };
-  
-  // WebSocket для голосового чата
-  const [voiceSocket, setVoiceSocket] = useState<WebSocket | null>(null);
-  const [isVoiceConnected, setIsVoiceConnected] = useState(false);
-  const [shouldReconnect, setShouldReconnect] = useState(true);
-  
-  // Real-time распознавание
-  const [realtimeText, setRealtimeText] = useState('');
+
   
   // Состояние для документов
   const [isDragging, setIsDragging] = useState(false);
@@ -212,20 +185,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const animationFrameRef = useRef<number | null>(null);
-  const currentStreamRef = useRef<MediaStream | null>(null);
-  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
-  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const lastAudioLevelRef = useRef<number>(0);
   const messageRefs = useRef<(HTMLDivElement | null)[]>([]);
-  
-  // Константы
-  const silenceThreshold = 0.1;
-  const silenceTimeout = 5000;
   
   // Context и Socket
   const { state } = useAppContext();
@@ -242,13 +202,18 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     updateChatTitle,
     getProjectById,
   } = useAppActions();
-  const { sendMessage, regenerateResponse, isConnected, isConnecting, reconnect, stopGeneration, socket, onMultiLLMEvent, offMultiLLMEvent } = useSocket();
+  const { sendMessage, regenerateResponse, isConnected, isConnecting, stopGeneration, socket, onMultiLLMEvent, offMultiLLMEvent } = useSocket();
 
   // Получаем текущий чат и сообщения
   const currentChat = getCurrentChat();
   const messages = getCurrentMessages();
   const project = currentChat?.projectId ? getProjectById(currentChat.projectId) : null;
-  
+
+  // Сбрасываем поле ввода при переключении между чатами, чтобы черновик не "дублировался"
+  useEffect(() => {
+    setInputMessage('');
+  }, [state.currentChatId]);
+
   // Стабильный обработчик для MessageRenderer (НЕ меняется при ререндерах!)
   const handleSendMessageFromRendererRef = useRef<((prompt: string) => void) | null>(null);
   
@@ -291,6 +256,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     const savedWidescreenMode = localStorage.getItem('widescreen_mode');
     const savedShowUserName = localStorage.getItem('show_user_name');
     const savedEnableNotification = localStorage.getItem('enable_notification');
+    const savedChatInputStyle = localStorage.getItem('chat_input_style');
     return {
       autoGenerateTitles: savedAutoTitle !== null ? savedAutoTitle === 'true' : true,
       largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
@@ -300,6 +266,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       widescreenMode: savedWidescreenMode !== null ? savedWidescreenMode === 'true' : false,
       showUserName: savedShowUserName !== null ? savedShowUserName === 'true' : false,
       enableNotification: savedEnableNotification !== null ? savedEnableNotification === 'true' : false,
+      chatInputStyle: (savedChatInputStyle as 'compact' | 'classic') || 'compact',
     };
   });
 
@@ -314,6 +281,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       const savedWidescreenMode = localStorage.getItem('widescreen_mode');
       const savedShowUserName = localStorage.getItem('show_user_name');
       const savedEnableNotification = localStorage.getItem('enable_notification');
+      const savedChatInputStyle = localStorage.getItem('chat_input_style');
       setInterfaceSettings({
         autoGenerateTitles: savedAutoTitle !== null ? savedAutoTitle === 'true' : true,
         largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
@@ -323,6 +291,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         widescreenMode: savedWidescreenMode !== null ? savedWidescreenMode === 'true' : false,
         showUserName: savedShowUserName !== null ? savedShowUserName === 'true' : false,
         enableNotification: savedEnableNotification !== null ? savedEnableNotification === 'true' : false,
+        chatInputStyle: (savedChatInputStyle as 'compact' | 'classic') || 'compact',
       });
     };
 
@@ -352,11 +321,14 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   // Убираем автоматическую остановку генерации при смене чата
   // Генерация должна происходить в том чате, где был задан вопрос
 
-  // Добавляем состояние для текущего индекса голоса
-  const [currentVoiceIndex, setCurrentVoiceIndex] = useState(0);
-  
-  // Состояние для показа/скрытия настроек голоса
-  const [showVoiceSettings, setShowVoiceSettings] = useState(false);
+  // Состояние для кнопки "Прочесть вслух"
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [voiceSettingsTTS] = useState(() => ({
+    voice_id: localStorage.getItem('voice_id') || 'ru',
+    speech_rate: parseFloat(localStorage.getItem('speech_rate') || '1.0'),
+    voice_speaker: localStorage.getItem('voice_speaker') || 'baya',
+  }));
 
   // Автоскролл к последнему сообщению
   useEffect(() => {
@@ -697,32 +669,6 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     loadDocuments();
   }, []);
 
-  // Синхронизируем currentVoiceIndex с voiceSettings.voice_speaker при инициализации
-  useEffect(() => {
-    const voices = Object.keys(voiceTestMessages);
-    const currentIndex = voices.indexOf(voiceSettings.voice_speaker);
-    if (currentIndex !== -1) {
-      setCurrentVoiceIndex(currentIndex);
-    }
-  }, [voiceSettings.voice_speaker]);
-
-  // Принудительная синхронизация при загрузке страницы
-  useEffect(() => {
-    const voices = Object.keys(voiceTestMessages);
-    const currentIndex = voices.indexOf(voiceSettings.voice_speaker);
-    if (currentIndex !== -1) {
-      setCurrentVoiceIndex(currentIndex);
-    }
-  }, []); // Пустой массив зависимостей - выполняется только при монтировании
-
-  // Дополнительная проверка синхронизации после рендера
-  useEffect(() => {
-    const voices = Object.keys(voiceTestMessages);
-    const currentIndex = voices.indexOf(voiceSettings.voice_speaker);
-    if (currentIndex !== -1 && currentIndex !== currentVoiceIndex) {
-      setCurrentVoiceIndex(currentIndex);
-    }
-  });
 
   // ================================
   // ФУНКЦИИ ТЕКСТОВОГО ЧАТА
@@ -1141,887 +1087,48 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   };
 
   // ================================
-  // ФУНКЦИИ ГОЛОСОВОГО ЧАТА
+  // TTS ДЛЯ КНОПКИ "ПРОЧЕСТЬ ВСЛУХ"
   // ================================
-
-  // Подключение к WebSocket голосового чата
-  const connectVoiceWebSocket = () => {
-    if (voiceSocket && voiceSocket.readyState === WebSocket.OPEN) {
-      return; // Уже подключен
-    }
-    
-    const ws = new WebSocket(getWsUrl('/ws/voice'));
-    setVoiceSocket(ws);
-    
-    ws.onopen = () => {
-      setIsVoiceConnected(true);
-      showNotification('success', 'Голосовой чат подключен');
-      
-    };
-    
-    ws.onmessage = (event) => {
-      try {
-        if (typeof event.data === 'string') {
-          const data = JSON.parse(event.data);
-          
-          
-          switch (data.type) {
-            case 'listening_started':
-              showNotification('success', 'Готов к приему голоса');
-              break;
-              
-            case 'speech_recognized':
-              // Обновляем real-time текст
-              
-              setRealtimeText(prev => prev + ' ' + data.text);
-              showNotification('success', 'Речь распознана в реальном времени');
-              break;
-              
-            case 'ai_response':
-              // Получаем ответ от AI
-              
-              setRecordedText(data.text);
-              showNotification('success', 'Получен ответ от astrachat');
-              break;
-              
-            case 'speech_error':
-              
-              showNotification('warning', data.error || 'Ошибка распознавания речи');
-              break;
-              
-            case 'tts_error':
-              
-              showNotification('error', data.error || 'Ошибка синтеза речи');
-              break;
-              
-            case 'error':
-              
-              showNotification('error', data.error || 'Ошибка WebSocket');
-              break;
-              
-            default:
-              
-          }
-        } else if (event.data instanceof Blob) {
-          // Получены аудио данные для воспроизведения
-          
-          playAudioResponse(event.data);
-        }
-      } catch (error) {
-        
-      }
-    };
-    
-    ws.onerror = (error) => {
-      setIsVoiceConnected(false);
-      showNotification('error', 'Ошибка подключения к голосовому чату');
-      
-      
-      // Автоматически переподключаемся через 5 секунд, только если разрешено
-      setTimeout(() => {
-        if (!isVoiceConnected && shouldReconnect) {
-          showNotification('info', 'Попытка переподключения...');
-          connectVoiceWebSocket();
-        }
-      }, 5000);
-    };
-    
-    ws.onclose = (event) => {
-      setIsVoiceConnected(false);
-      setVoiceSocket(null);
-      
-      // Автоматически переподключаемся если соединение закрылось неожиданно, только если разрешено
-      if (event.code !== 1000 && shouldReconnect) { // 1000 = нормальное закрытие
-        showNotification('warning', 'Соединение с голосовым чатом закрыто, переподключаюсь...');
-        setTimeout(() => {
-          if (!isVoiceConnected && shouldReconnect) {
-            connectVoiceWebSocket();
-          }
-        }, 3000);
-      } else {
-        
-      }
-    };
-  };
-
-  // Функция очистки всех ресурсов
-  const cleanupVoiceResources = () => {
-    
-    
-    // Останавливаем таймер тишины
-    if (silenceTimerRef.current) {
-      clearTimeout(silenceTimerRef.current);
-      silenceTimerRef.current = null;
-      
-    }
-    
-    // Останавливаем анимацию
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = null;
-      
-    }
-    
-    // Останавливаем запись
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-      mediaRecorderRef.current = null;
-      
-    }
-    
-    // Останавливаем медиа поток
-    if (currentStreamRef.current) {
-      currentStreamRef.current.getTracks().forEach(track => track.stop());
-      currentStreamRef.current = null;
-      
-    }
-    
-    // Закрываем аудио контекст
-    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-      audioContextRef.current.close();
-      audioContextRef.current = null;
-      
-    }
-    
-    // Останавливаем воспроизведение
-    if (currentAudioRef.current) {
-      currentAudioRef.current.pause();
-      currentAudioRef.current.src = '';
-      currentAudioRef.current = null;
-      
-    }
-    
-    // Закрываем WebSocket соединение
-    if (voiceSocket && voiceSocket.readyState === WebSocket.OPEN) {
-      voiceSocket.close();
-      setVoiceSocket(null);
-      
-    }
-    
-    // Сбрасываем локальные состояния
-    setIsRecording(false);
-    setIsProcessing(false);
-    setIsSpeaking(false);
-    setRecordingTime(0);
-    setRealtimeText('');
-    setAudioLevel(0);
-    
-    // Сбрасываем глобальные состояния
-    setRecording(false);
-    setSpeaking(false);
-    
-    
-    showNotification('info', 'Все процессы остановлены');
-  };
-
-  // Функция для проверки тишины и автоматической остановки
-  const checkSilence = () => {
-    if (audioLevel < silenceThreshold) {
-      // Если уровень звука ниже порога, запускаем таймер
-      if (!silenceTimerRef.current) {
-        silenceTimerRef.current = setTimeout(() => {
-          
-          stopRecording();
-          showNotification('info', 'Автоматическая остановка: не обнаружена речь');
-        }, silenceTimeout);
-      }
-    } else {
-      // Если есть звук, сбрасываем таймер
-      if (silenceTimerRef.current) {
-        clearTimeout(silenceTimerRef.current);
-        silenceTimerRef.current = null;
-      }
-    }
-  };
-
-  // Функция воспроизведения аудио ответа
-  const playAudioResponse = async (audioBlob: Blob) => {
-    try {
-      
-      const audioUrl = URL.createObjectURL(audioBlob);
-      const audio = new Audio(audioUrl);
-      currentAudioRef.current = audio;
-      
-      audio.onended = () => {
-        setIsSpeaking(false);
-        setIsProcessing(false);
-        URL.revokeObjectURL(audioUrl);
-        currentAudioRef.current = null;
-        
-        showNotification('success', 'Готов к следующему запросу');
-      };
-      
-      audio.onerror = () => {
-        setIsSpeaking(false);
-        setIsProcessing(false);
-        showNotification('error', 'Ошибка воспроизведения речи');
-        URL.revokeObjectURL(audioUrl);
-        currentAudioRef.current = null;
-        
-      };
-      
-      // Устанавливаем isProcessing в false когда начинается воспроизведение,
-      // чтобы синяя волна размышлений скрылась, а зеленая волна звука появилась
-      setIsProcessing(false);
-      setIsSpeaking(true);
-      await audio.play();
-      
-    } catch (error) {
-      
-      setIsSpeaking(false);
-      setIsProcessing(false);
-      showNotification('error', 'Ошибка воспроизведения речи');
-    }
-  };
-
-  // Функция отправки real-time чанка для распознавания
-  const sendRealtimeChunk = async () => {
-    if (audioChunksRef.current.length > 0 && voiceSocket && voiceSocket.readyState === WebSocket.OPEN) {
-      try {
-        // Берем последний чанк для real-time распознавания
-        const lastChunk = audioChunksRef.current[audioChunksRef.current.length - 1];
-        
-        
-        // Отправляем через WebSocket для быстрого распознавания
-        voiceSocket.send(lastChunk);
-        
-        
-      } catch (error) {
-        
-      }
-    }
-  };
-
-  const startRecording = async (): Promise<void> => {
-    try {
-      // Включаем автопереподключение
-      setShouldReconnect(true);
-      
-      // Подключаем WebSocket если не подключен
-      if (!isVoiceConnected || !voiceSocket || voiceSocket.readyState !== WebSocket.OPEN) {
-        showNotification('info', 'Подключаю голосовой чат...');
-        connectVoiceWebSocket();
-      }
-      
-      // Отправляем команду start_listening
-      if (voiceSocket && voiceSocket.readyState === WebSocket.OPEN) {
-        voiceSocket.send(JSON.stringify({ type: 'start_listening' }));
-        showNotification('info', 'Отправляю команду начала прослушивания...');
-      }
-    
-      // Очищаем предыдущие ресурсы перед началом новой записи
-      if (currentStreamRef.current) {
-        currentStreamRef.current.getTracks().forEach(track => track.stop());
-      }
-      
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        } 
-      });
-      currentStreamRef.current = stream;
-      
-      // Настройка аудио контекста для визуализации
-      audioContextRef.current = new AudioContext();
-      analyserRef.current = audioContextRef.current.createAnalyser();
-      const source = audioContextRef.current.createMediaStreamSource(stream);
-      source.connect(analyserRef.current);
-      
-      analyserRef.current.fftSize = 256;
-      const bufferLength = analyserRef.current.frequencyBinCount;
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const dataArray = new Uint8Array(bufferLength);
-      
-      // Настройка MediaRecorder - пытаемся выбрать лучший формат для распознавания речи
-      let selectedOptions = undefined;
-      
-      // Попробуем различные форматы в порядке предпочтения
-      const preferredMimeTypes = [
-        'audio/wav',
-        'audio/webm;codecs=pcm',
-        'audio/webm;codecs=opus',
-        'audio/webm',
-        'audio/mp4',
-        'audio/ogg;codecs=opus'
-      ];
-      
-      for (const mimeType of preferredMimeTypes) {
-        if (MediaRecorder.isTypeSupported(mimeType)) {
-          selectedOptions = { mimeType };
-          break;
-        }
-      }
-      
-      if (!selectedOptions) {
-        mediaRecorderRef.current = new MediaRecorder(stream);
-      } else {
-        mediaRecorderRef.current = new MediaRecorder(stream, selectedOptions);
-      }
-      
-      audioChunksRef.current = [];
-
-      mediaRecorderRef.current.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          
-          audioChunksRef.current.push(event.data);
-        }
-      };
-
-      mediaRecorderRef.current.onstop = async () => {
-        
-        
-        setIsProcessing(true);
-        
-        try {
-          // Создаем Blob из записанных чанков
-          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
-          
-          
-          // Проверяем размер аудио данных
-          if (audioBlob.size < 100) {
-            showNotification('warning', 'Запись слишком короткая, попробуйте еще раз');
-            setIsProcessing(false);
-            return;
-          }
-          
-          // Отправляем аудио через WebSocket для real-time обработки
-          if (voiceSocket && voiceSocket.readyState === WebSocket.OPEN) {
-            
-            voiceSocket.send(audioBlob);
-            showNotification('info', 'Отправляю голос на обработку...');
-          } else {
-            // Fallback на старый метод, если WebSocket не работает
-            
-            showNotification('warning', 'WebSocket не подключен, использую fallback...');
-            await processAudio(audioBlob);
-            setIsProcessing(false);
-          }
-        } catch (error) {
-          
-          showNotification('error', 'Ошибка обработки аудио');
-          setIsProcessing(false);
-        }
-      };
-
-      mediaRecorderRef.current.onerror = (event) => {
-        showNotification('error', 'Ошибка записи аудио');
-        setIsRecording(false);
-      };
-
-      mediaRecorderRef.current.start(1000); // Записываем по 1 секунде
-      
-      setIsRecording(true);
-      
-      // Запускаем отслеживание аудио уровня и тишины
-      updateAudioLevel();
-      
-      showNotification('info', 'Запись началась. Говорите...');
-       
-     } catch (error) {
-        const errorObj = error as any;
-        if (errorObj?.name === 'NotAllowedError') {
-          showNotification('error', 'Доступ к микрофону заблокирован. Разрешите доступ в браузере.');
-        } else if (errorObj?.name === 'NotFoundError') {
-          showNotification('error', 'Микрофон не найден');
-        } else {
-          showNotification('error', 'Не удалось получить доступ к микрофону');
-        }
-        setIsRecording(false);
-      }
-  };
-
-  const stopRecording = (): void => {
-    
-    
-    // Отключаем автопереподключение WebSocket
-    setShouldReconnect(false);
-    
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      mediaRecorderRef.current = null;
-      
-    }
-    
-    // Останавливаем медиа поток
-    if (currentStreamRef.current) {
-      currentStreamRef.current.getTracks().forEach(track => {
-        track.stop();
-        
-      });
-      currentStreamRef.current = null;
-    }
-    
-    // Останавливаем анимацию
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = null;
-      
-    }
-    
-    // Закрываем аудио контекст
-    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-      audioContextRef.current.close();
-      audioContextRef.current = null;
-      
-    }
-    
-    // Останавливаем таймер тишины
-    if (silenceTimerRef.current) {
-      clearTimeout(silenceTimerRef.current);
-      silenceTimerRef.current = null;
-      
-    }
-    
-    setIsRecording(false);
-    setAudioLevel(0);
-    setRealtimeText('');
-    setRecordingTime(0);
-    
-    
-    showNotification('info', 'Прослушивание остановлено');
-    
-    // WebSocket остается активным для следующего использования, но переподключение отключено
-  };
-
-  // Обновляем функцию updateAudioLevel для отслеживания тишины
-  const updateAudioLevel = () => {
-    if (analyserRef.current && isRecording) {
-      analyserRef.current.getByteFrequencyData(new Uint8Array(analyserRef.current.frequencyBinCount));
-      const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
-      analyserRef.current.getByteFrequencyData(dataArray);
-      
-      const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
-      const normalizedLevel = average / 255;
-      
-      setAudioLevel(normalizedLevel);
-      lastAudioLevelRef.current = normalizedLevel;
-      
-      // Проверяем тишину
-      checkSilence();
-      
-      animationFrameRef.current = requestAnimationFrame(updateAudioLevel);
-    }
-  };
-
-  const processAudio = async (audioBlob: Blob): Promise<void> => {
-    if (!isConnected) {
-      showNotification('error', 'Нет соединения с сервером');
-      return;
-    }
-
-    
-    setIsProcessing(true);
-    
-    try {
-      // Отправляем аудио на сервер для распознавания
-      const formData = new FormData();
-      formData.append('audio_file', audioBlob, 'recording.wav');
-
-      
-      const response = await fetch(getApiUrl(API_ENDPOINTS.VOICE_RECOGNIZE), {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        
-        showNotification('error', `Ошибка распознавания: ${response.status}`);
-        return;
-      }
-
-      const result = await response.json();
-      
-      
-      if (result.success) {
-        const recognizedText = result.text;
-        
-        setRecordedText(recognizedText);
-        
-        if (recognizedText && recognizedText.trim()) {
-          showNotification('success', 'Речь распознана');
-          
-          // Автоматически отправляем распознанный текст на обработку
-          await sendVoiceMessage(recognizedText);
-        } else {
-          showNotification('warning', 'Речь не распознана. Попробуйте еще раз.');
-        }
-      } else {
-        showNotification('error', 'Ошибка распознавания речи');
-      }
-    } catch (error) {
-      
-      showNotification('error', 'Ошибка подключения к серверу распознавания');
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  const sendVoiceMessage = async (text: string) => {
-    try {
-      
-      
-      // Отправляем текст в чат
-      const response = await fetch(getApiUrl(API_ENDPOINTS.CHAT), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          message: text,
-          streaming: false,
-        }),
-      });
-
-      const result = await response.json();
-      
-      
-      if (result.success) {
-        
-        // Синтезируем речь из ответа
-        await synthesizeSpeech(result.response);
-      } else {
-        
-        showNotification('error', 'Ошибка получения ответа от astrachat');
-      }
-    } catch (error) {
-      
-      showNotification('error', 'Ошибка отправки сообщения');
-    }
-  };
 
   const synthesizeSpeech = async (text: string) => {
     if (!text.trim()) return;
-
-  
-
-    // Останавливаем предыдущее воспроизведение
     if (currentAudioRef.current) {
-      currentAudioRef.current.pause();
-      currentAudioRef.current.src = '';
-      currentAudioRef.current = null;
+      currentAudioRef.current.pause(); currentAudioRef.current.src = ''; currentAudioRef.current = null;
     }
-
     setIsSpeaking(true);
-    
     try {
-      const requestBody = {
-        text: text,
-        voice_id: voiceSettings.voice_id,
-        voice_speaker: voiceSettings.voice_speaker,
-        speech_rate: voiceSettings.speech_rate
-      };
-      
-      
-      
       const response = await fetch(getApiUrl(API_ENDPOINTS.VOICE_SYNTHESIZE), {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text,
+          voice_id: voiceSettingsTTS.voice_id,
+          voice_speaker: voiceSettingsTTS.voice_speaker,
+          speech_rate: voiceSettingsTTS.speech_rate,
+        }),
       });
-
       if (response.ok) {
         const audioBlob = await response.blob();
-        
-        
         const audioUrl = URL.createObjectURL(audioBlob);
         const audio = new Audio(audioUrl);
-        
         currentAudioRef.current = audio;
-        
         audio.onended = () => {
-          setIsSpeaking(false);
-          URL.revokeObjectURL(audioUrl);
-          currentAudioRef.current = null;
-          
+          setIsSpeaking(false); URL.revokeObjectURL(audioUrl); currentAudioRef.current = null;
         };
-        
         audio.onerror = () => {
-          setIsSpeaking(false);
-          showNotification('error', 'Ошибка воспроизведения речи');
-          URL.revokeObjectURL(audioUrl);
-          currentAudioRef.current = null;
-          
+          setIsSpeaking(false); showNotification('error', 'Ошибка воспроизведения речи');
+          URL.revokeObjectURL(audioUrl); currentAudioRef.current = null;
         };
-        
         await audio.play();
-        
       } else {
-        const errorText = await response.text();
-        
-        throw new Error(`HTTP ${response.status}: ${errorText}`);
+        setIsSpeaking(false);
+        showNotification('error', 'Ошибка синтеза речи');
       }
-    } catch (error) {
-      
-      showNotification('error', 'Ошибка синтеза речи');
+    } catch {
       setIsSpeaking(false);
+      showNotification('error', 'Ошибка синтеза речи');
     }
   };
-
-  const handleManualSend = () => {
-    if (recordedText.trim()) {
-      sendVoiceMessage(recordedText);
-      setRecordedText('');
-    }
-  };
-
-  // Функция для сохранения настроек голоса в localStorage
-  const saveVoiceSettings = (settings: typeof voiceSettings) => {
-    
-    localStorage.setItem('voice_speaker', settings.voice_speaker);
-    localStorage.setItem('voice_id', settings.voice_id);
-    localStorage.setItem('speech_rate', settings.speech_rate.toString());
-    
-  };
-
-  // Функция для переключения голоса
-  const switchVoice = (direction: 'next' | 'prev') => {
-    const voices = Object.keys(voiceTestMessages);
-    let newIndex;
-    
-    if (direction === 'next') {
-      newIndex = currentVoiceIndex === voices.length - 1 ? 0 : currentVoiceIndex + 1;
-    } else {
-      newIndex = currentVoiceIndex === 0 ? voices.length - 1 : currentVoiceIndex - 1;
-    }
-    
-    const newVoice = voices[newIndex];
-    
-    // Останавливаем предыдущее воспроизведение перед переключением
-    if (currentAudioRef.current) {
-      currentAudioRef.current.pause();
-      currentAudioRef.current.src = '';
-      currentAudioRef.current = null;
-    }
-    
-    // Сбрасываем состояние воспроизведения
-    setIsSpeaking(false);
-    setCurrentTestVoice(null);
-    
-    setCurrentVoiceIndex(newIndex);
-    const newSettings = { ...voiceSettings, voice_speaker: newVoice };
-    setVoiceSettings(newSettings);
-    saveVoiceSettings(newSettings); // Сохраняем в localStorage
-    
-    testVoice(newVoice);
-  };
-
-  // Функция тестирования голоса
-  const testVoice = async (voiceName: string) => {
-    try {
-      
-      
-      // Останавливаем предыдущее воспроизведение
-      if (currentAudioRef.current) {
-        currentAudioRef.current.pause();
-        currentAudioRef.current.src = '';
-        currentAudioRef.current = null;
-      }
-      
-      // Сбрасываем состояние воспроизведения, но НЕ устанавливаем isSpeaking для тестирования
-      setCurrentTestVoice(voiceName);
-      
-      // Используем предзаписанное сообщение для быстрого тестирования
-      const testMessage = voiceTestMessages[voiceName as keyof typeof voiceTestMessages];
-      
-      const requestBody = {
-        text: testMessage,
-        voice_id: voiceSettings.voice_id,
-        voice_speaker: voiceName,
-        speech_rate: voiceSettings.speech_rate
-      };
-      
-      
-      
-      const response = await fetch(getApiUrl(API_ENDPOINTS.VOICE_SYNTHESIZE), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      });
-
-      if (response.ok) {
-        const audioBlob = await response.blob();
-        const audioUrl = URL.createObjectURL(audioBlob);
-        const audio = new Audio(audioUrl);
-        
-        
-        
-        audio.onended = () => {
-          
-          setCurrentTestVoice(null);
-          // НЕ устанавливаем setIsSpeaking(false) для тестирования
-          URL.revokeObjectURL(audioUrl);
-        };
-        
-        audio.onerror = () => {
-          
-          setCurrentTestVoice(null);
-          // НЕ устанавливаем setIsSpeaking(false) для тестирования
-          showNotification('error', 'Ошибка воспроизведения тестового голоса');
-          URL.revokeObjectURL(audioUrl);
-        };
-        
-        // Сохраняем ссылку на текущий аудио элемент
-        currentAudioRef.current = audio;
-        
-        try {
-          await audio.play();
-          
-          // НЕ устанавливаем setIsSpeaking(true) для тестирования
-          showNotification('success', `Тестирую голос ${voiceName}...`);
-        } catch (playError) {
-          
-          showNotification('error', 'Ошибка запуска воспроизведения тестового голоса');
-          setCurrentTestVoice(null);
-        }
-      } else {
-        const errorText = await response.text();
-        
-        setCurrentTestVoice(null);
-        // НЕ устанавливаем setIsSpeaking(false) для тестирования
-        throw new Error(`HTTP ${response.status}: ${errorText}`);
-      }
-    } catch (error) {
-      
-      setCurrentTestVoice(null);
-      // НЕ устанавливаем setIsSpeaking(false) для тестирования
-      showNotification('error', `Ошибка тестирования голоса: ${error instanceof Error ? error.message : 'Неизвестная ошибка'}`);
-    }
-  };
-
-  // Таймер записи и real-time распознавание
-  useEffect(() => {
-    let interval: NodeJS.Timeout;
-    
-    if (isRecording) {
-      interval = setInterval(() => {
-        setRecordingTime(prev => prev + 1);
-        
-        // Каждые 2 секунды отправляем текущий чанк для real-time распознавания
-        if (recordingTime > 0 && recordingTime % 2 === 0 && audioChunksRef.current.length > 0) {
-          sendRealtimeChunk();
-        }
-      }, 1000);
-    } else {
-      setRecordingTime(0);
-      setRealtimeText(''); // Очищаем real-time текст при остановке
-    }
-    
-    return () => {
-      if (interval) {
-        clearInterval(interval);
-      }
-    };
-  }, [isRecording, recordingTime]);
-
-  // Обновление глобального состояния
-  useEffect(() => {
-    setRecording(isRecording);
-  }, [isRecording]);
-  
-  useEffect(() => {
-    setSpeaking(isSpeaking);
-  }, [isSpeaking]);
-
-  // Очистка ресурсов при размонтировании компонента
-  useEffect(() => {
-    return () => {
-      // Очищаем только аудио ресурсы, WebSocket оставляем активным
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-        animationFrameRef.current = null;
-      }
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        mediaRecorderRef.current.stop();
-        mediaRecorderRef.current = null;
-      }
-      if (currentStreamRef.current) {
-        currentStreamRef.current.getTracks().forEach(track => track.stop());
-        currentStreamRef.current = null;
-      }
-      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-        audioContextRef.current.close();
-        audioContextRef.current = null;
-      }
-      if (currentAudioRef.current) {
-        currentAudioRef.current.pause();
-        currentAudioRef.current.src = '';
-        currentAudioRef.current = null;
-      }
-      // Сбрасываем глобальное состояние
-      setRecording(false);
-      setSpeaking(false);
-    };
-  }, []); // Убираем зависимости, чтобы избежать бесконечного цикла
-
-  // Принудительная очистка при любых попытках навигации
-  useEffect(() => {
-    // Обработчик события beforeunload для принудительной очистки
-    const handleBeforeUnload = () => {
-      // Очищаем только аудио ресурсы, WebSocket оставляем активным
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-        animationFrameRef.current = null;
-      }
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        mediaRecorderRef.current.stop();
-        mediaRecorderRef.current = null;
-      }
-      if (currentStreamRef.current) {
-        currentStreamRef.current.getTracks().forEach(track => track.stop());
-        currentStreamRef.current = null;
-      }
-      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-        audioContextRef.current.close();
-        audioContextRef.current = null;
-      }
-      if (currentAudioRef.current) {
-        currentAudioRef.current.pause();
-        currentAudioRef.current.src = '';
-        currentAudioRef.current = null;
-      }
-      setRecording(false);
-      setSpeaking(false);
-    };
-
-    // Добавляем обработчик
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    
-    // Очистка при размонтировании компонента
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-      // Очищаем только аудио ресурсы, WebSocket оставляем активным
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-        animationFrameRef.current = null;
-      }
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        mediaRecorderRef.current.stop();
-        mediaRecorderRef.current = null;
-      }
-      if (currentStreamRef.current) {
-        currentStreamRef.current.getTracks().forEach(track => track.stop());
-        currentStreamRef.current = null;
-      }
-      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-        audioContextRef.current.close();
-        audioContextRef.current = null;
-      }
-      if (currentAudioRef.current) {
-        currentAudioRef.current.pause();
-        currentAudioRef.current.src = '';
-        currentAudioRef.current = null;
-      }
-      setRecording(false);
-      setSpeaking(false);
-    };
-  }, []); // Убираем зависимости, чтобы избежать бесконечного цикла
 
   // ================================
   // ФУНКЦИИ РАБОТЫ С ДОКУМЕНТАМИ
@@ -2280,11 +1387,6 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     if (currentChat) {
       clearMessages(currentChat.id);
     }
-    handleMenuClose();
-  };
-
-  const handleReconnect = (): void => {
-    reconnect();
     handleMenuClose();
   };
 
@@ -2915,697 +2017,6 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   // ДИАЛОГИ
   // ================================
 
-  const VoiceDialog = (): React.ReactElement => (
-    <Dialog
-      open={showVoiceDialog}
-      onClose={() => setShowVoiceDialog(false)}
-      maxWidth="md"
-      fullWidth
-      TransitionComponent={undefined}
-      transitionDuration={0}
-      PaperProps={{
-        sx: {
-          bgcolor: 'background.paper',
-          borderRadius: 3,
-        }
-      }}
-    >
-      <DialogTitle sx={{ textAlign: 'center', pb: 1 }}>
-        Голосовой чат
-      </DialogTitle>
-      <DialogContent sx={{ textAlign: 'center', py: 3 }}>
-        {/* Индикатор подключения WebSocket */}
-        <Box sx={{ mb: 3, display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 1 }}>
-          <Box
-            sx={{
-              width: 12,
-              height: 12,
-              borderRadius: '50%',
-              backgroundColor: isVoiceConnected ? 'success.main' : 'warning.main',
-              animation: isVoiceConnected ? 'pulse 2s ease-in-out infinite' : 'none',
-              border: isVoiceConnected ? '2px solid rgba(76, 175, 80, 0.3)' : '2px solid rgba(255, 152, 0, 0.3)',
-            }}
-          />
-          <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
-            {isVoiceConnected ? 'Real-Time Голосовой Чат' : 'WebSocket подключится при записи'}
-          </Typography>
-        </Box>
-
-        {/* Кнопка настроек голоса - в левом нижнем углу */}
-        <Box sx={{ 
-          position: 'absolute', 
-          bottom: 20, 
-          left: 20,
-          zIndex: 10
-        }}>
-          <Tooltip title="Настройки голоса">
-            <IconButton
-              onClick={() => setShowVoiceSettings(!showVoiceSettings)}
-              sx={{
-                color: 'primary.main',
-                bgcolor: 'background.default',
-                border: '2px solid',
-                borderColor: 'primary.main',
-                width: 48,
-                height: 48,
-                '&:hover': {
-                  bgcolor: 'primary.main',
-                  color: 'white',
-                  transform: 'scale(1.05)',
-                },
-                transition: 'all 0.3s ease',
-                animation: showVoiceSettings ? 'spin 2s linear infinite' : 'none',
-                '@keyframes spin': {
-                  '0%': { transform: 'rotate(0deg)' },
-                  '100%': { transform: 'rotate(360deg)' },
-                },
-              }}
-            >
-              <SettingsIcon />
-            </IconButton>
-          </Tooltip>
-        </Box>
-
-        {/* Кнопка остановки всех процессов - справа на уровне кнопки настроек */}
-        <Box sx={{ 
-          position: 'absolute', 
-          bottom: 20, 
-          right: 20,
-          zIndex: 10
-        }}>
-          {(isRecording || isProcessing || isSpeaking || (voiceSocket && voiceSocket.readyState === WebSocket.OPEN)) && (
-            <Tooltip title="Остановить все процессы">
-              <IconButton
-                onClick={cleanupVoiceResources}
-                sx={{
-                  color: 'error.main',
-                  bgcolor: 'background.default',
-                  border: '2px solid',
-                  borderColor: 'error.main',
-                  width: 48,
-                  height: 48,
-                  '&:hover': {
-                    bgcolor: 'error.main',
-                    color: 'white',
-                    transform: 'scale(1.05)',
-                  },
-                  transition: 'all 0.3s ease',
-                }}
-              >
-                <StopIcon />
-              </IconButton>
-            </Tooltip>
-          )}
-        </Box>
-
-        {/* Меню выбора голоса - скрыто по умолчанию */}
-        <Collapse in={showVoiceSettings}>
-          <Card sx={{ mb: 3, p: 2, backgroundColor: 'background.default' }}>
-            <Typography variant="subtitle2" color="primary" gutterBottom sx={{ textAlign: 'center', mb: 3 }}>
-              Выберите голос:
-            </Typography>
-            
-            {/* Слайдер с кружками */}
-            <Box sx={{ 
-              display: 'flex', 
-              justifyContent: 'center', 
-              alignItems: 'center', 
-              gap: 1,
-              position: 'relative',
-              height: 120,
-              overflow: 'hidden'
-            }}>
-              {/* Стрелка влево - максимально близко к левому кругу */}
-              <IconButton
-                onClick={() => switchVoice('prev')}
-                sx={{ 
-                  color: 'text.secondary',
-                  '&:hover': { color: 'primary.main' },
-                  zIndex: 2,
-                  position: 'absolute',
-                  left: 220,
-                  top: '50%',
-                  transform: 'translateY(-50%)'
-                }}
-              >
-                <ChevronLeftIcon />
-              </IconButton>
-
-              {/* Контейнер для кружков - центрируем точно над счетчиком */}
-              <Box sx={{ 
-                display: 'flex', 
-                alignItems: 'center', 
-                gap: 2,
-                position: 'relative',
-                width: 400,
-                height: 100,
-                mx: 'auto', // Центрируем контейнер
-                ml: '168px' // Сдвигаем левее для совпадения с счетчиком
-              }}>
-                {Object.entries(voiceTestMessages).map(([voiceKey, testMessage], index) => {
-                  const isSelected = voiceSettings.voice_speaker === voiceKey;
-                  const isPlaying = isSpeaking && currentTestVoice === voiceKey;
-                  
-                                     // Вычисляем позицию и размер для каждого кружка
-                  const distance = Math.abs(index - currentVoiceIndex);
-                  let size, opacity, scale, zIndex, translateX;
-                  
-                  if (distance === 0) {
-                    // Активный кружок - большой и по центру
-                    size = 80;
-                    opacity = 1;
-                    scale = 1;
-                    zIndex = 3;
-                    translateX = 0;
-                  } else if (distance === 1) {
-                    // Соседние кружки - средние и по бокам
-                    size = 60;
-                    opacity = 0.7;
-                    scale = 0.8;
-                    zIndex = 2;
-                    translateX = index < currentVoiceIndex ? -62 : 81; // Одинаковое расстояние в обе стороны
-                  } else {
-                    // Дальние кружки - маленькие и на заднем плане
-                    size = 40;
-                    opacity = 0.3;
-                    scale = 0.6;
-                    zIndex = 1;
-                    translateX = index < currentVoiceIndex ? -95 : 134 // Одинаковое расстояние в обе стороны
-                  }
-                  
-                  return (
-                    <Box
-                      key={voiceKey}
-                      sx={{
-                        position: 'absolute',
-                        left: '50%',
-                        transform: `translateX(${translateX}px)`,
-                        cursor: 'pointer',
-                        transition: 'all 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
-                        zIndex,
-                      }}
-                      onClick={() => {
-                        setCurrentVoiceIndex(index);
-                        const newSettings = { ...voiceSettings, voice_speaker: voiceKey };
-                        setVoiceSettings(newSettings);
-                        saveVoiceSettings(newSettings); // Сохраняем в localStorage
-                        
-                        testVoice(voiceKey);
-                      }}
-                    >
-                      {/* Основной круг с анимацией переливания */}
-                      <Box
-                        sx={{
-                          width: size,
-                          height: size,
-                          borderRadius: '50%',
-                          background: isSelected 
-                            ? 'linear-gradient(135deg, #ff6b9d 0%, #c44569 50%, #ff6b9d 100%)'
-                            : 'linear-gradient(135deg, #667eea 0%, #764ba2 50%, #667eea 100%)',
-                          backgroundSize: '200% 200%',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          boxShadow: isSelected 
-                            ? '0 8px 25px rgba(255, 107, 157, 0.4)'
-                            : '0 4px 15px rgba(102, 126, 234, 0.3)',
-                          transition: 'all 0.3s ease',
-                          opacity,
-                          transform: `scale(${scale})`,
-                          outline: 'none',
-                          border: 'none',
-                          animation: isSelected 
-                            ? 'gradientShift 3s ease-in-out infinite, float 2s ease-in-out infinite'
-                            : 'gradientShift 4s ease-in-out infinite',
-                          '@keyframes gradientShift': {
-                            '0%': { backgroundPosition: '0% 50%' },
-                            '50%': { backgroundPosition: '100% 50%' },
-                            '100%': { backgroundPosition: '0% 50%' },
-                          },
-                          '@keyframes float': {
-                            '0%, 100%': { transform: `scale(${scale}) translateY(0px)` },
-                            '50%': { transform: `scale(${scale}) translateY(-3px)` },
-                          },
-                          '&:hover': {
-                            transform: `scale(${scale * 1.05})`,
-                            boxShadow: isSelected 
-                              ? '0 12px 35px rgba(255, 107, 157, 0.6)'
-                              : '0 8px 25px rgba(102, 126, 234, 0.5)',
-                            animation: 'gradientShift 1.5s ease-in-out infinite, float 1s ease-in-out infinite',
-                            outline: 'none',
-                            border: 'none',
-                          },
-                          '&:focus': {
-                            outline: 'none',
-                            border: 'none',
-                          }
-                        }}
-                      >
-                        {/* Добавляем внутренний блеск */}
-                        <Box
-                          sx={{
-                            position: 'absolute',
-                            top: '15%',
-                            left: '15%',
-                            width: '30%',
-                            height: '30%',
-                            borderRadius: '50%',
-                            background: 'radial-gradient(circle, rgba(255,255,255,0.4) 0%, transparent 70%)',
-                            animation: 'sparkle 2s ease-in-out infinite',
-                            '@keyframes sparkle': {
-                              '0%, 100%': { opacity: 0.4, transform: 'scale(1)' },
-                              '50%': { opacity: 0.8, transform: 'scale(1.2)' },
-                            }
-                          }}
-                        />
-                      </Box>
-
-                      {/* Индикатор воспроизведения */}
-                      {isPlaying && (
-                        <Box
-                          sx={{
-                            position: 'absolute',
-                            top: -5,
-                            right: -5,
-                            width: 20,
-                            height: 20,
-                            borderRadius: '50%',
-                            backgroundColor: 'success.main',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            animation: 'pulse 1s infinite',
-                            '@keyframes pulse': {
-                              '0%': { transform: 'scale(1)', opacity: 1 },
-                              '50%': { transform: 'scale(1.2)', opacity: 0.7 },
-                              '100%': { transform: 'scale(1)', opacity: 1 },
-                            }
-                          }}
-                        >
-                          <VolumeUpIcon sx={{ fontSize: 12, color: 'white' }} />
-                        </Box>
-                      )}
-
-                      {/* Название голоса - показываем только для активного */}
-                      {isSelected && (
-                        <Typography
-                          variant="caption"
-                          sx={{
-                            textAlign: 'center',
-                            mt: 1,
-                            display: 'block',
-                            fontWeight: 'bold',
-                            color: 'primary.main',
-                            opacity: 1,
-                            fontSize: size * 0.2,
-                            whiteSpace: 'nowrap'
-                          }}
-                        >
-                          {voiceKey === 'baya' && 'Baya'}
-                          {voiceKey === 'xenia' && 'Xenia'}
-                          {voiceKey === 'kseniya' && 'Kseniya'}
-                          {voiceKey === 'aidar' && 'Aidar'}
-                          {voiceKey === 'eugene' && 'Eugene'}
-                        </Typography>
-                      )}                    
-                    </Box>
-                  );
-                })}
-              </Box>
-
-              {/* Стрелка вправо - максимально близко к правому кругу */}
-              <IconButton
-                onClick={() => switchVoice('next')}
-                sx={{ 
-                  color: 'text.secondary',
-                  '&:hover': { color: 'primary.main' },
-                  zIndex: 2,
-                  position: 'absolute',
-                  right: 220,
-                  top: '50%',
-                  transform: 'translateY(-50%)'
-                }}
-              >
-                <ChevronRightIcon />
-              </IconButton>
-            </Box>
-
-            {/* Индикатор текущего выбора */}
-            <Box sx={{ textAlign: 'center', mt: 2 }}>
-              <Typography variant="body2" color="text.secondary">
-                {currentVoiceIndex + 1} / {Object.keys(voiceTestMessages).length}
-              </Typography>
-            </Box>
-
-            {/* Настройка скорости речи ассистента */}
-            <Box sx={{ mt: 3, px: 2 }}>
-              <Typography variant="subtitle2" color="primary" gutterBottom sx={{ textAlign: 'center', mb: 2 }}>
-                Скорость речи ассистента:
-              </Typography>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1 }}>
-                <Typography variant="caption" color="text.secondary" sx={{ minWidth: 40 }}>
-                  Медленно
-                </Typography>
-                <Slider
-                  value={voiceSettings.speech_rate}
-                  onChange={(_, value) => {
-                    const newSettings = { ...voiceSettings, speech_rate: value as number };
-                    console.log('Слайдер скорости речи изменен:', {
-                      старое_значение: voiceSettings.speech_rate,
-                      новое_значение: value,
-                      тип_значения: typeof value
-                    });
-                    setVoiceSettings(newSettings);
-                    saveVoiceSettings(newSettings);
-                    
-                  }}
-                  min={0.5}
-                  max={2.0}
-                  step={0.1}
-                  marks={[
-                    { value: 0.5, label: '0.5x' },
-                    { value: 1.0, label: '1.0x' },
-                    { value: 1.5, label: '1.5x' },
-                    { value: 2.0, label: '2.0x' }
-                  ]}
-                  valueLabelDisplay="auto"
-                  sx={{
-                    flex: 1,
-                    '& .MuiSlider-mark': {
-                      backgroundColor: 'primary.main',
-                    },
-                    '& .MuiSlider-markLabel': {
-                      color: 'text.secondary',
-                      fontSize: '0.75rem',
-                    },
-                    '& .MuiSlider-valueLabel': {
-                      backgroundColor: 'primary.main',
-                      color: 'white',
-                    }
-                  }}
-                />
-                <Typography variant="caption" color="text.secondary" sx={{ minWidth: 40 }}>
-                  Быстро
-                </Typography>
-              </Box>
-              <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'center', display: 'block' }}>
-                Текущая скорость: {voiceSettings.speech_rate.toFixed(1)}x
-              </Typography>
-              
-              {/* Кнопка тестирования скорости речи */}
-              <Box sx={{ mt: 2, textAlign: 'center' }}>
-                <Button
-                  variant="outlined"
-                  size="small"
-                  startIcon={<VolumeUpIcon />}
-                  onClick={() => {
-                    const testMessage = "Это тест скорости речи ассистента. Настройте скорость по вашему вкусу.";
-                    synthesizeSpeech(testMessage);
-                  }}
-                  disabled={isSpeaking}
-                  sx={{
-                    fontSize: '0.75rem',
-                    px: 2,
-                    py: 0.5,
-                    borderColor: 'primary.main',
-                    color: 'primary.main',
-                    '&:hover': {
-                      borderColor: 'primary.dark',
-                      backgroundColor: 'primary.light',
-                      color: 'primary.dark',
-                    }
-                  }}
-                >
-                  Тестировать скорость
-                </Button>
-              </Box>
-            </Box>
-          </Card>
-        </Collapse>
-
-        {!isRecording ? (
-          <Box>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-              Нажмите кнопку микрофона для начала записи
-            </Typography>
-            <IconButton
-              size="large"
-              onClick={startRecording}
-              disabled={state.isLoading && !messages.some(msg => msg.isStreaming)}
-              sx={{
-                width: 80,
-                height: 80,
-                bgcolor: 'primary.main',
-                color: 'white',
-                '&:hover': { bgcolor: 'primary.dark' },
-                '&:disabled': {
-                  bgcolor: 'action.disabledBackground',
-                  color: 'action.disabled',
-                },
-              }}
-            >
-              <MicIcon sx={{ fontSize: 40 }} />
-            </IconButton>
-          </Box>
-        ) : (
-          <Box>
-            {/* Визуализация аудио */}
-            <Box sx={{ mb: 4, position: 'relative', display: 'inline-block' }}>
-              <Box
-                sx={{
-                  width: 200,
-                  height: 200,
-                  borderRadius: '50%',
-                  background: isRecording
-                    ? `conic-gradient(#f44336 ${audioLevel * 360}deg, #e0e0e0 0deg)`
-                    : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  animation: isRecording ? 'pulse 1.5s ease-in-out infinite' : 'none',
-                  transition: 'all 0.3s ease',
-                  '@keyframes pulse': {
-                    '0%': { transform: 'scale(1)', opacity: 1 },
-                    '50%': { transform: 'scale(1.2)', opacity: 0.7 },
-                    '100%': { transform: 'scale(1)', opacity: 1 },
-                  },
-                }}
-              >
-                <IconButton
-                  onClick={stopRecording}
-                  disabled={isProcessing || isSpeaking}
-                  sx={{
-                    width: 120,
-                    height: 120,
-                    backgroundColor: 'white',
-                    color: 'error.main',
-                    '&:hover': {
-                      backgroundColor: 'grey.100',
-                    },
-                  }}
-                >
-                  <StopIcon sx={{ fontSize: 48 }} />
-                </IconButton>
-              </Box>
-
-              {/* Индикаторы состояния */}
-              {isProcessing && (
-                <Box sx={{ position: 'absolute', top: -10, right: -10 }}>
-                  <CircularProgress size={24} color="secondary" />
-                </Box>
-              )}
-              
-              {isSpeaking && (
-                <Box sx={{ position: 'absolute', bottom: -10, right: -10 }}>
-                  <Box sx={{ 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    gap: 0.5,
-                    height: 32
-                  }}>
-                    {[...Array(5)].map((_, index) => (
-                      <Box
-                        key={index}
-                        sx={{
-                          width: 4,
-                          height: 16,
-                          background: 'linear-gradient(180deg, #4caf50 0%, #66bb6a 50%, #81c784 100%)',
-                          borderRadius: 2,
-                          animation: 'soundWave 1s infinite ease-in-out',
-                          animationDelay: `${index * 0.1}s`,
-                          boxShadow: '0 2px 6px rgba(76, 175, 80, 0.4)',
-                          '@keyframes soundWave': {
-                            '0%, 100%': { 
-                              transform: 'scaleY(0.2)',
-                              opacity: 0.6
-                            },
-                            '50%': { 
-                              transform: 'scaleY(1)',
-                              opacity: 1
-                            },
-                          },
-                        }}
-                      />
-                    ))}
-                  </Box>
-                </Box>
-              )}
-            </Box>
-
-            {/* Статус записи */}
-            <Box sx={{ mb: 2 }}>
-              <Typography variant="h6" color="error.main" gutterBottom>
-                Прослушивание... {Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')}
-              </Typography>
-              <Box sx={{ display: 'flex', justifyContent: 'center', gap: 1 }}>
-                <Box sx={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: 'error.main', animation: 'pulse 1s infinite' }} />
-                <Box sx={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: 'error.main', animation: 'pulse 1s infinite', animationDelay: '0.2s' }} />
-                <Box sx={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: 'error.main', animation: 'pulse 1s infinite', animationDelay: '0.4s' }} />
-              </Box>
-            </Box>
-
-            {/* Инструкции */}
-            <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
-              Говорите четко и ясно. Real-time распознавание каждые 2 секунды. Автоматическая остановка через 5 секунд тишины.
-            </Typography>
-          </Box>
-        )}
-        
-        {/* Real-time распознавание */}
-        {isRecording && realtimeText && (
-          <Card sx={{ mb: 3, p: 2, backgroundColor: 'warning.light' }}>
-            <Typography variant="subtitle2" color="warning.dark" gutterBottom>
-              Real-time распознавание (каждые 2 сек):
-            </Typography>
-            <Typography variant="body1" sx={{ fontStyle: 'italic', color: 'warning.dark' }}>
-              "{realtimeText}"
-            </Typography>
-          </Card>
-        )}
-
-        {/* Финальный распознанный текст */}
-        {recordedText && (
-          <Card sx={{ mb: 3, p: 2, backgroundColor: 'background.default' }}>
-            <Typography variant="subtitle2" color="primary" gutterBottom>
-              Финальный распознанный текст:
-            </Typography>
-            <Typography variant="body1" sx={{ fontStyle: 'italic' }}>
-              "{recordedText}"
-            </Typography>
-            <Box sx={{ mt: 2, display: 'flex', gap: 1, justifyContent: 'center' }}>
-              <Button
-                variant="contained"
-                startIcon={<SendIcon />}
-                onClick={handleManualSend}
-                disabled={isProcessing || isSpeaking}
-              >
-                Отправить
-              </Button>
-              <Button
-                variant="outlined"
-                startIcon={<RefreshIcon />}
-                onClick={() => setRecordedText('')}
-              >
-                Очистить
-              </Button>
-            </Box>
-          </Card>
-        )}
-
-        {/* Индикатор загрузки */}
-        {isProcessing && (
-          <Box sx={{ mb: 2, textAlign: 'center' }}>
-            <Typography variant="body2" color="primary" sx={{ mb: 1 }}>
-              Ассистент думает...
-            </Typography>
-            <Box sx={{ display: 'flex', justifyContent: 'center', gap: 0.5 }}>
-              <Box
-                sx={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: '50%',
-                  backgroundColor: 'primary.main',
-                  animation: 'thinkingDot 1.4s ease-in-out infinite both',
-                  '@keyframes thinkingDot': {
-                    '0%, 80%, 100%': { transform: 'scale(0)' },
-                    '40%': { transform: 'scale(1)' },
-                  },
-                }}
-              />
-              <Box
-                sx={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: '50%',
-                  backgroundColor: 'primary.main',
-                  animation: 'thinkingDot 1.4s ease-in-out infinite both',
-                  animationDelay: '0.2s',
-                  '@keyframes thinkingDot': {
-                    '0%, 80%, 100%': { transform: 'scale(0)' },
-                    '40%': { transform: 'scale(1)' },
-                  },
-                }}
-              />
-              <Box
-                sx={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: '50%',
-                  backgroundColor: 'primary.main',
-                  animation: 'thinkingDot 1.4s ease-in-out infinite both',
-                  animationDelay: '0.4s',
-                  '@keyframes thinkingDot': {
-                    '0%, 80%, 100%': { transform: 'scale(0)' },
-                    '40%': { transform: 'scale(1)' },
-                  },
-                }}
-              />
-            </Box>
-          </Box>
-        )}
-
-        {/* Индикатор речи */}
-        {isSpeaking && !isProcessing && (
-          <Box sx={{ mb: 2, textAlign: 'center' }}>
-            <Typography variant="body2" color="success.main" sx={{ mb: 1 }}>
-            </Typography>
-            <Box sx={{ display: 'flex', justifyContent: 'center', gap: 1 }}>
-              {[...Array(9)].map((_, index) => (
-                <Box
-                  key={index}
-                  sx={{
-                    width: 4,
-                    height: 22,
-                    background: 'linear-gradient(180deg, #4caf50 0%, #66bb6a 50%, #81c784 100%)',
-                    borderRadius: 2,
-                    animation: 'soundWave2 1.2s infinite ease-in-out',
-                    animationDelay: `${index * 0.08}s`,
-                    boxShadow: '0 3px 8px rgba(76, 175, 80, 0.5)',
-                    '@keyframes soundWave2': {
-                      '0%, 100%': { 
-                        transform: 'scaleY(0.3)',
-                        opacity: 0.5
-                      },
-                      '50%': { 
-                        transform: 'scaleY(1)',
-                        opacity: 1
-                      },
-                    },
-                  }}
-                />
-              ))}
-            </Box>
-          </Box>
-        )}
-      </DialogContent>
-      <DialogActions sx={{ justifyContent: 'center', pb: 3 }}>
-        <Button onClick={() => setShowVoiceDialog(false)}>
-          Закрыть
-        </Button>
-      </DialogActions>
-    </Dialog>
-  );
-
   const DocumentDialog = (): React.ReactElement => (
     <Dialog
       open={showDocumentDialog}
@@ -3896,317 +2307,65 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
 
         {/* Панель управления моделями и ввода */}
         <Box sx={{ p: 2, display: 'flex', justifyContent: 'center' }}>
-          {/* Объединенное поле ввода с кнопками */}
-          <Box
-            sx={{
-              p: 2,
-              borderRadius: 2,
-              bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)',
-              border: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'}`,
-              maxWidth: '1000px',
-              width: '100%',
-            }}
-          >
-            {/* Скрытый input для выбора файла */}
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".pdf,.docx,.xlsx,.txt,.jpg,.jpeg,.png,.webp"
-              onChange={handleFileSelect}
-              style={{ display: 'none' }}
-            />
-
-            {/* Прикрепленные файлы - выше поля ввода */}
-            {uploadedFiles.length > 0 && (
-              <Box sx={{ mb: 2 }}>
-                {/* Кнопка генерации отчета в области файлов */}
-                <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    startIcon={<AssessmentIcon />}
-                    onClick={handleGenerateReport}
-                    sx={{
-                      color: '#4caf50',
-                      borderColor: '#4caf50',
-                      '&:hover': {
-                        borderColor: '#4caf50',
-                        bgcolor: 'rgba(76, 175, 80, 0.1)',
-                      },
-                      fontSize: '0.75rem',
-                      textTransform: 'none',
-                    }}
-                    disabled={isUploading || modelWindows.some(w => w.isStreaming)}
-                  >
-                    Сгенерировать отчет об уверенности
-                  </Button>
-                </Box>
-                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-                  {uploadedFiles.map((file, index) => (
-                    <Box
-                      key={index}
-                      className="file-attachment"
-                      sx={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 1,
-                        p: 1,
-                        borderRadius: 2,
-                        maxWidth: '300px',
-                        bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
-                        border: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)'}`,
-                      }}
-                    >
-                      <Box
-                        sx={{
-                          width: 32,
-                          height: 32,
-                          borderRadius: 1,
-                          bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          color: isDarkMode ? 'white' : '#333',
-                          flexShrink: 0,
-                          border: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.3)' : 'rgba(0, 0, 0, 0.3)'}`,
-                        }}
-                      >
-                        {file.type.includes('pdf') ? <PdfIcon fontSize="small" /> : 
-                         file.type.includes('word') ? <DocumentIcon fontSize="small" /> : 
-                         file.type.includes('excel') ? <ExcelIcon fontSize="small" /> : <DocumentIcon fontSize="small" />}
-                      </Box>
-                      <Box sx={{ minWidth: 0, flex: 1 }}>
-                        <Typography 
-                          variant="caption" 
-                          sx={{ 
-                            fontWeight: 'medium', 
-                            display: 'block', 
-                            color: isDarkMode ? 'white' : '#333',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap'
-                          }}
-                          title={file.name}
-                        >
-                          {file.name}
-                        </Typography>
-                      </Box>
-                      <IconButton
-                        size="small"
-                        onClick={() => handleFileDelete(file.name)}
-                        sx={{ 
-                          color: isDarkMode ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.7)',
-                          '&:hover': { 
-                            color: '#ff6b6b',
-                            bgcolor: isDarkMode ? 'rgba(255, 107, 107, 0.2)' : 'rgba(255, 107, 107, 0.1)',
-                          },
-                          p: 0.5,
-                          borderRadius: 1,
-                          flexShrink: 0,
-                        }}
-                      >
-                        <CloseIcon fontSize="small" />
-                      </IconButton>
-                    </Box>
-                  ))}
-                </Box>
-              </Box>
-            )}
-
-            {/* Индикатор загрузки файла */}
-            {isUploading && (
-              <Box sx={{ mb: 2, p: 1 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <CircularProgress size={16} sx={{ color: isDarkMode ? 'white' : '#333' }} />
-                  <Typography variant="caption" sx={{ color: isDarkMode ? 'white' : '#333' }}>
-                    Загрузка документа...
-                  </Typography>
-                </Box>
-              </Box>
-            )}
-
-            {/* Поле ввода текста */}
-            <TextField
-              inputRef={inputRef}
-              fullWidth
-              multiline
-              maxRows={4}
-              value={inputMessage}
-              onChange={(e) => setInputMessage(e.target.value)}
-              onKeyPress={handleKeyPress}
-              onPaste={handlePaste}
-              placeholder={
-                !isConnected && !isConnecting
-                  ? "Нет соединения с сервером. Запустите backend на порту 8000" 
-                  : isConnecting
-                    ? "Подключение к серверу..."
+          <ChatInputBar
+            value={inputMessage}
+            onChange={setInputMessage}
+            onKeyPress={handleKeyPress}
+            onPaste={(e) => handlePaste(e as React.ClipboardEvent<HTMLDivElement>)}
+            placeholder={
+              !isConnected && !isConnecting
+                ? 'Нет соединения с сервером. Запустите backend на порту 8000'
+                : isConnecting
+                  ? 'Подключение к серверу...'
                   : modelWindows.some(w => w.isStreaming)
-                    ? "Модели генерируют ответ... Нажмите ⏹️ чтобы остановить"
+                    ? 'Модели генерируют ответ... Нажмите ⏹️ чтобы остановить'
                     : !modelWindows.some(w => w.selectedModel)
-                      ? "Выберите модель для начала диалога"
-                      : "Чем я могу помочь вам сегодня?"
-              }
-              variant="outlined"
-              size="small"
-              disabled={!isConnected || !modelWindows.some(w => w.selectedModel) || modelWindows.some(w => w.isStreaming)}
-              sx={{
-                mb: 1.5,
-                '& .MuiOutlinedInput-root': {
-                  bgcolor: 'transparent',
-                  border: 'none',
-                  fontSize: '0.875rem',
-                  '&:hover': {
-                    bgcolor: 'transparent',
-                  },
-                  '&.Mui-focused': {
-                    bgcolor: 'transparent',
-                  }
-                }
-              }}
-            />
-
-            {/* Кнопки снизу */}
-            <Box
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 0.5,
-                justifyContent: 'space-between',
-              }}
-            >
-              {/* Левая группа кнопок */}
-              <Box sx={{ display: 'flex', gap: 0.5 }}>
-                {/* Кнопка загрузки документов */}
-                <Tooltip title="Загрузить документ">
+                      ? 'Выберите модель для начала диалога'
+                      : 'Чем я могу помочь вам сегодня?'
+            }
+            inputDisabled={!isConnected || !modelWindows.some(w => w.selectedModel) || modelWindows.some(w => w.isStreaming)}
+            inputRef={inputRef}
+            isDarkMode={isDarkMode}
+            maxWidth="1000px"
+            fileInputRef={fileInputRef}
+            onAttachClick={() => fileInputRef.current?.click()}
+            onFileSelect={(files) => { if (files?.length) handleFileUpload(files[0]); }}
+            uploadedFiles={uploadedFiles.map(f => ({ name: f.name, type: f.type || 'application/octet-stream' }))}
+            onFileRemove={(file) => handleFileDelete(file.name)}
+            isUploading={isUploading}
+            attachDisabled={isUploading || modelWindows.some(w => w.isStreaming)}
+            showReportButton={uploadedFiles.length > 0}
+            onReportClick={handleGenerateReport}
+            reportDisabled={isUploading || modelWindows.some(w => w.isStreaming)}
+            showStopButton={state.isLoading || modelWindows.some(w => w.isStreaming)}
+            onStopClick={handleStopGeneration}
+            onSendClick={handleSendMessage}
+            sendDisabled={!inputMessage.trim() || !isConnected || !modelWindows.some(w => w.selectedModel)}
+            styleVariant={interfaceSettings.chatInputStyle}
+            extraActions={
+              modelWindows.length < 4 ? (
+                <Tooltip title="Добавить модель">
                   <IconButton
-                    onClick={() => {
-                      // Используем setTimeout для гарантии, что input уже отрендерился
-                      setTimeout(() => {
-                        if (fileInputRef.current) {
-                          fileInputRef.current.click();
-                        } else {
-                          
-                        }
-                      }, 0);
-                    }}
-                    sx={{ 
-                      color: '#2196f3',
+                    onClick={addModelWindow}
+                    sx={{
+                      color: 'primary.main',
                       bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+                      border: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)'}`,
                       '&:hover': {
                         bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)',
                       },
-                      '&:active': {
-                        transform: 'none',
-                      }
+                      '&:active': { transform: 'none' },
+                      flexShrink: 0,
                     }}
                     disableRipple
-                    disabled={isUploading || modelWindows.some(w => w.isStreaming)}
+                    disabled={modelWindows.some(w => w.isStreaming)}
                   >
-                    <AttachFileIcon sx={{ color: '#2196f3', fontSize: '1.2rem' }} />
+                    <AddIcon sx={{ fontSize: '1.2rem' }} />
                   </IconButton>
                 </Tooltip>
-
-                {/* Кнопка генерации отчета */}
-                {uploadedFiles.length > 0 && (
-                  <Tooltip title="Сгенерировать отчет об уверенности">
-                    <IconButton
-                      onClick={handleGenerateReport}
-                      sx={{ 
-                        color: '#4caf50',
-                        bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
-                        '&:hover': {
-                          bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)',
-                        },
-                        '&:active': {
-                          transform: 'none',
-                        }
-                      }}
-                      disableRipple
-                      disabled={isUploading || modelWindows.some(w => w.isStreaming)}
-                    >
-                      <AssessmentIcon sx={{ color: '#4caf50', fontSize: '1.2rem' }} />
-                    </IconButton>
-                  </Tooltip>
-                )}
-
-                {/* Кнопка добавления модели */}
-                {modelWindows.length < 4 && (
-                  <Tooltip title="Добавить модель">
-                    <IconButton
-                      onClick={addModelWindow}
-                      sx={{ 
-                        color: 'primary.main',
-                        bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
-                        border: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)'}`,
-                        '&:hover': {
-                          bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)',
-                        },
-                        '&:active': {
-                          transform: 'none',
-                        }
-                      }}
-                      disableRipple
-                      disabled={modelWindows.some(w => w.isStreaming)}
-                    >
-                      <AddIcon sx={{ fontSize: '1.2rem' }} />
-                    </IconButton>
-                  </Tooltip>
-                )}
-              </Box>
-
-              {/* Правая группа кнопок */}
-              <Box sx={{ display: 'flex', gap: 0.5 }}>
-                {/* Кнопка отправки/остановки генерации */}
-                {(state.isLoading || modelWindows.some(w => w.isStreaming)) ? (
-                  <Tooltip title="Прервать генерацию">
-                    <IconButton
-                      onClick={handleStopGeneration}
-                      color="error"
-                      sx={{
-                        bgcolor: 'error.main',
-                        color: 'white',
-                        '&:hover': {
-                          bgcolor: 'error.dark',
-                        },
-                        animation: 'pulse 2s ease-in-out infinite',
-                        '@keyframes pulse': {
-                          '0%': { opacity: 1 },
-                          '50%': { opacity: 0.7 },
-                          '100%': { opacity: 1 },
-                        },
-                      }}
-                    >
-                      <StopIcon sx={{ fontSize: '1.2rem' }} />
-                    </IconButton>
-                  </Tooltip>
-                ) : (
-                  <Tooltip title="Отправить">
-                    <span>
-                      <IconButton
-                        onClick={handleSendMessage}
-                        disabled={!inputMessage.trim() || !isConnected || !modelWindows.some(w => w.selectedModel)}
-                        color="primary"
-                        sx={{
-                          bgcolor: 'primary.main',
-                          color: 'white',
-                          '&:hover': {
-                            bgcolor: 'primary.dark',
-                          },
-                          '&:disabled': {
-                            bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.12)',
-                            color: isDarkMode ? 'rgba(255, 255, 255, 0.6)' : 'rgba(0, 0, 0, 0.26)',
-                            border: isDarkMode ? '1px solid rgba(255, 255, 255, 0.2)' : 'none',
-                          }
-                        }}
-                      >
-                        <SendIcon sx={{ fontSize: '1.2rem' }} />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                )}
-              </Box>
-            </Box>
-          </Box>
+              ) : null
+            }
+          />
         </Box>
       </Box>
     );
@@ -4576,321 +2735,68 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                      )}
 
                      {/* Объединенное поле ввода с кнопками */}
-           <Box
-             sx={{
+           <ChatInputBar
+             value={inputMessage}
+             onChange={setInputMessage}
+             onKeyPress={handleKeyPress}
+             onPaste={(e) => handlePaste(e as React.ClipboardEvent<HTMLDivElement>)}
+             placeholder={
+               !isConnected && !isConnecting
+                 ? 'Нет соединения с сервером. Запустите backend на порту 8000'
+                 : isConnecting
+                   ? 'Подключение к серверу...'
+                   : state.isLoading && !messages.some(msg => msg.isStreaming)
+                     ? 'astrachat думает...'
+                     : state.isLoading && messages.some(msg => msg.isStreaming)
+                       ? 'astrachat генерирует ответ... Нажмите ⏹️ чтобы остановить'
+                       : 'Чем я могу помочь вам сегодня?'
+             }
+             inputDisabled={!isConnected || (state.isLoading && !messages.some(msg => msg.isStreaming))}
+             inputRef={inputRef}
+             isDarkMode={isDarkMode}
+             styleVariant={interfaceSettings.chatInputStyle}
+             containerSx={{
                mt: 2,
-               p: 2,
-               borderRadius: 2,
-               bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)',
-               border: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'}`,
-               maxWidth: interfaceSettings.widescreenMode ? '100%' : '1000px', // Расширяем до ширины карточек сообщений
-               width: '100%', // Занимает всю доступную ширину до maxWidth
-               mx: 'auto', // Центрируем по горизонтали
-               px: interfaceSettings.widescreenMode ? 4 : 2,
-               // Центрируем по вертикали при пустом чате
+               p: interfaceSettings.chatInputStyle === 'classic' ? 0 : 1.5,
+               borderRadius: interfaceSettings.chatInputStyle === 'classic' ? '28px' : '28px',
+               maxWidth: messages.length === 0 ? '800px' : (interfaceSettings.widescreenMode ? '100%' : '1000px'),
+               width: '100%',
+               mx: 'auto',
+               px: interfaceSettings.chatInputStyle === 'classic' ? 0 : (interfaceSettings.widescreenMode ? 4 : 2),
                ...(messages.length === 0 && {
                  position: 'absolute',
                  top: '50%',
                  left: '50%',
-                 transform: 'translate(-50%, -50%)',
+                 transform: 'translate(-50%, 0)',
                  mt: 0,
                }),
              }}
-           >
-
-                           {/* Скрытый input для выбора файла */}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".pdf,.docx,.xlsx,.txt,.jpg,.jpeg,.png,.webp"
-                onChange={handleFileSelect}
-                style={{ display: 'none' }}
-              />
-
-              {/* Прикрепленные файлы - выше поля ввода */}
-              {uploadedFiles.length > 0 && (
-                <Box sx={{ mb: 2 }}>
-                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-                    {uploadedFiles.map((file, index) => (
-                      <Box
-                        key={index}
-                        className="file-attachment"
-                        sx={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 1,
-                          p: 1,
-                          borderRadius: 2,
-                          maxWidth: '300px',
-                          bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
-                          border: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)'}`,
-                        }}
-                      >
-                        <Box
-                          sx={{
-                            width: 32,
-                            height: 32,
-                            borderRadius: 1,
-                            bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            color: isDarkMode ? 'white' : '#333',
-                            flexShrink: 0,
-                            border: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.3)' : 'rgba(0, 0, 0, 0.3)'}`,
-                          }}
-                        >
-                          {file.type.includes('pdf') ? <PdfIcon fontSize="small" /> : 
-                           file.type.includes('word') ? <DocumentIcon fontSize="small" /> : 
-                           file.type.includes('excel') ? <DocumentIcon fontSize="small" /> : <DocumentIcon fontSize="small" />}
-                        </Box>
-                        <Box sx={{ minWidth: 0, flex: 1 }}>
-                          <Typography 
-                            variant="caption" 
-                            sx={{ 
-                              fontWeight: 'medium', 
-                              display: 'block', 
-                              color: isDarkMode ? 'white' : '#333',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap'
-                            }}
-                            title={file.name}
-                          >
-                            {file.name}
-                          </Typography>
-                        </Box>
-                        <IconButton
-                          size="small"
-                          onClick={() => handleFileDelete(file.name)}
-                          sx={{ 
-                            color: isDarkMode ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.7)',
-                            '&:hover': { 
-                              color: '#ff6b6b',
-                              bgcolor: isDarkMode ? 'rgba(255, 107, 107, 0.2)' : 'rgba(255, 107, 107, 0.1)',
-                            },
-                            p: 0.5,
-                            borderRadius: 1,
-                            flexShrink: 0,
-                          }}
-                        >
-                          <CloseIcon fontSize="small" />
-                        </IconButton>
-                      </Box>
-                    ))}
-                  </Box>
-                </Box>
-              )}
-
-              {/* Индикатор загрузки файла */}
-              {isUploading && (
-                <Box sx={{ mb: 2, p: 1 }}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <CircularProgress size={16} sx={{ color: isDarkMode ? 'white' : '#333' }} />
-                    <Typography variant="caption" sx={{ color: isDarkMode ? 'white' : '#333' }}>
-                      Загрузка документа...
-                    </Typography>
-                  </Box>
-                </Box>
-              )}
-
-              {/* Поле ввода текста */}
-              <TextField
-                inputRef={inputRef}
-                fullWidth
-                multiline
-                maxRows={4}
-                value={inputMessage}
-                onChange={(e) => setInputMessage(e.target.value)}
-                onKeyPress={handleKeyPress}
-                onPaste={handlePaste}
-                placeholder={
-                  !isConnected && !isConnecting
-                    ? "Нет соединения с сервером. Запустите backend на порту 8000" 
-                    : isConnecting
-                      ? "Подключение к серверу..."
-                      : state.isLoading && !messages.some(msg => msg.isStreaming)
-                        ? "astrachat думает..." 
-                        : state.isLoading && messages.some(msg => msg.isStreaming)
-                          ? "astrachat генерирует ответ... Нажмите ⏹️ чтобы остановить"
-                        : "Чем я могу помочь вам сегодня?"
-                }
-                variant="outlined"
-                size="small"
-                disabled={!isConnected || (state.isLoading && !messages.some(msg => msg.isStreaming))}
-                sx={{
-                  mb: 1.5,
-                  '& .MuiOutlinedInput-root': {
-                    bgcolor: 'transparent',
-                    border: 'none',
-                    fontSize: '0.875rem',
-                    '&:hover': {
-                      bgcolor: 'transparent',
-                    },
-                    '&.Mui-focused': {
-                      bgcolor: 'transparent',
-                    }
-                  }
-                }}
-              />
-
-                           {/* Кнопки снизу */}
-              <Box
-                sx={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 0.5,
-                  justifyContent: 'space-between',
-                }}
-              >
-                                 {/* Левая группа кнопок */}
-                 <Box sx={{ display: 'flex', gap: 0.5 }}>
-                   {/* Кнопка загрузки документов */}
-                   <Tooltip title="Загрузить документ">
-                     <IconButton
-                       onClick={() => fileInputRef.current?.click()}
-                       sx={{ 
-                         color: '#2196f3',
-                         bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
-                         '&:hover': {
-                           bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)',
-                         },
-                         '&:active': {
-                           transform: 'none',
-                         }
-                       }}
-                       disableRipple
-                       disabled={isUploading || (state.isLoading && !messages.some(msg => msg.isStreaming))}
-                     >
-                       <AttachFileIcon sx={{ color: '#2196f3', fontSize: '1.2rem' }} />
-                     </IconButton>
-                   </Tooltip>
-
-                   {/* Кнопка генерации отчета */}
-                   {uploadedFiles.length > 0 && (
-                     <Tooltip title="Сгенерировать отчет об уверенности">
-                       <IconButton
-                         onClick={handleGenerateReport}
-                         sx={{ 
-                           color: '#4caf50',
-                           bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
-                           '&:hover': {
-                             bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)',
-                           },
-                           '&:active': {
-                             transform: 'none',
-                           }
-                         }}
-                         disableRipple
-                         disabled={isUploading || (state.isLoading && !messages.some(msg => msg.isStreaming))}
-                       >
-                         <AssessmentIcon sx={{ color: '#4caf50', fontSize: '1.2rem' }} />
-                       </IconButton>
-                     </Tooltip>
-                   )}
-
-                                       {/* Кнопка меню с шестеренкой */}
-                    <Tooltip title="Дополнительные действия">
-                      <span>
-                        <IconButton
-                          onClick={handleMenuOpen}
-                          disabled={state.isLoading && !messages.some(msg => msg.isStreaming)}
-                          sx={{ 
-                            color: isDarkMode ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.7)',
-                            bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
-                            '&:hover': {
-                              bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)',
-                            },
-                            '&:disabled': {
-                              color: isDarkMode ? 'rgba(255, 255, 255, 0.3)' : 'rgba(0, 0, 0, 0.3)',
-                              bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)',
-                            }
-                          }}
-                        >
-                          <SettingsIcon sx={{ fontSize: '1.2rem' }} />
-                        </IconButton>
-                      </span>
-                    </Tooltip>
-                 </Box>
-
-                                {/* Правая группа кнопок */}
-                <Box sx={{ display: 'flex', gap: 0.5 }}>
-                  {/* Кнопка отправки/остановки генерации */}
-                  {(state.isLoading || messages.some(msg => msg.isStreaming)) ? (
-                    <Tooltip title="Прервать генерацию">
-                      <IconButton
-                        onClick={handleStopGeneration}
-                        color="error"
-                        sx={{
-                          bgcolor: 'error.main',
-                          color: 'white',
-                          '&:hover': {
-                            bgcolor: 'error.dark',
-                          },
-                          animation: 'pulse 2s ease-in-out infinite',
-                          '@keyframes pulse': {
-                            '0%': { opacity: 1 },
-                            '50%': { opacity: 0.7 },
-                            '100%': { opacity: 1 },
-                          },
-                        }}
-                      >
-                        <SquareIcon sx={{ fontSize: '1.2rem' }} />
-                      </IconButton>
-                    </Tooltip>
-                  ) : (
-                     <Tooltip title="Отправить">
-                       <span>
-                         <IconButton
-                           onClick={handleSendMessage}
-                           disabled={!inputMessage.trim() || !isConnected || (state.isLoading && !messages.some(msg => msg.isStreaming))}
-                           color="primary"
-                           sx={{
-                             bgcolor: 'primary.main',
-                             color: 'white',
-                             '&:hover': {
-                               bgcolor: 'primary.dark',
-                             },
-                             '&:disabled': {
-                               bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.12)',
-                               color: isDarkMode ? 'rgba(255, 255, 255, 0.6)' : 'rgba(0, 0, 0, 0.26)',
-                                 border: isDarkMode ? '1px solid rgba(255, 255, 255, 0.2)' : 'none',
-                             }
-                           }}
-                         >
-                           <SendIcon sx={{ fontSize: '1.2rem' }} />
-                         </IconButton>
-                       </span>
-                     </Tooltip>
-                   )}
-
-                  {/* Кнопка голосового ввода */}
-                  <Tooltip title="Голосовой ввод">
-                    <IconButton
-                      onClick={() => setShowVoiceDialog(true)}
-                      disabled={state.isLoading && !messages.some(msg => msg.isStreaming)}
-                      sx={{
-                        bgcolor: 'secondary.main',
-                        color: 'white',
-                        '&:hover': { 
-                          bgcolor: 'secondary.dark' 
-                        },
-                        '&:disabled': {
-                          bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.12)',
-                          color: isDarkMode ? 'rgba(255, 255, 255, 0.6)' : 'rgba(0, 0, 0, 0.26)',
-                        }
-                      }}
-                    >
-                      <MicIcon sx={{ fontSize: '1.2rem' }} />
-                    </IconButton>
-                  </Tooltip>
-                </Box>
-              </Box>
-           </Box>
-        </Box>
+             fileInputRef={fileInputRef}
+             onAttachClick={() => fileInputRef.current?.click()}
+             onFileSelect={(files) => { if (files?.length) handleFileUpload(files[0]); }}
+             uploadedFiles={uploadedFiles.map(f => ({ name: f.name, type: f.type || 'application/octet-stream' }))}
+             onFileRemove={(file) => handleFileDelete(file.name)}
+             isUploading={isUploading}
+             attachDisabled={isUploading || (state.isLoading && !messages.some(msg => msg.isStreaming))}
+             showReportButton={uploadedFiles.length > 0}
+             onReportClick={handleGenerateReport}
+             reportDisabled={isUploading || (state.isLoading && !messages.some(msg => msg.isStreaming))}
+             onSettingsClick={handleMenuOpen}
+             settingsDisabled={state.isLoading && !messages.some(msg => msg.isStreaming)}
+             showStopButton={state.isLoading || messages.some(msg => msg.isStreaming)}
+             onStopClick={handleStopGeneration}
+             onSendClick={handleSendMessage}
+             sendDisabled={!inputMessage.trim() || !isConnected || (state.isLoading && !messages.some(msg => msg.isStreaming))}
+             onVoiceClick={() => setShowVoiceDialog(true)}
+             voiceDisabled={state.isLoading && !messages.some(msg => msg.isStreaming)}
+             voiceTooltip="Голосовой ввод"
+           />
 
              {/* Диалоги */}
-       <VoiceDialog />
+       <VoiceChatDialog
+         open={showVoiceDialog}
+         onClose={() => setShowVoiceDialog(false)}
+       />
        <DocumentDialog />
 
                {/* Выпадающее меню с дополнительными действиями (шестеренка) */}
@@ -4919,10 +2825,6 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
          <MenuItem onClick={handleClearChat} sx={{ gap: 1 }}>
            <ClearIcon fontSize="small" />
            Очистить чат
-         </MenuItem>
-         <MenuItem onClick={handleReconnect} sx={{ gap: 1 }}>
-           <RefreshIcon fontSize="small" />
-           Переподключиться
          </MenuItem>
        </Menu>
 
@@ -5005,7 +2907,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
             width: rightSidebarOpen ? 280 : 64,
             boxSizing: 'border-box',
             background: rightSidebarOpen 
-              ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
+              ? rightSidebarPanelBg
               : 'background.default',
             color: rightSidebarOpen ? 'white' : 'text.primary',
             borderLeft: '1px solid',
@@ -5294,8 +3196,8 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         </Paper>
       )}
 
-      {/* Навигационная панель для сообщений */}
-      {messages.length > 0 && (
+      {/* Навигационная панель для сообщений (панель с диалогами) */}
+      {messages.length > 0 && showDialoguesPanel && (
         <MessageNavigationBar
           messages={messages}
           isDarkMode={isDarkMode}
@@ -5313,6 +3215,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         isDarkMode={isDarkMode}
         selectedCount={selectedMessages.size}
       />
+      </Box>
     </Box>
   );
 }
