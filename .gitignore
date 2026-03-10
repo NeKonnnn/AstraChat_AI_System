@@ -38,7 +38,7 @@ MANIFEST
 
 # Model weights and directories
 model_small/
-models/
+/models/
 diarize_models/
 diarize_models
 silero_models/
@@ -159,7 +159,7 @@ data/
 postgres_data/
 minio_data/
 
-# Cursor (опционально)
+# Cursor 
 .cursor/
 
 # Симлинк backend/backend (Docker/скрипт), Git на Windows не индексирует

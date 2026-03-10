@@ -1,5 +1,5 @@
-# Загрузка моделей для RAG: эмбеддинги и реранкер.
-# Можно использовать свои скачанные веса из models_dir, в офлайне — через HF_HUB_OFFLINE.
+# Загрузка моделей для RAG: эмбеддинги и реранкер
+# Можно использовать свои скачанные веса из models_dir, в офлайне - через HF_HUB_OFFLINE
 import os
 import logging
 from typing import List, Optional, Any
@@ -13,7 +13,7 @@ _last_rag_models_error: Optional[str] = None
 
 
 def _resolve_model_path(models_dir: str, name_or_path: Optional[str], default_hf: str) -> str:
-    # Если есть локальная папка — возвращаем полный путь, иначе имя модели с HF.
+    # Если есть локальная папка - возвращаем полный путь, иначе имя модели с HF
     if not name_or_path:
         return default_hf
     if os.path.isabs(name_or_path) and os.path.isdir(name_or_path):
@@ -32,12 +32,12 @@ def _resolve_model_path(models_dir: str, name_or_path: Optional[str], default_hf
                 return os.path.join(models_dir, entry)
     except OSError:
         pass
-    # Вариант кэша HuggingFace: cross-encoder/ms-marco-... → cross-encoder--ms-marco-...
+    # Вариант кэша HuggingFace
     if "marco" in name_or_path.lower() or "cross-encoder" in default_hf.lower():
         alt_name = default_hf.replace("/", "--")
         alt_full = os.path.join(models_dir, alt_name)
         if os.path.isdir(alt_full):
-            # Кэш HF: внутри есть snapshots/<hash>/ — нужен путь к snapshot
+            # Кэш HF: внутри есть snapshots/<hash>/ - нужен путь к snapshot
             snap_dir = os.path.join(alt_full, "snapshots")
             if os.path.isdir(snap_dir):
                 for h in os.listdir(snap_dir):
@@ -60,7 +60,7 @@ def _resolve_model_path(models_dir: str, name_or_path: Optional[str], default_hf
 
 
 async def get_rag_models_handler() -> Optional[dict]:
-    # Поднимаем эмбеддинг-модель и реранкер. Кэш/локальные пути — в models_dir.
+    # Поднимаем эмбеддинг-модель и реранкер. Кэш/локальные пути - в models_dir.
     # offline=True чтобы вообще не лезть в интернет.
     global _rag_models, _last_rag_models_error
     _last_rag_models_error = None

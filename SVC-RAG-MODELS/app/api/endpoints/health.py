@@ -9,7 +9,7 @@ router = APIRouter()
 
 @router.get("/health")
 async def health():
-    # Проверка: жив ли сервис и подняты ли модели.
+    # Проверка: жив ли сервис и подняты ли модели
     if not settings.rag_models.enabled:
         return JSONResponse(content={
             "status": "disabled",

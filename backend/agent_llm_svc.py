@@ -26,10 +26,17 @@ import asyncio
 from typing import List, Dict, Any, Optional, Callable
 from config import get_path
 
-# Получаем путь к моделям из конфига
-MODEL_PATH = get_path("model_path")
-from backend.context_prompts import context_prompt_manager
-from backend.llm_client import ask_agent_llm_svc, get_llm_service
+# Импорт путей и настроек
+try:
+    from backend.config import get_path
+    MODEL_PATH = get_path("model_path")
+    from backend.context_prompts import context_prompt_manager
+    from backend.llm_client import ask_agent_llm_svc, get_llm_service
+except ImportError:
+    from config import get_path
+    MODEL_PATH = get_path("model_path")
+    from context_prompts import context_prompt_manager
+    from llm_client import ask_agent_llm_svc, get_llm_service
 
 # Настройка логирования с поддержкой UTF-8
 logger = logging.getLogger(__name__)
@@ -207,7 +214,11 @@ def reload_model_by_path(model_path):
             try:
                 async def _load_on_llm_svc():
                     service = await get_llm_service()
-                    return await service.client.load_model(model_name)
+                    ok = await service.client.load_model(model_name)
+                    if ok:
+                        service.model_name = model_name
+                        logger.info(f"[llm-svc] Обновлён model_name в бэкенде: {model_name}")
+                    return ok
                 try:
                     loop = asyncio.get_event_loop()
                 except RuntimeError:

@@ -1,5 +1,6 @@
 import asyncio
 import uuid
+import os
 from typing import List, Optional, AsyncGenerator
 from app.models.schemas import Message, ToolDefinition, ChatCompletionResponse
 from app.core.config import settings
@@ -9,6 +10,9 @@ from .generators.non_stream_generator import NonStreamResponseGenerator
 from .generators.stream_generator import StreamResponseGenerator
 import logging
 logger = logging.getLogger(__name__)
+
+MODELS_DIR = "/app/models/llm"
+
 class LlamaService:
     """Фасад для работы с моделями LLM"""
     _instance: Optional['LlamaService'] = None
@@ -150,3 +154,72 @@ class LlamaService:
     def is_available(self) -> bool:
         """Проверка, есть ли свободные инстансы для обработки запросов"""
         return self._initialized and self.model_pool.available_count > 0
+
+    @property
+    def model_path(self) -> str:
+        """Путь к текущей модели (из конфига)."""
+        return settings.model.path
+
+    @property
+    def n_ctx(self) -> int:
+        """Размер контекста из конфига."""
+        return settings.model.ctx_size
+
+    @property
+    def n_gpu_layers(self) -> int:
+        """Количество GPU-слоёв из конфига."""
+        return settings.model.gpu_layers
+
+    async def load_model(self, model_name_or_path: str) -> bool:
+        """
+        Переключение на другую модель по имени (файл без .gguf) или по полному пути.
+        Обновляет конфиг, делает cleanup и повторную инициализацию пула.
+        """
+        name = (model_name_or_path or "").strip()
+        if not name:
+            logger.error("load_model: пустое имя модели")
+            return False
+        if name.lower().endswith(".gguf"):
+            name = name[:-5]
+        name = os.path.basename(name).strip()
+        if not name:
+            return False
+        if os.path.isabs(model_name_or_path.strip()) and os.path.exists(model_name_or_path.strip()):
+            model_path = model_name_or_path.strip()
+            display_name = os.path.splitext(os.path.basename(model_path))[0]
+        else:
+            model_path = os.path.join(MODELS_DIR, f"{name}.gguf")
+            display_name = name
+        if not os.path.exists(model_path):
+            logger.error(f"Model file not found: {model_path}")
+            return False
+        if self._initialized and self.model_name == display_name:
+            logger.info(f"Model {display_name} already loaded")
+            return True
+        prev_path = settings.model.path
+        prev_name = settings.model.name
+        try:
+            settings.model.path = model_path
+            settings.model.name = display_name
+            await self.cleanup()
+            await self.initialize()
+            self.model_name = display_name
+            self.non_stream_generator = NonStreamResponseGenerator(
+                self.model_name, self._create_completion
+            )
+            self.stream_generator = StreamResponseGenerator(
+                self.model_name, self._create_completion_stream
+            )
+            logger.info(f"Switched to model: {display_name}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to load model {display_name}: {e}")
+            settings.model.path = prev_path
+            settings.model.name = prev_name
+            try:
+                await self.initialize()
+                self.model_name = settings.model.name
+                logger.info(f"Restored previous model: {self.model_name}")
+            except Exception as restore_e:
+                logger.error(f"Failed to restore previous model: {restore_e}")
+            return False

@@ -37,7 +37,7 @@ class RagService:
         cfg = get_settings().rag
         self._cfg = cfg
 
-        # BM25 / гибридный поиск (как в backend DocumentProcessor)
+        # BM25 / гибридный поиск 
         self.use_hybrid_search: bool = cfg.use_hybrid_search
         self.hybrid_bm25_weight: float = cfg.hybrid_bm25_weight
         self.bm25_index: Optional[BM25Okapi] = None
@@ -218,14 +218,14 @@ class RagService:
         Поиск: эмбеддинг запроса → векторный поиск → опционально гибрид с BM25 → опционально rerank.
 
         strategy:
-        - "auto" (по умолчанию) — как в backend DocumentProcessor: приоритет reranking → hierarchical → hybrid → standard.
-        - "reranking" — векторный/гибридный/иерархический поиск + rerank.
-        - "hierarchical" — умный поиск по иерархии (OptimizedDocumentIndex).
-        - "hybrid" — только гибрид (BM25 + векторный), без rerank.
-        - "standard" — только векторный поиск (pgvector), без BM25 и rerank.
+        - "auto" (по умолчанию) - как в backend DocumentProcessor: приоритет reranking → hierarchical → hybrid → standard.
+        - "reranking" - векторный/гибридный/иерархический поиск + rerank.
+        - "hierarchical" - умный поиск по иерархии (OptimizedDocumentIndex).
+        - "hybrid" - только гибрид (BM25 + векторный), без rerank.
+        - "standard" - только векторный поиск (pgvector), без BM25 и rerank.
         Также поддерживается "flat" как синоним "standard".
 
-        Возвращает список (content, score, document_id, chunk_index), где score — комбинированный
+        Возвращает список (content, score, document_id, chunk_index), где score - комбинированный
         скор (для reranking: 0.7 * rerank_score + 0.3 * original_score, как в backend).
         """
         if not query or not query.strip():
@@ -235,7 +235,7 @@ class RagService:
         if user_strategy == "flat":
             user_strategy = "standard"
 
-        # Явный иерархический поиск — отдельная ветка
+        # Явный иерархический поиск - отдельная ветка
         if user_strategy == "hierarchical" and self._optimized_index is not None:
             try:
                 return await self._optimized_index.smart_search_async(query, k=k, search_strategy="auto")

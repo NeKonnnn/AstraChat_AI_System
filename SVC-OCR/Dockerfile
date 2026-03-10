@@ -2,14 +2,14 @@ FROM ubuntu:22.04
 
 WORKDIR /app
 
-# Установка переменных окружения (ОРИГИНАЛ)
+# Установка переменных окружения 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
 
-# Установка timezone без промптов (ОРИГИНАЛ)
+# Установка timezone без промптов 
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
-# Установка Python 3.11 и системных зависимостей (ОРИГИНАЛ)
+# Установка Python 3.11 и системных зависимостей 
 # Добавлены libgl1 и libglib2.0-0 для работы OpenCV/Pillow, которые нужны Surya
 # Добавлены libldap2-dev и libsasl2-dev для сборки python-ldap
 RUN apt-get update && apt-get install -y \
@@ -39,11 +39,11 @@ RUN apt-get update && apt-get install -y \
     libsasl2-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Создание символической ссылки для python (ОРИГИНАЛ)
+# Создание символической ссылки для python 
 RUN ln -sf /usr/bin/python3.11 /usr/bin/python && \
     ln -sf /usr/bin/python3.11 /usr/bin/python3
 
-# Флаги сборки (ОРИГИНАЛ)
+# Флаги сборки 
 ENV CMAKE_ARGS="-DGGML_METAL=OFF -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS" \
     CFLAGS="-pthread -mcpu=native" \
     CXXFLAGS="-pthread -mcpu=native"
@@ -53,7 +53,7 @@ COPY requirements.txt .
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir --prefer-binary -r requirements.txt
 
-# Переменные окружения (ОРИГИНАЛ)
+# Переменные окружения 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
@@ -65,7 +65,7 @@ COPY config/ ./config/
 # Создание директории для моделей
 RUN mkdir -p /app/models/surya
 
-# Создание непривилегированного пользователя (ОРИГИНАЛ)
+# Создание непривилегированного пользователя 
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 
 # Установка прав доступа

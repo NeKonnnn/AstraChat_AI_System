@@ -2,14 +2,14 @@ FROM ubuntu:22.04
 
 WORKDIR /app
 
-# Установка переменных окружения (ОРИГИНАЛ)
+# Установка переменных окружения 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
 
-# Установка timezone (ОРИГИНАЛ)
+# Установка timezone 
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
-# Установка Python 3.11 и системных зависимостей (ОРИГИНАЛ)
+# Установка Python 3.11 и системных зависимостей 
 # Здесь есть ffmpeg, sox, libsndfile - всё нужное для STT
 RUN apt-get update && apt-get install -y \
     software-properties-common \
@@ -44,38 +44,38 @@ RUN apt-get update && apt-get install -y \
     sox \
     && rm -rf /var/lib/apt/lists/*
 
-# Создание символической ссылки для python (ОРИГИНАЛ)
+# Создание символической ссылки для python 
 RUN ln -sf /usr/bin/python3.11 /usr/bin/python && \
     ln -sf /usr/bin/python3.11 /usr/bin/python3
 
-# Флаги для сборки (ОРИГИНАЛ)
+# Флаги для сборки 
 ENV CMAKE_ARGS="-DGGML_METAL=OFF -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS" \
     CFLAGS="-pthread -mcpu=native" \
     CXXFLAGS="-pthread -mcpu=native"
 
-# Установка Python зависимостей (ОРИГИНАЛ)
+# Установка Python зависимостей 
 COPY requirements.txt .
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir --prefer-binary -r requirements.txt
 
-# Переменные окружения (ОРИГИНАЛ)
+# Переменные окружения 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
-# Настройка многопоточности (ОРИГИНАЛ)
+# Настройка многопоточности 
 ENV OMP_NUM_THREADS=8
 ENV OPENBLAS_NUM_THREADS=8
 ENV MKL_NUM_THREADS=8
 
-# Копирование исходного кода и конфигурации (ТЕПЕРЬ ТОЛЬКО ДЛЯ ЭТОГО СЕРВИСА)
+# Копирование исходного кода и конфигурации 
 COPY app/ ./app/
 COPY config/ ./config/
 
 # Создание директории для моделей (модели монтируются томами, копирование не требуется)
 RUN mkdir -p /app/models/vosk /app/models/whisperx_models
 
-# Создание непривилегированного пользователя (ОРИГИНАЛ)
+# Создание непривилегированного пользователя 
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 
 # Установка прав доступа к папке моделей

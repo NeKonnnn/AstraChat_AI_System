@@ -20,7 +20,7 @@ app:
   description: "Microservice for Silero Text-to-Speech"
   version: "1.0.0"
 
-# Настройки логирования (ОРИГИНАЛ)
+# Настройки логирования
 logging:
   level: "INFO"
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -28,7 +28,6 @@ logging:
   backup_count: 5
 
 # --- SILERO (СИНТЕЗ РЕЧИ) ---
-# Настройки оставлены точь-в-точь как в оригинале
 silero:
   enabled: true
   models_dir: "/app/models/silero"  # Путь внутри контейнера
@@ -49,7 +48,7 @@ silero:
 
 # --- ОСТАЛЬНЫЕ МОДУЛИ ОТКЛЮЧЕНЫ ---
 # Эти секции обязаны быть в файле, чтобы Pydantic-модель из app/core/config.py 
-# прошла валидацию при загрузке, но мы их деактивируем.
+# прошла валидацию при загрузке
 
 model:
   path: "/dev/null"

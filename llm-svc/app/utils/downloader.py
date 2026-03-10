@@ -5,7 +5,6 @@
 - Google Cloud Storage
 - HTTP/HTTPS
 """
-
 import os
 import logging
 import requests
@@ -63,37 +62,35 @@ def download_from_s3(s3_url: str, destination: str) -> bool:
     """Загрузка файла из S3 или S3-совместимого хранилища"""
     try:
         import boto3
-        from botocore.exceptions import ClientError
+        from botocore.exceptions import ClientError  # если дальше будешь обрабатывать ошибки по-умному
     except ImportError:
         logger.error("boto3 не установлен. Установите: pip install boto3")
         return False
-    
+
     try:
         # Парсим s3 URL
         # Формат: s3://bucket-name/path/to/file
         parsed = urlparse(s3_url)
         bucket = parsed.netloc
         key = parsed.path.lstrip('/')
-        
+
         logger.info(f"Загрузка модели из S3: {bucket}/{key}")
-        
-        # Получаем учетные данные из переменных окружения
+
+        # Создаём клиент S3, берём учётные данные из переменных окружения
         s3_client = boto3.client(
             's3',
             aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
             aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
             region_name=os.getenv('AWS_DEFAULT_REGION', 'us-east-1')
         )
-        
-        # Создаем директорию если не существует
+
+        # Создаём директорию, если её нет
         Path(destination).parent.mkdir(parents=True, exist_ok=True)
-        
+
         # Загружаем файл
         s3_client.download_file(bucket, key, destination)
-        
         logger.info(f"Модель успешно загружена из S3 в {destination}")
         return True
-        
     except Exception as e:
         logger.error(f"Ошибка при загрузке из S3: {str(e)}")
         return False

@@ -94,7 +94,7 @@ class LLMClient:
         try:
             async with httpx.AsyncClient(timeout=load_timeout) as client:
                 response = await client.post(
-                    f"{self.base_url}/v1/models/load",
+                    f"{self.llm_url}/v1/models/load",
                     headers=self._get_headers(),
                     json={"model": model_name}
                 )
@@ -491,18 +491,21 @@ class LLMService:
         self.auto_select = llm_svc_config.auto_select
         
     async def initialize(self) -> bool:
-        """Инициализация сервиса"""
+        """Инициализация связи с сервисом LLM."""
         try:
             health = await self.client.health_check()
             if health.get("status") == "healthy":
-                logger.info("llm-svc сервис доступен")
-                
-                # Получаем список моделей
-                models = await self.client.get_models()
-                if models:
-                    self.model_name = models[0]["id"]
-                    logger.info(f"Используется модель: {self.model_name}")
-                
+                logger.info("Связь с микросервисом LLM установлена")
+                # Используем фактически загруженную модель из llm-svc (health)
+                if health.get("model_loaded") and health.get("model_name"):
+                    self.model_name = health["model_name"]
+                    logger.info(f"Текущая загруженная модель в llm-svc: {self.model_name}")
+                else:
+                    # Модель ещё не загружена — опционально можно взять из конфига или не менять
+                    models = await self.client.get_models()
+                    if models:
+                        self.model_name = models[0]["id"]
+                        logger.info(f"Модель не загружена в llm-svc, используем первую из списка: {self.model_name}")
                 return True
             else:
                 logger.error(f"llm-svc недоступен: {health}")

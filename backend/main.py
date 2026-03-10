@@ -301,7 +301,7 @@ except Exception as e:
 # Импорт клиента для SVC-RAG (RAG‑логика вынесена в отдельный сервис)
 try:
     logger.info("Попытка импорта RagClient (SVC-RAG)...")
-    from backend.rag_client import get_rag_client
+    from backend.settings.rag_client import get_rag_client
     rag_client = get_rag_client()
     logger.info(f"RagClient инициализирован, base_url={rag_client.base_url}")
 except ImportError as e:

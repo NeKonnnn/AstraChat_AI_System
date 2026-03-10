@@ -23,7 +23,7 @@ logging:
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
 # --- RAG MODELS (embedding + reranker) ---
-# models_dir — путь ВНУТРИ КОНТЕЙНЕРА. На хосте кладите модели в КОРЕНЬ ПРОЕКТА: models/rag/
+# На хосте кладите модели в КОРЕНЬ ПРОЕКТА: models/rag/
 # (рядом с models/ для LLM). В docker-compose: volumes: - ./models:/app/models
 # Тогда в контейнере /app/models/rag = host models/rag/
 # Структура: models/rag/paraphrase-multilingual-MiniLM-L12-v2/, models/rag/ms-marco-MiniLM-L-6-v2/
@@ -34,5 +34,5 @@ rag_models:
   # Если папки нет, сервис попытается скачать модель с Hugging Face в models_dir.
   embedding_model: "paraphrase-multilingual-MiniLM-L12-v2"
   reranker_model: "ms-marco-MiniLM-L-6-v2"
-  offline: true   # только локальные модели, без запросов к HuggingFace (избегаем 401/503)
+  offline: true   # только локальные модели, без запросов к HuggingFace
   device: "cpu"
