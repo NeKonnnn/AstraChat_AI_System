@@ -21,7 +21,8 @@ class RerankResponse(BaseModel):
 
 @router.post("/rerank", response_model=RerankResponse)
 async def rerank_passages(request: RerankRequest):
-    # Переранжируем пассажи по релевантности к запросу. Возвращаем top_k индексов и скоры.
+    # Переранжируем по релевантности к запросу
+    # Возвращаем top_k индексов и скоры
     if not settings.rag_models.enabled:
         raise HTTPException(status_code=503, detail="Сервис RAG-моделей выключен")
     if not request.passages:

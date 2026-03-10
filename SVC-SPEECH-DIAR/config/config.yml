@@ -1,4 +1,4 @@
-# Конфигурация сервера (ОРИГИНАЛ)
+# Конфигурация сервера 
 server:
   host: "0.0.0.0"
   port: 8000
@@ -6,7 +6,7 @@ server:
   docs_url: "/docs"
   redoc_url: "/redoc"
 
-# Настройки CORS (ОРИГИНАЛ)
+# Настройки CORS 
 cors:
   allowed_origins:
     - "*"
@@ -20,8 +20,7 @@ app:
   description: "Microservice for Pyannote Speaker Diarization"
   version: "1.0.0"
 
-# --- DIARIZATION (РАЗДЕЛЕНИЕ СПИКЕРОВ) ---
-# Настройки взяты из твоего оригинала
+# --- DIARIZATION  ---
 diarization:
   enabled: true
   models_dir: "/app/models/diarization"  # Путь внутри контейнера

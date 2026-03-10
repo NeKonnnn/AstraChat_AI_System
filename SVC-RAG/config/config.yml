@@ -27,7 +27,7 @@ rag_models_client:
   base_url: "http://rag-models:8000"
   timeout: 60.0
 
-# PostgreSQL с pgvector (та же БД, что и у backend, или своя)
+# PostgreSQL с pgvector 
 postgresql:
   host: "postgresql"
   port: 5432

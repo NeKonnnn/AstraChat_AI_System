@@ -1,9 +1,12 @@
+"""
+Тонкий async-клиент для SVC-RAG.
+"""
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-from settings import get_settings
+from .config import get_settings
 
 
 class RagClient:
@@ -57,7 +60,6 @@ class RagClient:
                 resp.raise_for_status()
                 return resp.json()
         except httpx.HTTPStatusError as e:
-            # Пробрасываем человекочитаемую ошибку наверх
             detail = None
             try:
                 detail = e.response.json()
@@ -78,10 +80,6 @@ class RagClient:
         minio_bucket: Optional[str] = None,
         original_path: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """
-        Загрузить документ в SVC-RAG.
-        Соответствует SVC-RAG POST /documents (multipart + form-поля для MinIO).
-        """
         files = {
             "file": (filename, file_bytes, "application/octet-stream"),
         }
@@ -96,11 +94,7 @@ class RagClient:
         return await self._request("POST", "/documents", files=files, data=data)
 
     async def list_documents(self) -> List[Dict[str, Any]]:
-        """
-        Получить список документов: [{id, filename, created_at}, ...].
-        """
         resp = await self._request("GET", "/documents")
-        # Эндпоинт уже возвращает список; просто прокидываем дальше
         return resp
 
     async def delete_document_by_id(self, document_id: int) -> Dict[str, Any]:
@@ -114,11 +108,6 @@ class RagClient:
         document_id: int,
         max_chunks: int = 2,
     ) -> List[Tuple[str, float, Optional[int], Optional[int]]]:
-        """
-        Получить первые чанки документа (для оглавления/структуры).
-        Возвращает тот же формат, что и search: (content, score, document_id, chunk_index).
-        score для этих чанков задаём 1.0 (высокий приоритет при слиянии).
-        """
         try:
             resp = await self._request(
                 "GET",
@@ -146,11 +135,6 @@ class RagClient:
         document_id: Optional[int] = None,
         use_reranking: Optional[bool] = None,
     ) -> List[Tuple[str, float, Optional[int], Optional[int]]]:
-        """
-        Поиск по документам.
-        strategy: "auto" | "reranking" | "hierarchical" | "hybrid" | "standard" (или "flat").
-        Возвращает список (content, score, document_id, chunk_index).
-        """
         body: Dict[str, Any] = {
             "query": query,
             "k": k,
@@ -163,7 +147,6 @@ class RagClient:
             body["strategy"] = strategy
 
         resp = await self._request("POST", "/search", json=body)
-        # SVC-RAG /search возвращает {"hits": [{content, score, document_id, chunk_index}, ...]}
         hits = resp.get("hits", [])
         return [
             (
@@ -176,17 +159,10 @@ class RagClient:
         ]
 
     async def get_confidence_report(self) -> Dict[str, Any]:
-        """
-        Получить агрегированный отчёт по уверенности (как get_confidence_report_data в backend).
-        """
         return await self._request("GET", "/documents/report/confidence")
 
     async def get_image_minio_info(self, filename: str) -> Optional[Dict[str, Any]]:
-        """
-        Получить информацию о MinIO/пути для изображения по имени файла.
-        """
         resp = await self._request("GET", f"/documents/minio-info/{filename}")
-        # Эндпоинт может вернуть null
         if resp is None:
             return None
         return resp
@@ -196,11 +172,7 @@ _rag_client_singleton: Optional[RagClient] = None
 
 
 def get_rag_client() -> RagClient:
-    """
-    Ленивая инициализация глобального клиента SVC-RAG для backend.
-    """
     global _rag_client_singleton
     if _rag_client_singleton is None:
         _rag_client_singleton = RagClient()
     return _rag_client_singleton
-

@@ -34,7 +34,7 @@ vosk:
 whisperx:
   enabled: true
   models_dir: "/app/models/whisperx_models" # Путь внутри контейнера
-  device: "cpu"  # cpu — PyTorch 2.1.2 не поддерживает RTX 5070 Ti (sm_120)
+  device: "cpu"  # cpu - PyTorch 2.1.2 не поддерживает RTX 5070 Ti (sm_120)
   compute_type: "int8"  # int8 для CPU
   language: "ru"
   batch_size: 16

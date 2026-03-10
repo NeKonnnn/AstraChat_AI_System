@@ -50,7 +50,7 @@ class PostgreSQLConfig(BaseModel):
 
 
 class OcrConfig(BaseModel):
-    # URL сервиса OCR (Surya). Такой же, как в backend: SVC_OCR_URL / http://ocr-service:8000
+    # URL сервиса OCR (Surya) SVC_OCR_URL / http://ocr-service:8000
     url: str = os.environ.get("SVC_OCR_URL", "http://ocr-service:8000")
     timeout: float = float(os.environ.get("RAG_OCR_TIMEOUT", "300.0"))
 
@@ -66,7 +66,7 @@ class RagServiceConfig(BaseModel):
     chunk_size: int = 1000
     chunk_overlap: int = 200
 
-    # Иерархическое индексирование (как в backend DocumentProcessor)
+    # Иерархическое индексирование 
     use_hierarchical_indexing: bool = os.environ.get("RAG_USE_HIERARCHICAL", "true").lower() == "true"
     hierarchical_threshold: int = int(os.environ.get("RAG_HIERARCHICAL_THRESHOLD", "10000"))
     hierarchical_chunk_size: int = int(os.environ.get("RAG_HIERARCHICAL_CHUNK_SIZE", "1500"))

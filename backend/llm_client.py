@@ -127,6 +127,34 @@ class LLMClient:
         except Exception as e:
             logger.error(f"Ошибка получения моделей: {e}")
             return []
+
+    async def load_model(self, model_name: str) -> bool:
+        """Запросить LLM-сервис загрузить/переключить модель по имени (для llama.cpp backend)."""
+        if not model_name or not model_name.strip():
+            logger.warning("load_model: пустое имя модели")
+            return False
+        model_name = model_name.strip()
+        # Большие модели на CPU могут грузиться 5–15+ минут
+        load_timeout = httpx.Timeout(900.0, connect=10.0, read=900.0, write=30.0)
+        try:
+            async with httpx.AsyncClient(timeout=load_timeout) as client:
+                response = await client.post(
+                    f"{self.llm_url}/v1/models/load",
+                    headers=self._get_headers(),
+                    json={"model": model_name}
+                )
+                if not response.is_success:
+                    logger.error(f"llm-svc load_model failed: {response.status_code} {response.text}")
+                    return False
+                data = response.json()
+                if data.get("success"):
+                    logger.info(f"llm-svc переключился на модель: {model_name}")
+                    return True
+                logger.warning(f"llm-svc load_model returned success=False: {data}")
+                return False
+        except Exception as e:
+            logger.error(f"Ошибка вызова llm-svc load_model: {e}")
+            return False
     
     async def chat_completion(
         self,
@@ -453,15 +481,21 @@ class LLMService:
             self.auto_select = False
         
     async def initialize(self) -> bool:
-        """Инициализация связи с сервисом LLM """
+        """Инициализация связи с сервисом LLM."""
         try:
             health = await self.client.health_check()
             if health.get("status") == "healthy":
                 logger.info("Связь с микросервисом LLM установлена")
-                models = await self.client.get_models()
-                if models:
-                    self.model_name = models[0]["id"]
-                    logger.info(f"Активная модель: {self.model_name}")
+                # Используем фактически загруженную модель из llm-svc (health)
+                if health.get("model_loaded") and health.get("model_name"):
+                    self.model_name = health["model_name"]
+                    logger.info(f"Текущая загруженная модель в llm-svc: {self.model_name}")
+                else:
+                    # Модель ещё не загружена — опционально можно взять из конфига или не менять
+                    models = await self.client.get_models()
+                    if models:
+                        self.model_name = models[0]["id"]
+                        logger.info(f"Модель не загружена в llm-svc, используем первую из списка: {self.model_name}")
                 return True
             else:
                 logger.error(f"Микросервис LLM недоступен: {health}")

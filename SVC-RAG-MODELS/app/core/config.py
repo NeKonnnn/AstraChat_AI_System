@@ -38,9 +38,9 @@ class RagModelsConfig(BaseModel):
     enabled: bool = True
     # Папка, куда кладём кэш HF и свои модели
     models_dir: str = os.environ.get("RAG_MODELS_DIR", "/app/models/rag")
-    # Эмбеддинг: имя с HF или подпапка в models_dir (например paraphrase-multilingual-MiniLM-L12-v2)
+    # Эмбеддинг: имя с HF или подпапка в models_dir 
     embedding_model: Optional[str] = os.environ.get("RAG_EMBEDDING_MODEL")
-    # Реранкер: то же самое (например ms-marco-MiniLM-L-6-v2)
+    # Реранкер: то же самое 
     reranker_model: Optional[str] = os.environ.get("RAG_RERANKER_MODEL")
     # Только локальные веса, в интернет не качаем
     offline: bool = os.environ.get("RAG_MODELS_OFFLINE", "0").strip().lower() in ("1", "true", "yes")

@@ -25,11 +25,13 @@ from typing import List, Dict, Any, Optional, Callable
 
 # Импорт путей и настроек
 try:
-    from backend.config.config import PROJECT_ROOT
+    from backend.config import get_path
+    MODEL_PATH = get_path("model_path")
     from backend.context_prompts import context_prompt_manager
     from backend.llm_client import ask_agent_llm_svc, get_llm_service
 except ImportError:
-    from config.config import PROJECT_ROOT
+    from config import get_path
+    MODEL_PATH = get_path("model_path")
     from context_prompts import context_prompt_manager
     from llm_client import ask_agent_llm_svc, get_llm_service
 
@@ -152,21 +154,63 @@ def update_model_settings(new_settings):
 _selected_model_name = None
 
 def reload_model_by_path(model_path):
-    """Выбор модели в распределенной системе  """
+    """Перезагрузка модели с новым файлом модели (через llm-svc)"""
     global _selected_model_name
+    
     if USE_LLM_SVC:
-        if os.path.isdir(model_path): return False
+        # Проверяем, что путь не является директорией
+        if os.path.isdir(model_path):
+            logger.warning(f"Передан путь к директории вместо файла модели: {model_path}. Пропускаем загрузку.")
+            return False
         
-        # Если путь начинается с llm-svc://, извлекаем ID модели
+        # Проверяем, является ли путь llm-svc путем
         if model_path.startswith("llm-svc://"):
-            model_name = model_path.replace("llm-svc://", "")
+            # Извлекаем имя модели из пути
+            model_name = model_path.replace("llm-svc://", "").strip()
+            if not model_name:
+                logger.warning("llm-svc: пустое имя модели в пути")
+                return False
+            global _selected_model_name
             _selected_model_name = model_name
-            logger.info(f"[SVC] Выбрана модель: {model_name}")
+            # Запрашиваем llm-svc реально переключить загруженную модель (веса)
+            try:
+                async def _load_on_llm_svc():
+                    service = await get_llm_service()
+                    ok = await service.client.load_model(model_name)
+                    if ok:
+                        service.model_name = model_name
+                        logger.info(f"[llm-svc] Обновлён model_name в бэкенде: {model_name}")
+                    return ok
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                if loop.is_running():
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(asyncio.run, _load_on_llm_svc())
+                        return future.result()
+                else:
+                    return loop.run_until_complete(_load_on_llm_svc())
+            except Exception as e:
+                logger.exception(f"Ошибка переключения модели в llm-svc: {e}")
+                return False
+        
+        # Если путь к локальному файлу, но мы используем llm-svc, предупреждаем
+        if os.path.exists(model_path) and model_path.endswith('.gguf'):
+            logger.warning(f"Передан путь к локальному файлу модели {model_path}, но используется llm-svc. Модель должна быть доступна через llm-svc.")
             return True
         
-        logger.warning(f"[SVC] Запрос локального пути {model_path} в режиме микросервисов")
+        logger.info(f"Перезагрузка модели через llm-svc: {model_path}")
+        # В llm-svc перезагрузка модели происходит через конфигурацию
+        # Здесь мы можем обновить настройки или перезапустить сервис
+        logger.info("Для смены модели в llm-svc обновите конфигурацию и перезапустите сервис")
         return True
-    return True
+    else:
+        # Fallback к оригинальной логике
+        logger.info("Используется оригинальная перезагрузка модели")
+        return True
 
 def get_model_info():
     """Получение информации о модели через API"""

@@ -27,7 +27,7 @@ class EmbedResponse(BaseModel):
 
 @router.post("/embed", response_model=EmbedResponse)
 async def embed_texts(request: EmbedRequest):
-    # Считаем эмбеддинги для одного или нескольких текстов. На выходе — векторы (у MiniLM-L12 по 384 числа).
+    # Считаем эмбеддинги для одного или нескольких текстов. На выходе - векторы
     if not settings.rag_models.enabled:
         raise HTTPException(status_code=503, detail="Сервис RAG-моделей выключен")
     texts = request.get_texts()

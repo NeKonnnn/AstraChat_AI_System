@@ -5,15 +5,9 @@
 
 import asyncio
 import logging
-import os
-import sys
-from pathlib import Path
-
-# Добавляем путь к корню проекта
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from backend.database.postgresql.connection import PostgreSQLConnection
-from backend.config import settings
+from backend.settings import get_settings
 
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
@@ -26,13 +20,16 @@ async def cleanup_invalid_tags(action: str = "rename"):
     Args:
         action: "delete" - удалить теги, "rename" - переименовать (по умолчанию)
     """
-    # Создаем подключение к PostgreSQL
+    # Загружаем настройки PostgreSQL из единого слоя конфигурации
+    app_settings = get_settings()
+    pg = app_settings.postgresql
+
     db_connection = PostgreSQLConnection(
-        host=settings.POSTGRES_HOST,
-        port=settings.POSTGRES_PORT,
-        database=settings.POSTGRES_DB,
-        user=settings.POSTGRES_USER,
-        password=settings.POSTGRES_PASSWORD
+        host=pg.host,
+        port=pg.port,
+        database=pg.database,
+        user=pg.user,
+        password=pg.password,
     )
     
     try:
