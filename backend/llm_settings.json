@@ -1,11 +1,6 @@
 {
-<<<<<<< HEAD
-  "context_size": 50000,
-  "output_tokens": 35000,
-=======
   "context_size": 8192,
   "output_tokens": 1024,
->>>>>>> upstream/main
   "batch_size": 512,
   "n_threads": 12,
   "use_mmap": true,
@@ -18,11 +13,7 @@
   "min_p": 0.05,
   "frequency_penalty": 0.0,
   "presence_penalty": 0.0,
-<<<<<<< HEAD
-  "use_gpu": false,
-=======
   "use_gpu": true,
->>>>>>> upstream/main
   "streaming": true,
   "legacy_api": false
 }

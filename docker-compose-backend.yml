@@ -1,5 +1,5 @@
 services:
-  # Backend - FastAPI (теперь Оркестратор для всех микросервисов)
+  # Backend - FastAPI 
   astrachat-backend:
     build:
       context: ./backend
@@ -14,7 +14,6 @@ services:
     env_file:
       - ./backend/.env # Подхватываем .env из папки бэкенда
     environment:
-      # --- НОВЫЕ ПЕРЕМЕННЫЕ ДЛЯ МИКРОСЕРВИСОВ ---
       - USE_LLM_SVC=true # Включаем режим работы через сервисы
       - SVC_LLM_URL=http://llm-service:8000
       - SVC_STT_URL=http://stt-service:8000
@@ -48,7 +47,7 @@ services:
     networks:
       - astrachat-network
 
-  # --- БАЗЫ ДАННЫХ И NGINX (ОСТАВЛЕНЫ БЕЗ ИЗМЕНЕНИЙ) ---
+  # --- БАЗЫ ДАННЫХ И NGINX ---
 
   mongodb:
     image: mongo:7
@@ -114,7 +113,7 @@ services:
       - ./ssl:/etc/nginx/ssl:ro
     depends_on:
       - astrachat-backend
-      # - astrachat-frontend (если ты его добавишь в главный compose)
+      # - astrachat-frontend 
     restart: unless-stopped
     networks:
       - astrachat-network

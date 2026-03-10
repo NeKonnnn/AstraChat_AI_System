@@ -170,7 +170,6 @@ def reload_model_by_path(model_path):
             if not model_name:
                 logger.warning("llm-svc: пустое имя модели в пути")
                 return False
-            global _selected_model_name
             _selected_model_name = model_name
             # Запрашиваем llm-svc реально переключить загруженную модель (веса)
             try:
