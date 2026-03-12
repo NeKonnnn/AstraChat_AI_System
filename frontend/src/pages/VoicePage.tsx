@@ -30,6 +30,7 @@ import {
 } from '@mui/icons-material';
 import { useAppContext, useAppActions } from '../contexts/AppContext';
 import { useSocket } from '../contexts/SocketContext';
+import VoiceVisualization3D from '../components/VoiceVisualization3D';
 
 export default function VoicePage() {
   const [isRecording, setIsRecording] = useState(false);
@@ -38,6 +39,8 @@ export default function VoicePage() {
   const [audioLevel, setAudioLevel] = useState(0);
   const [recordedText, setRecordedText] = useState('');
   const [recordingTime, setRecordingTime] = useState(0);
+  /** Поток с микрофона для 3D-визуализации (только во время записи) */
+  const [streamForVisualization, setStreamForVisualization] = useState<MediaStream | null>(null);
   const [voiceSettings, setVoiceSettings] = useState({
     voice_id: 'ru',
     speech_rate: 1.0,
@@ -118,11 +121,12 @@ export default function VoicePage() {
     setRecordingTime(0);
     setRealtimeText('');
     setAudioLevel(0);
-    
+    setStreamForVisualization(null);
+
     // Сбрасываем глобальное состояние
     setRecording(false);
     setSpeaking(false);
-    
+
     // Теперь отправляем команду остановки на backend (если WebSocket активен)
     if (voiceSocket && voiceSocket.readyState === WebSocket.OPEN) {
       try {
@@ -532,7 +536,8 @@ export default function VoicePage() {
         } 
       });
       currentStreamRef.current = stream;
-      
+      setStreamForVisualization(stream);
+
       // Настройка аудио контекста для визуализации
       audioContextRef.current = new AudioContext();
       analyserRef.current = audioContextRef.current.createAnalyser();
@@ -685,16 +690,17 @@ export default function VoicePage() {
        console.log('Таймер тишины остановлен');
      }
      
-     setIsRecording(false);
-     setAudioLevel(0);
-     setRealtimeText('');
-     setRecordingTime(0);
-     
-     console.log('Запись полностью остановлена');
-     showNotification('info', 'Прослушивание остановлено');
-     
-     // WebSocket остается активным для следующего использования, но переподключение отключено
-   };
+    setIsRecording(false);
+    setAudioLevel(0);
+    setRealtimeText('');
+    setRecordingTime(0);
+    setStreamForVisualization(null);
+
+    console.log('Запись полностью остановлена');
+    showNotification('info', 'Прослушивание остановлено');
+
+    // WebSocket остается активным для следующего использования, но переподключение отключено
+  };
 
   const processAudio = async (audioBlob: Blob) => {
     if (!isConnected) {
@@ -890,197 +896,153 @@ export default function VoicePage() {
       </Paper>
 
       {/* Основная область */}
-      <Box sx={{ flexGrow: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', p: 2 }}>
-        <Container maxWidth="md">
-          <Card sx={{ p: 4, textAlign: 'center' }}>
-            <CardContent>
-              {/* Визуализация аудио */}
-              <Box sx={{ mb: 4, position: 'relative', display: 'inline-block' }}>
-                <Box
-                  sx={{
-                    width: 200,
-                    height: 200,
-                    borderRadius: '50%',
-                    background: isRecording
-                      ? `conic-gradient(#f44336 ${audioLevel * 360}deg, #e0e0e0 0deg)`
-                      : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    animation: isRecording ? 'pulse 1.5s ease-in-out infinite' : 'none',
-                    transition: 'all 0.3s ease',
-                    '@keyframes pulse': {
-                      '0%': { transform: 'scale(1)', opacity: 1 },
-                      '50%': { transform: 'scale(1.2)', opacity: 0.7 },
-                      '100%': { transform: 'scale(1)', opacity: 1 },
-                    },
-                  }}
-                >
-                  <IconButton
-                    onClick={toggleRecording}
-                    disabled={isProcessing || isSpeaking}
-                    sx={{
-                      width: 120,
-                      height: 120,
-                      backgroundColor: 'white',
-                      color: isRecording ? 'error.main' : 'primary.main',
-                      '&:hover': {
-                        backgroundColor: 'grey.100',
-                      },
-                    }}
-                  >
-                    {isRecording ? (
-                      <StopIcon sx={{ fontSize: 48 }} />
-                    ) : (
-                      <MicIcon sx={{ fontSize: 48 }} />
-                    )}
-                  </IconButton>
-                </Box>
+      <Box sx={{ flexGrow: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', p: 2, position: 'relative' }}>
 
-                {/* Индикаторы состояния */}
-                {isProcessing && (
-                  <Box sx={{ position: 'absolute', top: -10, right: -10 }}>
-                    <CircularProgress size={24} color="secondary" />
-                  </Box>
-                )}
-                
-                {isSpeaking && (
-                  <Box sx={{ position: 'absolute', bottom: -10, right: -10 }}>
-                    <Chip
-                      icon={<VolumeUpIcon />}
-                      label="Говорю"
-                      color="success"
-                      size="small"
-                    />
-                  </Box>
-                )}
-              </Box>
+        {/* ── РЕЖИМ ЗАПИСИ: только 3D без карточки ── */}
+        {isRecording && streamForVisualization ? (
+          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+            {/* 3D объект — никаких контейнеров, фонов, рамок */}
+            <Box sx={{ width: 360, height: 360, position: 'relative' }}>
+              <VoiceVisualization3D stream={streamForVisualization} />
+            </Box>
 
-              {/* Кнопка экстренной остановки - перемещена в более видимое место */}
-              {(isRecording || isProcessing || isSpeaking) && (
-                <Box sx={{ mb: 3, display: 'flex', justifyContent: 'center' }}>
-                  <Button
-                    variant="contained"
-                    color="error"
-                    startIcon={<StopIcon />}
-                    onClick={cleanupResources}
-                    sx={{
-                      px: 3,
-                      py: 1.5,
-                      fontSize: '1.1rem',
-                      fontWeight: 'bold',
-                    }}
-                  >
-                    Остановить все процессы
-                  </Button>
-                </Box>
-              )}
-
-              {/* Статус записи */}
-              <Box sx={{ mb: 2 }}>
-                {isRecording && (
-                  <Box sx={{ textAlign: 'center', mb: 2 }}>
-                    <Typography variant="h6" color="error.main" gutterBottom>
-                      Прослушивание... {Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')}
-                    </Typography>
-                    <Box sx={{ display: 'flex', justifyContent: 'center', gap: 1 }}>
-                      <Box sx={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: 'error.main', animation: 'pulse 1s infinite' }} />
-                      <Box sx={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: 'error.main', animation: 'pulse 1s infinite', animationDelay: '0.2s' }} />
-                      <Box sx={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: 'error.main', animation: 'pulse 1s infinite', animationDelay: '0.4s' }} />
-                    </Box>
-                  </Box>
-                )}
-                
-                <Typography variant="h6" gutterBottom>
-                  {isRecording && 'Говорите четко и ясно...'}
-                  {isProcessing && 'Обрабатываю речь...'}
-                  {isSpeaking && 'Говорю ответ...'}
-                  {!isRecording && !isProcessing && !isSpeaking && 'Нажмите для прослушивания'}
-                </Typography>
-              </Box>
-
-              {/* Индикатор подключения WebSocket */}
-              <Box sx={{ mb: 2, display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 1 }}>
-                <Box
-                  sx={{
-                    width: 12,
-                    height: 12,
-                    borderRadius: '50%',
-                    backgroundColor: isVoiceConnected ? 'success.main' : 'warning.main',
-                    animation: isVoiceConnected ? 'pulse 2s ease-in-out infinite' : 'none',
-                    border: isVoiceConnected ? '2px solid rgba(76, 175, 80, 0.3)' : '2px solid rgba(255, 152, 0, 0.3)',
-                  }}
-                />
-                <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
-                  {isVoiceConnected ? 'Real-Time Голосовой Чат' : 'WebSocket подключится при записи'}
-                </Typography>
-              </Box>
-
-              {/* Инструкции */}
-              <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
-                {isRecording 
-                  ? 'Говорите четко и ясно. Real-time распознавание каждые 2 секунды. Автоматическая остановка через 5 секунд тишины.'
-                  : isProcessing || isSpeaking
-                    ? 'Микрофон заблокирован пока astrachat обрабатывает ваш запрос...'
-                    : 'Нажмите на микрофон и задайте свой вопрос голосом. WebSocket подключится автоматически.'
-                }
+            {/* Статус + таймер */}
+            <Box sx={{ textAlign: 'center' }}>
+              <Typography variant="h6" color="error.main" gutterBottom>
+                Прослушивание... {Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')}
               </Typography>
+              <Box sx={{ display: 'flex', justifyContent: 'center', gap: 1, mb: 1 }}>
+                {[0, 0.2, 0.4].map((d) => (
+                  <Box key={d} sx={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: 'error.main', animation: 'pulse 1s infinite', animationDelay: `${d}s` }} />
+                ))}
+              </Box>
+              <Typography variant="body2" color="text.secondary">
+                Говорите четко и ясно. Автоостановка через 5 сек тишины.
+              </Typography>
+            </Box>
 
-              {/* Real-time распознавание */}
-              {isRecording && realtimeText && (
-                <Card sx={{ mb: 3, p: 2, backgroundColor: 'warning.light' }}>
-                  <Typography variant="subtitle2" color="warning.dark" gutterBottom>
-                    Real-time распознавание (каждые 2 сек):
-                  </Typography>
-                  <Typography variant="body1" sx={{ fontStyle: 'italic', color: 'warning.dark' }}>
-                    "{realtimeText}"
-                  </Typography>
-                </Card>
-              )}
+            {/* Кнопка стоп */}
+            <Button
+              variant="contained"
+              color="error"
+              startIcon={<StopIcon />}
+              onClick={cleanupResources}
+              size="large"
+              sx={{ borderRadius: 8, px: 4 }}
+            >
+              Остановить
+            </Button>
 
-              {/* Финальный распознанный текст */}
-              {recordedText && (
-                <Card sx={{ mb: 3, p: 2, backgroundColor: 'background.default' }}>
-                  <Typography variant="subtitle2" color="primary" gutterBottom>
-                    Финальный распознанный текст:
-                  </Typography>
-                  <Typography variant="body1" sx={{ fontStyle: 'italic' }}>
-                    "{recordedText}"
-                  </Typography>
-                  <Box sx={{ mt: 2, display: 'flex', gap: 1, justifyContent: 'center' }}>
-                    <Button
-                      variant="contained"
-                      startIcon={<SendIcon />}
-                      onClick={handleManualSend}
+            {/* Real-time текст */}
+            {realtimeText && (
+              <Typography variant="body1" sx={{ fontStyle: 'italic', color: 'warning.main', maxWidth: 400, textAlign: 'center' }}>
+                "{realtimeText}"
+              </Typography>
+            )}
+          </Box>
+        ) : (
+          /* ── ОБЫЧНЫЙ РЕЖИМ: карточка ── */
+          <Container maxWidth="md">
+            <Card sx={{ p: 4, textAlign: 'center' }}>
+              <CardContent>
+                <Box sx={{ mb: 4, position: 'relative', display: 'inline-block' }}>
+                  <Box
+                    sx={{
+                      width: 200,
+                      height: 200,
+                      borderRadius: '50%',
+                      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      transition: 'all 0.3s ease',
+                    }}
+                  >
+                    <IconButton
+                      onClick={toggleRecording}
                       disabled={isProcessing || isSpeaking}
+                      sx={{
+                        width: 120,
+                        height: 120,
+                        backgroundColor: 'white',
+                        color: 'primary.main',
+                        '&:hover': { backgroundColor: 'grey.100' },
+                      }}
                     >
-                      Отправить
-                    </Button>
-                    <Button
-                      variant="outlined"
-                      startIcon={<RefreshIcon />}
-                      onClick={() => setRecordedText('')}
-                    >
-                      Очистить
-                    </Button>
+                      <MicIcon sx={{ fontSize: 48 }} />
+                    </IconButton>
                   </Box>
-                </Card>
-              )}
 
-              {/* Индикатор загрузки */}
-              {(isProcessing || isSpeaking) && (
-                <LinearProgress sx={{ mb: 2 }} />
-              )}
+                  {isProcessing && (
+                    <Box sx={{ position: 'absolute', top: -10, right: -10 }}>
+                      <CircularProgress size={24} color="secondary" />
+                    </Box>
+                  )}
+                  {isSpeaking && (
+                    <Box sx={{ position: 'absolute', bottom: -10, right: -10 }}>
+                      <Chip icon={<VolumeUpIcon />} label="Говорю" color="success" size="small" />
+                    </Box>
+                  )}
+                </Box>
 
-              {/* Предупреждения */}
-              {!isConnected && (
-                <Alert severity="warning" sx={{ mb: 2 }}>
-                  Нет соединения с сервером. Голосовой чат недоступен.
-                </Alert>
-              )}
-            </CardContent>
-          </Card>
-        </Container>
+                {(isProcessing || isSpeaking) && (
+                  <Box sx={{ mb: 2 }}>
+                    <Typography variant="h6" gutterBottom>
+                      {isProcessing && 'Обрабатываю речь...'}
+                      {isSpeaking && 'Говорю ответ...'}
+                    </Typography>
+                    <LinearProgress sx={{ mb: 2 }} />
+                  </Box>
+                )}
+
+                {!isProcessing && !isSpeaking && (
+                  <Typography variant="h6" gutterBottom color="text.secondary">
+                    Нажмите для прослушивания
+                  </Typography>
+                )}
+
+                {/* Индикатор WebSocket */}
+                <Box sx={{ mb: 2, display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 1 }}>
+                  <Box sx={{ width: 12, height: 12, borderRadius: '50%', backgroundColor: isVoiceConnected ? 'success.main' : 'warning.main', border: isVoiceConnected ? '2px solid rgba(76,175,80,0.3)' : '2px solid rgba(255,152,0,0.3)' }} />
+                  <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
+                    {isVoiceConnected ? 'Real-Time Голосовой Чат' : 'WebSocket подключится при записи'}
+                  </Typography>
+                </Box>
+
+                <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
+                  {isProcessing || isSpeaking
+                    ? 'Микрофон заблокирован пока astrachat обрабатывает ваш запрос...'
+                    : 'Нажмите на микрофон и задайте свой вопрос голосом.'}
+                </Typography>
+
+                {recordedText && (
+                  <Card sx={{ mb: 3, p: 2, backgroundColor: 'background.default' }}>
+                    <Typography variant="subtitle2" color="primary" gutterBottom>
+                      Распознанный текст:
+                    </Typography>
+                    <Typography variant="body1" sx={{ fontStyle: 'italic' }}>
+                      "{recordedText}"
+                    </Typography>
+                    <Box sx={{ mt: 2, display: 'flex', gap: 1, justifyContent: 'center' }}>
+                      <Button variant="contained" startIcon={<SendIcon />} onClick={handleManualSend} disabled={isProcessing || isSpeaking}>
+                        Отправить
+                      </Button>
+                      <Button variant="outlined" startIcon={<RefreshIcon />} onClick={() => setRecordedText('')}>
+                        Очистить
+                      </Button>
+                    </Box>
+                  </Card>
+                )}
+
+                {!isConnected && (
+                  <Alert severity="warning" sx={{ mb: 2 }}>
+                    Нет соединения с сервером. Голосовой чат недоступен.
+                  </Alert>
+                )}
+              </CardContent>
+            </Card>
+          </Container>
+        )}
       </Box>
     </Box>
   );

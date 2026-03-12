@@ -27,6 +27,7 @@ import {
 import { useAppActions, useAppContext } from '../contexts/AppContext';
 import { useSocket } from '../contexts/SocketContext';
 import { getApiUrl, getWsUrl, API_ENDPOINTS } from '../config/api';
+import VoiceVisualization3D from './VoiceVisualization3D';
 
 export interface VoiceChatDialogProps {
   open: boolean;
@@ -77,6 +78,7 @@ export default function VoiceChatDialog({ open, onClose }: VoiceChatDialogProps)
   const [realtimeText, setRealtimeText] = useState('');
   const [showVoiceSettings, setShowVoiceSettings] = useState(false);
   const [currentVoiceIndex, setCurrentVoiceIndex] = useState(0);
+  const [streamForVisualization, setStreamForVisualization] = useState<MediaStream | null>(null);
 
   // ================================
   // РЕФЫ
@@ -271,6 +273,7 @@ export default function VoiceChatDialog({ open, onClose }: VoiceChatDialogProps)
     setRecordingTime(0);
     setRealtimeText('');
     setAudioLevel(0);
+    setStreamForVisualization(null);
     setRecording(false);
     setSpeaking(false);
     showNotification('info', 'Все процессы остановлены');
@@ -441,6 +444,7 @@ export default function VoiceChatDialog({ open, onClose }: VoiceChatDialogProps)
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
       currentStreamRef.current = stream;
+      setStreamForVisualization(stream);
       audioContextRef.current = new AudioContext();
       analyserRef.current = audioContextRef.current.createAnalyser();
       const source = audioContextRef.current.createMediaStreamSource(stream);
@@ -524,6 +528,7 @@ export default function VoiceChatDialog({ open, onClose }: VoiceChatDialogProps)
     setAudioLevel(0);
     setRealtimeText('');
     setRecordingTime(0);
+    setStreamForVisualization(null);
     showNotification('info', 'Прослушивание остановлено');
   };
 
@@ -814,26 +819,52 @@ export default function VoiceChatDialog({ open, onClose }: VoiceChatDialogProps)
         ) : (
           <Box>
             <Box sx={{ mb: 4, position: 'relative', display: 'inline-block' }}>
-              <Box
-                sx={{
-                  width: 200, height: 200, borderRadius: '50%',
-                  background: isRecording
-                    ? `conic-gradient(#f44336 ${audioLevel * 360}deg, #e0e0e0 0deg)`
-                    : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  animation: isRecording ? 'pulse 1.5s ease-in-out infinite' : 'none',
-                  transition: 'all 0.3s ease',
-                  '@keyframes pulse': { '0%': { transform: 'scale(1)', opacity: 1 }, '50%': { transform: 'scale(1.2)', opacity: 0.7 }, '100%': { transform: 'scale(1)', opacity: 1 } },
-                }}
-              >
-                <IconButton
-                  onClick={stopRecording}
-                  disabled={isProcessing || isSpeaking}
-                  sx={{ width: 120, height: 120, backgroundColor: 'white', color: 'error.main', '&:hover': { backgroundColor: 'grey.100' } }}
+              {streamForVisualization ? (
+                <Box sx={{ position: 'relative', display: 'inline-block', bgcolor: 'transparent', border: 'none', boxShadow: 'none' }}>
+                  <Box sx={{ width: 300, height: 300, position: 'relative', bgcolor: 'transparent', border: 'none', boxShadow: 'none' }}>
+                    <VoiceVisualization3D stream={streamForVisualization} />
+                  </Box>
+                  <Box
+                    sx={{
+                      position: 'absolute',
+                      bottom: 12,
+                      left: '50%',
+                      transform: 'translateX(-50%)',
+                      zIndex: 1,
+                    }}
+                  >
+                    <IconButton
+                      onClick={stopRecording}
+                      disabled={isProcessing || isSpeaking}
+                      sx={{
+                        width: 52,
+                        height: 52,
+                        backgroundColor: 'rgba(244, 67, 54, 0.95)',
+                        color: 'white',
+                        '&:hover': { backgroundColor: 'error.dark' },
+                      }}
+                    >
+                      <StopIcon sx={{ fontSize: 26 }} />
+                    </IconButton>
+                  </Box>
+                </Box>
+              ) : (
+                <Box
+                  sx={{
+                    width: 200, height: 200, borderRadius: '50%',
+                    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}
                 >
-                  <StopIcon sx={{ fontSize: 48 }} />
-                </IconButton>
-              </Box>
+                  <IconButton
+                    onClick={stopRecording}
+                    disabled={isProcessing || isSpeaking}
+                    sx={{ width: 120, height: 120, backgroundColor: 'white', color: 'error.main', '&:hover': { backgroundColor: 'grey.100' } }}
+                  >
+                    <StopIcon sx={{ fontSize: 48 }} />
+                  </IconButton>
+                </Box>
+              )}
               {isProcessing && <Box sx={{ position: 'absolute', top: -10, right: -10 }}><CircularProgress size={24} color="secondary" /></Box>}
               {isSpeaking && (
                 <Box sx={{ position: 'absolute', bottom: -10, right: -10 }}>

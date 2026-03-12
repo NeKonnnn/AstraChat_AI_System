@@ -126,8 +126,8 @@ export default function ChatInputBar({
 
   // В компактном режиме: одна строка — кнопки по бокам; со 2-й строки — кнопки снизу.
   // Переключение по числу символов + гистерезис, чтобы не скакало (scrollHeight давал дребезг).
-  const CHARS_FIRST_LINE = 52;   // примерно столько символов влезает в одну строку (шрифт 0.875rem, кнопки по бокам)
-  const CHARS_SINGLE_BACK = 45;  // обратно в одну строку только когда короче (гистерезис)
+  const CHARS_FIRST_LINE = 100;   // примерно столько символов влезает в одну строку (шрифт 0.875rem, кнопки по бокам)
+  const CHARS_SINGLE_BACK = 100;  // обратно в одну строку только когда короче (гистерезис)
   const [compactMultiline, setCompactMultiline] = useState(false);
   useEffect(() => {
     if (isClassic) return;
