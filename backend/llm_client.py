@@ -361,14 +361,18 @@ class LLMClient:
         language: str = "auto",
         min_speakers: int = 1,
         max_speakers: int = 10,
-        min_duration: float = 1.0
+        min_duration: float = 1.0,
+        engine: str = "vosk",
     ) -> Dict[str, Any]:
-        """Комбинированная транскрибация: диаризация (SVC-SPEECH-DIAR) + STT (SVC-SPEECH-RECG)"""
+        """
+        Комбинированная транскрибация: диаризация (SVC-SPEECH-DIAR) + STT (SVC-SPEECH-RECG).
+        Параметр `engine` позволяет выбирать движок STT: 'vosk' или 'whisperx'.
+        """
         try:
             long_timeout = httpx.Timeout(3600.0, connect=10.0, read=3600.0, write=60.0)
             
             # Шаг 1: Диаризация - получаем сегменты по спикерам
-            logger.info("[transcribe_with_diarization] Шаг 1: запрос диаризации...")
+            logger.info(f"[transcribe_with_diarization] Шаг 1: запрос диаризации... engine={engine}")
             diarization_result = await self.diarize_audio(
                 audio_file, filename=filename,
                 min_speakers=min_speakers, max_speakers=max_speakers,
@@ -381,11 +385,22 @@ class LLMClient:
                 return {"success": True, "text": "", "segments": [], "speakers_count": 0}
             
             # Шаг 2: Транскрибация - отправляем весь файл в STT сервис
-            logger.info("[transcribe_with_diarization] Шаг 2: запрос транскрибации через STT...")
-            transcription_result = await self.transcribe_audio(
-                audio_file, filename=filename, language=language
+            logger.info(f"[transcribe_with_diarization] Шаг 2: запрос транскрибации через STT (engine={engine})...")
+            engine_normalized = (engine or "vosk").lower()
+            if engine_normalized == "whisperx":
+                transcription_result = await self.transcribe_audio_whisperx(
+                    audio_file, filename=filename, language=language
+                )
+            else:
+                transcription_result = await self.transcribe_audio(
+                    audio_file, filename=filename, language=language
+                )
+
+            full_text = (
+                transcription_result.get("text", "")
+                if isinstance(transcription_result, dict)
+                else str(transcription_result)
             )
-            full_text = transcription_result.get("text", "") if isinstance(transcription_result, dict) else str(transcription_result)
             
             # Шаг 3: Комбинируем результаты
             logger.info(f"[transcribe_with_diarization] Комбинируем: {len(segments)} сегментов, текст: {len(full_text)} симв.")

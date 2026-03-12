@@ -26,6 +26,18 @@ import logging
 import traceback
 import warnings
 
+# Базовый логгер модуля (используется в коде до инициализации класса)
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _formatter = logging.Formatter(
+        '[%(asctime)s] %(levelname)s [WhisperXModule] %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S',
+    )
+    _handler.setFormatter(_formatter)
+    logger.addHandler(_handler)
+    logger.setLevel(logging.INFO)
+
 # ПРОВЕРКА РЕЖИМА МИКРОСЕРВИСОВ
 USE_LLM_SVC = os.getenv('USE_LLM_SVC', 'false').lower() == 'true'
 
@@ -183,7 +195,8 @@ class WhisperXTranscriber:
                 response = transcribe_with_diarization_llm_svc(
                     audio_data, 
                     filename=os.path.basename(audio_path),
-                    language=self.language
+                    language=self.language,
+                    engine="whisperx"
                 )
                 
                 if response.get("success"):
