@@ -229,7 +229,8 @@ class UniversalTranscriber:
                 result = transcribe_with_diarization_llm_svc(
                     audio_data, 
                     filename=os.path.basename(audio_path),
-                    language="auto"
+                    language="auto",
+                    engine=self.engine
                 )
                 if result.get("success"):
                     # Формируем текст с метками спикеров из сегментов

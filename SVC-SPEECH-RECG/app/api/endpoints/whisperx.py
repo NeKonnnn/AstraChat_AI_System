@@ -130,42 +130,74 @@ async def transcribe_audio_whisperx(
             # Загружаем аудио
             audio = whisperx.load_audio(wav_file_path)
             
-            # Транскрибируем
-            result = model_info["model"].transcribe(
-                audio, 
+            # Транскрибируем.
+            # Вариант 1: faster-whisper (tuple: (segments, info)).
+            # Вариант 2: whisperx pipeline (dict c ключом "segments" и без "text").
+            raw = model_info["model"].transcribe(
+                audio,
                 batch_size=batch_size,
                 language=language
             )
-            
-            # Извлекаем текст
-            text = result["text"].strip()
-            
-            if not text:
+
+            text = ""
+            detected_lang = language
+            segments_list = []
+
+            if isinstance(raw, tuple):
+                segments_iter, info = raw
+                segments_list = list(segments_iter)  # потребляем генератор
+                text = " ".join((getattr(s, "text", None) or "") for s in segments_list).strip()
+                detected_lang = getattr(info, "language", None) or language
+            elif isinstance(raw, dict):
+                # Новый формат whisperx: {"segments": [...], "word_segments": [...], "language": "..."}
+                segments_list = raw.get("segments") or []
+                detected_lang = raw.get("language", language)
+                # Если есть готовый text - используем, иначе собираем из сегментов
+                text = (raw.get("text") or "").strip()
+                if not text and segments_list:
+                    text = " ".join(
+                        (seg.get("text") or "").strip()
+                        for seg in segments_list
+                        if isinstance(seg, dict)
+                    ).strip()
+
+            # Сегменты для ответа (единый формат)
+            segments = []
+            for seg in segments_list:
+                if hasattr(seg, "text"):
+                    segments.append(
+                        {
+                            "start": getattr(seg, "start", 0),
+                            "end": getattr(seg, "end", 0),
+                            "text": (seg.text or "").strip(),
+                        }
+                    )
+                elif isinstance(seg, dict):
+                    segments.append(
+                        {
+                            "start": seg.get("start", 0),
+                            "end": seg.get("end", 0),
+                            "text": (seg.get("text") or "").strip(),
+                        }
+                    )
+
+            # Если совсем нет текста и сегментов — считаем это ошибкой распознавания
+            if not text and not segments:
                 return JSONResponse(
                     status_code=400,
                     content={
                         "success": False,
-                        "error": "Не удалось распознать текст в аудио (пустой результат)"
-                    }
+                        "error": "Не удалось распознать текст в аудио",
+                    },
                 )
-            
-            # Получаем сегменты если доступны
-            segments = []
-            if "segments" in result:
-                for segment in result["segments"]:
-                    segments.append({
-                        "start": segment.get("start", 0),
-                        "end": segment.get("end", 0),
-                        "text": segment.get("text", "").strip()
-                    })
-            
+
             return JSONResponse(content={
                 "success": True,
                 "text": text,
-                "language": language,
+                "language": detected_lang,
                 "segments": segments,
-                "duration": len(audio) / 16000,  # Примерная длительность
-                "words_count": len(text.split())
+                "duration": len(audio) / 16000,
+                "words_count": len(text.split()) if text else 0
             })
                 
         finally:
@@ -181,7 +213,7 @@ async def transcribe_audio_whisperx(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Ошибка при транскрибации WhisperX: {str(e)}")
+        logger.error(f"Ошибка при транскрибации WhisperX: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Ошибка при транскрибации: {str(e)}")
 
 
