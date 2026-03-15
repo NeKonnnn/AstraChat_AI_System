@@ -435,6 +435,7 @@ async def get_my_agents(
         
         filters = AgentFilters(
             author_id=current_user["user_id"],
+            author_only=True,
             sort_by="date",
             sort_order="desc",
             limit=limit,

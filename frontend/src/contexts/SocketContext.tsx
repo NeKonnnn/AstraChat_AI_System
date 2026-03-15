@@ -587,6 +587,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     currentMessageRef.current = null;
     
 
+    // Читаем флаг "Base знаний" из localStorage (устанавливается в UnifiedChatPage)
+    const useKbRag = localStorage.getItem('use_kb_rag') === 'true';
+
     // Отправляем сообщение через Socket.IO
     const messageData = {
       message,
@@ -594,6 +597,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       timestamp: new Date().toISOString(),
       message_id: userMessageId,  // Передаем ID сообщения с фронтенда
       conversation_id: chatId,     // Передаем ID диалога
+      use_kb_rag: useKbRag,        // Флаг поиска по Базе Знаний
     };
 
     socket!.emit('chat_message', messageData);

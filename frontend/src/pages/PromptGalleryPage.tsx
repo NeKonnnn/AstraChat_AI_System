@@ -1067,28 +1067,12 @@ export default function PromptGalleryPage() {
           <Container maxWidth="xl">
             <Box sx={{ textAlign: 'center' }}>
               <Typography variant="h4" fontWeight="bold" gutterBottom>
-                Галерея Промптов и Агентов
+                Галерея промптов
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                Делитесь лучшими промптами и создавайте собственных ИИ агентов
+                Делитесь лучшими промптами с командой
               </Typography>
             </Box>
-          </Container>
-        </Box>
-
-        {/* Вкладки */}
-        <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-          <Container maxWidth="xl">
-            <Tabs 
-              value={activeTab} 
-              onChange={handleTabChange}
-              variant="fullWidth"
-              textColor="primary"
-              indicatorColor="primary"
-            >
-              <Tab icon={<PromptIcon />} label="Промпты" iconPosition="start" />
-              <Tab icon={<AgentIcon />} label="Агенты" iconPosition="start" />
-            </Tabs>
           </Container>
         </Box>
 
@@ -1099,7 +1083,7 @@ export default function PromptGalleryPage() {
               <Box sx={{ flex: '1 1 300px', minWidth: '250px' }}>
                 <TextField
                   fullWidth
-                  placeholder={activeTab === 0 ? "Поиск промптов..." : "Поиск агентов..."}
+                  placeholder="Поиск промптов..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   InputProps={{
@@ -1124,151 +1108,44 @@ export default function PromptGalleryPage() {
             py: 3,
           }}
         >
-        {activeTab === 0 ? (
-          // Вкладка промптов
-          <>
-            {loading ? (
-              <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-                <CircularProgress />
-              </Box>
-            ) : prompts.length === 0 ? (
-              <Alert severity="info">
-                Промпты не найдены. Попробуйте изменить фильтры или создайте первый промпт!
-              </Alert>
-            ) : (
-              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)', lg: 'repeat(3, 1fr)' }, gap: 3 }}>
-                {prompts.map((prompt) => (
-                  <Box key={prompt.id}>
-                    <PromptCard
-                      prompt={prompt}
-                      onRate={(rating) => handleRatePrompt(prompt.id, rating)}
-                      onUse={() => handleUsePrompt(prompt)}
-                      onEdit={() => openEditDialog(prompt)}
-                      onDelete={() => openDeleteDialog(prompt.id)}
-                      onToggleBookmark={() => handleToggleBookmark(prompt)}
-                      onView={loadPrompts}
-                    />
-                  </Box>
-                ))}
-              </Box>
-            )}
+          {loading ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
+              <CircularProgress />
+            </Box>
+          ) : prompts.length === 0 ? (
+            <Alert severity="info">
+              Промпты не найдены. Попробуйте изменить фильтры или создайте первый промпт!
+            </Alert>
+          ) : (
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)', lg: 'repeat(3, 1fr)' }, gap: 3 }}>
+              {prompts.map((prompt) => (
+                <Box key={prompt.id}>
+                  <PromptCard
+                    prompt={prompt}
+                    onRate={(rating) => handleRatePrompt(prompt.id, rating)}
+                    onUse={() => handleUsePrompt(prompt)}
+                    onEdit={() => openEditDialog(prompt)}
+                    onDelete={() => openDeleteDialog(prompt.id)}
+                    onToggleBookmark={() => handleToggleBookmark(prompt)}
+                    onView={loadPrompts}
+                  />
+                </Box>
+              ))}
+            </Box>
+          )}
 
-            {/* Пагинация для промптов */}
-            {totalPages > 1 && (
-              <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4 }}>
-                <Pagination
-                  count={totalPages}
-                  page={page}
-                  onChange={(_, value) => setPage(value)}
-                  color="primary"
-                  size="large"
-                />
-              </Box>
-            )}
-          </>
-        ) : (
-          // Вкладка агентов
-          <>
-            {agentsLoading ? (
-              <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-                <CircularProgress />
-              </Box>
-            ) : agents.length === 0 ? (
-              <Alert severity="info">
-                Агенты не найдены. Попробуйте изменить фильтры или создайте первого агента!
-              </Alert>
-            ) : (
-              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(2, 1fr)', lg: 'repeat(3, 1fr)' }, gap: 3 }}>
-                {agents.map((agent) => (
-                  <Card key={agent.id} sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-                    <CardContent sx={{ flexGrow: 1 }}>
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', mb: 2 }}>
-                        <Typography variant="h6" component="div" sx={{ fontWeight: 'bold' }}>
-                          {agent.name}
-                        </Typography>
-                        <IconButton size="small">
-                          <MoreVertIcon />
-                        </IconButton>
-                      </Box>
-                      
-                      {agent.description && (
-                        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                          {agent.description}
-                        </Typography>
-                      )}
-                      
-                      {agent.tags && agent.tags.length > 0 && (
-                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 2 }}>
-                          {agent.tags.map((tag: Tag) => (
-                            <Chip key={tag.id} label={tag.name} size="small" />
-                          ))}
-                        </Box>
-                      )}
-                      
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                        <Rating 
-                          value={agent.average_rating} 
-                          readOnly 
-                          size="small"
-                          precision={0.1}
-                        />
-                        <Typography variant="caption" color="text.secondary">
-                          ({agent.total_votes})
-                        </Typography>
-                      </Box>
-                      
-                      <Box sx={{ display: 'flex', gap: 1, mt: 2 }}>
-                        <Chip 
-                          icon={<PersonIcon />} 
-                          label={agent.author_name} 
-                          size="small" 
-                          variant="outlined"
-                        />
-                        <Chip 
-                          icon={<ViewIcon />} 
-                          label={agent.views_count} 
-                          size="small" 
-                          variant="outlined"
-                        />
-                      </Box>
-                    </CardContent>
-                    <CardActions>
-                      <Button 
-                        size="small" 
-                        startIcon={<CopyIcon />}
-                        onClick={() => handleUseAgent(agent)}
-                        fullWidth
-                        variant="contained"
-                      >
-                        Использовать
-                      </Button>
-                      <Button 
-                        size="small" 
-                        startIcon={agent.is_bookmarked ? <BookmarkIcon /> : <BookmarkBorderIcon />}
-                        onClick={() => handleToggleAgentBookmark(agent)}
-                      >
-                        {agent.is_bookmarked ? 'В закладках' : 'В закладки'}
-                      </Button>
-                    </CardActions>
-                  </Card>
-                ))}
-              </Box>
-            )}
-
-            {/* Пагинация для агентов */}
-            {agentsTotalPages > 1 && (
-              <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4 }}>
-                <Pagination
-                  count={agentsTotalPages}
-                  page={agentsPage}
-                  onChange={(_, value) => setAgentsPage(value)}
-                  color="primary"
-                  size="large"
-                />
-              </Box>
-            )}
-          </>
-        )}
+          {/* Пагинация */}
+          {totalPages > 1 && (
+            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4 }}>
+              <Pagination
+                count={totalPages}
+                page={page}
+                onChange={(_, value) => setPage(value)}
+                color="primary"
+                size="large"
+              />
+            </Box>
+          )}
       </Container>
       </Box>
 
@@ -1319,21 +1196,6 @@ export default function PromptGalleryPage() {
         </DialogActions>
       </Dialog>
 
-      {/* Диалог создания агента */}
-      <AgentDialog
-        open={showCreateAgentDialog}
-        onClose={() => {
-          setShowCreateAgentDialog(false);
-          resetAgentForm();
-        }}
-        onSave={handleCreateAgent}
-        agentForm={agentForm}
-        setAgentForm={setAgentForm}
-        allTags={allTags}
-        title="Создать агента"
-        newTagInput={newAgentTagInput}
-        setNewTagInput={setNewAgentTagInput}
-      />
 
       {/* Уведомления */}
       <Snackbar
@@ -1413,19 +1275,13 @@ export default function PromptGalleryPage() {
           gap: rightSidebarOpen ? 2 : 1,
           flex: 1,
         }}>
-          {/* Кнопка "Создать промпт" или "Создать агента" */}
-          <Tooltip title={rightSidebarOpen ? '' : (activeTab === 0 ? 'Создать промпт' : 'Создать агента')} placement="left">
+          {/* Кнопка "Создать промпт" */}
+          <Tooltip title={rightSidebarOpen ? '' : 'Создать промпт'} placement="left">
             <Button
               fullWidth={rightSidebarOpen}
               variant={rightSidebarOpen ? 'contained' : 'text'}
               startIcon={<AddIcon />}
-              onClick={() => {
-                if (activeTab === 0) {
-                  setShowCreateDialog(true);
-                } else {
-                  setShowCreateAgentDialog(true);
-                }
-              }}
+              onClick={() => setShowCreateDialog(true)}
               sx={{
                 bgcolor: rightSidebarOpen ? 'rgba(255,255,255,0.2)' : 'transparent',
                 color: rightSidebarOpen ? 'white' : 'text.primary',
@@ -1449,7 +1305,7 @@ export default function PromptGalleryPage() {
                 },
               }}
             >
-              {rightSidebarOpen && (activeTab === 0 ? 'Создать промпт' : 'Создать агента')}
+              {rightSidebarOpen && 'Создать промпт'}
             </Button>
           </Tooltip>
 

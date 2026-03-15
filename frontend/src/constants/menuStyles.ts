@@ -56,3 +56,153 @@ export function getMenuColors(isDarkMode: boolean): MenuColors {
     menuDisabledColor: isDarkMode ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.5)',
   };
 }
+
+// ─── Стиль выпадающего окна (кнопка + Popover), как у «Агенты» / «Категория» ───
+
+/** Цвет фона кнопки-триггера выпадающего списка. */
+export const DROPDOWN_TRIGGER_BG = 'rgba(0,0,0,0.25)';
+/** Цвет фона кнопки при наведении. */
+export const DROPDOWN_TRIGGER_BG_HOVER = 'rgba(0,0,0,0.35)';
+/** Рамка кнопки-триггера. */
+export const DROPDOWN_TRIGGER_BORDER = '1px solid rgba(255,255,255,0.15)';
+/** Цвет иконки-шеврона. */
+export const DROPDOWN_CHEVRON_COLOR = 'rgba(255,255,255,0.45)';
+
+/** Стиль кнопки, открывающей выпадающий список (Агенты, Категория, Настройки и т.п.). */
+export const DROPDOWN_TRIGGER_BUTTON_SX = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  px: 1.5,
+  py: 1,
+  borderRadius: '10px',
+  bgcolor: DROPDOWN_TRIGGER_BG,
+  border: DROPDOWN_TRIGGER_BORDER,
+  cursor: 'pointer',
+  userSelect: 'none' as const,
+  transition: 'background 0.15s',
+  '&:hover': { bgcolor: DROPDOWN_TRIGGER_BG_HOVER },
+};
+
+/** Стиль иконки шеврона в кнопке выпадающего списка (transform задаётся в компоненте по open). */
+export const DROPDOWN_CHEVRON_SX = {
+  color: DROPDOWN_CHEVRON_COLOR,
+  fontSize: 18,
+  transition: 'transform 0.2s',
+};
+
+/** Фон бумаги (Popover) выпадающего списка — чёрный, не серый (theme.paper = #1e1e1e). */
+export const DROPDOWN_PAPER_BG = '#0f1116';
+/** Рамка бумаги выпадающего списка. */
+export const DROPDOWN_PAPER_BORDER = '1px solid rgba(255,255,255,0.10)';
+/** Тень выпадающего окна. */
+export const DROPDOWN_PAPER_SHADOW = '0 8px 32px rgba(0,0,0,0.5)';
+/** Размытие фона выпадающего окна. */
+export const DROPDOWN_PAPER_BLUR = 'blur(12px)';
+/** Минимальная ширина выпадающего списка, px. */
+export const DROPDOWN_PAPER_MIN_WIDTH_PX = 180;
+/** Ширина по умолчанию, если якорь не задан, px. */
+export const DROPDOWN_PAPER_DEFAULT_WIDTH_PX = 220;
+/** Отступ сверху от кнопки до выпадающего окна (theme spacing). */
+export const DROPDOWN_PAPER_MARGIN_TOP = 0.75;
+
+/**
+ * Общий стиль «окошка» выпадающего меню (фон, рамка, тень, скругление).
+ * Используется в конструкторе агентов (Агенты, Категория) и в селекторе «Агент / Модель».
+ * background задан явно, чтобы перебить theme.palette.background.paper (серый фон от темы).
+ */
+export const DROPDOWN_PANEL_SX: Record<string, unknown> = {
+  bgcolor: DROPDOWN_PAPER_BG,
+  background: `${DROPDOWN_PAPER_BG} !important`,
+  backgroundColor: `${DROPDOWN_PAPER_BG} !important`,
+  backdropFilter: DROPDOWN_PAPER_BLUR,
+  border: DROPDOWN_PAPER_BORDER,
+  borderRadius: `${MENU_BORDER_RADIUS_PX}px`,
+  boxShadow: DROPDOWN_PAPER_SHADOW,
+  overflow: 'hidden',
+};
+
+/**
+ * Стиль для slotProps.paper выпадающего Popover (Агенты, Категория, поиск в конструкторе).
+ * Ширина подстраивается под ширину якоря (кнопки).
+ * background/backgroundColor с !important перебивают theme.palette.background.paper.
+ */
+export function getDropdownPopoverPaperSx(anchorEl: HTMLElement | null): Record<string, unknown> {
+  return {
+    ...DROPDOWN_PANEL_SX,
+    background: `${DROPDOWN_PAPER_BG} !important`,
+    backgroundColor: `${DROPDOWN_PAPER_BG} !important`,
+    mt: DROPDOWN_PAPER_MARGIN_TOP,
+    minWidth: DROPDOWN_PAPER_MIN_WIDTH_PX,
+    width: anchorEl ? `${anchorEl.getBoundingClientRect().width}px` : DROPDOWN_PAPER_DEFAULT_WIDTH_PX,
+  };
+}
+
+/** Цвет подсветки пункта выпадающего списка (выбран / hover). */
+export const DROPDOWN_ITEM_HOVER_BG = 'rgba(255,255,255,0.10)';
+
+/** Общий стиль пункта в выпадающем списке (без учёта selected — его задают в компоненте). */
+export const DROPDOWN_ITEM_SX = {
+  px: 1.5,
+  py: 0.85,
+  fontSize: '0.82rem',
+  cursor: 'pointer',
+  borderRadius: '10px',
+  mx: 0.5,
+  transition: 'all 0.12s',
+  '&:hover': { bgcolor: DROPDOWN_ITEM_HOVER_BG, color: 'white' },
+};
+
+// ─── Поля ввода и триггеры (переиспользуемые по всему проекту) ───
+
+/** Фон полей ввода и кнопок-триггеров (тёмная тема). */
+export const FIELD_BG = 'rgba(0,0,0,0.25)';
+/** Рамка полей (цвет). */
+export const FIELD_BORDER = 'rgba(255,255,255,0.15)';
+/** Рамка при наведении. */
+export const FIELD_BORDER_HOVER = 'rgba(255,255,255,0.3)';
+/** Фон при наведении (триггеры). */
+export const FIELD_BG_HOVER = 'rgba(0,0,0,0.35)';
+/** Рамка при фокусе. */
+export const FIELD_FOCUS = 'rgba(33,150,243,0.7)';
+/** Цвет текста. */
+export const FIELD_TEXT = 'white';
+/** Цвет плейсхолдера / пустого триггера. */
+export const FIELD_PLACEHOLDER = 'rgba(255,255,255,0.35)';
+/** Размер шрифта полей. */
+export const FIELD_FONT_SIZE = '0.82rem';
+
+/** Стиль для MUI TextField (поля ввода по всему проекту). */
+export const FORM_FIELD_INPUT_SX = {
+  '& .MuiOutlinedInput-root': {
+    bgcolor: FIELD_BG,
+    color: FIELD_TEXT,
+    fontSize: FIELD_FONT_SIZE,
+    '& fieldset': { borderColor: FIELD_BORDER },
+    '&:hover fieldset': { borderColor: FIELD_BORDER_HOVER },
+    '&.Mui-focused fieldset': { borderColor: FIELD_FOCUS },
+  },
+  '& .MuiInputBase-input': { color: FIELD_TEXT },
+  '& .MuiInputBase-input::placeholder': { color: FIELD_PLACEHOLDER },
+};
+
+/** Стиль кнопки-триггера, выглядящей как поле (выпадающие списки, выбор модели и т.п.). */
+export const FORM_FIELD_TRIGGER_SX = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  px: 1.5,
+  py: 1,
+  borderRadius: '10px',
+  bgcolor: FIELD_BG,
+  border: `1px solid ${FIELD_BORDER}`,
+  cursor: 'pointer',
+  userSelect: 'none' as const,
+  transition: 'background 0.15s, border-color 0.15s',
+  fontSize: FIELD_FONT_SIZE,
+  color: FIELD_TEXT,
+  '&:hover': {
+    borderColor: FIELD_BORDER_HOVER,
+    bgcolor: FIELD_BG_HOVER,
+  },
+};

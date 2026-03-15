@@ -190,8 +190,6 @@ class WhisperXTranscriber:
                 with open(audio_path, 'rb') as f:
                     audio_data = f.read()
                 
-                # Вызываем наш Оркестратор из llm_client
-                # Он вернет объединенный результат: {text, segments, diarization}
                 response = transcribe_with_diarization_llm_svc(
                     audio_data, 
                     filename=os.path.basename(audio_path),
@@ -200,24 +198,12 @@ class WhisperXTranscriber:
                 )
                 
                 if response.get("success"):
-                    # Подготавливаем данные для оригинального форматера
-                    # Нам нужно превратить ответ сервиса в структуру, которую поймет _format_transcript_with_speakers
-                    result_for_format = {
-                        "segments": response.get("segments", []),
-                        "diarization_data": response.get("diarization", [])
-                    }
-                    
-                    # Если в сегментах уже есть спикеры (сделано оркестратором), 
-                    # форматер их подхватит. Если нет - вызовем ручной маппинг.
-                    if not any('speaker' in s for s in result_for_format["segments"]):
-                        self.logger.info("[SVC] Маппинг спикеров на бэкенде...")
-                        # Используем оригинальный метод ручного объединения
-                        manual_res = self._manual_assign_speakers(response.get("diarization"), {"segments": response.get("segments")})
-                        if manual_res:
-                            result_for_format = manual_res
-
-                    transcript = self._format_transcript_with_speakers(result_for_format)
-                    return True, transcript
+                    # segments уже содержат speaker, назначенный оркестратором в llm_client
+                    segments = response.get("segments", [])
+                    if segments:
+                        transcript = self._format_transcript_with_speakers({"segments": segments})
+                        return True, transcript
+                    return False, "Сервис вернул пустые сегменты"
                 else:
                     return False, f"Ошибка сервиса: {response.get('error')}"
             except Exception as e:
@@ -304,40 +290,32 @@ class WhisperXTranscriber:
             return False, f"Ошибка: {str(e)}"
 
     def _format_transcript_with_speakers(self, result: Dict) -> str:
-        """Форматирует транскрипт с информацией о спикерах """
+        """Форматирует транскрипт с информацией о спикерах.
+        Формат: SPEAKER_XX: текст (без временных меток).
+        Смежные сегменты одного спикера объединяются в один блок.
+        """
         try:
-            print(f"=== Форматирование с диаризацией ===")
-            print(f"Тип result: {type(result)}")
-            
-            transcript = []
             segments = result.get("segments", [])
-            print(f"Количество сегментов: {len(segments)}")
-            
             if not segments:
-                print("Нет сегментов для форматирования")
                 return self._format_simple_transcript(result)
             
-            for i, segment in enumerate(segments):
+            lines = []  # [(speaker, text)]
+            for segment in segments:
                 speaker = segment.get("speaker", None)
                 text = segment.get("text", "").strip()
-                start_time = segment.get("start", 0)
-                
-                # Если нет информации о спикере (например, из сервиса пришло отдельно), 
-                # логика ручного объединения должна была сработать раньше.
-                if speaker is None:
-                    speaker = f"Спикер_{i+1}"
-                
                 if not text:
                     continue
-                
-                time_str = self._format_time_simple(start_time)
-                formatted_line = f"{time_str} {speaker}: {text}"
-                transcript.append(formatted_line)
+                if speaker is None:
+                    speaker = "SPEAKER_?"
+                if lines and lines[-1][0] == speaker:
+                    lines[-1] = (speaker, lines[-1][1] + " " + text)
+                else:
+                    lines.append((speaker, text))
             
-            if not transcript:
+            if not lines:
                 return self._format_simple_transcript(result)
             
-            return "\n".join(transcript)
+            return "\n".join(f"{spk}: {txt}" for spk, txt in lines)
             
         except Exception as e:
             print(f"Ошибка форматирования с диаризацией: {e}")
@@ -524,7 +502,7 @@ class WhisperXTranscriber:
             
             if best_match and best_overlap > 0:
                 speaker_id = None
-                # Извлекаем ID спикера  
+                # Извлекаем ID спикера — возвращаем оригинальное имя без нормализации
                 if isinstance(best_match, dict):
                     speaker_id = best_match.get('speaker')
                 elif hasattr(best_match, 'track'):
@@ -533,11 +511,11 @@ class WhisperXTranscriber:
                     speaker_id = str(best_match.label)
                 
                 if speaker_id:
-                    return self._normalize_speaker_name(speaker_id)
+                    return speaker_id
             
-            return "Speaker_A"
+            return "SPEAKER_?"
         except:
-            return "Speaker_A"
+            return "SPEAKER_?"
     
     def _normalize_speaker_name(self, speaker_id):
         """Нормализует имя спикера к читаемому формату  """

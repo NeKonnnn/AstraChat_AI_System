@@ -7,19 +7,25 @@ import {
   List,
   ListItem,
   ListItemText,
-  FormControl,
-  Select,
-  MenuItem,
   IconButton,
   Tooltip,
   Alert,
+  Popover,
 } from '@mui/material';
 import {
   Search as SearchIcon,
   HelpOutline as HelpOutlineIcon,
+  ExpandMore as ExpandMoreIcon,
 } from '@mui/icons-material';
 import { useAppActions } from '../../contexts/AppContext';
 import { getApiUrl } from '../../config/api';
+import {
+  DROPDOWN_TRIGGER_BUTTON_SX,
+  DROPDOWN_CHEVRON_SX,
+  getDropdownPopoverPaperSx,
+  DROPDOWN_ITEM_SX,
+  DROPDOWN_ITEM_HOVER_BG,
+} from '../../constants/menuStyles';
 
 type RAGStrategy = 'auto' | 'reranking' | 'hierarchical' | 'hybrid' | 'standard';
 
@@ -28,6 +34,7 @@ interface RAGSettingsProps {}
 export default function RAGSettings({}: RAGSettingsProps) {
   const [selectedStrategy, setSelectedStrategy] = useState<RAGStrategy>('auto');
   const [isLoading, setIsLoading] = useState(false);
+  const [strategyPopoverAnchor, setStrategyPopoverAnchor] = useState<HTMLElement | null>(null);
   const { showNotification } = useAppActions();
 
   useEffect(() => {
@@ -215,22 +222,46 @@ export default function RAGSettings({}: RAGSettingsProps) {
                   fontWeight: 500,
                 }}
               />
-              <FormControl variant="outlined" size="small" sx={{ minWidth: 280 }}>
-                <Select
-                  value={selectedStrategy}
-                  onChange={handleStrategyChange}
-                  disabled={isLoading}
+              <Box sx={{ minWidth: 280 }}>
+                <Box
+                  onClick={(e) => !isLoading && setStrategyPopoverAnchor(e.currentTarget)}
                   sx={{
-                    textTransform: 'none',
+                    ...DROPDOWN_TRIGGER_BUTTON_SX,
+                    opacity: isLoading ? 0.7 : 1,
+                    pointerEvents: isLoading ? 'none' : 'auto',
                   }}
                 >
-                  <MenuItem value="auto">Автоматический выбор</MenuItem>
-                  <MenuItem value="reranking">Reranking (переранжирование)</MenuItem>
-                  <MenuItem value="hierarchical">Иерархический поиск</MenuItem>
-                  <MenuItem value="hybrid">Гибридный поиск</MenuItem>
-                  <MenuItem value="standard">Стандартный поиск</MenuItem>
-                </Select>
-              </FormControl>
+                  <Typography sx={{ color: 'white', fontWeight: 500, fontSize: '0.875rem' }}>
+                    {getStrategyLabel(selectedStrategy)}
+                  </Typography>
+                  <ExpandMoreIcon sx={{ ...DROPDOWN_CHEVRON_SX, transform: strategyPopoverAnchor ? 'rotate(180deg)' : 'none' }} />
+                </Box>
+                <Popover
+                  open={Boolean(strategyPopoverAnchor)}
+                  anchorEl={strategyPopoverAnchor}
+                  onClose={() => setStrategyPopoverAnchor(null)}
+                  anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+                  transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(strategyPopoverAnchor) } }}
+                >
+                  <Box sx={{ py: 0.5 }}>
+                    {(['auto', 'reranking', 'hierarchical', 'hybrid', 'standard'] as const).map((strategy) => (
+                      <Box
+                        key={strategy}
+                        onClick={() => { setSelectedStrategy(strategy); setStrategyPopoverAnchor(null); }}
+                        sx={{
+                          ...DROPDOWN_ITEM_SX,
+                          color: selectedStrategy === strategy ? 'white' : 'rgba(255,255,255,0.9)',
+                          fontWeight: selectedStrategy === strategy ? 600 : 400,
+                          bgcolor: selectedStrategy === strategy ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
+                        }}
+                      >
+                        {getStrategyLabel(strategy)}
+                      </Box>
+                    ))}
+                  </Box>
+                </Popover>
+              </Box>
             </ListItem>
           </List>
 

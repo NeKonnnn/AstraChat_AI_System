@@ -14,19 +14,22 @@ import {
   DialogContent,
   IconButton,
   Tooltip,
-} from '@mui/material';
-import {
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem as SelectMenuItem,
+  Popover,
 } from '@mui/material';
 import {
   Computer as ComputerIcon,
   Notifications as NotificationsIcon,
   HelpOutline as HelpOutlineIcon,
   Close as CloseIcon,
+  ExpandMore as ExpandMoreIcon,
 } from '@mui/icons-material';
+import {
+  DROPDOWN_TRIGGER_BUTTON_SX,
+  DROPDOWN_CHEVRON_SX,
+  getDropdownPopoverPaperSx,
+  DROPDOWN_ITEM_SX,
+  DROPDOWN_ITEM_HOVER_BG,
+} from '../../constants/menuStyles';
 import { useAppActions } from '../../contexts/AppContext';
 import { SIDEBAR_PANEL_COLOR_KEY, DEFAULT_SIDEBAR_GRADIENT } from '../../constants/sidebarPanelColor';
 import {
@@ -91,7 +94,9 @@ export default function InterfaceSettings() {
   });
 
   const [colorPickerOpen, setColorPickerOpen] = useState(false);
-  
+  const [stylePopoverAnchor, setStylePopoverAnchor] = useState<HTMLElement | null>(null);
+  const [colorPopoverAnchor, setColorPopoverAnchor] = useState<HTMLElement | null>(null);
+
   const { showNotification } = useAppActions();
 
   const handleSidebarColorSelect = (value: string) => {
@@ -515,17 +520,39 @@ export default function InterfaceSettings() {
                 secondary="Компактный — пилюльная форма с кнопками внутри. Классический — прямоугольник с тулбаром кнопок снизу."
                 secondaryTypographyProps={{ variant: 'body2', sx: { mt: 0.5 } }}
               />
-              <FormControl size="small" sx={{ minWidth: 180, flexShrink: 0 }}>
-                <InputLabel>Стиль</InputLabel>
-                <Select
-                  value={interfaceSettings.chatInputStyle}
-                  label="Стиль"
-                  onChange={(e) => handleChatInputStyleChange(e.target.value as 'compact' | 'classic')}
+              <Box sx={{ minWidth: 180, flexShrink: 0 }}>
+                <Box onClick={(e) => setStylePopoverAnchor(e.currentTarget)} sx={DROPDOWN_TRIGGER_BUTTON_SX}>
+                  <Typography sx={{ color: 'white', fontWeight: 500, fontSize: '0.875rem' }}>
+                    {interfaceSettings.chatInputStyle === 'compact' ? 'Компактный' : 'Классический'}
+                  </Typography>
+                  <ExpandMoreIcon sx={{ ...DROPDOWN_CHEVRON_SX, transform: stylePopoverAnchor ? 'rotate(180deg)' : 'none' }} />
+                </Box>
+                <Popover
+                  open={Boolean(stylePopoverAnchor)}
+                  anchorEl={stylePopoverAnchor}
+                  onClose={() => setStylePopoverAnchor(null)}
+                  anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+                  transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(stylePopoverAnchor) } }}
                 >
-                  <SelectMenuItem value="compact">Компактный</SelectMenuItem>
-                  <SelectMenuItem value="classic">Классический</SelectMenuItem>
-                </Select>
-              </FormControl>
+                  <Box sx={{ py: 0.5 }}>
+                    {(['compact', 'classic'] as const).map((v) => (
+                      <Box
+                        key={v}
+                        onClick={() => { handleChatInputStyleChange(v); setStylePopoverAnchor(null); }}
+                        sx={{
+                          ...DROPDOWN_ITEM_SX,
+                          color: interfaceSettings.chatInputStyle === v ? 'white' : 'rgba(255,255,255,0.9)',
+                          fontWeight: interfaceSettings.chatInputStyle === v ? 600 : 400,
+                          bgcolor: interfaceSettings.chatInputStyle === v ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
+                        }}
+                      >
+                        {v === 'compact' ? 'Компактный' : 'Классический'}
+                      </Box>
+                    ))}
+                  </Box>
+                </Popover>
+              </Box>
             </ListItem>
 
             <Divider />
@@ -578,40 +605,56 @@ export default function InterfaceSettings() {
                 secondary="Левой и правой панелей (сайдбар с чатами и панель действий)"
                 secondaryTypographyProps={{ variant: 'body2', sx: { mt: 0.5 } }}
               />
-              <FormControl size="small" sx={{ minWidth: 200, flexShrink: 0 }}>
-                <InputLabel>Цвет</InputLabel>
-                <Select
-                  value={interfaceSettings.sidebarPanelColor ? 'custom' : 'default'}
-                  label="Цвет"
-                  onChange={(e) => {
-                    const v = e.target.value as string;
-                    if (v === 'pick' || v === 'custom') {
-                      setColorPickerOpen(true);
-                      return;
-                    }
-                    handleSidebarColorSelect(v === 'default' ? '' : v);
-                  }}
-                  renderValue={(v) =>
-                    v === 'default'
+              <Box sx={{ minWidth: 200, flexShrink: 0 }}>
+                <Box onClick={(e) => setColorPopoverAnchor(e.currentTarget)} sx={DROPDOWN_TRIGGER_BUTTON_SX}>
+                  <Typography sx={{ color: 'white', fontWeight: 500, fontSize: '0.875rem' }}>
+                    {!interfaceSettings.sidebarPanelColor
                       ? 'По умолчанию'
-                      : interfaceSettings.sidebarPanelColor
-                        ? (interfaceSettings.sidebarPanelColor.startsWith('#')
-                            ? `Пользовательский (${interfaceSettings.sidebarPanelColor})`
-                            : 'Пользовательский')
-                        : 'Выбрать цвет'
-                  }
-                >
-                  <SelectMenuItem value="default">По умолчанию</SelectMenuItem>
-                  {interfaceSettings.sidebarPanelColor && (
-                    <SelectMenuItem value="custom">
-                      {interfaceSettings.sidebarPanelColor.startsWith('#')
+                      : interfaceSettings.sidebarPanelColor.startsWith('#')
                         ? `Пользовательский (${interfaceSettings.sidebarPanelColor})`
                         : 'Пользовательский'}
-                    </SelectMenuItem>
-                  )}
-                  <SelectMenuItem value="pick">Выбрать цвет</SelectMenuItem>
-                </Select>
-              </FormControl>
+                  </Typography>
+                  <ExpandMoreIcon sx={{ ...DROPDOWN_CHEVRON_SX, transform: colorPopoverAnchor ? 'rotate(180deg)' : 'none' }} />
+                </Box>
+                <Popover
+                  open={Boolean(colorPopoverAnchor)}
+                  anchorEl={colorPopoverAnchor}
+                  onClose={() => setColorPopoverAnchor(null)}
+                  anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+                  transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(colorPopoverAnchor) } }}
+                >
+                  <Box sx={{ py: 0.5 }}>
+                    <Box
+                      onClick={() => { handleSidebarColorSelect(''); setColorPopoverAnchor(null); }}
+                      sx={{
+                        ...DROPDOWN_ITEM_SX,
+                        color: !interfaceSettings.sidebarPanelColor ? 'white' : 'rgba(255,255,255,0.9)',
+                        fontWeight: !interfaceSettings.sidebarPanelColor ? 600 : 400,
+                        bgcolor: !interfaceSettings.sidebarPanelColor ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
+                      }}
+                    >
+                      По умолчанию
+                    </Box>
+                    {interfaceSettings.sidebarPanelColor && (
+                      <Box
+                        onClick={() => setColorPopoverAnchor(null)}
+                        sx={{ ...DROPDOWN_ITEM_SX, color: 'rgba(255,255,255,0.9)', bgcolor: 'transparent' }}
+                      >
+                        {interfaceSettings.sidebarPanelColor.startsWith('#')
+                          ? `Пользовательский (${interfaceSettings.sidebarPanelColor})`
+                          : 'Пользовательский'}
+                      </Box>
+                    )}
+                    <Box
+                      onClick={() => { setColorPopoverAnchor(null); setColorPickerOpen(true); }}
+                      sx={{ ...DROPDOWN_ITEM_SX, color: 'rgba(255,255,255,0.9)', bgcolor: 'transparent' }}
+                    >
+                      Выбрать цвет
+                    </Box>
+                  </Box>
+                </Popover>
+              </Box>
             </ListItem>
           </List>
         </CardContent>

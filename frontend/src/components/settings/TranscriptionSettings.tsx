@@ -4,26 +4,32 @@ import {
   Typography,
   Card,
   CardContent,
-  FormControl,
   FormControlLabel,
   List,
   ListItem,
   ListItemText,
-  Select,
-  MenuItem,
   Switch,
   Button,
   IconButton,
   Tooltip,
   Alert,
   Divider,
+  Popover,
 } from '@mui/material';
 import {
   Mic as MicIcon,
   Refresh as RefreshIcon,
   HelpOutline as HelpOutlineIcon,
   Restore as RestoreIcon,
+  ExpandMore as ExpandMoreIcon,
 } from '@mui/icons-material';
+import {
+  DROPDOWN_TRIGGER_BUTTON_SX,
+  DROPDOWN_CHEVRON_SX,
+  getDropdownPopoverPaperSx,
+  DROPDOWN_ITEM_SX,
+  DROPDOWN_ITEM_HOVER_BG,
+} from '../../constants/menuStyles';
 import { useAppActions } from '../../contexts/AppContext';
 import { getApiUrl } from '../../config/api';
 
@@ -37,6 +43,8 @@ export default function TranscriptionSettings() {
     auto_detect: true,
   });
   const [isLoading, setIsLoading] = useState(false);
+  const [enginePopoverAnchor, setEnginePopoverAnchor] = useState<HTMLElement | null>(null);
+  const [languagePopoverAnchor, setLanguagePopoverAnchor] = useState<HTMLElement | null>(null);
 
   const { showNotification } = useAppActions();
 
@@ -198,17 +206,46 @@ export default function TranscriptionSettings() {
                 }
                 primaryTypographyProps={{ variant: 'body1', fontWeight: 500 }}
               />
-              <FormControl variant="outlined" size="small" sx={{ minWidth: 280 }}>
-                <Select
-                  value={transcriptionSettings.engine}
-                  onChange={(e) => handleSettingChange('engine', e.target.value)}
-                  disabled={isLoading}
-                  sx={{ textTransform: 'none' }}
+              <Box sx={{ minWidth: 280 }}>
+                <Box
+                  onClick={(e) => !isLoading && setEnginePopoverAnchor(e.currentTarget)}
+                  sx={{
+                    ...DROPDOWN_TRIGGER_BUTTON_SX,
+                    opacity: isLoading ? 0.7 : 1,
+                    pointerEvents: isLoading ? 'none' : 'auto',
+                  }}
                 >
-                  <MenuItem value="whisperx">WhisperX</MenuItem>
-                  <MenuItem value="vosk">Vosk</MenuItem>
-                </Select>
-              </FormControl>
+                  <Typography sx={{ color: 'white', fontWeight: 500, fontSize: '0.875rem' }}>
+                    {transcriptionSettings.engine === 'whisperx' ? 'WhisperX' : 'Vosk'}
+                  </Typography>
+                  <ExpandMoreIcon sx={{ ...DROPDOWN_CHEVRON_SX, transform: enginePopoverAnchor ? 'rotate(180deg)' : 'none' }} />
+                </Box>
+                <Popover
+                  open={Boolean(enginePopoverAnchor)}
+                  anchorEl={enginePopoverAnchor}
+                  onClose={() => setEnginePopoverAnchor(null)}
+                  anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+                  transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(enginePopoverAnchor) } }}
+                >
+                  <Box sx={{ py: 0.5 }}>
+                    {(['whisperx', 'vosk'] as const).map((engine) => (
+                      <Box
+                        key={engine}
+                        onClick={() => { handleSettingChange('engine', engine); setEnginePopoverAnchor(null); }}
+                        sx={{
+                          ...DROPDOWN_ITEM_SX,
+                          color: transcriptionSettings.engine === engine ? 'white' : 'rgba(255,255,255,0.9)',
+                          fontWeight: transcriptionSettings.engine === engine ? 600 : 400,
+                          bgcolor: transcriptionSettings.engine === engine ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
+                        }}
+                      >
+                        {engine === 'whisperx' ? 'WhisperX' : 'Vosk'}
+                      </Box>
+                    ))}
+                  </Box>
+                </Popover>
+              </Box>
             </ListItem>
 
             <Divider />
@@ -250,18 +287,46 @@ export default function TranscriptionSettings() {
                 }
                 primaryTypographyProps={{ variant: 'body1', fontWeight: 500 }}
               />
-              <FormControl variant="outlined" size="small" sx={{ minWidth: 280 }}>
-                <Select
-                  value={transcriptionSettings.language}
-                  onChange={(e) => handleSettingChange('language', e.target.value)}
-                  disabled={isLoading}
-                  sx={{ textTransform: 'none' }}
+              <Box sx={{ minWidth: 280 }}>
+                <Box
+                  onClick={(e) => !isLoading && setLanguagePopoverAnchor(e.currentTarget)}
+                  sx={{
+                    ...DROPDOWN_TRIGGER_BUTTON_SX,
+                    opacity: isLoading ? 0.7 : 1,
+                    pointerEvents: isLoading ? 'none' : 'auto',
+                  }}
                 >
-                  <MenuItem value="ru">Русский</MenuItem>
-                  <MenuItem value="en">English</MenuItem>
-                  <MenuItem value="auto">Автоопределение</MenuItem>
-                </Select>
-              </FormControl>
+                  <Typography sx={{ color: 'white', fontWeight: 500, fontSize: '0.875rem' }}>
+                    {transcriptionSettings.language === 'ru' ? 'Русский' : transcriptionSettings.language === 'en' ? 'English' : 'Автоопределение'}
+                  </Typography>
+                  <ExpandMoreIcon sx={{ ...DROPDOWN_CHEVRON_SX, transform: languagePopoverAnchor ? 'rotate(180deg)' : 'none' }} />
+                </Box>
+                <Popover
+                  open={Boolean(languagePopoverAnchor)}
+                  anchorEl={languagePopoverAnchor}
+                  onClose={() => setLanguagePopoverAnchor(null)}
+                  anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+                  transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(languagePopoverAnchor) } }}
+                >
+                  <Box sx={{ py: 0.5 }}>
+                    {(['ru', 'en', 'auto'] as const).map((lang) => (
+                      <Box
+                        key={lang}
+                        onClick={() => { handleSettingChange('language', lang); setLanguagePopoverAnchor(null); }}
+                        sx={{
+                          ...DROPDOWN_ITEM_SX,
+                          color: transcriptionSettings.language === lang ? 'white' : 'rgba(255,255,255,0.9)',
+                          fontWeight: transcriptionSettings.language === lang ? 600 : 400,
+                          bgcolor: transcriptionSettings.language === lang ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
+                        }}
+                      >
+                        {lang === 'ru' ? 'Русский' : lang === 'en' ? 'English' : 'Автоопределение'}
+                      </Box>
+                    ))}
+                  </Box>
+                </Popover>
+              </Box>
             </ListItem>
 
             <Divider />

@@ -4,7 +4,6 @@ import {
   Typography,
   Card,
   CardContent,
-  FormControl,
   FormControlLabel,
   Button,
   Alert,
@@ -23,8 +22,7 @@ import {
   DialogContent,
   DialogActions,
   Tooltip,
-  Select,
-  MenuItem as SelectMenuItem,
+  Popover,
 } from '@mui/material';
 import {
   SmartToyOutlined as AgentIcon,
@@ -38,7 +36,16 @@ import {
   HelpOutline as HelpOutlineIcon,
 } from '@mui/icons-material';
 import { getApiUrl } from '../../config/api';
-import { MENU_ICON_MIN_WIDTH, MENU_ICON_TO_TEXT_GAP_PX, MENU_ICON_FONT_SIZE_PX } from '../../constants/menuStyles';
+import {
+  MENU_ICON_MIN_WIDTH,
+  MENU_ICON_TO_TEXT_GAP_PX,
+  MENU_ICON_FONT_SIZE_PX,
+  DROPDOWN_TRIGGER_BUTTON_SX,
+  DROPDOWN_CHEVRON_SX,
+  getDropdownPopoverPaperSx,
+  DROPDOWN_ITEM_SX,
+  DROPDOWN_ITEM_HOVER_BG,
+} from '../../constants/menuStyles';
 
 
 interface AgentStatus {
@@ -95,6 +102,7 @@ export default function AgentsSettings() {
   const [success, setSuccess] = useState<string | null>(null);
   const [agentsExpanded, setAgentsExpanded] = useState(true);
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
+  const [modePopoverAnchor, setModePopoverAnchor] = useState<HTMLElement | null>(null);
   const [pendingOrchestratorAction, setPendingOrchestratorAction] = useState<boolean | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [, setAvailableModels] = useState<Model[]>([]);
@@ -496,18 +504,46 @@ export default function AgentsSettings() {
                       fontWeight: 500,
                     }}
                   />
-                  <FormControl variant="outlined" size="small" sx={{ minWidth: 280 }}>
-                    <Select
-                      value={agentStatus.mode}
-                      onChange={(e) => switchMode(e.target.value as AgentMode)}
-                      disabled={isLoading}
-                      sx={{ textTransform: 'none' }}
+                  <Box sx={{ minWidth: 280 }}>
+                    <Box
+                      onClick={(e) => !isLoading && setModePopoverAnchor(e.currentTarget)}
+                      sx={{
+                        ...DROPDOWN_TRIGGER_BUTTON_SX,
+                        opacity: isLoading ? 0.7 : 1,
+                        pointerEvents: isLoading ? 'none' : 'auto',
+                      }}
                     >
-                      <SelectMenuItem value="direct">Прямой режим</SelectMenuItem>
-                      <SelectMenuItem value="agent">Агентный режим</SelectMenuItem>
-                      <SelectMenuItem value="multi-llm">Прямой режим с несколькими LLM</SelectMenuItem>
-                    </Select>
-                  </FormControl>
+                      <Typography sx={{ color: 'white', fontWeight: 500, fontSize: '0.875rem' }}>
+                        {getModeLabel(agentStatus.mode as AgentMode)}
+                      </Typography>
+                      <ExpandMoreIcon sx={{ ...DROPDOWN_CHEVRON_SX, transform: modePopoverAnchor ? 'rotate(180deg)' : 'none' }} />
+                    </Box>
+                    <Popover
+                      open={Boolean(modePopoverAnchor)}
+                      anchorEl={modePopoverAnchor}
+                      onClose={() => setModePopoverAnchor(null)}
+                      anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+                      transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+                      slotProps={{ paper: { sx: getDropdownPopoverPaperSx(modePopoverAnchor) } }}
+                    >
+                      <Box sx={{ py: 0.5 }}>
+                        {(['direct', 'agent', 'multi-llm'] as const).map((mode) => (
+                          <Box
+                            key={mode}
+                            onClick={() => { switchMode(mode); setModePopoverAnchor(null); }}
+                            sx={{
+                              ...DROPDOWN_ITEM_SX,
+                              color: agentStatus.mode === mode ? 'white' : 'rgba(255,255,255,0.9)',
+                              fontWeight: agentStatus.mode === mode ? 600 : 400,
+                              bgcolor: agentStatus.mode === mode ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
+                            }}
+                          >
+                            {getModeLabel(mode)}
+                          </Box>
+                        ))}
+                      </Box>
+                    </Popover>
+                  </Box>
                 </ListItem>
               </List>
 

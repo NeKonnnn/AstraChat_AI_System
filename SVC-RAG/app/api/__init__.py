@@ -1,7 +1,8 @@
 from fastapi import APIRouter
-from .endpoints import documents, search, health
+from .endpoints import documents, search, health, kb
 
 router = APIRouter()
 router.include_router(documents.router, prefix="/documents", tags=["Документы"])
 router.include_router(search.router, prefix="/search", tags=["Поиск"])
 router.include_router(health.router, tags=["Здоровье"])
+router.include_router(kb.router, prefix="/kb", tags=["База Знаний"])

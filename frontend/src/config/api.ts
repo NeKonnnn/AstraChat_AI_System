@@ -23,6 +23,11 @@ export const API_ENDPOINTS = {
   DOCUMENTS_QUERY: '/api/documents/query',
   DOCUMENTS_LIST: '/api/documents',
   DOCUMENTS_DELETE: '/api/documents',
+
+  // База Знаний (Knowledge Base RAG)
+  KB_DOCUMENTS_UPLOAD: '/api/kb/documents',
+  KB_DOCUMENTS_LIST: '/api/kb/documents',
+  KB_DOCUMENTS_DELETE: '/api/kb/documents',
   
   // Модели
   MODELS: '/api/models',

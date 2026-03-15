@@ -167,6 +167,57 @@ class RagClient:
             return None
         return resp
 
+    # ─── Knowledge Base (постоянная база знаний) ─────────────────────────────
+
+    async def kb_upload_document(
+        self,
+        file_bytes: bytes,
+        filename: str,
+    ) -> Dict[str, Any]:
+        """Загрузить документ в постоянную Базу Знаний."""
+        files = {
+            "file": (filename, file_bytes, "application/octet-stream"),
+        }
+        return await self._request("POST", "/kb/documents", files=files)
+
+    async def kb_list_documents(self) -> List[Dict[str, Any]]:
+        """Список документов в Базе Знаний."""
+        resp = await self._request("GET", "/kb/documents")
+        return resp if isinstance(resp, list) else []
+
+    async def kb_delete_document(self, document_id: int) -> Dict[str, Any]:
+        """Удалить документ из Базы Знаний."""
+        return await self._request("DELETE", f"/kb/documents/{document_id}")
+
+    async def kb_search(
+        self,
+        query: str,
+        k: int = 8,
+        document_id: Optional[int] = None,
+        use_reranking: Optional[bool] = None,
+    ) -> List[Tuple[str, float, Optional[int], Optional[int]]]:
+        """Поиск по Базе Знаний.
+
+        Возвращает список (content, score, document_id, chunk_index).
+        """
+        body: Dict[str, Any] = {"query": query, "k": k}
+        if document_id is not None:
+            body["document_id"] = document_id
+        if use_reranking is not None:
+            body["use_reranking"] = use_reranking
+
+        resp = await self._request("POST", "/kb/search", json=body)
+        hits = resp.get("hits", [])
+        return [
+            (
+                h.get("content", ""),
+                float(h.get("score", 0.0)),
+                h.get("document_id"),
+                h.get("chunk_index"),
+            )
+            for h in hits
+        ]
+
 
 _rag_client_singleton: Optional[RagClient] = None
 

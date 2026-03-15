@@ -761,6 +761,7 @@ async def chat_message(sid, data):
         stop_generation_flags[sid] = False
         user_message_id = data.get("message_id", None)
         conversation_id = data.get("conversation_id", None)
+        use_kb_rag = bool(data.get("use_kb_rag", False))
         
         if conversation_id:
             import backend.database.memory_service as memory_service_module
@@ -831,7 +832,28 @@ async def chat_message(sid, data):
             final_user_message = user_message
             if doc_context:
                 final_user_message = f"Контекст: {doc_context}\nВопрос: {user_message}"
-            
+
+            # KB search для multi-llm режима
+            if use_kb_rag and rag_client:
+                try:
+                    kb_hits_multi = await rag_client.kb_search(user_message, k=8)
+                    if kb_hits_multi:
+                        kb_parts_multi = []
+                        total_len = 0
+                        MAX_KB_CONTEXT_CHARS = 10000
+                        for i, (content, score, doc_id, chunk_idx) in enumerate(kb_hits_multi, 1):
+                            frag = f"Фрагмент БЗ {i} (doc_id={doc_id}, чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
+                            if total_len + len(frag) > MAX_KB_CONTEXT_CHARS:
+                                frag = frag[: max(0, MAX_KB_CONTEXT_CHARS - total_len - 60)] + "\n... [обрезано]\n"
+                                kb_parts_multi.append(frag)
+                                break
+                            kb_parts_multi.append(frag)
+                            total_len += len(frag)
+                        kb_context_multi = "\n".join(kb_parts_multi)
+                        final_user_message = f"База Знаний (постоянные документы):\n{kb_context_multi}\n\n" + final_user_message
+                except Exception as e:
+                    logger.error(f"Socket.IO multi-llm: ошибка поиска по Базе Знаний: {e}")
+
             loop = asyncio.get_running_loop()
             
             async def generate_single_model_response(model_name: str):
@@ -1094,7 +1116,32 @@ async def chat_message(sid, data):
                     )
             except Exception as e:
                 logger.error(f"Socket.IO: ошибка при получении контекста документов через SVC-RAG: {e}")
-        
+
+        # ПОИСК ПО БАЗЕ ЗНАНИЙ (если флаг use_kb_rag активен)
+        if use_kb_rag and rag_client:
+            try:
+                kb_hits = await rag_client.kb_search(user_message, k=8)
+                if kb_hits:
+                    kb_parts = []
+                    total_len = 0
+                    MAX_KB_CONTEXT_CHARS = 10000
+                    for i, (content, score, doc_id, chunk_idx) in enumerate(kb_hits, 1):
+                        frag = f"Фрагмент БЗ {i} (doc_id={doc_id}, чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
+                        if total_len + len(frag) > MAX_KB_CONTEXT_CHARS:
+                            frag = frag[: max(0, MAX_KB_CONTEXT_CHARS - total_len - 60)] + "\n... [обрезано]\n"
+                            kb_parts.append(frag)
+                            break
+                        kb_parts.append(frag)
+                        total_len += len(frag)
+                    kb_context = "\n".join(kb_parts)
+                    final_message = (
+                        f"База Знаний (постоянные документы):\n{kb_context}\n\n"
+                        + final_message
+                    )
+                    logger.info(f"KB RAG: добавлен контекст из Базы Знаний ({len(kb_hits)} результатов)")
+            except Exception as e:
+                logger.error(f"Socket.IO: ошибка поиска по Базе Знаний: {e}")
+
         # Генерация ответа
         current_model_path = get_current_model_path()
         logger.info(f"Socket.IO: current_model_path = {current_model_path}")
@@ -3840,6 +3887,57 @@ async def toggle_orchestrator(status: Dict[str, bool]):
     except Exception as e:
         logger.error(f"Ошибка переключения оркестратора: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# ================================
+# БАЗА ЗНАНИЙ (Knowledge Base RAG)
+# ================================
+
+@app.post("/api/kb/documents")
+async def kb_upload_document(file: UploadFile = File(...)):
+    """Загрузить документ в постоянную Базу Знаний (KB RAG)."""
+    if not rag_client:
+        raise HTTPException(status_code=503, detail="RAG service недоступен")
+    try:
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="Файл пустой")
+        result = await rag_client.kb_upload_document(
+            file_bytes=content,
+            filename=file.filename or "unknown",
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Ошибка загрузки в Базу Знаний: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/kb/documents")
+async def kb_list_documents():
+    """Список документов в постоянной Базе Знаний."""
+    if not rag_client:
+        raise HTTPException(status_code=503, detail="RAG service недоступен")
+    try:
+        docs = await rag_client.kb_list_documents()
+        return {"documents": docs}
+    except Exception as e:
+        logger.error(f"Ошибка получения списка Базы Знаний: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/kb/documents/{document_id}")
+async def kb_delete_document(document_id: int):
+    """Удалить документ из постоянной Базы Знаний."""
+    if not rag_client:
+        raise HTTPException(status_code=503, detail="RAG service недоступен")
+    try:
+        result = await rag_client.kb_delete_document(document_id)
+        return result
+    except Exception as e:
+        logger.error(f"Ошибка удаления из Базы Знаний: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # ================================
 # СТАТИЧЕСКИЕ ФАЙЛЫ И ФРОНТЕНД

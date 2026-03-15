@@ -233,19 +233,23 @@ class UniversalTranscriber:
                     engine=self.engine
                 )
                 if result.get("success"):
-                    # Формируем текст с метками спикеров из сегментов
-                    segments = result.get("segments", [])
+                    # Сегменты содержат speaker, назначенный оркестратором.
+                    # Смежные сегменты одного спикера объединяем в один блок.
+                    segments = sorted(result.get("segments", []), key=lambda s: s.get("start", 0))
                     if segments:
-                        lines = []
+                        lines = []  # [(speaker, text)]
                         for seg in segments:
                             speaker = seg.get("speaker", "SPEAKER_?")
-                            text = seg.get("text", "").strip()
-                            if text:
-                                lines.append(f"[{speaker}]: {text}")
-                        diarized_text = "\n".join(lines) if lines else result.get("text", "")
-                    else:
-                        diarized_text = result.get("text", "")
-                    return True, diarized_text
+                            seg_text = (seg.get("text") or "").strip()
+                            if not seg_text:
+                                continue
+                            if lines and lines[-1][0] == speaker:
+                                lines[-1] = (speaker, lines[-1][1] + " " + seg_text)
+                            else:
+                                lines.append((speaker, seg_text))
+                        if lines:
+                            return True, "\n".join(f"{spk}: {txt}" for spk, txt in lines)
+                    return False, "Сервис вернул пустые сегменты"
                 return False, result.get("error", "Unknown error")
             except Exception as e:
                 return False, str(e)

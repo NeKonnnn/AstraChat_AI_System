@@ -74,6 +74,7 @@ import {
   Settings as SettingsIcon,
   Refresh as RefreshIcon,
   Clear as ClearIcon,
+  AutoStories as KbIcon,
 } from '@mui/icons-material';
 import { useAppContext, useAppActions } from '../contexts/AppContext';
 import { useSocket } from '../contexts/SocketContext';
@@ -138,6 +139,13 @@ export default function ProjectPage() {
   const [chatInputStyle, setChatInputStyle] = useState<'compact' | 'classic'>(() =>
     (localStorage.getItem('chat_input_style') as 'compact' | 'classic') || 'compact'
   );
+  const [useKbRag, setUseKbRag] = useState(() => localStorage.getItem('use_kb_rag') === 'true');
+
+  const toggleKbRag = () => {
+    const next = !useKbRag;
+    setUseKbRag(next);
+    localStorage.setItem('use_kb_rag', String(next));
+  };
 
   // Слушаем изменение стиля поля ввода через настройки
   React.useEffect(() => {
@@ -726,6 +734,22 @@ export default function ProjectPage() {
             },
           }}
         >
+          <MenuItem
+            onClick={() => {
+              toggleKbRag();
+              handleMenuClose();
+            }}
+            sx={{
+              color: theme.palette.mode === 'dark' ? 'white' : '#333',
+              gap: 1,
+              '&:hover': {
+                bgcolor: theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)',
+              },
+            }}
+          >
+            <KbIcon fontSize="small" />
+            <ListItemText primary={useKbRag ? 'Отключить Базу Знаний' : 'Подключить Базу Знаний'} />
+          </MenuItem>
           <MenuItem
             onClick={() => {
               setInputMessage('');

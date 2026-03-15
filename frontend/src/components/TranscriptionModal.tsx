@@ -62,6 +62,10 @@ interface TranscriptionModalProps {
   onTranscriptionComplete?: (result: string) => void;
   onTranscriptionError?: (error: string) => void;
   onInsertToChat?: (text: string) => void;
+  /** При открытии сразу начать транскрибацию этого файла (из меню «Загрузить файл» на правом баре). */
+  initialFile?: File | null;
+  /** При открытии переключить на вкладку: 0 — файл, 1 — YouTube. */
+  initialTab?: 0 | 1;
 }
 
 export default function TranscriptionModal({ 
@@ -73,9 +77,12 @@ export default function TranscriptionModal({
   onTranscriptionComplete,
   onTranscriptionError,
   onInsertToChat,
+  initialFile,
+  initialTab = 0,
 }: TranscriptionModalProps) {
   const theme = useTheme();
   const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
+  const startedForFileRef = useRef<File | null>(null);
   
   const [tabValue, setTabValue] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
@@ -104,6 +111,23 @@ export default function TranscriptionModal({
       }
     }
   }, [externalTranscriptionResult, originalTranscriptionResult]);
+
+  // При открытии с вкладки YouTube — переключаем на неё
+  useEffect(() => {
+    if (open && initialTab === 1) setTabValue(1);
+  }, [open, initialTab]);
+
+  // При открытии с файлом из меню правого бара — сразу запускаем транскрибацию
+  useEffect(() => {
+    if (!open) {
+      startedForFileRef.current = null;
+      return;
+    }
+    if (initialFile && startedForFileRef.current !== initialFile) {
+      startedForFileRef.current = initialFile;
+      handleFileTranscriptionWithFile(initialFile);
+    }
+  }, [open, initialFile]);
   
   const { showNotification } = useAppActions();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -261,6 +285,60 @@ export default function TranscriptionModal({
       if (!onTranscriptionStart) {
         setInternalIsTranscribing(false);
       }
+    }
+  };
+
+  /** Запуск транскрибации переданного файла (из меню «Загрузить файл» на правом баре). */
+  const handleFileTranscriptionWithFile = async (file: File) => {
+    if (onTranscriptionStart) onTranscriptionStart();
+    else setInternalIsTranscribing(true);
+    const currentTranscriptionId = `transcribe_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    setTranscriptionId(currentTranscriptionId);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('request_id', currentTranscriptionId);
+      const response = await fetch(getApiUrl(API_ENDPOINTS.TRANSCRIBE_UPLOAD), {
+        method: 'POST',
+        body: formData,
+      });
+      if (!response.ok) {
+        if (response.status === 499) {
+          const errorData = await response.json().catch(() => ({ detail: 'Транскрибация была остановлена' }));
+          const err = new Error(errorData.detail || 'Транскрибация была остановлена') as Error & { status: number };
+          err.status = 499;
+          throw err;
+        }
+        const errorData = await response.json().catch(() => ({ detail: 'Ошибка при транскрибации' }));
+        throw new Error(errorData.detail || 'Ошибка при транскрибации');
+      }
+      const result = await response.json();
+      if (result.success) {
+        if (result.transcription_id) setTranscriptionId(result.transcription_id);
+        const transcriptionText = result.transcription;
+        setOriginalTranscriptionResult(transcriptionText);
+        if (onTranscriptionComplete) onTranscriptionComplete(transcriptionText);
+        else setInternalTranscriptionResult(transcriptionText);
+        setShowResult(true);
+        showNotification('success', 'Транскрибация завершена');
+        setTranscriptionId(null);
+      } else {
+        const errorMsg = result.message || 'Ошибка при транскрибации';
+        if (onTranscriptionError) onTranscriptionError(errorMsg);
+        showNotification('error', errorMsg);
+        setTranscriptionId(null);
+      }
+    } catch (error: any) {
+      if (error?.status === 499 || error?.message?.includes('остановлена')) {
+        if (onTranscriptionError) onTranscriptionError('Транскрибация была остановлена');
+        showNotification('info', 'Транскрибация была остановлена');
+      } else {
+        if (onTranscriptionError) onTranscriptionError(error?.message || 'Ошибка');
+        showNotification('error', error?.message || 'Ошибка при отправке файла');
+      }
+      setTranscriptionId(null);
+    } finally {
+      if (!onTranscriptionStart) setInternalIsTranscribing(false);
     }
   };
 

@@ -749,12 +749,9 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         '& .MuiDrawer-paper': {
           width: open ? 280 : 64,
           boxSizing: 'border-box',
-          background: open 
-            ? sidebarPanelBg
-            : 'background.default',
+          background: sidebarPanelBg,
           color: open ? 'white' : 'text.primary',
-          borderRight: '1px solid',
-          borderColor: 'divider',
+          borderRight: '1px solid rgba(255,255,255,0.08)',
           transition: 'width 0.3s ease, background 0.3s ease, color 0.3s ease',
           overflowX: 'hidden',
           display: 'flex',
@@ -975,18 +972,19 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                 <AddIcon />
               </IconButton>
             </Tooltip>
+
           </Box>
 
-          {/* Кнопка "Скрыть панель" - на том же расстоянии как "Показать панель" */}
+          {/* Кнопка "Скрыть панель" — та же стилистика, что на правом сайдбаре (fixed по центру высоты) */}
           {onHide && (
-            <Box sx={{ 
+            <Box sx={{
               position: 'fixed',
               left: 0,
               top: '50%',
               transform: 'translateY(-50%)',
               width: 64,
-              display: 'flex', 
-              justifyContent: 'center', 
+              display: 'flex',
+              justifyContent: 'center',
               alignItems: 'center',
               zIndex: 1200,
             }}>
@@ -1002,9 +1000,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                     '&:hover': {
                       backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
                       opacity: 1,
-                      '& .MuiSvgIcon-root': {
-                        color: 'primary.main',
-                      },
+                      '& .MuiSvgIcon-root': { color: 'primary.main' },
                     },
                   }}
                 >
@@ -1995,7 +1991,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           </ListItemIcon>
           <ListItemText primary="Архив" />
         </MenuItem>
-        
+
         <MenuItem
           data-submenu-trigger="help"
           onMouseEnter={handleHelpSubmenuEnter}

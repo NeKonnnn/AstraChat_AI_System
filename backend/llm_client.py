@@ -247,9 +247,13 @@ class LLMClient:
         filename: str = "audio.wav",
         language: str = "auto",
         compute_type: str = "float16",
-        batch_size: int = 16
+        batch_size: int = 16,
+        word_timestamps: bool = True,
     ) -> Dict[str, Any]:
-        """Транскрибация аудио файла через WhisperX """
+        """Транскрибация аудио файла через WhisperX.
+        word_timestamps=True запрашивает временны́е метки на уровне слов —
+        они нужны для точного сопоставления со спикерами (аналог assign_word_speakers).
+        """
         try:
             ext = os.path.splitext(filename)[1].lower()
             content_type_map = {
@@ -258,7 +262,12 @@ class LLMClient:
             }
             content_type = content_type_map.get(ext, "audio/wav")
             files = {"file": (filename, io.BytesIO(audio_file), content_type)}
-            data = {"language": language, "compute_type": compute_type, "batch_size": batch_size}
+            data = {
+                "language": language,
+                "compute_type": compute_type,
+                "batch_size": batch_size,
+                "word_timestamps": str(word_timestamps).lower(),
+            }
             
             # Таймаут 30 минут 
             whisperx_timeout = httpx.Timeout(1800.0, connect=10.0, read=1800.0, write=60.0)
@@ -332,7 +341,7 @@ class LLMClient:
         filename: str = "audio.wav",
         min_speakers: int = 1,
         max_speakers: int = 10,
-        min_duration: float = 1.0
+        min_duration: float = 0.5
     ) -> Dict[str, Any]:
         """Диаризация Pyannote"""
         try:
@@ -361,31 +370,36 @@ class LLMClient:
         language: str = "auto",
         min_speakers: int = 1,
         max_speakers: int = 10,
-        min_duration: float = 1.0,
+        min_duration: float = 0.5,
         engine: str = "vosk",
     ) -> Dict[str, Any]:
         """
-        Комбинированная транскрибация: диаризация (SVC-SPEECH-DIAR) + STT (SVC-SPEECH-RECG).
-        Параметр `engine` позволяет выбирать движок STT: 'vosk' или 'whisperx'.
+        Комбинированная транскрибация с диаризацией.
+        Шаг 1: диаризация (diarization-service) → сегменты по спикерам.
+        Шаг 2: транскрипция (stt-service) → текст с временными метками.
+        Шаг 3: сопоставление по времени → segments[{speaker, text, start, end}].
+        Возвращает {success, text, segments, speakers_count}.
         """
         try:
             long_timeout = httpx.Timeout(3600.0, connect=10.0, read=3600.0, write=60.0)
             
-            # Шаг 1: Диаризация - получаем сегменты по спикерам
-            logger.info(f"[transcribe_with_diarization] Шаг 1: запрос диаризации... engine={engine}")
+            # Шаг 1: Диаризация
+            # min_duration=0.5 — позволяет детектировать короткие реплики (< 1 сек),
+            # например "Да, всем добрый день." в начале разговора.
+            logger.info(f"[transcribe_with_diarization] Шаг 1: диаризация... engine={engine}")
             diarization_result = await self.diarize_audio(
                 audio_file, filename=filename,
                 min_speakers=min_speakers, max_speakers=max_speakers,
                 min_duration=min_duration
             )
             
-            segments = diarization_result.get("segments", [])
-            if not segments:
+            diar_segments = diarization_result.get("segments", [])
+            if not diar_segments:
                 logger.warning("[transcribe_with_diarization] Диаризация не нашла сегментов")
                 return {"success": True, "text": "", "segments": [], "speakers_count": 0}
             
-            # Шаг 2: Транскрибация - отправляем весь файл в STT сервис
-            logger.info(f"[transcribe_with_diarization] Шаг 2: запрос транскрибации через STT (engine={engine})...")
+            # Шаг 2: Транскрипция
+            logger.info(f"[transcribe_with_diarization] Шаг 2: транскрипция (engine={engine})...")
             engine_normalized = (engine or "vosk").lower()
             if engine_normalized == "whisperx":
                 transcription_result = await self.transcribe_audio_whisperx(
@@ -402,38 +416,137 @@ class LLMClient:
                 else str(transcription_result)
             )
             
-            # Шаг 3: Комбинируем результаты
-            logger.info(f"[transcribe_with_diarization] Комбинируем: {len(segments)} сегментов, текст: {len(full_text)} симв.")
+            # Шаг 3: Сопоставление сегментов STT и диаризации по времени
+            stt_segments = transcription_result.get("segments", []) if isinstance(transcription_result, dict) else []
+            has_timestamps = (
+                len(stt_segments) > 0
+                and all(
+                    isinstance(s.get("start"), (int, float)) and isinstance(s.get("end"), (int, float))
+                    for s in stt_segments
+                )
+            )
             
-            # Присваиваем текст сегментам (пропорционально по длительности)
-            total_duration = sum(s.get("duration", 0) for s in segments)
-            words = full_text.split() if full_text else []
-            total_words = len(words)
-            
-            result_segments = []
-            word_idx = 0
-            for seg in segments:
-                seg_duration = seg.get("duration", 0)
-                # Пропорция слов для этого сегмента
-                if total_duration > 0:
-                    word_count = max(1, round(total_words * seg_duration / total_duration))
+            if has_timestamps:
+                diar_sorted = sorted(diar_segments, key=lambda s: s.get("start", 0))
+
+                # Проверяем, есть ли word-level timestamps (приходят от WhisperX как
+                # segment["words"] = [{word, start, end}, ...]).
+                # Если есть — сопоставляем каждое слово со спикером, затем собираем
+                # сегменты (аналог whisperx.assign_word_speakers).
+                # Если нет — fallback: max-overlap на уровне сегментов.
+                all_words = []
+                for stt in stt_segments:
+                    words = stt.get("words") or []
+                    for w in words:
+                        if isinstance(w, dict) and "start" in w and "end" in w and w.get("word"):
+                            all_words.append(w)
+
+                if all_words:
+                    # --- Word-level сопоставление (точный аналог assign_word_speakers) ---
+                    raw_parts = []  # (start, end, speaker, word)
+                    for w in all_words:
+                        w_start = float(w.get("start", 0))
+                        w_end = float(w.get("end", 0))
+                        word_text = (w.get("word") or "").strip()
+                        if not word_text:
+                            continue
+                        best_speaker = "SPEAKER_0"
+                        best_overlap = 0.0
+                        for d in diar_sorted:
+                            d_start = float(d.get("start", 0))
+                            d_end = float(d.get("end", 0))
+                            overlap = max(0.0, min(w_end, d_end) - max(w_start, d_start))
+                            if overlap > best_overlap:
+                                best_overlap = overlap
+                                best_speaker = d.get("speaker", "SPEAKER_0")
+                        raw_parts.append((w_start, w_end, best_speaker, word_text))
+
+                    # Собираем слова в сегменты: слова одного спикера подряд → один сегмент
+                    result_segments = []
+                    for w_start, w_end, speaker, word_text in raw_parts:
+                        if result_segments and result_segments[-1]["speaker"] == speaker:
+                            result_segments[-1]["text"] += " " + word_text
+                            result_segments[-1]["end"] = w_end
+                        else:
+                            result_segments.append({
+                                "start": w_start,
+                                "end": w_end,
+                                "speaker": speaker,
+                                "text": word_text,
+                            })
+                    logger.info(f"[transcribe_with_diarization] Word-level сопоставление: {len(result_segments)} сегментов")
                 else:
-                    word_count = total_words
-                
-                seg_words = words[word_idx:word_idx + word_count]
-                word_idx += word_count
-                
-                result_segments.append({
-                    "start": seg.get("start", 0),
-                    "end": seg.get("end", 0),
-                    "duration": seg_duration,
-                    "speaker": seg.get("speaker", "SPEAKER_0"),
-                    "text": " ".join(seg_words)
-                })
-            
-            # Добавляем оставшиеся слова к последнему сегменту
-            if word_idx < total_words and result_segments:
-                result_segments[-1]["text"] += " " + " ".join(words[word_idx:])
+                    # --- Segment-level: разбиваем каждый STT-сегмент по границам диаризации,
+                    # затем объединяем смежные части одного спикера в один блок. ---
+                    raw_parts = []  # (start, end, speaker, text_fragment)
+                    for stt in stt_segments:
+                        t_start = float(stt.get("start", 0))
+                        t_end = float(stt.get("end", 0))
+                        text = (stt.get("text") or "").strip()
+                        if not text:
+                            continue
+
+                        overlapping = sorted([
+                            (float(d.get("start", 0)), float(d.get("end", 0)),
+                             d.get("speaker", "SPEAKER_0"),
+                             max(0.0, min(t_end, float(d.get("end", 0))) - max(t_start, float(d.get("start", 0)))))
+                            for d in diar_sorted
+                            if max(0.0, min(t_end, float(d.get("end", 0))) - max(t_start, float(d.get("start", 0)))) > 0
+                        ], key=lambda x: x[0])
+
+                        if not overlapping:
+                            nearest = min(diar_sorted, key=lambda d: abs(float(d.get("start", 0)) - t_start))
+                            raw_parts.append((t_start, t_end, nearest.get("speaker", "SPEAKER_0"), text))
+                            continue
+
+                        if len(overlapping) == 1:
+                            raw_parts.append((t_start, t_end, overlapping[0][2], text))
+                        else:
+                            # Делим текст пропорционально времени каждого спикера
+                            total_overlap = sum(o for _, _, _, o in overlapping)
+                            words_list = text.split()
+                            word_idx = 0
+                            for i, (d_start, d_end, speaker, overlap) in enumerate(overlapping):
+                                if i == len(overlapping) - 1:
+                                    chunk = words_list[word_idx:]
+                                else:
+                                    count = max(1, round(len(words_list) * overlap / total_overlap))
+                                    chunk = words_list[word_idx:word_idx + count]
+                                    word_idx += len(chunk)
+                                chunk_text = " ".join(chunk).strip()
+                                if chunk_text:
+                                    raw_parts.append((d_start, d_end, speaker, chunk_text))
+
+                    # Объединяем смежные части одного спикера в один блок
+                    result_segments = []
+                    for p_start, p_end, speaker, text in sorted(raw_parts, key=lambda x: x[0]):
+                        if result_segments and result_segments[-1]["speaker"] == speaker:
+                            result_segments[-1]["text"] += " " + text
+                            result_segments[-1]["end"] = p_end
+                        else:
+                            result_segments.append({"start": p_start, "end": p_end, "speaker": speaker, "text": text})
+                    logger.info(f"[transcribe_with_diarization] Segment+split+merge: {len(result_segments)} сегментов")
+            else:
+                # Fallback: распределяем текст по сегментам диаризации пропорционально длительности
+                total_duration = sum(s.get("duration", s.get("end", 0) - s.get("start", 0)) for s in diar_segments)
+                words = full_text.split() if full_text else []
+                total_words = len(words)
+                result_segments = []
+                word_idx = 0
+                for seg in diar_segments:
+                    seg_duration = seg.get("duration", seg.get("end", 0) - seg.get("start", 0))
+                    word_count = max(1, round(total_words * seg_duration / total_duration)) if total_duration > 0 else total_words
+                    seg_words = words[word_idx:word_idx + word_count]
+                    word_idx += word_count
+                    result_segments.append({
+                        "start": seg.get("start", 0),
+                        "end": seg.get("end", 0),
+                        "speaker": seg.get("speaker", "SPEAKER_0"),
+                        "text": " ".join(seg_words),
+                    })
+                if word_idx < total_words and result_segments:
+                    result_segments[-1]["text"] += " " + " ".join(words[word_idx:])
+                logger.info(f"[transcribe_with_diarization] Fallback по длительности: {len(diar_segments)} сегментов")
             
             return {
                 "success": True,
@@ -443,7 +556,7 @@ class LLMClient:
             }
             
         except Exception as e:
-            logger.error(f"Ошибка комбинированной обработки: {e}")
+            logger.error(f"[transcribe_with_diarization] Ошибка: {e}")
             raise
 
     # ==========================================

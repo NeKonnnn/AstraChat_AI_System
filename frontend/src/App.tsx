@@ -11,6 +11,7 @@ import DocumentsPage from './pages/DocumentsPage';
 import HistoryPage from './pages/HistoryPage';
 import PromptGalleryPage from './pages/PromptGalleryPage';
 import ProjectPage from './pages/ProjectPage';
+import KnowledgeBasePage from './pages/KnowledgeBasePage';
 import { SocketProvider } from './contexts/SocketContext';
 import { AppProvider } from './contexts/AppContext';
 import { AuthProvider } from './contexts/AuthContext';
@@ -253,6 +254,7 @@ function App() {
                             <Route path="/project/:projectId" element={<ProjectPage />} />
                             <Route path="/voice" element={<VoicePage />} />
                             <Route path="/documents" element={<DocumentsPage />} />
+                            <Route path="/knowledge-base" element={<KnowledgeBasePage isDarkMode={isDarkMode} />} />
                             <Route path="/prompts" element={<PromptGalleryPage />} />
                             <Route path="/profile" element={<ProfilePage />} />
                             <Route path="/history" element={<HistoryPage />} />

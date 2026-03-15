@@ -29,6 +29,11 @@ import {
   Checkbox,
   FormControlLabel,
   Paper,
+  List,
+  ListItem,
+  ListItemButton,
+  ListItemIcon,
+  ListItemText,
 } from '@mui/material';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -52,18 +57,23 @@ import {
   Transcribe as TranscribeIcon,
   AutoAwesome as PromptsIcon,
   Share as ShareIcon,
+  AutoStories as KbIcon,
+  SmartToy as AgentConstructorIcon,
+  YouTube as YouTubeIcon,
 } from '@mui/icons-material';
 import { useAppContext, useAppActions, Message } from '../contexts/AppContext';
 import { useSocket } from '../contexts/SocketContext';
 import { getApiUrl, getWsUrl, API_ENDPOINTS } from '../config/api';
 import MessageRenderer from '../components/MessageRenderer';
 import { useNavigate } from 'react-router-dom';
-import TranscriptionModal from '../components/TranscriptionModal';
+import TranscriptionResultModal from '../components/TranscriptionResultModal';
 import ModelSelector from '../components/ModelSelector';
 import MessageNavigationBar from '../components/MessageNavigationBar';
 import ShareConfirmDialog from '../components/ShareConfirmDialog';
 import ChatInputBar from '../components/ChatInputBar';
 import VoiceChatDialog from '../components/VoiceChatDialog';
+import AgentConstructorPanel from '../components/AgentConstructorPanel';
+import AgentSelector from '../components/AgentSelector';
 import { getSidebarPanelBackground } from '../constants/sidebarPanelColor';
 
 interface UnifiedChatPageProps {
@@ -99,6 +109,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     return saved !== null ? saved === 'true' : false;
   });
   const [rightSidebarPanelBg, setRightSidebarPanelBg] = useState(() => getSidebarPanelBackground());
+  const [agentConstructorOpen, setAgentConstructorOpen] = useState(false);
 
   useEffect(() => {
     const onColorChanged = () => setRightSidebarPanelBg(getSidebarPanelBackground());
@@ -144,6 +155,10 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   const [transcriptionModalOpen, setTranscriptionModalOpen] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [transcriptionResult, setTranscriptionResult] = useState('');
+  const [transcriptionMenuOpen, setTranscriptionMenuOpen] = useState(false);
+  const [transcriptionYoutubeUrl, setTranscriptionYoutubeUrl] = useState('');
+  const [transcriptionId, setTranscriptionId] = useState<string | null>(null);
+  const transcriptionFileInputRef = useRef<HTMLInputElement>(null);
   
   // Состояние для текстового чата
   const [inputMessage, setInputMessage] = useState('');
@@ -175,6 +190,19 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   const [showDocumentDialog, setShowDocumentDialog] = useState(false);
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   
+  // Состояние "База Знаний" (KB RAG)
+  const [useKbRag, setUseKbRag] = useState(() => {
+    return localStorage.getItem('use_kb_rag') === 'true';
+  });
+
+  const toggleKbRag = () => {
+    setUseKbRag(prev => {
+      const next = !prev;
+      localStorage.setItem('use_kb_rag', String(next));
+      return next;
+    });
+  };
+
   // Состояние для режима "Поделиться"
   const [shareMode, setShareMode] = useState(false);
   const [selectedMessages, setSelectedMessages] = useState<Set<string>>(new Set());
@@ -1383,6 +1411,126 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     setAnchorEl(null);
   };
 
+  const handleTranscriptionFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files?.length) return;
+    const file = files[0];
+    const allowedTypes = [
+      'audio/mpeg', 'audio/wav', 'audio/m4a', 'audio/aac', 'audio/flac',
+      'video/mp4', 'video/avi', 'video/mov', 'video/mkv', 'video/webm',
+    ];
+    const isValidType = allowedTypes.some(type =>
+      file.type.includes(type.split('/')[1]) || file.name.toLowerCase().includes(type.split('/')[1])
+    );
+    if (!isValidType) {
+      showNotification('error', 'Поддерживаются только аудио и видео файлы');
+      e.target.value = '';
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024 * 1024) {
+      showNotification('error', 'Размер файла не должен превышать 5GB');
+      e.target.value = '';
+      return;
+    }
+    e.target.value = '';
+    startFileTranscriptionFromSidebar(file);
+  };
+
+  /** Запуск транскрибации файла из правого сайдбара (без открытия модалки). */
+  const startFileTranscriptionFromSidebar = async (file: File) => {
+    setIsTranscribing(true);
+    const currentId = `transcribe_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    setTranscriptionId(currentId);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('request_id', currentId);
+      const response = await fetch(getApiUrl(API_ENDPOINTS.TRANSCRIBE_UPLOAD), {
+        method: 'POST',
+        body: formData,
+      });
+      if (!response.ok) {
+        if (response.status === 499) {
+          const errorData = await response.json().catch(() => ({ detail: 'Транскрибация была остановлена' }));
+          throw Object.assign(new Error(errorData.detail || 'Транскрибация была остановлена'), { status: 499 });
+        }
+        const errorData = await response.json().catch(() => ({ detail: 'Ошибка при транскрибации' }));
+        throw new Error(errorData.detail || 'Ошибка при транскрибации');
+      }
+      const result = await response.json();
+      if (result.success) {
+        if (result.transcription_id) setTranscriptionId(result.transcription_id);
+        const text = result.transcription ?? '';
+        setTranscriptionResult(text);
+        showNotification('success', 'Транскрибация завершена');
+      } else {
+        showNotification('error', result.message || 'Ошибка при транскрибации');
+      }
+    } catch (err: any) {
+      if (err?.status === 499 || err?.message?.includes('остановлена')) {
+        showNotification('info', 'Транскрибация была остановлена');
+      } else {
+        showNotification('error', err?.message || 'Ошибка при отправке файла');
+      }
+    } finally {
+      setIsTranscribing(false);
+      setTranscriptionId(null);
+    }
+  };
+
+  const handleStopTranscriptionFromSidebar = async () => {
+    if (!transcriptionId) return;
+    try {
+      const response = await fetch(getApiUrl('/api/transcribe/stop'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transcription_id: transcriptionId }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        showNotification('info', 'Транскрибация остановлена');
+      } else {
+        showNotification('error', result.message || 'Ошибка остановки');
+      }
+    } catch {
+      showNotification('error', 'Ошибка при остановке транскрибации');
+    }
+    setTranscriptionId(null);
+    setIsTranscribing(false);
+  };
+
+  /** Транскрибация YouTube из правого сайдбара. */
+  const startYouTubeTranscriptionFromSidebar = async () => {
+    const url = transcriptionYoutubeUrl.trim();
+    if (!url) {
+      showNotification('warning', 'Введите URL YouTube видео');
+      return;
+    }
+    if (!url.includes('youtube.com') && !url.includes('youtu.be')) {
+      showNotification('error', 'Некорректный URL YouTube');
+      return;
+    }
+    setIsTranscribing(true);
+    try {
+      const response = await fetch(getApiUrl(API_ENDPOINTS.TRANSCRIBE_YOUTUBE), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+      const result = await response.json();
+      if (result.success) {
+        setTranscriptionResult(result.transcription ?? '');
+        showNotification('success', 'Транскрибация YouTube завершена');
+      } else {
+        showNotification('error', result.message || 'Ошибка при транскрибации YouTube');
+      }
+    } catch {
+      showNotification('error', 'Ошибка при обработке YouTube URL');
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
+
   const handleClearChat = (): void => {
     if (currentChat) {
       clearMessages(currentChat.id);
@@ -2342,31 +2490,59 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
             onSendClick={handleSendMessage}
             sendDisabled={!inputMessage.trim() || !isConnected || !modelWindows.some(w => w.selectedModel)}
             styleVariant={interfaceSettings.chatInputStyle}
+            onSettingsClick={handleMenuOpen}
+            settingsDisabled={modelWindows.some(w => w.isStreaming)}
             extraActions={
-              modelWindows.length < 4 ? (
-                <Tooltip title="Добавить модель">
-                  <IconButton
-                    onClick={addModelWindow}
-                    sx={{
-                      color: 'primary.main',
-                      bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
-                      border: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)'}`,
-                      '&:hover': {
-                        bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)',
-                      },
-                      '&:active': { transform: 'none' },
-                      flexShrink: 0,
-                    }}
-                    disableRipple
-                    disabled={modelWindows.some(w => w.isStreaming)}
-                  >
-                    <AddIcon sx={{ fontSize: '1.2rem' }} />
-                  </IconButton>
-                </Tooltip>
-              ) : null
+              <>
+                {modelWindows.length < 4 && (
+                  <Tooltip title="Добавить модель">
+                    <IconButton
+                      onClick={addModelWindow}
+                      sx={{
+                        color: 'primary.main',
+                        bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+                        border: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)'}`,
+                        '&:hover': {
+                          bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)',
+                        },
+                        '&:active': { transform: 'none' },
+                        flexShrink: 0,
+                      }}
+                      disableRipple
+                      disabled={modelWindows.some(w => w.isStreaming)}
+                    >
+                      <AddIcon sx={{ fontSize: '1.2rem' }} />
+                    </IconButton>
+                  </Tooltip>
+                )}
+              </>
             }
           />
         </Box>
+        {/* Выпадающее меню «Дополнительные действия» (режим нескольких моделей) */}
+        <Menu
+          anchorEl={anchorEl}
+          open={Boolean(anchorEl)}
+          onClose={handleMenuClose}
+          anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
+          transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+          PaperProps={{
+            sx: {
+              bgcolor: isDarkMode ? 'background.paper' : 'white',
+              border: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'}`,
+              boxShadow: isDarkMode ? '0 4px 20px rgba(0, 0, 0, 0.3)' : '0 4px 20px rgba(0, 0, 0, 0.15)',
+            },
+          }}
+        >
+          <MenuItem onClick={() => { toggleKbRag(); handleMenuClose(); }} sx={{ gap: 1 }}>
+            <KbIcon fontSize="small" />
+            {useKbRag ? 'Отключить Базу Знаний' : 'Подключить Базу Знаний'}
+          </MenuItem>
+          <MenuItem onClick={handleClearChat} sx={{ gap: 1 }}>
+            <ClearIcon fontSize="small" />
+            Очистить чат
+          </MenuItem>
+        </Menu>
       </Box>
     );
   }
@@ -2461,6 +2637,39 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
           )}
         </Box>
       )}
+
+      {/* Кнопка выбора агента/модели — сверху по центру, на одной строке с выбранной моделью */}
+      <Box sx={{
+        position: 'absolute',
+        top: 16,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        zIndex: 1200,
+        display: 'flex',
+        alignItems: 'center',
+      }}>
+        <AgentSelector
+          isDarkMode={isDarkMode}
+          triggerMaxWidth={180}
+          onModelSelect={async (modelPath) => {
+            try {
+              const response = await fetch(getApiUrl('/api/models/load'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model_path: modelPath }),
+              });
+              const data = await response.json();
+              if (response.ok && data.success) {
+                showNotification('success', 'Модель успешно загружена');
+              } else {
+                showNotification('error', data.message || 'Не удалось загрузить модель');
+              }
+            } catch (e: any) {
+              showNotification('error', e?.message || 'Ошибка загрузки модели');
+            }
+          }}
+        />
+      </Box>
 
       {/* Область сообщений */}
       <Box
@@ -2789,8 +2998,8 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
              sendDisabled={!inputMessage.trim() || !isConnected || (state.isLoading && !messages.some(msg => msg.isStreaming))}
              onVoiceClick={() => setShowVoiceDialog(true)}
              voiceDisabled={state.isLoading && !messages.some(msg => msg.isStreaming)}
-             voiceTooltip="Голосовой ввод"
-           />
+            voiceTooltip="Голосовой ввод"
+          />
 
              {/* Диалоги */}
        <VoiceChatDialog
@@ -2822,6 +3031,16 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
            }
          }}
        >
+         <MenuItem
+           onClick={() => {
+             toggleKbRag();
+             handleMenuClose();
+           }}
+           sx={{ gap: 1 }}
+         >
+           <KbIcon fontSize="small" />
+           {useKbRag ? 'Отключить Базу Знаний' : 'Подключить Базу Знаний'}
+         </MenuItem>
          <MenuItem onClick={handleClearChat} sx={{ gap: 1 }}>
            <ClearIcon fontSize="small" />
            Очистить чат
@@ -2893,7 +3112,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
        </Snackbar>
       </Box>
 
-      {/* Правый сайдбар с кнопками */}
+      {/* Правый сайдбар: кнопки действий → по клику «Конструктор агента» открывается панель */}
       {!rightSidebarHidden && (
       <Drawer
         variant="persistent"
@@ -2906,165 +3125,339 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
           '& .MuiDrawer-paper': {
             width: rightSidebarOpen ? 280 : 64,
             boxSizing: 'border-box',
-            background: rightSidebarOpen 
-              ? rightSidebarPanelBg
-              : 'background.default',
-            color: rightSidebarOpen ? 'white' : 'text.primary',
-            borderLeft: '1px solid',
-            borderColor: 'divider',
-            transition: 'width 0.3s ease, background 0.3s ease, color 0.3s ease',
+            background: rightSidebarPanelBg,
+            borderLeft: '1px solid rgba(255,255,255,0.08)',
+            transition: 'width 0.3s ease',
             overflowX: 'hidden',
             display: 'flex',
             flexDirection: 'column',
           },
         }}
       >
-        {/* Заголовок */}
-        <Box
-          sx={{
-            p: rightSidebarOpen ? 2 : 1,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: rightSidebarOpen ? 'space-between' : 'center',
-            background: rightSidebarOpen ? 'rgba(0,0,0,0.1)' : 'transparent',
-            minHeight: 64,
-          }}
-        >
-          {rightSidebarOpen && (
-            <Typography variant="h6" fontWeight="bold" sx={{ color: 'white' }}>
-              Действия
-            </Typography>
-          )}
-          <IconButton
-            onClick={() => setRightSidebarOpen(!rightSidebarOpen)}
-            sx={{
-              color: rightSidebarOpen ? 'white' : 'text.primary',
-              '&:hover': {
-                backgroundColor: rightSidebarOpen 
-                  ? 'rgba(255,255,255,0.1)' 
-                  : 'action.hover',
-              },
-            }}
-          >
-            <MenuIcon />
-          </IconButton>
-        </Box>
-
-        {rightSidebarOpen && <Divider sx={{ borderColor: 'rgba(255,255,255,0.1)' }} />}
-
-        {/* Кнопки */}
-        <Box sx={{ 
-          p: rightSidebarOpen ? 2 : 1, 
-          display: 'flex', 
-          flexDirection: 'column', 
-          gap: rightSidebarOpen ? 2 : 1,
-          flex: 1,
-        }}>
-          {/* Кнопка "Транскрибация" */}
-          <Tooltip title={rightSidebarOpen ? '' : 'Транскрибация'} placement="left">
-            <Button
-              fullWidth={rightSidebarOpen}
-              variant={rightSidebarOpen ? 'contained' : 'text'}
-              startIcon={<TranscribeIcon />}
-              onClick={() => setTranscriptionModalOpen(true)}
-              sx={{
-                bgcolor: rightSidebarOpen ? 'rgba(255,255,255,0.2)' : 'transparent',
-                color: rightSidebarOpen ? 'white' : 'text.primary',
-                opacity: !rightSidebarOpen ? 0.7 : 1,
-                '&:hover': {
-                  bgcolor: rightSidebarOpen 
-                    ? 'rgba(255,255,255,0.3)' 
-                    : (isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'),
-                  opacity: 1,
-                  '& .MuiSvgIcon-root': !rightSidebarOpen ? {
-                    color: 'primary.main',
-                  } : {},
-                },
-                textTransform: 'none',
-                py: rightSidebarOpen ? 1.5 : 1,
-                minWidth: rightSidebarOpen ? 'auto' : 40,
-                width: rightSidebarOpen ? '100%' : 40,
-                justifyContent: rightSidebarOpen ? 'flex-start' : 'center',
-                '& .MuiButton-startIcon': {
-                  margin: rightSidebarOpen ? '0 8px 0 0' : 0,
-                },
-              }}
-            >
-              {rightSidebarOpen && 'Транскрибация'}
-            </Button>
-          </Tooltip>
-
-          {/* Кнопка "Галерея промптов" */}
-          <Tooltip title={rightSidebarOpen ? '' : 'Галерея промптов'} placement="left">
-            <Button
-              fullWidth={rightSidebarOpen}
-              variant={rightSidebarOpen ? 'outlined' : 'text'}
-              startIcon={<PromptsIcon />}
-              onClick={() => navigate('/prompts')}
-              sx={{
-                bgcolor: rightSidebarOpen ? 'transparent' : 'transparent',
-                color: rightSidebarOpen ? 'white' : 'text.primary',
-                borderColor: rightSidebarOpen ? 'rgba(255,255,255,0.3)' : 'transparent',
-                opacity: !rightSidebarOpen ? 0.7 : 1,
-                '&:hover': {
-                  bgcolor: rightSidebarOpen 
-                    ? 'rgba(255,255,255,0.2)' 
-                    : (isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'),
-                  borderColor: rightSidebarOpen ? 'rgba(255,255,255,0.5)' : 'transparent',
-                  opacity: 1,
-                  '& .MuiSvgIcon-root': !rightSidebarOpen ? {
-                    color: 'primary.main',
-                  } : {},
-                },
-                textTransform: 'none',
-                py: rightSidebarOpen ? 1.5 : 1,
-                minWidth: rightSidebarOpen ? 'auto' : 40,
-                width: rightSidebarOpen ? '100%' : 40,
-                justifyContent: rightSidebarOpen ? 'flex-start' : 'center',
-                '& .MuiButton-startIcon': {
-                  margin: rightSidebarOpen ? '0 8px 0 0' : 0,
-                },
-              }}
-            >
-              {rightSidebarOpen && 'Галерея промптов'}
-            </Button>
-          </Tooltip>
-        </Box>
-
-        {/* Кнопка "Скрыть панель" - на том же расстоянии как "Показать панель" */}
+        {/* Свёрнутое состояние: те же стили кнопок, что на левой панели; кнопка «Скрыть панель» — fixed по центру высоты экрана */}
         {!rightSidebarOpen && (
-          <Box sx={{ 
-            position: 'fixed',
-            right: 0,
-            top: '50%',
-            transform: 'translateY(-50%)',
-            width: 64,
-            display: 'flex', 
-            justifyContent: 'center',
-            alignItems: 'center',
-            zIndex: 1200,
-          }}>
-            <Tooltip title="Скрыть панель" placement="left">
-              <IconButton
-                onClick={() => setRightSidebarHidden(true)}
-                sx={{
-                  color: 'text.primary',
-                  opacity: 0.7,
-                  width: 40,
-                  height: 40,
-                  borderRadius: 1,
-                  '&:hover': {
-                    backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
-                    opacity: 1,
-                    '& .MuiSvgIcon-root': {
-                      color: 'primary.main',
+          <>
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', pt: 1, gap: 0.5 }}>
+              <Tooltip title="Открыть панель" placement="left">
+                <IconButton
+                  onClick={() => setRightSidebarOpen(true)}
+                  sx={{
+                    color: 'text.primary',
+                    opacity: 0.7,
+                    width: 40,
+                    height: 40,
+                    borderRadius: 1,
+                    '&:hover': {
+                      backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+                      opacity: 1,
+                      '& .MuiSvgIcon-root': { color: 'primary.main' },
                     },
-                  },
-                }}
-              >
-                <ChevronRightIcon />
-              </IconButton>
-            </Tooltip>
+                  }}
+                >
+                  <MenuIcon />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Транскрибация" placement="left">
+                <IconButton
+                  onClick={() => { setRightSidebarOpen(true); setTranscriptionMenuOpen(true); }}
+                  sx={{
+                    color: 'text.primary',
+                    opacity: 0.7,
+                    width: 40,
+                    height: 40,
+                    borderRadius: 1,
+                    '&:hover': {
+                      backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+                      opacity: 1,
+                      '& .MuiSvgIcon-root': { color: 'primary.main' },
+                    },
+                  }}
+                >
+                  <TranscribeIcon />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Галерея промптов" placement="left">
+                <IconButton
+                  onClick={() => navigate('/prompts')}
+                  sx={{
+                    color: 'text.primary',
+                    opacity: 0.7,
+                    width: 40,
+                    height: 40,
+                    borderRadius: 1,
+                    '&:hover': {
+                      backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+                      opacity: 1,
+                      '& .MuiSvgIcon-root': { color: 'primary.main' },
+                    },
+                  }}
+                >
+                  <PromptsIcon />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Конструктор агента" placement="left">
+                <IconButton
+                  onClick={() => { setRightSidebarOpen(true); setAgentConstructorOpen(true); }}
+                  sx={{
+                    color: 'text.primary',
+                    opacity: 0.7,
+                    width: 40,
+                    height: 40,
+                    borderRadius: 1,
+                    '&:hover': {
+                      backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+                      opacity: 1,
+                      '& .MuiSvgIcon-root': { color: 'primary.main' },
+                    },
+                  }}
+                >
+                  <AgentConstructorIcon />
+                </IconButton>
+              </Tooltip>
+            </Box>
+            {/* Та же позиция и дизайн, что у кнопки «Скрыть панель» на левой панели: по центру высоты экрана */}
+            <Box sx={{
+              position: 'fixed',
+              right: 0,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              width: 64,
+              display: 'flex',
+              justifyContent: 'center',
+              alignItems: 'center',
+              zIndex: 1200,
+            }}>
+              <Tooltip title="Скрыть панель" placement="left">
+                <IconButton
+                  onClick={() => setRightSidebarHidden(true)}
+                  sx={{
+                    color: 'text.primary',
+                    opacity: 0.7,
+                    width: 40,
+                    height: 40,
+                    borderRadius: 1,
+                    '&:hover': {
+                      backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+                      opacity: 1,
+                      '& .MuiSvgIcon-root': {
+                        color: 'primary.main',
+                      },
+                    },
+                  }}
+                >
+                  <ChevronRightIcon />
+                </IconButton>
+              </Tooltip>
+            </Box>
+          </>
+        )}
+
+        {/* Развёрнутое состояние: кнопки всегда видны, меню конструктора открывается под кнопкой «Конструктор агента» */}
+        {rightSidebarOpen && (
+          <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+            <Box sx={{ px: 2, py: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.1)', minHeight: 56, flexShrink: 0 }}>
+              <Typography variant="subtitle2" fontWeight={600} sx={{ color: 'white' }}>Действия</Typography>
+              <Box sx={{ display: 'flex', gap: 0.5 }}>
+                <Tooltip title="Скрыть панель" placement="left">
+                  <IconButton size="small" onClick={() => { setRightSidebarHidden(true); setAgentConstructorOpen(false); }}
+                    sx={{ color: 'rgba(255,255,255,0.5)', '&:hover': { color: 'white', bgcolor: 'rgba(255,255,255,0.08)' } }}>
+                    <ChevronRightIcon sx={{ fontSize: '1rem' }} />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title="Свернуть" placement="left">
+                  <IconButton size="small" onClick={() => setRightSidebarOpen(false)}
+                    sx={{ color: 'rgba(255,255,255,0.5)', '&:hover': { color: 'white', bgcolor: 'rgba(255,255,255,0.08)' } }}>
+                    <MenuIcon sx={{ fontSize: '1rem' }} />
+                  </IconButton>
+                </Tooltip>
+              </Box>
+            </Box>
+            <List sx={{ py: 0, px: 1, flexShrink: 0 }}>
+              <ListItem disablePadding sx={{ mb: 0.5 }}>
+                <ListItemButton
+                  onClick={() => setTranscriptionMenuOpen(prev => !prev)}
+                  sx={{
+                    borderRadius: 2,
+                    color: 'white',
+                    py: 1,
+                    px: 2,
+                    backgroundColor: transcriptionMenuOpen ? 'rgba(255,255,255,0.15)' : 'transparent',
+                    '&:hover': { backgroundColor: transcriptionMenuOpen ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.08)' },
+                    transition: 'all 0.2s ease',
+                  }}
+                >
+                  <ListItemIcon sx={{ color: 'white', minWidth: 36, mr: 1 }}>
+                    <TranscribeIcon fontSize="small" />
+                  </ListItemIcon>
+                  <ListItemText primary="Транскрибация" primaryTypographyProps={{ fontSize: '0.875rem' }} />
+                </ListItemButton>
+              </ListItem>
+              {/* Меню транскрибации — сразу под кнопкой «Транскрибация» */}
+              {transcriptionMenuOpen && (
+                <Box sx={{ borderTop: '1px solid rgba(255,255,255,0.08)', p: 1.5, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  <input
+                    ref={transcriptionFileInputRef}
+                    type="file"
+                    accept="audio/*,video/*"
+                    hidden
+                    onChange={handleTranscriptionFileSelect}
+                  />
+                  {/* Прогресс: транскрибация идёт */}
+                  {isTranscribing && (
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+                      <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.8)', fontSize: '0.78rem' }}>
+                        Транскрибация идёт...
+                      </Typography>
+                      <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
+                        <CircularProgress size={16} sx={{ color: 'primary.main' }} />
+                        <Button
+                          size="small"
+                          startIcon={<SquareIcon sx={{ fontSize: '0.75rem' }} />}
+                          onClick={handleStopTranscriptionFromSidebar}
+                          disabled={!transcriptionId}
+                          sx={{
+                            fontSize: '0.7rem',
+                            textTransform: 'none',
+                            color: 'rgba(255,255,255,0.7)',
+                            py: 0.5,
+                            minWidth: 0,
+                            '&:hover': { bgcolor: 'rgba(255,255,255,0.08)' },
+                          }}
+                        >
+                          Остановить
+                        </Button>
+                      </Box>
+                    </Box>
+                  )}
+                  {/* Кнопка «Посмотреть результат» после завершения */}
+                  {transcriptionResult && !isTranscribing && (
+                    <Button
+                      size="small"
+                      fullWidth
+                      variant="outlined"
+                      onClick={() => setTranscriptionModalOpen(true)}
+                      sx={{
+                        fontSize: '0.78rem',
+                        textTransform: 'none',
+                        color: 'primary.main',
+                        borderColor: 'primary.main',
+                        py: 0.75,
+                        '&:hover': { borderColor: 'primary.light', bgcolor: 'rgba(33,150,243,0.08)' },
+                      }}
+                    >
+                      Посмотреть результат
+                    </Button>
+                  )}
+                  <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.7rem', display: 'block', lineHeight: 1.35 }}>
+                    Форматы: MP3, WAV, M4A, AAC, FLAC, MP4, AVI, MOV, MKV, WebM
+                    <br />
+                    Максимальный размер: 5GB
+                  </Typography>
+                  <Button
+                    size="small"
+                    fullWidth
+                    startIcon={<UploadIcon sx={{ fontSize: '0.85rem !important' }} />}
+                    onClick={() => transcriptionFileInputRef.current?.click()}
+                    disabled={isTranscribing}
+                    sx={{
+                      fontSize: '0.72rem',
+                      textTransform: 'none',
+                      color: 'rgba(255,255,255,0.6)',
+                      border: '1px dashed rgba(255,255,255,0.2)',
+                      py: 0.75,
+                      justifyContent: 'flex-start',
+                      '&:hover': { bgcolor: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.35)' },
+                      '&:disabled': { color: 'rgba(255,255,255,0.35)', borderColor: 'rgba(255,255,255,0.1)' },
+                    }}
+                  >
+                    Загрузить файл
+                  </Button>
+                  <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.7rem', display: 'block', mt: 0.5 }}>
+                    Вставить ссылку на ютуб
+                  </Typography>
+                  <TextField
+                    size="small"
+                    fullWidth
+                    placeholder="https://www.youtube.com/watch?v=..."
+                    value={transcriptionYoutubeUrl}
+                    onChange={(e) => setTranscriptionYoutubeUrl(e.target.value)}
+                    disabled={isTranscribing}
+                    sx={{
+                      '& .MuiOutlinedInput-root': {
+                        fontSize: '0.78rem',
+                        bgcolor: 'rgba(255,255,255,0.06)',
+                        color: 'rgba(255,255,255,0.9)',
+                        borderColor: 'rgba(255,255,255,0.2)',
+                        '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(255,255,255,0.35)' },
+                        '&.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: 'primary.main' },
+                      },
+                      '& .MuiInputBase-input::placeholder': { color: 'rgba(255,255,255,0.4)', opacity: 1 },
+                    }}
+                  />
+                  <Button
+                    size="small"
+                    fullWidth
+                    startIcon={<YouTubeIcon sx={{ fontSize: '0.85rem !important' }} />}
+                    onClick={startYouTubeTranscriptionFromSidebar}
+                    disabled={!transcriptionYoutubeUrl.trim() || isTranscribing}
+                    sx={{
+                      fontSize: '0.72rem',
+                      textTransform: 'none',
+                      color: 'rgba(255,255,255,0.9)',
+                      bgcolor: 'rgba(255,255,255,0.08)',
+                      py: 0.65,
+                      '&:hover': { bgcolor: 'rgba(255,255,255,0.12)' },
+                      '&:disabled': { color: 'rgba(255,255,255,0.4)' },
+                    }}
+                  >
+                    Транскрибировать
+                  </Button>
+                </Box>
+              )}
+              <ListItem disablePadding sx={{ mb: 0.5 }}>
+                <ListItemButton
+                  onClick={() => navigate('/prompts')}
+                  sx={{
+                    borderRadius: 2,
+                    color: 'white',
+                    py: 1,
+                    px: 2,
+                    '&:hover': { backgroundColor: 'rgba(255,255,255,0.08)' },
+                    transition: 'all 0.2s ease',
+                  }}
+                >
+                  <ListItemIcon sx={{ color: 'white', minWidth: 36, mr: 1 }}>
+                    <PromptsIcon fontSize="small" />
+                  </ListItemIcon>
+                  <ListItemText primary="Галерея промптов" primaryTypographyProps={{ fontSize: '0.875rem' }} />
+                </ListItemButton>
+              </ListItem>
+              <ListItem disablePadding sx={{ mb: 0.5 }}>
+                <ListItemButton
+                  onClick={() => setAgentConstructorOpen(prev => !prev)}
+                  sx={{
+                    borderRadius: 2,
+                    color: 'white',
+                    py: 1,
+                    px: 2,
+                    backgroundColor: agentConstructorOpen ? 'rgba(255,255,255,0.15)' : 'transparent',
+                    '&:hover': { backgroundColor: agentConstructorOpen ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.08)' },
+                    transition: 'all 0.2s ease',
+                  }}
+                >
+                  <ListItemIcon sx={{ color: 'white', minWidth: 36, mr: 1 }}>
+                    <AgentConstructorIcon fontSize="small" />
+                  </ListItemIcon>
+                  <ListItemText primary="Конструктор агента" primaryTypographyProps={{ fontSize: '0.875rem' }} />
+                </ListItemButton>
+              </ListItem>
+            </List>
+            {/* Меню конструктора открывается прямо под кнопкой «Конструктор агента» */}
+            {agentConstructorOpen && (
+              <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+                <AgentConstructorPanel isDarkMode={isDarkMode} isOpen={true} />
+              </Box>
+            )}
           </Box>
         )}
       </Drawer>
@@ -3106,26 +3499,15 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         </Box>
       )}
 
-      {/* Модальное окно транскрибации */}
-      <TranscriptionModal
+      {/* Модальное окно только с результатом транскрибации (открывается по «Посмотреть результат») */}
+      <TranscriptionResultModal
         open={transcriptionModalOpen}
         onClose={() => setTranscriptionModalOpen(false)}
-        isTranscribing={isTranscribing}
         transcriptionResult={transcriptionResult}
-        onTranscriptionStart={() => setIsTranscribing(true)}
-        onTranscriptionComplete={(result) => {
-          setIsTranscribing(false);
-          setTranscriptionResult(result);
-          // Показываем уведомление, даже если окно закрыто
-          showNotification('success', 'Транскрибация завершена! Откройте окно транскрибации для просмотра результата.');
-        }}
-        onTranscriptionError={() => setIsTranscribing(false)}
+        onResultChange={(text) => setTranscriptionResult(text)}
         onInsertToChat={(text) => {
           setInputMessage(text);
-          // Фокусируемся на поле ввода после вставки текста
-          setTimeout(() => {
-            inputRef.current?.focus();
-          }, 100);
+          setTimeout(() => inputRef.current?.focus(), 100);
         }}
       />
 

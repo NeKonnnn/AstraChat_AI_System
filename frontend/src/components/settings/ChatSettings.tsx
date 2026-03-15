@@ -14,9 +14,7 @@ import {
   List,
   ListItem,
   ListItemText,
-  Select,
-  MenuItem,
-  FormControl,
+  Popover,
 } from '@mui/material';
 import {
   Delete as DeleteIcon,
@@ -25,7 +23,15 @@ import {
   Download as DownloadIcon,
   Archive as ArchiveIcon,
   Link as LinkIcon,
+  ExpandMore as ExpandMoreIcon,
 } from '@mui/icons-material';
+import {
+  DROPDOWN_TRIGGER_BUTTON_SX,
+  DROPDOWN_CHEVRON_SX,
+  getDropdownPopoverPaperSx,
+  DROPDOWN_ITEM_SX,
+  DROPDOWN_ITEM_HOVER_BG,
+} from '../../constants/menuStyles';
 import { useAppContext, useAppActions } from '../../contexts/AppContext';
 import ManageSharesDialog from '../ManageSharesDialog';
 
@@ -43,6 +49,7 @@ export default function ChatSettings({ isDarkMode = false }: ChatSettingsProps =
   const [showManageSharesDialog, setShowManageSharesDialog] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fontSize, setFontSize] = useState<FontSize>('medium');
+  const [fontPopoverAnchor, setFontPopoverAnchor] = useState<HTMLElement | null>(null);
 
   // Загружаем размер шрифта из localStorage
   useEffect(() => {
@@ -150,19 +157,39 @@ export default function ChatSettings({ isDarkMode = false }: ChatSettingsProps =
                   fontWeight: 500,
                 }}
               />
-              <FormControl variant="outlined" size="small" sx={{ minWidth: 180 }}>
-                <Select
-                  value={fontSize}
-                  onChange={handleFontSizeChange}
-                  sx={{
-                    textTransform: 'none',
-                  }}
+              <Box sx={{ minWidth: 180 }}>
+                <Box onClick={(e) => setFontPopoverAnchor(e.currentTarget)} sx={DROPDOWN_TRIGGER_BUTTON_SX}>
+                  <Typography sx={{ color: 'white', fontWeight: 500, fontSize: '0.875rem' }}>
+                    {getFontSizeLabel(fontSize)}
+                  </Typography>
+                  <ExpandMoreIcon sx={{ ...DROPDOWN_CHEVRON_SX, transform: fontPopoverAnchor ? 'rotate(180deg)' : 'none' }} />
+                </Box>
+                <Popover
+                  open={Boolean(fontPopoverAnchor)}
+                  anchorEl={fontPopoverAnchor}
+                  onClose={() => setFontPopoverAnchor(null)}
+                  anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+                  transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(fontPopoverAnchor) } }}
                 >
-                  <MenuItem value="small">Мелкий</MenuItem>
-                  <MenuItem value="medium">Средний</MenuItem>
-                  <MenuItem value="large">Большой</MenuItem>
-                </Select>
-              </FormControl>
+                  <Box sx={{ py: 0.5 }}>
+                    {(['small', 'medium', 'large'] as const).map((size) => (
+                      <Box
+                        key={size}
+                        onClick={() => { setFontSize(size); localStorage.setItem('chat-font-size', size); showNotification('success', 'Размер шрифта изменен'); setFontPopoverAnchor(null); }}
+                        sx={{
+                          ...DROPDOWN_ITEM_SX,
+                          color: fontSize === size ? 'white' : 'rgba(255,255,255,0.9)',
+                          fontWeight: fontSize === size ? 600 : 400,
+                          bgcolor: fontSize === size ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
+                        }}
+                      >
+                        {getFontSizeLabel(size)}
+                      </Box>
+                    ))}
+                  </Box>
+                </Popover>
+              </Box>
             </ListItem>
 
             <Divider />
