@@ -269,8 +269,8 @@ class LLMClient:
                 "word_timestamps": str(word_timestamps).lower(),
             }
             
-            # Таймаут 30 минут 
-            whisperx_timeout = httpx.Timeout(1800.0, connect=10.0, read=1800.0, write=60.0)
+            # Таймаут 5 часов
+            whisperx_timeout = httpx.Timeout(18000.0, connect=10.0, read=18000.0, write=60.0)
             async with httpx.AsyncClient(timeout=whisperx_timeout) as client:
                 response = await client.post(
                     f"{self.stt_url}/v1/whisperx/transcribe",
@@ -348,8 +348,8 @@ class LLMClient:
             files = {"file": (filename, io.BytesIO(audio_file), "audio/wav")}
             data = {"min_speakers": min_speakers, "max_speakers": max_speakers, "min_duration": min_duration}
             
-            # Таймаут 60 минут 
-            diarize_timeout = httpx.Timeout(3600.0, connect=10.0, read=3600.0, write=60.0)
+            # Таймаут 5 часов
+            diarize_timeout = httpx.Timeout(18000.0, connect=10.0, read=18000.0, write=60.0)
             async with httpx.AsyncClient(timeout=diarize_timeout) as client:
                 response = await client.post(
                     f"{self.diarization_url}/v1/diarize",
@@ -381,7 +381,7 @@ class LLMClient:
         Возвращает {success, text, segments, speakers_count}.
         """
         try:
-            long_timeout = httpx.Timeout(3600.0, connect=10.0, read=3600.0, write=60.0)
+            long_timeout = httpx.Timeout(18000.0, connect=10.0, read=18000.0, write=60.0)
             
             # Шаг 1: Диаризация
             # min_duration=0.5 — позволяет детектировать короткие реплики (< 1 сек),

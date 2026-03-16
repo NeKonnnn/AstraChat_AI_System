@@ -114,12 +114,25 @@ export default function AgentSelector({ isDarkMode = true, maxWidth, triggerMaxW
     }
   }, []);
 
+  // При открытии меню подгружаем списки агентов и моделей
   useEffect(() => {
     if (anchorEl) {
       loadAgents();
       loadModels();
     }
   }, [anchorEl, loadAgents, loadModels]);
+
+  // При монтировании узнаём текущую модель, чтобы показывать её название на кнопке
+  useEffect(() => {
+    let cancelled = false;
+    fetch(getApiUrl('/api/models/current'))
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!cancelled && data?.path) setSelectedModelPath(data.path);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     const onAgentSelected = () => setActiveAgent(getActiveAgentFromStorage());
@@ -196,7 +209,19 @@ export default function AgentSelector({ isDarkMode = true, maxWidth, triggerMaxW
     maxWidth: '90vw',
   };
 
-  const triggerLabel = activeAgent ? activeAgent.name : 'Агент / Модель';
+  // Надпись на кнопке: агент → имя агента; только модель → имя модели; иначе «Агент / Модель»
+  const getModelDisplayName = () => {
+    if (!selectedModelPath) return '';
+    const fromList = models.find((m) => m.path === selectedModelPath);
+    if (fromList?.name) return fromList.name.replace(/\.gguf$/i, '');
+    const fromPath = selectedModelPath.split(/[/\\]/).pop()?.replace(/\.gguf$/i, '') ?? selectedModelPath;
+    return fromPath;
+  };
+  const triggerLabel = activeAgent
+    ? activeAgent.name
+    : selectedModelPath
+      ? getModelDisplayName()
+      : 'Агент / Модель';
 
   const triggerSx = {
     display: 'flex',
@@ -230,9 +255,15 @@ export default function AgentSelector({ isDarkMode = true, maxWidth, triggerMaxW
 
   return (
     <Box sx={{ maxWidth: maxWidth ?? '100%', width: '100%', mx: 'auto' }}>
-      <Tooltip title={activeAgent ? `Агент: ${activeAgent.name}. Нажмите, чтобы сменить` : 'Выберите агента или модель'}>
+      <Tooltip title={activeAgent ? `Агент: ${activeAgent.name}. Нажмите, чтобы сменить` : selectedModelPath ? `Модель: ${getModelDisplayName()}. Нажмите, чтобы сменить` : 'Выберите агента или модель'}>
         <Box onClick={handleOpen} sx={triggerSx}>
-          <AgentIcon sx={{ fontSize: '1.1rem', color: 'rgba(255,255,255,0.9)', flexShrink: 0 }} />
+          {activeAgent ? (
+            <AgentIcon sx={{ fontSize: '1.1rem', color: 'rgba(255,255,255,0.9)', flexShrink: 0 }} />
+          ) : selectedModelPath ? (
+            <ComputerIcon sx={{ fontSize: '1.1rem', color: 'rgba(255,255,255,0.9)', flexShrink: 0 }} />
+          ) : (
+            <AgentIcon sx={{ fontSize: '1.1rem', color: 'rgba(255,255,255,0.9)', flexShrink: 0 }} />
+          )}
           <Typography sx={{ fontSize: '0.875rem', fontWeight: 500, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {triggerLabel}
           </Typography>
@@ -244,8 +275,8 @@ export default function AgentSelector({ isDarkMode = true, maxWidth, triggerMaxW
         open={Boolean(anchorEl)}
         anchorEl={anchorEl}
         onClose={handleClose}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-        transformOrigin={{ vertical: 'top', horizontal: 'center' }}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'left' }}
         slotProps={{ paper: { sx: paperSx } }}
       >
         <Box
@@ -275,9 +306,9 @@ export default function AgentSelector({ isDarkMode = true, maxWidth, triggerMaxW
           </Box>
         </Box>
 
-        {/* Второе окошко: появляется при наведении на «Мои агенты» или «Модели» */}
+        {/* Второе окошко: появляется при наведении на «Мои агенты» или «Модели»; список — не более 4 пунктов по высоте, остальное скролл */}
         {submenu !== null && (
-          <Box sx={{ ...windowSx, width: rightPanelWidth, minHeight: 280, display: 'flex', flexDirection: 'column' }}>
+          <Box sx={{ ...windowSx, width: rightPanelWidth, display: 'flex', flexDirection: 'column' }}>
           {submenu === 'agents' && (
             <>
               <Box sx={{ display: 'flex', alignItems: 'center', px: 1.5, py: 0.9, gap: 1, borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
@@ -298,7 +329,7 @@ export default function AgentSelector({ isDarkMode = true, maxWidth, triggerMaxW
                   }}
                 />
               </Box>
-              <Box sx={{ flex: 1, overflowY: 'auto', py: 0.5, '&::-webkit-scrollbar': { width: 3 }, '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(255,255,255,0.12)', borderRadius: 2 } }}>
+              <Box sx={{ maxHeight: 208, overflowY: 'auto', py: 0.5, '&::-webkit-scrollbar': { width: 3 }, '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(255,255,255,0.12)', borderRadius: 2 } }}>
                 {loadingAgents ? (
                   <Box sx={{ py: 2, display: 'flex', justifyContent: 'center' }}>
                     <CircularProgress size={20} sx={{ color: 'rgba(255,255,255,0.5)' }} />
@@ -353,7 +384,7 @@ export default function AgentSelector({ isDarkMode = true, maxWidth, triggerMaxW
                   }}
                 />
               </Box>
-              <Box sx={{ flex: 1, overflowY: 'auto', py: 0.5, '&::-webkit-scrollbar': { width: 3 }, '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(255,255,255,0.12)', borderRadius: 2 } }}>
+              <Box sx={{ maxHeight: 208, overflowY: 'auto', py: 0.5, '&::-webkit-scrollbar': { width: 3 }, '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(255,255,255,0.12)', borderRadius: 2 } }}>
                 {loadingModels ? (
                   <Box sx={{ py: 2, display: 'flex', justifyContent: 'center' }}>
                     <CircularProgress size={20} sx={{ color: 'rgba(255,255,255,0.5)' }} />
@@ -377,7 +408,7 @@ export default function AgentSelector({ isDarkMode = true, maxWidth, triggerMaxW
                           }}
                         >
                           <ComputerIcon sx={{ fontSize: 18, color: 'rgba(255,255,255,0.7)', flexShrink: 0 }} />
-                          <Typography sx={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{model.name.replace('.gguf', '')}</Typography>
+                          <Typography sx={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{model.name.replace('.gguf', '')}</Typography>
                           {isSelected && <CheckIcon sx={{ fontSize: 16, color: 'primary.main', flexShrink: 0 }} />}
                         </Box>
                       );

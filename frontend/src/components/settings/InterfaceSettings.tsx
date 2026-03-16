@@ -69,7 +69,6 @@ export default function InterfaceSettings() {
     const savedWidescreenMode = localStorage.getItem('widescreen_mode');
     const savedShowUserName = localStorage.getItem('show_user_name');
     const savedEnableNotification = localStorage.getItem('enable_notification');
-    const savedShowModelSelectorInSettings = localStorage.getItem('show_model_selector_in_settings');
     const savedUseFoldersMode = localStorage.getItem('use_folders_mode');
     const savedBrowserNotifications = localStorage.getItem('browser_notifications_enabled');
     const savedShowDialoguesPanel = localStorage.getItem('show_dialogues_panel');
@@ -84,7 +83,6 @@ export default function InterfaceSettings() {
       widescreenMode: savedWidescreenMode !== null ? savedWidescreenMode === 'true' : false,
       showUserName: savedShowUserName !== null ? savedShowUserName === 'true' : false,
       enableNotification: savedEnableNotification !== null ? savedEnableNotification === 'true' : false,
-      showModelSelectorInSettings: savedShowModelSelectorInSettings !== null ? savedShowModelSelectorInSettings === 'true' : false,
       useFoldersMode: savedUseFoldersMode !== null ? savedUseFoldersMode === 'true' : true, // По умолчанию папки
       browserNotifications: savedBrowserNotifications !== null ? savedBrowserNotifications === 'true' : false,
       showDialoguesPanel: savedShowDialoguesPanel !== null ? savedShowDialoguesPanel === 'true' : true,
@@ -96,6 +94,32 @@ export default function InterfaceSettings() {
   const [colorPickerOpen, setColorPickerOpen] = useState(false);
   const [stylePopoverAnchor, setStylePopoverAnchor] = useState<HTMLElement | null>(null);
   const [colorPopoverAnchor, setColorPopoverAnchor] = useState<HTMLElement | null>(null);
+  const [modelModePopoverAnchor, setModelModePopoverAnchor] = useState<HTMLElement | null>(null);
+
+  type ModelSelectorMode = 'settings' | 'workspace' | 'workspace_agent';
+  const [modelSelectorMode, setModelSelectorModeState] = useState<ModelSelectorMode>(() => {
+    const saved = localStorage.getItem('model_selector_mode');
+    if (saved === 'settings' || saved === 'workspace' || saved === 'workspace_agent') return saved;
+    // Миграция со старого булевого ключа
+    const oldBool = localStorage.getItem('show_model_selector_in_settings');
+    return oldBool === 'true' ? 'settings' : 'workspace';
+  });
+
+  const MODEL_SELECTOR_OPTIONS: { value: ModelSelectorMode; label: string }[] = [
+    { value: 'settings', label: 'Выбор модели в настройках' },
+    { value: 'workspace', label: 'Выбор модели в рабочей зоне' },
+    { value: 'workspace_agent', label: 'Выбор модели/агента в рабочей зоне' },
+  ];
+
+  const handleModelSelectorModeChange = (mode: ModelSelectorMode) => {
+    setModelSelectorModeState(mode);
+    localStorage.setItem('model_selector_mode', mode);
+    // Синхронизируем старый ключ для обратной совместимости
+    localStorage.setItem('show_model_selector_in_settings', String(mode === 'settings'));
+    window.dispatchEvent(new Event('interfaceSettingsChanged'));
+    showNotification('success', 'Настройки интерфейса сохранены');
+    setModelModePopoverAnchor(null);
+  };
 
   const { showNotification } = useAppActions();
 
@@ -153,7 +177,6 @@ export default function InterfaceSettings() {
     localStorage.setItem('widescreen_mode', String(newSettings.widescreenMode));
     localStorage.setItem('show_user_name', String(newSettings.showUserName));
     localStorage.setItem('enable_notification', String(newSettings.enableNotification));
-    localStorage.setItem('show_model_selector_in_settings', String(newSettings.showModelSelectorInSettings));
     localStorage.setItem('use_folders_mode', String(newSettings.useFoldersMode));
     localStorage.setItem('show_dialogues_panel', String(newSettings.showDialoguesPanel));
     setNotificationsEnabled(newSettings.browserNotifications);
@@ -441,7 +464,7 @@ export default function InterfaceSettings() {
 
             <Divider />
 
-            {/* Отображать выбор модели в настройках */}
+            {/* Место расположения выбора модели */}
             <ListItem
               sx={{
                 px: 0,
@@ -449,24 +472,54 @@ export default function InterfaceSettings() {
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
+                gap: 2,
               }}
             >
               <ListItemText
-                primary="Отображать выбор модели в настройках"
-                primaryTypographyProps={{
-                  variant: 'body1',
-                  fontWeight: 500,
-                }}
-                secondary="Если включено, выбор модели будет в настройках, иначе в рабочей зоне"
-                secondaryTypographyProps={{
-                  variant: 'body2',
-                  sx: { mt: 0.5 }
-                }}
+                primary="Место расположения выбора модели"
+                primaryTypographyProps={{ variant: 'body1', fontWeight: 500 }}
+                secondary={
+                  modelSelectorMode === 'settings'
+                    ? 'Выбор модели доступен в разделе Настройки → Модели'
+                    : modelSelectorMode === 'workspace'
+                    ? 'Кнопка выбора модели отображается в левом углу рабочей зоны'
+                    : 'Кнопка «Агент / Модель» отображается в левом углу рабочей зоны'
+                }
+                secondaryTypographyProps={{ variant: 'body2', sx: { mt: 0.5 } }}
               />
-              <Switch
-                checked={interfaceSettings.showModelSelectorInSettings}
-                onChange={(e) => handleInterfaceSettingChange('showModelSelectorInSettings', e.target.checked)}
-              />
+              <Box sx={{ minWidth: 220, flexShrink: 0 }}>
+                <Box onClick={(e) => setModelModePopoverAnchor(e.currentTarget)} sx={DROPDOWN_TRIGGER_BUTTON_SX}>
+                  <Typography sx={{ color: 'white', fontWeight: 500, fontSize: '0.875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {MODEL_SELECTOR_OPTIONS.find((o) => o.value === modelSelectorMode)?.label ?? ''}
+                  </Typography>
+                  <ExpandMoreIcon sx={{ ...DROPDOWN_CHEVRON_SX, transform: modelModePopoverAnchor ? 'rotate(180deg)' : 'none', flexShrink: 0 }} />
+                </Box>
+                <Popover
+                  open={Boolean(modelModePopoverAnchor)}
+                  anchorEl={modelModePopoverAnchor}
+                  onClose={() => setModelModePopoverAnchor(null)}
+                  anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+                  transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(modelModePopoverAnchor) } }}
+                >
+                  <Box sx={{ py: 0.5 }}>
+                    {MODEL_SELECTOR_OPTIONS.map((opt) => (
+                      <Box
+                        key={opt.value}
+                        onClick={() => handleModelSelectorModeChange(opt.value)}
+                        sx={{
+                          ...DROPDOWN_ITEM_SX,
+                          color: modelSelectorMode === opt.value ? 'white' : 'rgba(255,255,255,0.9)',
+                          fontWeight: modelSelectorMode === opt.value ? 600 : 400,
+                          bgcolor: modelSelectorMode === opt.value ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
+                        }}
+                      >
+                        {opt.label}
+                      </Box>
+                    ))}
+                  </Box>
+                </Popover>
+              </Box>
             </ListItem>
 
             <Divider />

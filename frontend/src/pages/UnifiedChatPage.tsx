@@ -117,11 +117,15 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     return () => window.removeEventListener('sidebarColorChanged', onColorChanged);
   }, []);
 
-  // Состояние для отображения выбора модели
-  const [showModelSelectorInSettings, setShowModelSelectorInSettings] = useState(() => {
-    const saved = localStorage.getItem('show_model_selector_in_settings');
-    return saved !== null ? saved === 'true' : false;
-  });
+  // Режим расположения выбора модели: 'settings' | 'workspace' | 'workspace_agent'
+  type ModelSelectorMode = 'settings' | 'workspace' | 'workspace_agent';
+  const readModelSelectorMode = (): ModelSelectorMode => {
+    const saved = localStorage.getItem('model_selector_mode');
+    if (saved === 'settings' || saved === 'workspace' || saved === 'workspace_agent') return saved;
+    const oldBool = localStorage.getItem('show_model_selector_in_settings');
+    return oldBool === 'true' ? 'settings' : 'workspace';
+  };
+  const [modelSelectorMode, setModelSelectorMode] = useState<ModelSelectorMode>(readModelSelectorMode);
 
   // Состояние для панели с диалогами (навигация по сообщениям)
   const [showDialoguesPanel, setShowDialoguesPanel] = useState(() => {
@@ -132,8 +136,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   // Слушаем изменения настроек
   useEffect(() => {
     const handleSettingsChange = () => {
-      const savedModel = localStorage.getItem('show_model_selector_in_settings');
-      setShowModelSelectorInSettings(savedModel !== null ? savedModel === 'true' : false);
+      setModelSelectorMode(readModelSelectorMode());
       const savedPanel = localStorage.getItem('show_dialogues_panel');
       setShowDialoguesPanel(savedPanel !== null ? savedPanel === 'true' : true);
     };
@@ -2604,11 +2607,34 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
           >
             /
           </Typography>
-          {!showModelSelectorInSettings && (
+          {modelSelectorMode === 'workspace' && (
             <ModelSelector 
               isDarkMode={isDarkMode}
               onModelSelect={(modelPath) => {
                 
+              }}
+            />
+          )}
+          {modelSelectorMode === 'workspace_agent' && (
+            <AgentSelector
+              isDarkMode={isDarkMode}
+              triggerMaxWidth={180}
+              onModelSelect={async (modelPath) => {
+                try {
+                  const response = await fetch(getApiUrl('/api/models/load'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model_path: modelPath }),
+                  });
+                  const data = await response.json();
+                  if (response.ok && data.success) {
+                    showNotification('success', 'Модель успешно загружена');
+                  } else {
+                    showNotification('error', data.message || 'Не удалось загрузить модель');
+                  }
+                } catch (e: any) {
+                  showNotification('error', e?.message || 'Ошибка загрузки модели');
+                }
               }}
             />
           )}
@@ -2621,13 +2647,13 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         <Box sx={{ 
           position: 'absolute',
           top: 16,
-          left: sidebarOpen ? 16 : 80, // Ближе к панели когда развернута, дальше от узкой полоски (64px) когда закрыта
+          left: sidebarOpen ? 16 : 80,
           zIndex: 1200,
-          transition: 'left 0.3s ease', // Плавная анимация при изменении позиции
+          transition: 'left 0.3s ease',
           display: 'flex',
           alignItems: 'center',
         }}>
-          {!showModelSelectorInSettings && (
+          {modelSelectorMode === 'workspace' && (
             <ModelSelector 
               isDarkMode={isDarkMode}
               onModelSelect={(modelPath) => {
@@ -2635,41 +2661,32 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
               }}
             />
           )}
+          {modelSelectorMode === 'workspace_agent' && (
+            <AgentSelector
+              isDarkMode={isDarkMode}
+              triggerMaxWidth={180}
+              onModelSelect={async (modelPath) => {
+                try {
+                  const response = await fetch(getApiUrl('/api/models/load'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model_path: modelPath }),
+                  });
+                  const data = await response.json();
+                  if (response.ok && data.success) {
+                    showNotification('success', 'Модель успешно загружена');
+                  } else {
+                    showNotification('error', data.message || 'Не удалось загрузить модель');
+                  }
+                } catch (e: any) {
+                  showNotification('error', e?.message || 'Ошибка загрузки модели');
+                }
+              }}
+            />
+          )}
         </Box>
       )}
 
-      {/* Кнопка выбора агента/модели — сверху по центру, на одной строке с выбранной моделью */}
-      <Box sx={{
-        position: 'absolute',
-        top: 16,
-        left: '50%',
-        transform: 'translateX(-50%)',
-        zIndex: 1200,
-        display: 'flex',
-        alignItems: 'center',
-      }}>
-        <AgentSelector
-          isDarkMode={isDarkMode}
-          triggerMaxWidth={180}
-          onModelSelect={async (modelPath) => {
-            try {
-              const response = await fetch(getApiUrl('/api/models/load'), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model_path: modelPath }),
-              });
-              const data = await response.json();
-              if (response.ok && data.success) {
-                showNotification('success', 'Модель успешно загружена');
-              } else {
-                showNotification('error', data.message || 'Не удалось загрузить модель');
-              }
-            } catch (e: any) {
-              showNotification('error', e?.message || 'Ошибка загрузки модели');
-            }
-          }}
-        />
-      </Box>
 
       {/* Область сообщений */}
       <Box

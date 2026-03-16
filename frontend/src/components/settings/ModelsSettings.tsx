@@ -40,10 +40,13 @@ import { getApiUrl } from '../../config/api';
 
 
 export default function ModelsSettings() {
-  const [showModelSelectorInSettings, setShowModelSelectorInSettings] = useState(() => {
-    const saved = localStorage.getItem('show_model_selector_in_settings');
-    return saved !== null ? saved === 'true' : false;
-  });
+  const readIsSettingsMode = () => {
+    const mode = localStorage.getItem('model_selector_mode');
+    if (mode) return mode === 'settings';
+    const oldBool = localStorage.getItem('show_model_selector_in_settings');
+    return oldBool === 'true';
+  };
+  const [showModelSelectorInSettings, setShowModelSelectorInSettings] = useState(readIsSettingsMode);
   
   const [modelSettings, setModelSettings] = useState({
     context_size: 2048,
@@ -116,8 +119,7 @@ export default function ModelsSettings() {
     
     // Слушаем изменения настроек
     const handleSettingsChange = () => {
-      const saved = localStorage.getItem('show_model_selector_in_settings');
-      setShowModelSelectorInSettings(saved !== null ? saved === 'true' : false);
+      setShowModelSelectorInSettings(readIsSettingsMode());
     };
     
     window.addEventListener('interfaceSettingsChanged', handleSettingsChange);
