@@ -80,6 +80,7 @@ class MinIOConnectionConfig(BaseModel):
     use_ssl: bool = False
     bucket_name: str = "astrachat-temp"
     documents_bucket_name: str = "astrachat-documents"
+    memory_rag_bucket_name: str = "astrachat-memory-rag"
     
     @model_validator(mode='before')
     @classmethod
@@ -99,6 +100,14 @@ class MinIOConnectionConfig(BaseModel):
             data["secret_key"] = os.getenv("MINIO_ROOT_PASSWORD", os.getenv("MINIO_SECRET_KEY", "minioadmin"))
         if not data.get("use_ssl"):
             data["use_ssl"] = os.getenv("MINIO_USE_SSL", "false").lower() == "true"
+        if not data.get("documents_bucket_name"):
+            data["documents_bucket_name"] = os.getenv(
+                "MINIO_DOCUMENTS_BUCKET_NAME", "astrachat-documents"
+            )
+        if not data.get("memory_rag_bucket_name"):
+            data["memory_rag_bucket_name"] = os.getenv(
+                "MINIO_MEMORY_RAG_BUCKET_NAME", "astrachat-memory-rag"
+            )
         return data
 
 class ServiceConnectionConfig(BaseModel):

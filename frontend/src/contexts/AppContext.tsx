@@ -17,6 +17,20 @@ export interface Message {
   // Для хранения нескольких вариантов ответов (при перегенерации)
   alternativeResponses?: string[];
   currentResponseIndex?: number; // Индекс текущего отображаемого варианта (0-based)
+  /** Трейс поиска по базе знаний / библиотеке (с бэкенда при «Подключить базу знаний») */
+  documentSearch?: {
+    query: string;
+    sourceFiles: string[];
+    hits: Array<{
+      file: string;
+      anchor: string;
+      relevance: number;
+      content: string;
+      chunkIndex: number;
+      documentId: number;
+      store: string;
+    }>;
+  };
 }
 
 export interface Chat {
@@ -134,7 +148,7 @@ type AppAction =
   | { type: 'DELETE_CHAT'; payload: string }
   | { type: 'DELETE_ALL_CHATS' }
   | { type: 'ADD_MESSAGE'; payload: { chatId: string; message: Message } }
-  | { type: 'UPDATE_MESSAGE'; payload: { chatId: string; messageId: string; content?: string; isStreaming?: boolean; multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>; alternativeResponses?: string[]; currentResponseIndex?: number } }
+  | { type: 'UPDATE_MESSAGE'; payload: { chatId: string; messageId: string; content?: string; isStreaming?: boolean; multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>; alternativeResponses?: string[]; currentResponseIndex?: number; documentSearch?: Message['documentSearch'] } }
   | { type: 'APPEND_CHUNK'; payload: { chatId: string; messageId: string; chunk: string; isStreaming?: boolean } }
   | { type: 'SET_LOADING'; payload: boolean }
   | { type: 'SET_CURRENT_MODEL'; payload: ModelInfo }
@@ -333,7 +347,7 @@ function appReducer(state: AppState, action: AppAction): AppState {
     }
       
     case 'UPDATE_MESSAGE': {
-      const { chatId, messageId, content, isStreaming, multiLLMResponses, alternativeResponses, currentResponseIndex } = action.payload;
+      const { chatId, messageId, content, isStreaming, multiLLMResponses, alternativeResponses, currentResponseIndex, documentSearch } = action.payload;
       
       const currentChat = state.chats.find(chat => chat.id === chatId);
       const updatedMessage = currentChat?.messages.find(msg => msg.id === messageId);
@@ -352,7 +366,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
                         ...(isStreaming !== undefined ? { isStreaming } : {}),
                         ...(multiLLMResponses !== undefined ? { multiLLMResponses } : {}),
                         ...(alternativeResponses !== undefined ? { alternativeResponses } : {}),
-                        ...(currentResponseIndex !== undefined ? { currentResponseIndex } : {})
+                        ...(currentResponseIndex !== undefined ? { currentResponseIndex } : {}),
+                        ...(documentSearch !== undefined ? { documentSearch } : {})
                       }
                     : msg
                 ),
@@ -846,8 +861,8 @@ export function useAppActions() {
       return messageId;
     },
     
-    updateMessage: (chatId: string, messageId: string, content?: string, isStreaming?: boolean, multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>, alternativeResponses?: string[], currentResponseIndex?: number) => {
-      dispatch({ type: 'UPDATE_MESSAGE', payload: { chatId, messageId, content, isStreaming, multiLLMResponses, alternativeResponses, currentResponseIndex } });
+    updateMessage: (chatId: string, messageId: string, content?: string, isStreaming?: boolean, multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>, alternativeResponses?: string[], currentResponseIndex?: number, documentSearch?: Message['documentSearch']) => {
+      dispatch({ type: 'UPDATE_MESSAGE', payload: { chatId, messageId, content, isStreaming, multiLLMResponses, alternativeResponses, currentResponseIndex, documentSearch } });
     },
     
     appendChunk: (chatId: string, messageId: string, chunk: string, isStreaming?: boolean) => {

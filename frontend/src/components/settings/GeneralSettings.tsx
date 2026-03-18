@@ -27,6 +27,7 @@ import {
 } from '@mui/icons-material';
 import { useAppActions } from '../../contexts/AppContext';
 import { getApiUrl } from '../../config/api';
+import MemoryRagLibrarySection from './MemoryRagLibrarySection';
 
 interface GeneralSettingsProps {
   isDarkMode: boolean;
@@ -102,6 +103,8 @@ export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSe
 
   return (
     <Box sx={{ p: 3 }}>
+      <MemoryRagLibrarySection variant="prominent" />
+
       {/* Настройки темы */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
@@ -163,7 +166,7 @@ export default function GeneralSettings({ isDarkMode, onToggleTheme }: GeneralSe
               </IconButton>
             </Tooltip>
           </Typography>
-          
+
           <List>
             {/* Неограниченная память */}
             <ListItem

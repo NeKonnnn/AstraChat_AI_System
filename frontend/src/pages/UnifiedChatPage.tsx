@@ -65,6 +65,7 @@ import { useAppContext, useAppActions, Message } from '../contexts/AppContext';
 import { useSocket } from '../contexts/SocketContext';
 import { getApiUrl, getWsUrl, API_ENDPOINTS } from '../config/api';
 import MessageRenderer from '../components/MessageRenderer';
+import { DocumentSearchPanel } from '../components/DocumentSearchPanel';
 import { useNavigate } from 'react-router-dom';
 import TranscriptionResultModal from '../components/TranscriptionResultModal';
 import ModelSelector from '../components/ModelSelector';
@@ -75,6 +76,11 @@ import VoiceChatDialog from '../components/VoiceChatDialog';
 import AgentConstructorPanel from '../components/AgentConstructorPanel';
 import AgentSelector from '../components/AgentSelector';
 import { getSidebarPanelBackground } from '../constants/sidebarPanelColor';
+import {
+  isKnowledgeRagEnabled,
+  setKnowledgeRagEnabled,
+  KNOWLEDGE_RAG_STORAGE_EVENT,
+} from '../utils/knowledgeRagStorage';
 
 interface UnifiedChatPageProps {
   isDarkMode: boolean;
@@ -193,17 +199,19 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   const [showDocumentDialog, setShowDocumentDialog] = useState(false);
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   
-  // Состояние "База Знаний" (KB RAG)
-  const [useKbRag, setUseKbRag] = useState(() => {
-    return localStorage.getItem('use_kb_rag') === 'true';
-  });
+  // База знаний в ответах LLM (страница KB + библиотека из настроек)
+  const [useKbRag, setUseKbRag] = useState(() => isKnowledgeRagEnabled());
+
+  useEffect(() => {
+    const onRag = () => setUseKbRag(isKnowledgeRagEnabled());
+    window.addEventListener(KNOWLEDGE_RAG_STORAGE_EVENT, onRag);
+    return () => window.removeEventListener(KNOWLEDGE_RAG_STORAGE_EVENT, onRag);
+  }, []);
 
   const toggleKbRag = () => {
-    setUseKbRag(prev => {
-      const next = !prev;
-      localStorage.setItem('use_kb_rag', String(next));
-      return next;
-    });
+    const next = !useKbRag;
+    setKnowledgeRagEnabled(next);
+    setUseKbRag(next);
   };
 
   // Состояние для режима "Поделиться"
@@ -1707,7 +1715,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
           <Typography variant="caption" sx={{ opacity: 0.8, fontSize: '0.75rem', fontWeight: 500 }}>
             {isUser 
               ? (interfaceSettings.showUserName && user?.username ? user.username : 'Вы')
-              : 'astrachat'}
+              : 'AstraChat'}
           </Typography>
           <Typography variant="caption" sx={{ ml: 'auto', opacity: 0.6, fontSize: '0.7rem' }}>
             {formatTimestamp(message.timestamp)}
@@ -1715,6 +1723,9 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         </Box>
         
         <Box sx={{ width: '100%' }}>
+          {!isUser && message.documentSearch && (
+            <DocumentSearchPanel trace={message.documentSearch} />
+          )}
           {message.multiLLMResponses && message.multiLLMResponses.length > 0 ? (
             // Отображение нескольких ответов от разных моделей
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -2619,23 +2630,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
             <AgentSelector
               isDarkMode={isDarkMode}
               triggerMaxWidth={180}
-              onModelSelect={async (modelPath) => {
-                try {
-                  const response = await fetch(getApiUrl('/api/models/load'), {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ model_path: modelPath }),
-                  });
-                  const data = await response.json();
-                  if (response.ok && data.success) {
-                    showNotification('success', 'Модель успешно загружена');
-                  } else {
-                    showNotification('error', data.message || 'Не удалось загрузить модель');
-                  }
-                } catch (e: any) {
-                  showNotification('error', e?.message || 'Ошибка загрузки модели');
-                }
-              }}
+              onModelSelect={() => {}}
             />
           )}
         </Box>
@@ -2665,23 +2660,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
             <AgentSelector
               isDarkMode={isDarkMode}
               triggerMaxWidth={180}
-              onModelSelect={async (modelPath) => {
-                try {
-                  const response = await fetch(getApiUrl('/api/models/load'), {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ model_path: modelPath }),
-                  });
-                  const data = await response.json();
-                  if (response.ok && data.success) {
-                    showNotification('success', 'Модель успешно загружена');
-                  } else {
-                    showNotification('error', data.message || 'Не удалось загрузить модель');
-                  }
-                } catch (e: any) {
-                  showNotification('error', e?.message || 'Ошибка загрузки модели');
-                }
-              }}
+              onModelSelect={() => {}}
             />
           )}
         </Box>
@@ -2817,7 +2796,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                             }}
                           />
                           <Typography variant="caption" sx={{ opacity: 0.8, fontSize: '0.75rem', fontWeight: 500 }}>
-                            astrachat
+                            AstraChat
                           </Typography>
                           <Typography variant="caption" sx={{ ml: 'auto', opacity: 0.6, fontSize: '0.7rem' }}>
                             {new Date().toLocaleTimeString('ru-RU', {

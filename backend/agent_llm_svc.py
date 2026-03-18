@@ -356,7 +356,18 @@ def prepare_prompt(text, system_prompt=None, history=None, model_path=None, cust
     
     return "".join(prompt_parts)
 
-def ask_agent(prompt, history=None, max_tokens=None, streaming=False, stream_callback=None, model_path=None, custom_prompt_id=None, images=None):
+def ask_agent(
+    prompt,
+    history=None,
+    max_tokens=None,
+    streaming=False,
+    stream_callback=None,
+    model_path=None,
+    custom_prompt_id=None,
+    images=None,
+    system_prompt=None,
+    temperature=None,
+):
     """Основная функция для работы с AI агентом через llm-svc"""
     
     if USE_LLM_SVC:
@@ -366,6 +377,8 @@ def ask_agent(prompt, history=None, max_tokens=None, streaming=False, stream_cal
         # Если не указано количество токенов, берем из настроек
         if max_tokens is None:
             max_tokens = model_settings.get("output_tokens")
+        if temperature is None:
+            temperature = float(model_settings.get("temperature") or 0.7)
         
         try:
             # Используем llm_client для генерации
@@ -377,7 +390,9 @@ def ask_agent(prompt, history=None, max_tokens=None, streaming=False, stream_cal
                 stream_callback=stream_callback,
                 model_path=model_path,
                 custom_prompt_id=custom_prompt_id,
-                images=images
+                images=images,
+                system_prompt=system_prompt,
+                temperature=temperature,
             )
             
             # Проверяем, не была ли генерация отменена

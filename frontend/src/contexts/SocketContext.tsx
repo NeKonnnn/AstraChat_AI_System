@@ -374,7 +374,44 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         }
         break;
 
-      case 'complete':
+      case 'complete': {
+        const rawDs = data.document_search;
+        let docSearch:
+          | {
+              query: string;
+              sourceFiles: string[];
+              hits: Array<{
+                file: string;
+                anchor: string;
+                relevance: number;
+                content: string;
+                chunkIndex: number;
+                documentId: number;
+                store: string;
+              }>;
+            }
+          | undefined;
+        if (rawDs && typeof rawDs === 'object') {
+          const hits = Array.isArray(rawDs.hits) ? rawDs.hits : [];
+          docSearch = {
+            query: String(rawDs.query ?? ''),
+            sourceFiles: Array.isArray(rawDs.sourceFiles)
+              ? rawDs.sourceFiles.map(String)
+              : Array.from(
+                  new Set(hits.map((h: any) => String(h?.file ?? '')).filter(Boolean))
+                ),
+            hits: hits.map((h: any) => ({
+              file: String(h?.file ?? ''),
+              anchor: String(h?.anchor ?? ''),
+              relevance: Number(h?.relevance ?? 0),
+              content: String(h?.content ?? ''),
+              chunkIndex: Number(h?.chunkIndex ?? h?.chunk_index ?? 0),
+              documentId: Number(h?.documentId ?? h?.document_id ?? 0),
+              store: String(h?.store ?? ''),
+            })),
+          };
+        }
+
         // Показываем браузерное уведомление, если уведомления включены
         if (areNotificationsEnabled() && isNotificationSupported()) {
           try {
@@ -407,8 +444,17 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         // КРИТИЧЕСКИ ВАЖНО: Сбрасываем isStreaming у currentMessageRef СРАЗУ
         // НЕЗАВИСИМО от того, найден ли чат в getChatById
         if (currentMessageRef.current) {
-          updateMessage(chatId, currentMessageRef.current, data.response || undefined, false);
-          
+          updateMessage(
+            chatId,
+            currentMessageRef.current,
+            data.response || undefined,
+            false,
+            undefined,
+            undefined,
+            undefined,
+            docSearch
+          );
+
           currentMessageRef.current = null;
         } 
         
@@ -442,7 +488,16 @@ export function SocketProvider({ children }: { children: ReactNode }) {
             // Иначе обновляем полным ответом
             const finalContent = wasStreaming ? lastStreamingMessage.content : data.response;
             
-            updateMessage(chatId, lastStreamingMessage.id, finalContent, false);
+            updateMessage(
+              chatId,
+              lastStreamingMessage.id,
+              finalContent,
+              false,
+              undefined,
+              undefined,
+              undefined,
+              docSearch
+            );
             messageUpdated = true;
             // Очищаем ref, так как сообщение уже обновлено
             if (currentMessageRef.current === lastStreamingMessage.id) {
@@ -470,14 +525,24 @@ export function SocketProvider({ children }: { children: ReactNode }) {
                 false,
                 undefined,
                 updatedAlternatives,
-                currentIndex
+                currentIndex,
+                docSearch
               );
               
               // Очищаем состояние перегенерации
               regenerationStateRef.current = null;
             } else {
               // Обычное обновление
-              updateMessage(chatId, currentMessageRef.current, data.response, false);
+              updateMessage(
+                chatId,
+                currentMessageRef.current,
+                data.response,
+                false,
+                undefined,
+                undefined,
+                undefined,
+                docSearch
+              );
             }
             currentMessageRef.current = null;
           } else {
@@ -485,17 +550,26 @@ export function SocketProvider({ children }: { children: ReactNode }) {
             const existingMessage = currentChat.messages.find(
               msg => msg.role === 'assistant' && msg.content === data.response && !msg.isStreaming
             );
-            
-            if (!existingMessage && chatId) {
-              // Создаем новое сообщение только если его еще нет
-              
+
+            if (existingMessage && chatId && docSearch) {
+              updateMessage(
+                chatId,
+                existingMessage.id,
+                undefined,
+                false,
+                undefined,
+                undefined,
+                undefined,
+                docSearch
+              );
+            } else if (!existingMessage && chatId) {
               addMessage(chatId, {
                 role: 'assistant',
                 content: data.response,
                 timestamp: data.timestamp || new Date().toISOString(),
                 isStreaming: false,
+                ...(docSearch ? { documentSearch: docSearch } : {}),
               });
-              // messageUpdated = true; // Не используется
             }
           }
         } 
@@ -518,9 +592,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         // ДОПОЛНИТЕЛЬНАЯ ГАРАНТИЯ: НЕ ОЧИЩАЕМ currentChatIdRef здесь!
         // Он нужен для следующих сообщений
         // currentChatIdRef.current = null; // УДАЛЕНО - не очищаем
-        
-        
+
         break;
+      }
 
       case 'error':
         
@@ -589,6 +663,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 
     // Читаем флаг "Base знаний" из localStorage (устанавливается в UnifiedChatPage)
     const useKbRag = localStorage.getItem('use_kb_rag') === 'true';
+    const useMemoryLibraryRag = localStorage.getItem('use_memory_library_rag') === 'true';
+    const rawAgentId = typeof localStorage !== 'undefined' ? localStorage.getItem('active_agent_id') : null;
+    const parsedAgentId = rawAgentId ? parseInt(rawAgentId, 10) : NaN;
+    const agentIdForChat = Number.isFinite(parsedAgentId) ? parsedAgentId : null;
 
     // Отправляем сообщение через Socket.IO
     const messageData = {
@@ -597,7 +675,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       timestamp: new Date().toISOString(),
       message_id: userMessageId,  // Передаем ID сообщения с фронтенда
       conversation_id: chatId,     // Передаем ID диалога
-      use_kb_rag: useKbRag,        // Флаг поиска по Базе Знаний
+      use_kb_rag: useKbRag,
+      use_memory_library_rag: useMemoryLibraryRag,
+      /** Бэкенд подставит модель и model_settings из карточки агента (конструктор) */
+      agent_id: agentIdForChat,
     };
 
     socket!.emit('chat_message', messageData);
@@ -637,12 +718,18 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 
     // Отправляем запрос на перегенерацию через Socket.IO
     // Используем тот же endpoint, но без создания нового сообщения пользователя
+    const rawAgentId = typeof localStorage !== 'undefined' ? localStorage.getItem('active_agent_id') : null;
+    const parsedAgentId = rawAgentId ? parseInt(rawAgentId, 10) : NaN;
+    const agentIdForChat = Number.isFinite(parsedAgentId) ? parsedAgentId : null;
+
     const messageData = {
       message: userMessage,
       streaming,
       timestamp: new Date().toISOString(),
       regenerate: true, // Флаг перегенерации
       assistant_message_id: assistantMessageId, // ID сообщения помощника для обновления
+      conversation_id: chatId,
+      agent_id: agentIdForChat,
     };
 
     socket.emit('chat_message', messageData);

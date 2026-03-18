@@ -97,6 +97,7 @@ class AgentFilters(BaseModel):
     search_query: Optional[str] = Field(None, description="Поисковый запрос")
     tag_ids: Optional[List[int]] = Field(None, description="Фильтр по тегам")
     author_id: Optional[str] = Field(None, description="Фильтр по автору")
+    author_only: bool = Field(False, description="Только агенты автора (игнорировать is_public)")
     min_rating: Optional[float] = Field(None, description="Минимальный рейтинг", ge=0, le=5)
     sort_by: str = Field("rating", description="Поле сортировки")
     sort_order: str = Field("desc", description="Порядок сортировки (asc/desc)")

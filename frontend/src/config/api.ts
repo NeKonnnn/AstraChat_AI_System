@@ -28,6 +28,10 @@ export const API_ENDPOINTS = {
   KB_DOCUMENTS_UPLOAD: '/api/kb/documents',
   KB_DOCUMENTS_LIST: '/api/kb/documents',
   KB_DOCUMENTS_DELETE: '/api/kb/documents',
+
+  MEMORY_RAG_UPLOAD: '/api/memory-rag/documents',
+  MEMORY_RAG_LIST: '/api/memory-rag/documents',
+  MEMORY_RAG_DELETE: '/api/memory-rag/documents',
   
   // Модели
   MODELS: '/api/models',

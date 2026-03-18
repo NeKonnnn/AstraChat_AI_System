@@ -7,22 +7,32 @@ import {
   TextField,
   Button,
   IconButton,
-  Select,
-  MenuItem,
-  FormControl,
-  InputLabel,
   Slider,
   Switch,
   FormControlLabel,
   Divider,
+  Popover,
 } from '@mui/material';
 import {
   ArrowBack as ArrowBackIcon,
   Refresh as RefreshIcon,
   ContentCopy as CopyIcon,
   Save as SaveIcon,
+  ExpandMore as ExpandMoreIcon,
 } from '@mui/icons-material';
+import {
+  FORM_FIELD_TRIGGER_SX,
+  FORM_FIELD_TRIGGER_VALUE_TYPOGRAPHY_SX,
+  FORM_FIELD_TRIGGER_PLACEHOLDER_TYPOGRAPHY_SX,
+  FORM_FIELD_TRIGGER_VALUE_ELLIPSIS_SX,
+  getDropdownPopoverPaperSx,
+  DROPDOWN_ITEM_SX,
+  DROPDOWN_ITEM_HOVER_BG,
+  DROPDOWN_CHEVRON_SX,
+} from '../constants/menuStyles';
 import { getSidebarPanelBackground } from '../constants/sidebarPanelColor';
+import ModelSettingsFields from './ModelSettingsFields';
+import { MODEL_SETTINGS_DEFAULT, type ModelSettingsState } from '../constants/modelSettingsStyles';
 
 export interface ModelParamsState {
   provider: string;
@@ -69,6 +79,9 @@ interface ModelParametersModalProps {
   onSave: (model: string, params: Partial<ModelParamsState>) => void;
   /** 'modal' — диалог поверх контента; 'panel' — панель вместо формы агента с кнопкой «Назад» */
   variant?: 'modal' | 'panel';
+  /** Тонкая настройка модели (из конструктора агента): при задании показывается блок внутри меню и сохраняется через onSaveModelSettings */
+  initialModelSettings?: ModelSettingsState;
+  onSaveModelSettings?: (s: ModelSettingsState) => void;
 }
 
 const inputSx = {
@@ -84,15 +97,15 @@ const inputSx = {
   '& .MuiInputLabel-root': { color: 'rgba(255,255,255,0.7)' },
 };
 
-const selectSx = {
-  '& .MuiOutlinedInput-root': {
-    bgcolor: 'rgba(0,0,0,0.25)',
-    color: 'white',
-    '& fieldset': { borderColor: 'rgba(255,255,255,0.15)' },
-    '&:hover fieldset': { borderColor: 'rgba(255,255,255,0.3)' },
-  },
-  '& .MuiSelect-icon': { color: 'rgba(255,255,255,0.5)' },
-};
+const PROVIDER_OPTIONS = [
+  { value: 'SC', label: 'SC' },
+  { value: 'OpenAI', label: 'OpenAI' },
+  { value: 'Local', label: 'Local' },
+];
+
+function formatModelLabel(path: string) {
+  return path.replace('llm-svc://', '').split('/').pop() || path || '—';
+}
 
 export default function ModelParametersModal({
   open,
@@ -102,9 +115,15 @@ export default function ModelParametersModal({
   initialParams,
   onSave,
   variant = 'modal',
+  initialModelSettings,
+  onSaveModelSettings,
 }: ModelParametersModalProps) {
   const [params, setParams] = useState<ModelParamsState>({ ...defaultParams, model: currentModel });
   const [stopInput, setStopInput] = useState('');
+  const [providerAnchor, setProviderAnchor] = useState<HTMLElement | null>(null);
+  const [modelAnchor, setModelAnchor] = useState<HTMLElement | null>(null);
+  const hasModelSettings = initialModelSettings != null && onSaveModelSettings != null;
+  const [modelSettings, setModelSettings] = useState<ModelSettingsState>(() => ({ ...MODEL_SETTINGS_DEFAULT, ...initialModelSettings }));
 
   useEffect(() => {
     if (open) {
@@ -114,15 +133,20 @@ export default function ModelParametersModal({
         ...initialParams,
         model: currentModel || (initialParams?.model as string) || prev.model,
       }));
+      if (hasModelSettings && initialModelSettings) {
+        setModelSettings({ ...MODEL_SETTINGS_DEFAULT, ...initialModelSettings });
+      }
     }
-  }, [open, currentModel, initialParams]);
+  }, [open, currentModel, initialParams, hasModelSettings, initialModelSettings]);
 
   const handleReset = () => {
     setParams({ ...defaultParams, model: params.model });
+    if (hasModelSettings) setModelSettings({ ...MODEL_SETTINGS_DEFAULT });
   };
 
   const handleSave = () => {
     onSave(params.model, params);
+    if (hasModelSettings) onSaveModelSettings(modelSettings);
     onClose();
   };
 
@@ -149,47 +173,129 @@ export default function ModelParametersModal({
       </Box>
 
       <Box sx={{ px: 2, py: 2, display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minHeight: 0, overflow: 'auto' }}>
-          {/* Provider & Model */}
-          <FormControl size="small" fullWidth>
-            <InputLabel sx={{ color: 'rgba(255,255,255,0.7)' }}>Провайдер *</InputLabel>
-            <Select
-              value={params.provider}
-              onChange={e => setParams(p => ({ ...p, provider: e.target.value }))}
-              label="Провайдер *"
-              sx={selectSx}
-              MenuProps={{ PaperProps: { sx: { bgcolor: '#1e2530', color: 'white', '& .MuiMenuItem-root': { '&:hover': { bgcolor: 'rgba(255,255,255,0.08)' } } } } }}
+          {/* Провайдер — как «Категория» в конструкторе агентов */}
+          <Box>
+            <Typography sx={labelSx} component="div">
+              Провайдер
+              <Box component="span" sx={{ color: '#f44336', ml: 0.25 }}>*</Box>
+            </Typography>
+            <Box
+              onClick={e => setProviderAnchor(e.currentTarget)}
+              sx={FORM_FIELD_TRIGGER_SX}
             >
-              <MenuItem value="SC">SC</MenuItem>
-              <MenuItem value="OpenAI">OpenAI</MenuItem>
-              <MenuItem value="Local">Local</MenuItem>
-            </Select>
-          </FormControl>
-
-          <FormControl size="small" fullWidth>
-            <InputLabel sx={{ color: 'rgba(255,255,255,0.7)' }}>Модель *</InputLabel>
-            <Select
-              value={params.model}
-              onChange={e => setParams(p => ({ ...p, model: e.target.value }))}
-              label="Модель *"
-              sx={selectSx}
-              MenuProps={{
-                PaperProps: {
-                  sx: {
-                    bgcolor: '#1e2530',
-                    color: 'white',
-                    maxHeight: 280,
-                    '& .MuiMenuItem-root': { fontSize: '0.8rem', '&:hover': { bgcolor: 'rgba(255,255,255,0.08)' }, whiteSpace: 'normal' },
-                  },
-                },
-              }}
+              <Typography sx={FORM_FIELD_TRIGGER_VALUE_TYPOGRAPHY_SX}>
+                {PROVIDER_OPTIONS.find(o => o.value === params.provider)?.label ?? params.provider}
+              </Typography>
+              <ExpandMoreIcon
+                sx={{ ...DROPDOWN_CHEVRON_SX, transform: Boolean(providerAnchor) ? 'rotate(180deg)' : 'none' }}
+              />
+            </Box>
+            <Popover
+              open={Boolean(providerAnchor)}
+              anchorEl={providerAnchor}
+              onClose={() => setProviderAnchor(null)}
+              anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+              transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+              slotProps={{ paper: { sx: getDropdownPopoverPaperSx(providerAnchor) } }}
             >
-              {availableModels.map(m => (
-                <MenuItem key={m} value={m}>{m.replace('llm-svc://', '').split('/').pop() || m}</MenuItem>
-              ))}
-            </Select>
-          </FormControl>
+              <Box sx={{ py: 0.5 }}>
+                {PROVIDER_OPTIONS.map(o => (
+                  <Box
+                    key={o.value}
+                    onClick={() => {
+                      setParams(p => ({ ...p, provider: o.value }));
+                      setProviderAnchor(null);
+                    }}
+                    sx={{
+                      ...DROPDOWN_ITEM_SX,
+                      color: params.provider === o.value ? 'white' : 'rgba(255,255,255,0.9)',
+                      fontWeight: params.provider === o.value ? 600 : 400,
+                      bgcolor: params.provider === o.value ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
+                    }}
+                  >
+                    {o.label}
+                  </Box>
+                ))}
+              </Box>
+            </Popover>
+          </Box>
 
-          {/* Context / Output tokens */}
+          {/* Модель — тот же стиль выпадающего окна */}
+          <Box>
+            <Typography sx={labelSx} component="div">
+              Модель
+              <Box component="span" sx={{ color: '#f44336', ml: 0.25 }}>*</Box>
+            </Typography>
+            <Box
+              onClick={e => setModelAnchor(e.currentTarget)}
+              sx={FORM_FIELD_TRIGGER_SX}
+            >
+              <Typography
+                component="span"
+                sx={params.model ? FORM_FIELD_TRIGGER_VALUE_ELLIPSIS_SX : { ...FORM_FIELD_TRIGGER_PLACEHOLDER_TYPOGRAPHY_SX, flex: 1, minWidth: 0 }}
+              >
+                {params.model ? formatModelLabel(params.model) : 'Выберите модель'}
+              </Typography>
+              <ExpandMoreIcon
+                sx={{ ...DROPDOWN_CHEVRON_SX, transform: Boolean(modelAnchor) ? 'rotate(180deg)' : 'none', flexShrink: 0 }}
+              />
+            </Box>
+            <Popover
+              open={Boolean(modelAnchor)}
+              anchorEl={modelAnchor}
+              onClose={() => setModelAnchor(null)}
+              anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+              transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+              slotProps={{ paper: { sx: getDropdownPopoverPaperSx(modelAnchor) } }}
+            >
+              <Box
+                sx={{
+                  py: 0.5,
+                  maxHeight: 280,
+                  overflowY: 'auto',
+                  '&::-webkit-scrollbar': { width: 3 },
+                  '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(255,255,255,0.12)', borderRadius: 2 },
+                }}
+              >
+                {availableModels.map(m => (
+                  <Box
+                    key={m}
+                    onClick={() => {
+                      setParams(p => ({ ...p, model: m }));
+                      setModelAnchor(null);
+                    }}
+                    sx={{
+                      ...DROPDOWN_ITEM_SX,
+                      color: params.model === m ? 'white' : 'rgba(255,255,255,0.9)',
+                      fontWeight: params.model === m ? 600 : 400,
+                      bgcolor: params.model === m ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
+                      whiteSpace: 'normal',
+                      wordBreak: 'break-word',
+                    }}
+                  >
+                    {formatModelLabel(m)}
+                  </Box>
+                ))}
+              </Box>
+            </Popover>
+          </Box>
+
+          {/* Тонкая настройка модели (при открытии из конструктора агента) */}
+          {hasModelSettings && (
+            <Box sx={{ mt: 1 }}>
+              <ModelSettingsFields
+                value={modelSettings}
+                onChange={setModelSettings}
+                accordion
+                darkPanel
+                compact
+              />
+            </Box>
+          )}
+
+          {/* Контекст / токены / слайдеры — скрыты при тонкой настройке из конструктора */}
+          {!hasModelSettings && (
+            <>
           <Box>
             <Typography sx={labelSx}>Максимальное количество контекстных токенов</Typography>
             <TextField size="small" fullWidth value={params.contextTokens} onChange={e => setParams(p => ({ ...p, contextTokens: e.target.value }))} sx={inputSx} />
@@ -199,7 +305,6 @@ export default function ModelParametersModal({
             <TextField size="small" fullWidth value={params.outputTokens} onChange={e => setParams(p => ({ ...p, outputTokens: e.target.value }))} sx={inputSx} />
           </Box>
 
-          {/* Sliders — по 2 в ряд, подписи одной высотой для выравнивания треков */}
           <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2, alignItems: 'stretch' }}>
             <Box sx={{ display: 'flex', flexDirection: 'column' }}>
               <Typography sx={{ ...labelSx, minHeight: 28, display: 'flex', alignItems: 'center' }}>Температура — {params.temperature.toFixed(2)}</Typography>
@@ -222,6 +327,8 @@ export default function ModelParametersModal({
                 sx={{ color: '#2196f3' }} />
             </Box>
           </Box>
+            </>
+          )}
 
           {/* Stop sequences */}
           <Box>

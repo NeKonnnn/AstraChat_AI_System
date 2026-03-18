@@ -26,6 +26,7 @@ import {
   DROPDOWN_ITEM_SX,
   DROPDOWN_ITEM_HOVER_BG,
 } from '../../constants/menuStyles';
+import MemoryRagLibrarySection from './MemoryRagLibrarySection';
 
 type RAGStrategy = 'auto' | 'reranking' | 'hierarchical' | 'hybrid' | 'standard';
 
@@ -152,6 +153,8 @@ export default function RAGSettings({}: RAGSettingsProps) {
 
   return (
     <Box sx={{ p: 3 }}>
+      <MemoryRagLibrarySection variant="prominent" />
+
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>

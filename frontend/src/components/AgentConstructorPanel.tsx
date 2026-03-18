@@ -53,6 +53,8 @@ import {
 } from '@mui/icons-material';
 import { getApiUrl, API_ENDPOINTS } from '../config/api';
 import { useAuth } from '../contexts/AuthContext';
+import { useAppActions } from '../contexts/AppContext';
+import { applyAgentModelAndSettings } from '../utils/applyAgentServer';
 import {
   DROPDOWN_CHEVRON_SX,
   getDropdownPopoverPaperSx,
@@ -60,10 +62,12 @@ import {
   DROPDOWN_ITEM_SX,
   FORM_FIELD_INPUT_SX,
   FORM_FIELD_TRIGGER_SX,
+  FORM_FIELD_TRIGGER_VALUE_TYPOGRAPHY_SX,
   FIELD_TEXT,
   FIELD_PLACEHOLDER,
 } from '../constants/menuStyles';
 import ModelParametersModal, { type ModelParamsState } from './ModelParametersModal';
+import { MODEL_SETTINGS_DEFAULT, type ModelSettingsState } from '../constants/modelSettingsStyles';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -165,6 +169,7 @@ function SectionHeader({ children }: { children: React.ReactNode }) {
 
 export default function AgentConstructorPanel({ isDarkMode, isOpen }: AgentConstructorPanelProps) {
   const { token } = useAuth();
+  const { showNotification } = useAppActions();
 
   // Agent list & selection
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -204,6 +209,7 @@ export default function AgentConstructorPanel({ isDarkMode, isOpen }: AgentConst
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [showModelParamsPanel, setShowModelParamsPanel] = useState(false);
   const [modelParams, setModelParams] = useState<Partial<ModelParamsState>>({});
+  const [agentModelSettings, setAgentModelSettings] = useState<ModelSettingsState>({ ...MODEL_SETTINGS_DEFAULT });
   const [agentSearchQuery, setAgentSearchQuery] = useState('');
   const [agentPopoverAnchor, setAgentPopoverAnchor] = useState<HTMLElement | null>(null);
   const [categoryPopoverAnchor, setCategoryPopoverAnchor] = useState<HTMLElement | null>(null);
@@ -283,6 +289,11 @@ export default function AgentConstructorPanel({ isDarkMode, isOpen }: AgentConst
     setCategory(cfg.category || 'Общий');
     setModel(cfg.model || '');
     setModelParams((cfg.model_params as Partial<ModelParamsState>) || {});
+    setAgentModelSettings(
+      (cfg.model_settings as Partial<ModelSettingsState>)
+        ? { ...MODEL_SETTINGS_DEFAULT, ...(cfg.model_settings as Partial<ModelSettingsState>) }
+        : { ...MODEL_SETTINGS_DEFAULT }
+    );
     setCodeInterpreter(!!cfg.code_interpreter);
     setWebSearch(!!cfg.web_search);
     setArtifactsEnabled(!!cfg.artifacts_enabled);
@@ -300,6 +311,7 @@ export default function AgentConstructorPanel({ isDarkMode, isOpen }: AgentConst
     setInstructions('');
     setModel(availableModels[0] || '');
     setModelParams({});
+    setAgentModelSettings({ ...MODEL_SETTINGS_DEFAULT });
     setCodeInterpreter(false);
     setWebSearch(false);
     setArtifactsEnabled(false);
@@ -355,8 +367,9 @@ export default function AgentConstructorPanel({ isDarkMode, isOpen }: AgentConst
       ],
       config: {
         category,
-        model,
+        model: model.replace(/^1lm-svc:\/\//i, 'llm-svc://').replace(/\s+/g, ''),
         model_params: modelParams,
+        model_settings: agentModelSettings,
         code_interpreter: codeInterpreter,
         web_search: webSearch,
         artifacts_enabled: artifactsEnabled,
@@ -392,9 +405,36 @@ export default function AgentConstructorPanel({ isDarkMode, isOpen }: AgentConst
       if (!isEdit && result.agent_id) {
         setSelectedAgentId(result.agent_id);
       }
+      const savedId = isEdit ? selectedAgentId : result.agent_id;
+      if (savedId && savedId !== 'new') {
+        try {
+          localStorage.setItem('active_agent_id', String(savedId));
+          localStorage.setItem('active_agent_name', name.trim());
+          localStorage.setItem('active_agent_prompt', instructions.trim() || 'Системные инструкции не заданы.');
+        } catch {
+          /* */
+        }
+        window.dispatchEvent(new CustomEvent('agentSelected'));
+      }
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
       await loadAgents();
+
+      if (token) {
+        const sp = instructions.trim() || 'Системные инструкции не заданы.';
+        const applied = await applyAgentModelAndSettings(token, {
+          system_prompt: sp,
+          model_path: model.trim() || null,
+          model_settings: agentModelSettings as unknown as Record<string, unknown>,
+        });
+        if (applied.ok && model.trim()) {
+          showNotification('success', 'Модель и настройки применены на сервере — ответы в чате пойдут с этой моделью');
+        } else if (applied.ok && !model.trim()) {
+          showNotification('info', 'Промпт и настройки применены; укажите модель в параметрах — пока чат без смены модели');
+        } else if (!applied.ok) {
+          showNotification('warning', `Агент сохранён; не удалось применить на сервер: ${applied.message}`);
+        }
+      }
     } catch (e: any) {
       setSaveError(e.message);
     } finally {
@@ -456,6 +496,8 @@ export default function AgentConstructorPanel({ isDarkMode, isOpen }: AgentConst
           currentModel={model}
           availableModels={availableModels}
           initialParams={Object.keys(modelParams).length ? modelParams : undefined}
+          initialModelSettings={agentModelSettings}
+          onSaveModelSettings={setAgentModelSettings}
           onSave={(newModel, params) => {
             setModel(newModel);
             setModelParams(params ?? {});
@@ -471,7 +513,7 @@ export default function AgentConstructorPanel({ isDarkMode, isOpen }: AgentConst
           onClick={e => setAgentPopoverAnchor(e.currentTarget)}
           sx={FORM_FIELD_TRIGGER_SX}
         >
-          <Typography sx={{ color: 'white', fontWeight: 600, fontSize: '0.875rem' }}>
+          <Typography sx={{ ...FORM_FIELD_TRIGGER_VALUE_TYPOGRAPHY_SX, fontWeight: 600 }}>
             Агенты
           </Typography>
           <ExpandMoreIcon
@@ -634,7 +676,7 @@ export default function AgentConstructorPanel({ isDarkMode, isOpen }: AgentConst
             onClick={e => setCategoryPopoverAnchor(e.currentTarget)}
             sx={FORM_FIELD_TRIGGER_SX}
           >
-            <Typography sx={{ color: 'white', fontWeight: 500, fontSize: '0.875rem' }}>
+            <Typography sx={FORM_FIELD_TRIGGER_VALUE_TYPOGRAPHY_SX}>
               {category}
             </Typography>
             <ExpandMoreIcon

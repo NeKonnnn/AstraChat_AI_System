@@ -292,9 +292,15 @@ class AgentRepository:
         try:
             async with await self.db_connection.acquire() as conn:
                 # Строим WHERE условие для основного запроса
-                where_conditions = ["a.is_public = true"]
-                params = []
-                param_num = 1
+                # Для "мои агенты" (author_only=True) показываем все агенты автора, иначе только публичные
+                if getattr(filters, 'author_only', False) and filters.author_id:
+                    where_conditions = [f"a.author_id = $1"]
+                    params = [filters.author_id]
+                    param_num = 2
+                else:
+                    where_conditions = ["a.is_public = true"]
+                    params = []
+                    param_num = 1
                 
                 if filters.search_query:
                     search_pattern = f"%{filters.search_query}%"
@@ -302,7 +308,7 @@ class AgentRepository:
                     params.append(search_pattern)
                     param_num += 1
                 
-                if filters.author_id:
+                if filters.author_id and not getattr(filters, 'author_only', False):
                     where_conditions.append(f"a.author_id = ${param_num}")
                     params.append(filters.author_id)
                     param_num += 1

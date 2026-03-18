@@ -57,6 +57,122 @@ export function getMenuColors(isDarkMode: boolean): MenuColors {
   };
 }
 
+// ─── Поле «Имя» (конструктор агентов): размеры «окошка» и текст — эталон для полей ввода и триггеров выпадающих списков ───
+
+/** Фон полей ввода и кнопок-триггеров (тёмная тема). */
+export const FIELD_BG = 'rgba(0,0,0,0.25)';
+/** Рамка полей (цвет). */
+export const FIELD_BORDER = 'rgba(255,255,255,0.15)';
+/** Рамка при наведении. */
+export const FIELD_BORDER_HOVER = 'rgba(255,255,255,0.3)';
+/** Фон при наведении (триггеры). */
+export const FIELD_BG_HOVER = 'rgba(0,0,0,0.35)';
+/** Рамка при фокусе. */
+export const FIELD_FOCUS = 'rgba(33,150,243,0.7)';
+/** Цвет текста. */
+export const FIELD_TEXT = 'white';
+/** Цвет плейсхолдера / пустого триггера. */
+export const FIELD_PLACEHOLDER = 'rgba(255,255,255,0.35)';
+
+/** Скругление рамки поля ввода и кнопки-триггера (px). */
+export const AGENT_CONSTRUCTOR_FIELD_RADIUS_PX = 10;
+/** Горизонтальный внутренний отступ (px). */
+export const AGENT_CONSTRUCTOR_FIELD_PADDING_X_PX = 12;
+/** Вертикальный внутренний отступ (px). */
+export const AGENT_CONSTRUCTOR_FIELD_PADDING_Y_PX = 8;
+/** Минимальная высота видимой области поля/триггера (px). */
+export const AGENT_CONSTRUCTOR_FIELD_MIN_HEIGHT_PX = 40;
+/** Размер шрифта текста внутри поля и в триггере. */
+export const AGENT_CONSTRUCTOR_FIELD_FONT_SIZE = '0.82rem';
+/** Межстрочный интервал текста в поле/триггере. */
+export const AGENT_CONSTRUCTOR_FIELD_LINE_HEIGHT = 1.43;
+
+/** @deprecated используйте AGENT_CONSTRUCTOR_FIELD_FONT_SIZE */
+export const FIELD_FONT_SIZE = AGENT_CONSTRUCTOR_FIELD_FONT_SIZE;
+
+/** Текст выбранного значения в кнопке-триггере (как в поле «Имя»). */
+export const FORM_FIELD_TRIGGER_VALUE_TYPOGRAPHY_SX = {
+  color: FIELD_TEXT,
+  fontWeight: 500,
+  fontSize: AGENT_CONSTRUCTOR_FIELD_FONT_SIZE,
+  lineHeight: AGENT_CONSTRUCTOR_FIELD_LINE_HEIGHT,
+} as const;
+
+/** Плейсхолдер в триггере (пустое значение). */
+export const FORM_FIELD_TRIGGER_PLACEHOLDER_TYPOGRAPHY_SX = {
+  ...FORM_FIELD_TRIGGER_VALUE_TYPOGRAPHY_SX,
+  color: FIELD_PLACEHOLDER,
+} as const;
+
+/** Длинный текст в триггере (модель и т.п.) — обрезка с многоточием. */
+export const FORM_FIELD_TRIGGER_VALUE_ELLIPSIS_SX = {
+  ...FORM_FIELD_TRIGGER_VALUE_TYPOGRAPHY_SX,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  flex: 1,
+  minWidth: 0,
+  pr: 1,
+} as const;
+
+/**
+ * MUI TextField: те же радиус, высота, отступы и шрифт, что у поля «Имя» в конструкторе.
+ * Ширина — в разметке (`fullWidth` / grid); здесь «коробка» и типографика.
+ */
+export const FORM_FIELD_INPUT_SX = {
+  '& .MuiOutlinedInput-root': {
+    borderRadius: `${AGENT_CONSTRUCTOR_FIELD_RADIUS_PX}px`,
+    minHeight: AGENT_CONSTRUCTOR_FIELD_MIN_HEIGHT_PX,
+    bgcolor: FIELD_BG,
+    color: FIELD_TEXT,
+    fontSize: AGENT_CONSTRUCTOR_FIELD_FONT_SIZE,
+    boxSizing: 'border-box' as const,
+    '& fieldset': { borderColor: FIELD_BORDER },
+    '&:hover fieldset': { borderColor: FIELD_BORDER_HOVER },
+    '&.Mui-focused fieldset': { borderColor: FIELD_FOCUS },
+  },
+  '& .MuiOutlinedInput-input': {
+    padding: `${AGENT_CONSTRUCTOR_FIELD_PADDING_Y_PX}px ${AGENT_CONSTRUCTOR_FIELD_PADDING_X_PX}px`,
+    lineHeight: AGENT_CONSTRUCTOR_FIELD_LINE_HEIGHT,
+    boxSizing: 'border-box' as const,
+  },
+  '& .MuiOutlinedInput-root.MuiInputBase-multiline': {
+    minHeight: 'unset',
+    alignItems: 'stretch',
+  },
+  '& .MuiOutlinedInput-root.MuiInputBase-multiline .MuiOutlinedInput-input': {
+    minHeight: 'unset !important',
+  },
+  '& .MuiInputBase-input': { color: FIELD_TEXT },
+  '& .MuiInputBase-input::placeholder': { color: FIELD_PLACEHOLDER },
+};
+
+/**
+ * Кнопка-триггер выпадающего списка: те же размеры и шрифт, что у поля «Имя».
+ */
+export const FORM_FIELD_TRIGGER_SX = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  boxSizing: 'border-box' as const,
+  minHeight: AGENT_CONSTRUCTOR_FIELD_MIN_HEIGHT_PX,
+  px: `${AGENT_CONSTRUCTOR_FIELD_PADDING_X_PX}px`,
+  py: `${AGENT_CONSTRUCTOR_FIELD_PADDING_Y_PX}px`,
+  borderRadius: `${AGENT_CONSTRUCTOR_FIELD_RADIUS_PX}px`,
+  bgcolor: FIELD_BG,
+  border: `1px solid ${FIELD_BORDER}`,
+  cursor: 'pointer',
+  userSelect: 'none' as const,
+  transition: 'background 0.15s, border-color 0.15s',
+  fontSize: AGENT_CONSTRUCTOR_FIELD_FONT_SIZE,
+  lineHeight: AGENT_CONSTRUCTOR_FIELD_LINE_HEIGHT,
+  color: FIELD_TEXT,
+  '&:hover': {
+    borderColor: FIELD_BORDER_HOVER,
+    bgcolor: FIELD_BG_HOVER,
+  },
+};
+
 // ─── Стиль выпадающего окна (кнопка + Popover), как у «Агенты» / «Категория» ───
 
 /** Цвет фона кнопки-триггера выпадающего списка. */
@@ -141,68 +257,15 @@ export function getDropdownPopoverPaperSx(anchorEl: HTMLElement | null): Record<
 /** Цвет подсветки пункта выпадающего списка (выбран / hover). */
 export const DROPDOWN_ITEM_HOVER_BG = 'rgba(255,255,255,0.10)';
 
-/** Общий стиль пункта в выпадающем списке (без учёта selected — его задают в компоненте). */
+/** Общий стиль пункта в выпадающем списке (шрифт и скругление как у поля «Имя» / триггера). */
 export const DROPDOWN_ITEM_SX = {
   px: 1.5,
   py: 0.85,
-  fontSize: '0.82rem',
+  fontSize: AGENT_CONSTRUCTOR_FIELD_FONT_SIZE,
+  lineHeight: AGENT_CONSTRUCTOR_FIELD_LINE_HEIGHT,
   cursor: 'pointer',
-  borderRadius: '10px',
+  borderRadius: `${AGENT_CONSTRUCTOR_FIELD_RADIUS_PX}px`,
   mx: 0.5,
   transition: 'all 0.12s',
   '&:hover': { bgcolor: DROPDOWN_ITEM_HOVER_BG, color: 'white' },
-};
-
-// ─── Поля ввода и триггеры (переиспользуемые по всему проекту) ───
-
-/** Фон полей ввода и кнопок-триггеров (тёмная тема). */
-export const FIELD_BG = 'rgba(0,0,0,0.25)';
-/** Рамка полей (цвет). */
-export const FIELD_BORDER = 'rgba(255,255,255,0.15)';
-/** Рамка при наведении. */
-export const FIELD_BORDER_HOVER = 'rgba(255,255,255,0.3)';
-/** Фон при наведении (триггеры). */
-export const FIELD_BG_HOVER = 'rgba(0,0,0,0.35)';
-/** Рамка при фокусе. */
-export const FIELD_FOCUS = 'rgba(33,150,243,0.7)';
-/** Цвет текста. */
-export const FIELD_TEXT = 'white';
-/** Цвет плейсхолдера / пустого триггера. */
-export const FIELD_PLACEHOLDER = 'rgba(255,255,255,0.35)';
-/** Размер шрифта полей. */
-export const FIELD_FONT_SIZE = '0.82rem';
-
-/** Стиль для MUI TextField (поля ввода по всему проекту). */
-export const FORM_FIELD_INPUT_SX = {
-  '& .MuiOutlinedInput-root': {
-    bgcolor: FIELD_BG,
-    color: FIELD_TEXT,
-    fontSize: FIELD_FONT_SIZE,
-    '& fieldset': { borderColor: FIELD_BORDER },
-    '&:hover fieldset': { borderColor: FIELD_BORDER_HOVER },
-    '&.Mui-focused fieldset': { borderColor: FIELD_FOCUS },
-  },
-  '& .MuiInputBase-input': { color: FIELD_TEXT },
-  '& .MuiInputBase-input::placeholder': { color: FIELD_PLACEHOLDER },
-};
-
-/** Стиль кнопки-триггера, выглядящей как поле (выпадающие списки, выбор модели и т.п.). */
-export const FORM_FIELD_TRIGGER_SX = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  px: 1.5,
-  py: 1,
-  borderRadius: '10px',
-  bgcolor: FIELD_BG,
-  border: `1px solid ${FIELD_BORDER}`,
-  cursor: 'pointer',
-  userSelect: 'none' as const,
-  transition: 'background 0.15s, border-color 0.15s',
-  fontSize: FIELD_FONT_SIZE,
-  color: FIELD_TEXT,
-  '&:hover': {
-    borderColor: FIELD_BORDER_HOVER,
-    bgcolor: FIELD_BG_HOVER,
-  },
 };

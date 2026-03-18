@@ -745,6 +745,135 @@ def _is_structure_query(text: str) -> bool:
     return any(k in t for k in keywords)
 
 
+def _terminal_chat_inference_banner(
+    *,
+    sid: str,
+    conversation_id,
+    user_preview: str,
+    mode_label: str,
+    model_path_for_call: str = None,
+    extra_line: str = None,
+):
+    """
+    Явный вывод в терминал (stdout) и в лог: какая модель, настройки и системный промпт
+    участвуют в ответе. Агент с UI не передаётся по WebSocket — на сервере действуют
+    загруженная модель, model_settings и глобальный промпт (после PUT из галереи и т.д.).
+    """
+    import json
+
+    lines = [
+        "",
+        "=" * 76,
+        "  [ЧАТ] Генерация ответа — что использует сервер СЕЙЧАС",
+        "=" * 76,
+        f"  Режим: {mode_label}",
+        f"  Socket: {sid[:20]}…  |  conversation_id: {conversation_id}",
+        f"  Текст запроса (начало): {(user_preview or '')[:160]!r}",
+    ]
+    path = model_path_for_call if model_path_for_call is not None else get_current_model_path()
+    lines.append(f"  Модель (путь для вызова LLM): {path!r}")
+    if get_model_info:
+        try:
+            info = get_model_info()
+            if info:
+                lines.append(f"  get_model_info: {json.dumps(info, ensure_ascii=False, default=str)[:500]}")
+        except Exception as ex:
+            lines.append(f"  get_model_info: ошибка {ex}")
+    if model_settings:
+        try:
+            st = model_settings.get_all()
+            lines.append(f"  Настройки модели: {json.dumps(st, ensure_ascii=False, default=str)}")
+        except Exception as ex:
+            lines.append(f"  Настройки модели: недоступны ({ex})")
+    else:
+        lines.append("  Настройки модели: модуль недоступен")
+    if context_prompt_manager:
+        try:
+            gp = context_prompt_manager.get_global_prompt() or ""
+            prev = gp[:500] + ("…" if len(gp) > 500 else "")
+            lines.append(f"  Глобальный системный промпт ({len(gp)} симв., начало): {prev!r}")
+        except Exception as ex:
+            lines.append(f"  Глобальный промпт: ошибка {ex}")
+    else:
+        lines.append("  Глобальный промпт: менеджер недоступен")
+    if extra_line:
+        lines.append(f"  {extra_line}")
+    lines.append(
+        "  Примечание: блок get_model_info — глобальное состояние llm-svc (что загружено в память)."
+    )
+    lines.append(
+        "  Реальный ответ строится по полю model в POST /v1/chat/completions (см. лог generate_response выше);"
+    )
+    lines.append(
+        "  при выбранном агенте туда подставляется модель из конструктора (llm-svc://id)."
+    )
+    lines.append("=" * 76)
+    block = "\n".join(lines)
+    print(block, flush=True)
+    logger.info(block)
+
+
+async def _resolve_agent_chat_params(agent_id_raw):
+    """
+    Модель и параметры из карточки агента (конструктор), а не глобальная загрузка на сервере.
+    В запрос к llm-svc уходит явный model id (llm-svc://...) и max_tokens/temperature из model_settings.
+    """
+    empty = {"model_path": None, "max_tokens": None, "temperature": None, "system_prompt": None}
+    if agent_id_raw is None:
+        return empty
+    try:
+        aid = int(agent_id_raw)
+    except (TypeError, ValueError):
+        return empty
+    try:
+        from backend.database.init_db import get_agent_repository
+
+        repo = get_agent_repository()
+        if repo is None:
+            return empty
+        ag = await repo.get_agent(aid, None)
+        if not ag:
+            return empty
+        cfg = ag.config if isinstance(ag.config, dict) else {}
+        mp = str(cfg.get("model") or cfg.get("model_path") or "").strip()
+        out = {**empty}
+        if mp:
+            low = mp.lower()
+            # 1lm-svc:// вместо llm-svc:// — иначе клиент не подставляет id модели в запрос
+            if low.startswith("1lm-svc://"):
+                mp = "llm-svc://" + mp[10:]
+                low = mp.lower()
+            if low.startswith("llm-svc://"):
+                out["model_path"] = mp
+            elif "/" in mp or mp.lower().endswith(".gguf") or (len(mp) > 2 and mp[1] == ":"):
+                out["model_path"] = mp
+            else:
+                out["model_path"] = f"llm-svc://{mp}"
+        ms = cfg.get("model_settings")
+        if isinstance(ms, dict):
+            if ms.get("output_tokens") is not None:
+                try:
+                    out["max_tokens"] = int(ms["output_tokens"])
+                except (TypeError, ValueError):
+                    pass
+            if ms.get("temperature") is not None:
+                try:
+                    out["temperature"] = float(ms["temperature"])
+                except (TypeError, ValueError):
+                    pass
+        sp = (ag.system_prompt or "").strip()
+        if sp:
+            out["system_prompt"] = sp
+        logger.info(
+            f"[chat] agent_id={aid} → model_path={out['model_path']}, "
+            f"max_tokens={out['max_tokens']}, temperature={out['temperature']}"
+        )
+        return out
+    except Exception as ex:
+        logger.warning(f"_resolve_agent_chat_params: {ex}")
+        return empty
+
+
 @sio.event
 async def chat_message(sid, data):
     """Обработка сообщений чата через Socket.IO"""
@@ -762,6 +891,8 @@ async def chat_message(sid, data):
         user_message_id = data.get("message_id", None)
         conversation_id = data.get("conversation_id", None)
         use_kb_rag = bool(data.get("use_kb_rag", False))
+        use_memory_library_rag = bool(data.get("use_memory_library_rag", False))
+        agent_profile = await _resolve_agent_chat_params(data.get("agent_id"))
         
         if conversation_id:
             import backend.database.memory_service as memory_service_module
@@ -807,7 +938,15 @@ async def chat_message(sid, data):
             if not multi_llm_models:
                 await sio.emit('chat_error', {'error': 'Модели не выбраны'}, room=sid)
                 return
-            
+
+            _terminal_chat_inference_banner(
+                sid=sid,
+                conversation_id=conversation_id,
+                user_preview=user_message,
+                mode_label=f"MULTI-LLM — модели: {', '.join(multi_llm_models)}",
+                extra_line="Ниже для каждой модели — отдельный блок перед вызовом LLM.",
+            )
+
             doc_context = None
             if rag_client:
                 try:
@@ -854,6 +993,31 @@ async def chat_message(sid, data):
                 except Exception as e:
                     logger.error(f"Socket.IO multi-llm: ошибка поиска по Базе Знаний: {e}")
 
+            if use_memory_library_rag and rag_client:
+                try:
+                    mem_hits = await rag_client.memory_rag_search(user_message, k=8)
+                    if mem_hits:
+                        mem_parts = []
+                        total_len = 0
+                        MAX_MEM = 10000
+                        for i, (content, score, doc_id, chunk_idx) in enumerate(mem_hits, 1):
+                            frag = (
+                                f"Фрагмент библиотеки памяти {i} (doc_id={doc_id}, чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
+                            )
+                            if total_len + len(frag) > MAX_MEM:
+                                frag = frag[: max(0, MAX_MEM - total_len - 60)] + "\n... [обрезано]\n"
+                                mem_parts.append(frag)
+                                break
+                            mem_parts.append(frag)
+                            total_len += len(frag)
+                        _mem_block = "\n".join(mem_parts)
+                        final_user_message = (
+                            f"Документы из настроек (библиотека памяти):\n{_mem_block}\n\n"
+                            + final_user_message
+                        )
+                except Exception as e:
+                    logger.error(f"Socket.IO multi-llm: ошибка memory_rag: {e}")
+
             loop = asyncio.get_running_loop()
             
             async def generate_single_model_response(model_name: str):
@@ -886,7 +1050,15 @@ async def chat_message(sid, data):
                                 time.sleep(0.5)
                             else:
                                 logger.warning(f"Socket.IO: Функция reload_model_by_path недоступна, используем текущую модель")
-                    
+
+                    _terminal_chat_inference_banner(
+                        sid=sid,
+                        conversation_id=data.get("conversation_id"),
+                        user_preview=final_user_message,
+                        mode_label=f"MULTI-LLM — сейчас модель «{model_name}»",
+                        model_path_for_call=model_path,
+                    )
+
                     # Функция для отправки чанков от конкретной модели
                     def model_stream_callback(chunk: str, acc_text: str):
                         try:
@@ -1026,9 +1198,58 @@ async def chat_message(sid, data):
             extended_context["stream_callback"] = agent_stream_callback if streaming else None
             extended_context["_main_event_loop"] = asyncio.get_running_loop()
             set_tool_context(extended_context)
-            
+
+            agent_effective_message = user_message
+            if use_kb_rag and rag_client:
+                try:
+                    _kb = await rag_client.kb_search(user_message, k=6)
+                    if _kb:
+                        _parts, _tl = [], 0
+                        for i, (c, s, did, ch) in enumerate(_kb, 1):
+                            frag = f"БЗ {i} (doc={did}): {c}\n"
+                            if _tl + len(frag) > 8000:
+                                break
+                            _parts.append(frag)
+                            _tl += len(frag)
+                        if _parts:
+                            agent_effective_message = (
+                                "База Знаний (документы):\n" + "\n".join(_parts) + "\n\n" + agent_effective_message
+                            )
+                except Exception as _e:
+                    logger.error(f"Agent mode KB RAG: {_e}")
+            if use_memory_library_rag and rag_client:
+                try:
+                    _mh = await rag_client.memory_rag_search(user_message, k=6)
+                    if _mh:
+                        _parts, _tl = [], 0
+                        for i, (c, s, did, ch) in enumerate(_mh, 1):
+                            frag = f"Библиотека памяти {i} (doc={did}): {c}\n"
+                            if _tl + len(frag) > 8000:
+                                break
+                            _parts.append(frag)
+                            _tl += len(frag)
+                        if _parts:
+                            agent_effective_message = (
+                                "Документы из настроек (библиотека памяти):\n"
+                                + "\n".join(_parts)
+                                + "\n\n"
+                                + agent_effective_message
+                            )
+                except Exception as _e:
+                    logger.error(f"Agent mode memory_rag: {_e}")
+
+            _terminal_chat_inference_banner(
+                sid=sid,
+                conversation_id=data.get("conversation_id"),
+                user_preview=user_message,
+                mode_label="Оркестратор агентов (agent architecture)",
+                extra_line="Базовая модель на сервере — та, что ниже; оркестратор может дергать LLM несколько раз.",
+            )
+
             try:
-                response = await orchestrator.process_message(user_message, history=history, context=context)
+                response = await orchestrator.process_message(
+                    agent_effective_message, history=history, context=context
+                )
                 logger.info(f"Socket.IO: АГЕНТНАЯ АРХИТЕКТУРА: Получен ответ, длина: {len(response) if response else 0}")
                 
                 if stop_generation_flags.get(sid, False):
@@ -1117,40 +1338,141 @@ async def chat_message(sid, data):
             except Exception as e:
                 logger.error(f"Socket.IO: ошибка при получении контекста документов через SVC-RAG: {e}")
 
-        # ПОИСК ПО БАЗЕ ЗНАНИЙ (если флаг use_kb_rag активен)
-        if use_kb_rag and rag_client:
+        # База знаний + библиотека памяти: один проход поиска, контекст для LLM и трейс для UI
+        document_search_trace = None
+        kb_hits_ctx = []
+        mem_hits_ctx = []
+        if rag_client and (use_kb_rag or use_memory_library_rag):
+            if use_kb_rag:
+                try:
+                    kb_hits_ctx = list(await rag_client.kb_search(user_message, k=8) or [])
+                except Exception as e:
+                    logger.error(f"Socket.IO: ошибка поиска по Базе Знаний: {e}")
+            if use_memory_library_rag:
+                try:
+                    mem_hits_ctx = list(await rag_client.memory_rag_search(user_message, k=8) or [])
+                except Exception as e:
+                    logger.error(f"Socket.IO: ошибка memory_rag: {e}")
+            kb_id_name = {}
+            mem_id_name = {}
             try:
-                kb_hits = await rag_client.kb_search(user_message, k=8)
-                if kb_hits:
-                    kb_parts = []
-                    total_len = 0
-                    MAX_KB_CONTEXT_CHARS = 10000
-                    for i, (content, score, doc_id, chunk_idx) in enumerate(kb_hits, 1):
-                        frag = f"Фрагмент БЗ {i} (doc_id={doc_id}, чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
-                        if total_len + len(frag) > MAX_KB_CONTEXT_CHARS:
-                            frag = frag[: max(0, MAX_KB_CONTEXT_CHARS - total_len - 60)] + "\n... [обрезано]\n"
-                            kb_parts.append(frag)
-                            break
-                        kb_parts.append(frag)
-                        total_len += len(frag)
-                    kb_context = "\n".join(kb_parts)
-                    final_message = (
-                        f"База Знаний (постоянные документы):\n{kb_context}\n\n"
-                        + final_message
-                    )
-                    logger.info(f"KB RAG: добавлен контекст из Базы Знаний ({len(kb_hits)} результатов)")
-            except Exception as e:
-                logger.error(f"Socket.IO: ошибка поиска по Базе Знаний: {e}")
+                if use_kb_rag and kb_hits_ctx:
+                    for d in await rag_client.kb_list_documents():
+                        kb_id_name[d["id"]] = d.get("filename") or str(d["id"])
+            except Exception:
+                pass
+            try:
+                if use_memory_library_rag and mem_hits_ctx:
+                    for d in await rag_client.memory_rag_list_documents():
+                        mem_id_name[d["id"]] = d.get("filename") or str(d["id"])
+            except Exception:
+                pass
+            hits_out = []
+            files_used = set()
+            for content, score, doc_id, chunk_idx in kb_hits_ctx:
+                if doc_id is None:
+                    continue
+                fn = kb_id_name.get(doc_id, f"doc_{doc_id}")
+                files_used.add(fn)
+                hits_out.append({
+                    "file": fn,
+                    "anchor": f"chunk@{chunk_idx}({fn})",
+                    "relevance": round(float(score), 4),
+                    "content": (content or "")[:12000],
+                    "chunkIndex": chunk_idx,
+                    "documentId": doc_id,
+                    "store": "kb",
+                })
+            for content, score, doc_id, chunk_idx in mem_hits_ctx:
+                if doc_id is None:
+                    continue
+                fn = mem_id_name.get(doc_id, f"doc_{doc_id}")
+                files_used.add(fn)
+                hits_out.append({
+                    "file": fn,
+                    "anchor": f"chunk@{chunk_idx}({fn})",
+                    "relevance": round(float(score), 4),
+                    "content": (content or "")[:12000],
+                    "chunkIndex": chunk_idx,
+                    "documentId": doc_id,
+                    "store": "memory",
+                })
+            document_search_trace = {
+                "query": user_message,
+                "sourceFiles": sorted(files_used),
+                "hits": hits_out,
+            }
 
-        # Генерация ответа
-        current_model_path = get_current_model_path()
-        logger.info(f"Socket.IO: current_model_path = {current_model_path}")
+        if kb_hits_ctx:
+            kb_parts = []
+            total_len = 0
+            MAX_KB_CONTEXT_CHARS = 10000
+            for i, (content, score, doc_id, chunk_idx) in enumerate(kb_hits_ctx, 1):
+                frag = f"Фрагмент БЗ {i} (doc_id={doc_id}, чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
+                if total_len + len(frag) > MAX_KB_CONTEXT_CHARS:
+                    frag = frag[: max(0, MAX_KB_CONTEXT_CHARS - total_len - 60)] + "\n... [обрезано]\n"
+                    kb_parts.append(frag)
+                    break
+                kb_parts.append(frag)
+                total_len += len(frag)
+            kb_context = "\n".join(kb_parts)
+            final_message = f"База Знаний (постоянные документы):\n{kb_context}\n\n" + final_message
+            logger.info(f"KB RAG: добавлен контекст ({len(kb_hits_ctx)} чанков)")
+
+        if mem_hits_ctx:
+            mem_parts = []
+            total_len = 0
+            MAX_MEM = 10000
+            for i, (content, score, doc_id, chunk_idx) in enumerate(mem_hits_ctx, 1):
+                frag = (
+                    f"Фрагмент библиотеки памяти {i} (doc_id={doc_id}, чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
+                )
+                if total_len + len(frag) > MAX_MEM:
+                    frag = frag[: max(0, MAX_MEM - total_len - 60)] + "\n... [обрезано]\n"
+                    mem_parts.append(frag)
+                    break
+                mem_parts.append(frag)
+                total_len += len(frag)
+            mem_ctx = "\n".join(mem_parts)
+            final_message = f"Документы из настроек (библиотека памяти):\n{mem_ctx}\n\n" + final_message
+            logger.info(f"memory_library RAG: добавлен контекст ({len(mem_hits_ctx)} чанков)")
+
+        # Генерация ответа (при выбранном агенте — модель и параметры из БД, иначе глобальная)
+        base_model_path = get_current_model_path()
+        eff_model_path = agent_profile["model_path"] or base_model_path
+        logger.info(
+            f"Socket.IO: model_path для вызова LLM = {eff_model_path!r} "
+            f"(из агента={'да' if agent_profile['model_path'] else 'нет'})"
+        )
+        _terminal_chat_inference_banner(
+            sid=sid,
+            conversation_id=conversation_id,
+            user_preview=final_message,
+            mode_label="Прямой чат с LLM (одна модель)"
+            + (" — параметры из выбранного агента" if data.get("agent_id") else ""),
+            model_path_for_call=eff_model_path,
+            extra_line="RAG/KB уже учтены в final_message при необходимости.",
+        )
+
+        def _run_ask_agent(stream: bool, cb):
+            return ask_agent(
+                final_message,
+                history=history,
+                max_tokens=agent_profile["max_tokens"],
+                streaming=stream,
+                stream_callback=cb,
+                model_path=eff_model_path,
+                custom_prompt_id=None,
+                images=images,
+                system_prompt=agent_profile["system_prompt"],
+                temperature=agent_profile["temperature"],
+            )
+
         if streaming:
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 response = await asyncio.get_event_loop().run_in_executor(
-                    executor, ask_agent, final_message, history,
-                    None, True, sync_stream_callback, current_model_path, None, images
+                    executor, lambda: _run_ask_agent(True, sync_stream_callback)
                 )
             logger.info(f"Socket.IO: получен потоковый ответ, длина: {len(response) if response else 0} символов")
             
@@ -1162,8 +1484,7 @@ async def chat_message(sid, data):
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 response = await asyncio.get_event_loop().run_in_executor(
-                    executor, ask_agent, final_message, history,
-                    None, False, None, current_model_path, None, images
+                    executor, lambda: _run_ask_agent(False, None)
                 )
             logger.info(f"Socket.IO: получен ответ, длина: {len(response)} символов")
         
@@ -1174,7 +1495,8 @@ async def chat_message(sid, data):
         
         try:
             conversation_id = data.get("conversation_id", None)
-            await save_dialog_entry("assistant", response, None, None, conversation_id)
+            _assist_meta = {"document_search": document_search_trace} if document_search_trace else None
+            await save_dialog_entry("assistant", response, _assist_meta, None, conversation_id)
         except RuntimeError as e:
             if "MongoDB" in str(e):
                 logger.warning(f"MongoDB недоступен. Ответ не будет сохранен: {e}")
@@ -1184,11 +1506,14 @@ async def chat_message(sid, data):
         if sid in stop_generation_flags:
             stop_generation_flags[sid] = False
         
-        await sio.emit('chat_complete', {
-            'response': response,
-            'timestamp': datetime.now().isoformat(),
-            'was_streaming': streaming
-        }, room=sid)
+        _complete_payload = {
+            "response": response,
+            "timestamp": datetime.now().isoformat(),
+            "was_streaming": streaming,
+        }
+        if document_search_trace is not None:
+            _complete_payload["document_search"] = document_search_trace
+        await sio.emit("chat_complete", _complete_payload, room=sid)
         logger.info(f"Socket.IO: финальное сообщение отправлено (streaming={streaming}, response_len={len(response) if response else 0})")
 
     except Exception as e:
@@ -1337,6 +1662,12 @@ async def chat_with_ai(message: ChatMessage):
         if use_agent_mode:
             logger.info("АГЕНТНАЯ АРХИТЕКТУРА: Переключение на агентный режим обработки")
             logger.info(f"Запрос пользователя: '{message.message[:100]}{'...' if len(message.message) > 100 else ''}'")
+            _terminal_chat_inference_banner(
+                sid="HTTP-POST-/api/chat",
+                conversation_id=None,
+                user_preview=message.message,
+                mode_label="REST /api/chat — оркестратор агентов",
+            )
             # Используем агентную архитектуру
             context = {
                 "history": history,
@@ -1396,6 +1727,13 @@ async def chat_with_ai(message: ChatMessage):
 
 Ответ:"""
                         current_model_path = get_current_model_path()
+                        _terminal_chat_inference_banner(
+                            sid="HTTP-POST-/api/chat",
+                            conversation_id=None,
+                            user_preview=prompt,
+                            mode_label="REST /api/chat — ответ с RAG",
+                            model_path_for_call=current_model_path,
+                        )
                         response = ask_agent(
                             prompt,
                             history=[],
@@ -1409,6 +1747,13 @@ async def chat_with_ai(message: ChatMessage):
             if not response:
                 logger.info("ПРЯМОЙ РЕЖИМ: Используем обычный AI agent без контекста документов")
                 current_model_path = get_current_model_path()
+                _terminal_chat_inference_banner(
+                    sid="HTTP-POST-/api/chat",
+                    conversation_id=None,
+                    user_preview=message.message,
+                    mode_label="REST /api/chat — прямой LLM (без RAG)",
+                    model_path_for_call=current_model_path,
+                )
                 response = ask_agent(
                     message.message,
                     history=history,
@@ -1419,6 +1764,13 @@ async def chat_with_ai(message: ChatMessage):
                 logger.info("ПРЯМОЙ РЕЖИМ: контекст документов недоступен, используем обычный AI agent")
                 # Отправляем запрос к модели без контекста документов
                 current_model_path = get_current_model_path()
+                _terminal_chat_inference_banner(
+                    sid="HTTP-POST-/api/chat",
+                    conversation_id=None,
+                    user_preview=message.message,
+                    mode_label="REST /api/chat — прямой LLM (fallback)",
+                    model_path_for_call=current_model_path,
+                )
                 response = ask_agent(
                     message.message,
                     history=history,
@@ -3936,6 +4288,93 @@ async def kb_delete_document(document_id: int):
         return result
     except Exception as e:
         logger.error(f"Ошибка удаления из Базы Знаний: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ================================
+# Библиотека памяти RAG (настройки): MinIO + memory_rag_* в Postgres
+# ================================
+
+@app.post("/api/memory-rag/documents")
+async def memory_rag_upload_document(file: UploadFile = File(...)):
+    """Загрузить файл: MinIO (отдельный bucket) + индексация в memory_rag_documents/vectors."""
+    if not rag_client:
+        raise HTTPException(status_code=503, detail="RAG service недоступен")
+    try:
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="Файл пустой")
+        fn = file.filename or "unknown"
+        ext = os.path.splitext(fn)[1] or ".bin"
+        memory_bucket = settings.minio.memory_rag_bucket_name
+        file_object_name = None
+        if minio_client:
+            try:
+                minio_client.ensure_bucket(memory_bucket)
+                file_object_name = minio_client.generate_object_name(prefix="memrag_", extension=ext)
+                minio_client.upload_file(
+                    content,
+                    file_object_name,
+                    content_type=file.content_type or "application/octet-stream",
+                    bucket_name=memory_bucket,
+                )
+            except Exception as e:
+                logger.error(f"MinIO загрузка memory-rag: {e}")
+                raise HTTPException(status_code=500, detail=f"MinIO: {e}")
+        try:
+            result = await rag_client.memory_rag_index_document(
+                file_bytes=content,
+                filename=fn,
+                minio_object=file_object_name,
+                minio_bucket=memory_bucket if file_object_name else None,
+            )
+        except Exception as e:
+            if minio_client and file_object_name:
+                try:
+                    minio_client.delete_file(file_object_name, bucket_name=memory_bucket)
+                except Exception:
+                    pass
+            logger.error(f"SVC-RAG memory-rag индексация: {e}")
+            raise HTTPException(status_code=422, detail=str(e))
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Ошибка загрузки memory-rag: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/memory-rag/documents")
+async def memory_rag_list_documents():
+    if not rag_client:
+        raise HTTPException(status_code=503, detail="RAG service недоступен")
+    try:
+        docs = await rag_client.memory_rag_list_documents()
+        return {"documents": docs}
+    except Exception as e:
+        logger.error(f"Ошибка списка memory-rag: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/memory-rag/documents/{document_id}")
+async def memory_rag_delete_document(document_id: int):
+    if not rag_client:
+        raise HTTPException(status_code=503, detail="RAG service недоступен")
+    try:
+        out = await rag_client.memory_rag_delete_document(document_id)
+        if not out.get("ok"):
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        mo, mb = out.get("minio_object"), out.get("minio_bucket")
+        if minio_client and mo and mb:
+            try:
+                minio_client.delete_file(mo, bucket_name=mb)
+            except Exception as ex:
+                logger.warning(f"Не удалось удалить объект MinIO memory-rag: {ex}")
+        return {"ok": True, "document_id": document_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Ошибка удаления memory-rag: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

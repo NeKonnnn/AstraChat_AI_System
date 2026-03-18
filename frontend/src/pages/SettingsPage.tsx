@@ -35,12 +35,19 @@ import {
   Upload as UploadIcon,
   Computer as ComputerIcon,
   Memory as MemoryIcon,
+  LibraryBooks as LibraryBooksIcon,
 } from '@mui/icons-material';
 import { useAppActions } from '../contexts/AppContext';
 import AgentArchitectureSettings from '../components/AgentArchitectureSettings';
+import MemoryRagLibraryModal from '../components/MemoryRagLibraryModal';
 
 // Backend URL
 import { getApiUrl } from '../config/api';
+import {
+  isKnowledgeRagEnabled,
+  setKnowledgeRagEnabled,
+  KNOWLEDGE_RAG_STORAGE_EVENT,
+} from '../utils/knowledgeRagStorage';
 
 export default function SettingsPage() {
   const [isExpanded, setIsExpanded] = useState(true);
@@ -82,6 +89,15 @@ export default function SettingsPage() {
     include_system_prompts: true,
     clear_on_restart: false,
   });
+
+  const [memoryRagModalOpen, setMemoryRagModalOpen] = useState(false);
+  const [useMemoryLibraryRag, setUseMemoryLibraryRag] = useState(() => isKnowledgeRagEnabled());
+
+  useEffect(() => {
+    const onRag = () => setUseMemoryLibraryRag(isKnowledgeRagEnabled());
+    window.addEventListener(KNOWLEDGE_RAG_STORAGE_EVENT, onRag);
+    return () => window.removeEventListener(KNOWLEDGE_RAG_STORAGE_EVENT, onRag);
+  }, []);
 
   // Состояния для контекстных промптов
   const [contextPrompts, setContextPrompts] = useState({
@@ -1036,6 +1052,34 @@ export default function SettingsPage() {
              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
                Управление контекстом и памятью ассистента для более эффективного общения
              </Typography>
+
+             <Box sx={{ mb: 2, display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
+               <Button
+                 variant="contained"
+                 color="primary"
+                 startIcon={<LibraryBooksIcon />}
+                 onClick={() => setMemoryRagModalOpen(true)}
+               >
+                 Документы для RAG (библиотека)
+               </Button>
+               <FormControlLabel
+                 control={
+                   <Switch
+                     checked={useMemoryLibraryRag}
+                     onChange={(_, c) => {
+                       setUseMemoryLibraryRag(c);
+                       setKnowledgeRagEnabled(c);
+                     }}
+                   />
+                 }
+                 label="Учитывать эти документы в ответах чата"
+               />
+             </Box>
+             <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 2 }}>
+               Файлы хранятся в отдельном bucket MinIO; для поиска используются векторы (pgvector) и текстовые чанки.
+             </Typography>
+
+             <MemoryRagLibraryModal open={memoryRagModalOpen} onClose={() => setMemoryRagModalOpen(false)} />
              
              <Alert severity="info" sx={{ mb: 2 }}>
                <Typography variant="body2">

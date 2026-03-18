@@ -14,6 +14,24 @@ import io
 import os
 
 
+def resolve_llm_svc_model_id_for_request(model_path: Optional[str], fallback_model_name: str) -> str:
+    """
+    Из пути llm-svc://<id> получает <id> для JSON model в /v1/chat/completions.
+    Частая опечатка: 1lm-svc:// (цифра 1) — иначе startswith('llm-svc') не срабатывает
+    и в запрос уходит глобально загруженная модель (QVikhr и т.д.).
+    """
+    if not model_path or not str(model_path).strip():
+        return fallback_model_name
+    s = re.sub(r"\s+", "", str(model_path).strip())
+    low = s.lower()
+    if low.startswith("1lm-svc://"):
+        s = "llm-svc://" + s[10:]
+        low = s.lower()
+    if low.startswith("llm-svc://"):
+        return s[10:]
+    return fallback_model_name
+
+
 def _clean_llm_response(text: str) -> str:
     """Очистка ответа LLM от артефактов chat template (im_start/im_end теги, HTML entities)."""
     if not text:
@@ -134,8 +152,8 @@ class LLMClient:
             logger.warning("load_model: пустое имя модели")
             return False
         model_name = model_name.strip()
-        # Большие модели на CPU могут грузиться 5–15+ минут
-        load_timeout = httpx.Timeout(900.0, connect=10.0, read=900.0, write=30.0)
+        # Большие модели на CPU могут грузиться до 20 минут
+        load_timeout = httpx.Timeout(1200.0, connect=10.0, read=1200.0, write=30.0)
         try:
             async with httpx.AsyncClient(timeout=load_timeout) as client:
                 response = await client.post(
@@ -595,6 +613,8 @@ class LLMService:
     
     def __init__(self, base_url: Optional[str] = None, api_key: Optional[str] = None):
         self.client = LLMClient(base_url, api_key)
+        # Сериализуем переключение моделей в llm-svc, чтобы параллельные чаты не ломали друг другу состояние
+        self._model_switch_lock = asyncio.Lock()
         
         # Получаем настройки модели из конфигурации 
         settings = get_settings()
@@ -736,10 +756,31 @@ class LLMService:
                                 })
                             break
             
-            # Определение модели 
-            model_to_use = self.model_name
-            if model_path and model_path.startswith("llm-svc://"):
-                model_to_use = model_path.replace("llm-svc://", "")
+            # Определение модели (явный id из агента / запроса; иначе глобальная загруженная)
+            model_to_use = resolve_llm_svc_model_id_for_request(model_path, self.model_name)
+            if str(model_path or "").strip():
+                logger.info(
+                    f"[generate_response] model_path={model_path!r} → запрошена model={model_to_use!r} "
+                    f"(загружена в llm-svc сейчас: {self.model_name!r})"
+                )
+
+            # Приоритет агента: если запрошена другая модель — переключаем llm-svc перед генерацией.
+            # Это убирает ситуацию «в ответе используется глобальная», когда llm-svc игнорирует поле model.
+            if model_to_use and model_to_use != self.model_name:
+                async with self._model_switch_lock:
+                    # double-check под локом
+                    if model_to_use != self.model_name:
+                        logger.info(f"[generate_response] Переключаю llm-svc на модель: {model_to_use!r}")
+                        ok = await self.client.load_model(model_to_use)
+                        if ok:
+                            self.model_name = model_to_use
+                            logger.info(f"[generate_response] llm-svc модель активна: {self.model_name!r}")
+                        else:
+                            logger.warning(
+                                f"[generate_response] Не удалось переключить llm-svc на {model_to_use!r}; "
+                                f"использую текущее состояние: {self.model_name!r}"
+                            )
+                            model_to_use = self.model_name
             
             if streaming and stream_callback:
                 return await self._stream_generation(
@@ -862,7 +903,8 @@ def ask_agent_llm_svc(prompt: str, history: Optional[List[Dict[str, str]]] = Non
                      stream_callback: Optional[Callable[[str, str], bool]] = None,
                      model_path: Optional[str] = None, custom_prompt_id: Optional[str] = None,
                      images: Optional[List[str]] = None,
-                     system_prompt: Optional[str] = None) -> str:
+                     system_prompt: Optional[str] = None,
+                     temperature: Optional[float] = None) -> str:
     """Синхронная обертка с защитой event loop """
     logger.info(f"[ask_agent_llm_svc] Called with prompt len: {len(prompt)}, streaming: {streaming}")
     
@@ -875,7 +917,8 @@ def ask_agent_llm_svc(prompt: str, history: Optional[List[Dict[str, str]]] = Non
                 prompt=prompt, history=history, max_tokens=max_tokens or 1024,
                 streaming=streaming, stream_callback=stream_callback,
                 images=images, model_path=model_path,
-                system_prompt=system_prompt
+                system_prompt=system_prompt,
+                temperature=temperature if temperature is not None else 0.7,
             )
             logger.info("[ask_agent_llm_svc] generate_response completed")
             return result

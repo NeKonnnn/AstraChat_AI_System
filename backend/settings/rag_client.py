@@ -218,6 +218,54 @@ class RagClient:
             for h in hits
         ]
 
+    # ─── Библиотека памяти (настройки): memory_rag_documents / memory_rag_vectors ─
+
+    async def memory_rag_index_document(
+        self,
+        file_bytes: bytes,
+        filename: str,
+        minio_object: Optional[str] = None,
+        minio_bucket: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        files = {"file": (filename, file_bytes, "application/octet-stream")}
+        data: Dict[str, Any] = {}
+        if minio_object:
+            data["minio_object"] = minio_object
+        if minio_bucket:
+            data["minio_bucket"] = minio_bucket
+        return await self._request("POST", "/memory-rag/documents", files=files, data=data)
+
+    async def memory_rag_list_documents(self) -> List[Dict[str, Any]]:
+        resp = await self._request("GET", "/memory-rag/documents")
+        return resp if isinstance(resp, list) else []
+
+    async def memory_rag_delete_document(self, document_id: int) -> Dict[str, Any]:
+        return await self._request("DELETE", f"/memory-rag/documents/{document_id}")
+
+    async def memory_rag_search(
+        self,
+        query: str,
+        k: int = 8,
+        document_id: Optional[int] = None,
+        use_reranking: Optional[bool] = None,
+    ) -> List[Tuple[str, float, Optional[int], Optional[int]]]:
+        body: Dict[str, Any] = {"query": query, "k": k}
+        if document_id is not None:
+            body["document_id"] = document_id
+        if use_reranking is not None:
+            body["use_reranking"] = use_reranking
+        resp = await self._request("POST", "/memory-rag/search", json=body)
+        hits = resp.get("hits", [])
+        return [
+            (
+                h.get("content", ""),
+                float(h.get("score", 0.0)),
+                h.get("document_id"),
+                h.get("chunk_index"),
+            )
+            for h in hits
+        ]
+
 
 _rag_client_singleton: Optional[RagClient] = None
 

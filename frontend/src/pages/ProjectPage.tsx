@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -82,6 +82,11 @@ import VoiceChatDialog from '../components/VoiceChatDialog';
 import ChatInputBar from '../components/ChatInputBar';
 import { useTheme } from '@mui/material/styles';
 import { MENU_BORDER_RADIUS_PX } from '../constants/menuStyles';
+import {
+  isKnowledgeRagEnabled,
+  setKnowledgeRagEnabled,
+  KNOWLEDGE_RAG_STORAGE_EVENT,
+} from '../utils/knowledgeRagStorage';
 
 const projectIconMap: Record<string, React.ComponentType<any>> = {
   folder: FolderIcon,
@@ -139,13 +144,19 @@ export default function ProjectPage() {
   const [chatInputStyle, setChatInputStyle] = useState<'compact' | 'classic'>(() =>
     (localStorage.getItem('chat_input_style') as 'compact' | 'classic') || 'compact'
   );
-  const [useKbRag, setUseKbRag] = useState(() => localStorage.getItem('use_kb_rag') === 'true');
+  const [useKbRag, setUseKbRag] = useState(() => isKnowledgeRagEnabled());
 
   const toggleKbRag = () => {
     const next = !useKbRag;
+    setKnowledgeRagEnabled(next);
     setUseKbRag(next);
-    localStorage.setItem('use_kb_rag', String(next));
   };
+
+  useEffect(() => {
+    const onRag = () => setUseKbRag(isKnowledgeRagEnabled());
+    window.addEventListener(KNOWLEDGE_RAG_STORAGE_EVENT, onRag);
+    return () => window.removeEventListener(KNOWLEDGE_RAG_STORAGE_EVENT, onRag);
+  }, []);
 
   // Слушаем изменение стиля поля ввода через настройки
   React.useEffect(() => {
