@@ -152,6 +152,7 @@ services:
       - MINIO_USE_SSL=${MINIO_USE_SSL:-false}
       - MINIO_BUCKET_NAME=${MINIO_BUCKET_NAME:-astrachat-temp}
       - MINIO_DOCUMENTS_BUCKET_NAME=${MINIO_DOCUMENTS_BUCKET_NAME:-astrachat-documents}
+      - MINIO_MEMORY_RAG_BUCKET_NAME=${MINIO_MEMORY_RAG_BUCKET_NAME:-astrachat-memory-rag}
       # RAG (SVC-RAG) URL для backend/rag_client.py
       - SVC_RAG_URL=http://svc-rag:8000/v1
     depends_on:
