@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import ProjectRagLibraryInline from './ProjectRagLibraryInline';
 import {
   Dialog,
   DialogTitle,
@@ -14,7 +15,6 @@ import {
   MenuItem,
   FormControl,
   InputLabel,
-  Chip,
   Avatar,
   Tabs,
   Tab,
@@ -34,7 +34,6 @@ import {
   Luggage as LuggageIcon,
   ExpandMore as ExpandMoreIcon,
   ExpandLess as ExpandLessIcon,
-  AttachFile as AttachFileIcon,
   Lightbulb as LightbulbIcon,
   Image as ImageIcon,
   PlayArrow as PlayArrowIcon,
@@ -60,10 +59,26 @@ import {
   Email as MailIcon,
 } from '@mui/icons-material';
 
+export interface DraftProjectPayload {
+  name: string;
+  memory: 'default' | 'project-only';
+  instructions: string;
+  icon?: string;
+  iconType?: 'icon' | 'emoji';
+  iconColor?: string;
+}
+
 interface NewProjectModalProps {
   open: boolean;
   onClose: () => void;
+  /** Обычное создание без предварительного черновика (файлы не загружались) */
   onCreateProject?: (projectData: ProjectData) => void;
+  /** Создать проект в состоянии при первой загрузке файла — вернуть id */
+  ensureDraftProjectForRag?: (draft: DraftProjectPayload) => string;
+  /** Обновить черновик при нажатии «Создать проект» */
+  finalizeDraftProject?: (projectId: string, updates: DraftProjectPayload) => void;
+  /** Закрытие без подтверждения — удалить черновик и данные на сервере */
+  cancelDraftProject?: (projectId: string) => void;
 }
 
 export interface ProjectData {
@@ -74,7 +89,6 @@ export interface ProjectData {
   category?: string;
   memory: 'default' | 'project-only';
   instructions: string;
-  files?: File[];
 }
 
 const iconOptions = [
@@ -126,7 +140,14 @@ const emojiOptions = [
   '🌍', '🌎', '🌏', '🗺️', '🏔️', '⛰️', '🌋', '🏕️', '🏖️', '🏝️', '🏜️', '🌅', '🌄', '🌆', '🌇', '🌃',
 ];
 
-export default function NewProjectModal({ open, onClose, onCreateProject }: NewProjectModalProps) {
+export default function NewProjectModal({
+  open,
+  onClose,
+  onCreateProject,
+  ensureDraftProjectForRag,
+  finalizeDraftProject,
+  cancelDraftProject,
+}: NewProjectModalProps) {
   const theme = useTheme();
   const [projectName, setProjectName] = useState('');
   const [selectedIcon, setSelectedIcon] = useState<string | null>(null);
@@ -138,9 +159,16 @@ export default function NewProjectModal({ open, onClose, onCreateProject }: NewP
   const [showIconPicker, setShowIconPicker] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [iconTab, setIconTab] = useState(0);
-  const [files, setFiles] = useState<File[]>([]);
-  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const [ragDraftProjectId, setRagDraftProjectId] = useState<string | null>(null);
+  const createCompletedRef = useRef(false);
   const iconPickerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (open) {
+      createCompletedRef.current = false;
+      setRagDraftProjectId(null);
+    }
+  }, [open]);
 
   // Закрываем попап при клике вне его
   useEffect(() => {
@@ -159,7 +187,7 @@ export default function NewProjectModal({ open, onClose, onCreateProject }: NewP
     };
   }, [showIconPicker]);
 
-  const handleClose = () => {
+  const resetForm = () => {
     setProjectName('');
     setSelectedIcon(null);
     setSelectedEmoji(null);
@@ -170,37 +198,60 @@ export default function NewProjectModal({ open, onClose, onCreateProject }: NewP
     setShowIconPicker(false);
     setShowAdvanced(false);
     setIconTab(0);
-    setFiles([]);
+    setRagDraftProjectId(null);
+  };
+
+  const handleClose = () => {
+    if (ragDraftProjectId && !createCompletedRef.current && cancelDraftProject) {
+      cancelDraftProject(ragDraftProjectId);
+    }
+    resetForm();
     onClose();
   };
 
+  const buildDraftPayload = (): DraftProjectPayload => ({
+    name: projectName.trim(),
+    memory,
+    instructions: instructions.trim(),
+    icon: iconType === 'icon' ? selectedIcon || undefined : selectedEmoji || undefined,
+    iconType,
+    iconColor: selectedColor,
+  });
+
   const handleCreate = () => {
     if (!projectName.trim()) return;
+    createCompletedRef.current = true;
 
-    const projectData: ProjectData = {
-      name: projectName.trim(),
-      icon: iconType === 'icon' ? selectedIcon || undefined : selectedEmoji || undefined,
-      iconType,
-      iconColor: selectedColor,
-      category: undefined,
-      memory,
-      instructions: instructions.trim(),
-      files: files.length > 0 ? files : undefined,
-    };
-
-    onCreateProject?.(projectData);
-    handleClose();
-  };
-
-  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
-    if (event.target.files) {
-      const newFiles = Array.from(event.target.files);
-      setFiles([...files, ...newFiles]);
+    if (ragDraftProjectId && finalizeDraftProject) {
+      finalizeDraftProject(ragDraftProjectId, buildDraftPayload());
+    } else {
+      const projectData: ProjectData = {
+        name: projectName.trim(),
+        icon: iconType === 'icon' ? selectedIcon || undefined : selectedEmoji || undefined,
+        iconType,
+        iconColor: selectedColor,
+        category: undefined,
+        memory,
+        instructions: instructions.trim(),
+      };
+      onCreateProject?.(projectData);
     }
+
+    resetForm();
+    onClose();
   };
 
-  const handleRemoveFile = (index: number) => {
-    setFiles(files.filter((_, i) => i !== index));
+  const resolveProjectIdForRag = (): string => {
+    if (ragDraftProjectId) return ragDraftProjectId;
+    if (!projectName.trim()) {
+      throw new Error('Сначала введите название проекта');
+    }
+    if (!ensureDraftProjectForRag) {
+      throw new Error('Загрузка файлов для нового проекта недоступна');
+    }
+    const id = ensureDraftProjectForRag(buildDraftPayload());
+    setRagDraftProjectId(id);
+    return id;
   };
 
   const renderIcon = () => {
@@ -436,6 +487,16 @@ export default function NewProjectModal({ open, onClose, onCreateProject }: NewP
           />
         </Box>
 
+        {/* Файлы RAG — немедленная загрузка; при первом файле создаётся черновик проекта */}
+        <Box sx={{ mb: 2, mt: 1 }}>
+          <ProjectRagLibraryInline
+            projectId={ragDraftProjectId}
+            onResolveProjectId={ensureDraftProjectForRag ? resolveProjectIdForRag : undefined}
+            dense
+            subtitle="После выбора файлов проект создаётся как черновик с текущим названием; при «Отменить» черновик удаляется."
+          />
+        </Box>
+
         {/* Расширенные настройки */}
         <Box sx={{ mb: 2 }}>
           <Button
@@ -514,45 +575,6 @@ export default function NewProjectModal({ open, onClose, onCreateProject }: NewP
                     },
                   }}
                 />
-              </Box>
-
-              {/* Файлы */}
-              <Box>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                  <Typography variant="body2" fontWeight="500">
-                    Файлы
-                  </Typography>
-                  <Tooltip title="Загрузите документы, изображения или код, чтобы использовать их в качестве базы знаний для AstraChat в рамках этого проекта.">
-                    <InfoIcon sx={{ fontSize: 16, opacity: 0.7 }} />
-                  </Tooltip>
-                </Box>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  style={{ display: 'none' }}
-                  onChange={handleFileSelect}
-                />
-                <Button
-                  variant="outlined"
-                  startIcon={<AttachFileIcon />}
-                  onClick={() => fileInputRef.current?.click()}
-                  sx={{ mb: 1 }}
-                >
-                  Добавить файлы
-                </Button>
-                {files.length > 0 && (
-                  <Box sx={{ mt: 1 }}>
-                    {files.map((file, index) => (
-                      <Chip
-                        key={index}
-                        label={file.name}
-                        onDelete={() => handleRemoveFile(index)}
-                        sx={{ mr: 1, mb: 1 }}
-                      />
-                    ))}
-                  </Box>
-                )}
               </Box>
             </Box>
           </Collapse>

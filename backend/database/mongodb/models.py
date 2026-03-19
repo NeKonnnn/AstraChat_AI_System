@@ -38,6 +38,7 @@ class Conversation(BaseModel):
     updated_at: datetime = Field(default_factory=datetime.utcnow, description="Дата обновления")
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Дополнительные метаданные")
     expires_at: Optional[datetime] = Field(None, description="Дата истечения для TTL")
+    project_id: Optional[str] = Field(None, description="ID проекта (null = обычный глобальный чат)")
     
     class Config:
         json_schema_extra = {

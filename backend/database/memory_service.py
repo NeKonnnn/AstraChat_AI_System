@@ -446,6 +446,147 @@ async def remove_last_user_message(conversation_id: Optional[str] = None) -> boo
         return False
 
 
+# ─── Функции памяти проектов ────────────────────────────────────────────────
+
+
+async def save_dialog_entry_to_project(
+    role: str,
+    content: str,
+    project_id: str,
+    conversation_id: Optional[str] = None,
+    message_id: Optional[str] = None,
+) -> bool:
+    """
+    Сохраняет сообщение в MongoDB с привязкой к проекту.
+    Используется чатами внутри проекта.
+    """
+    if not _check_mongodb_available():
+        logger.error("MongoDB недоступен. Сообщение проекта не сохранено.")
+        return False
+    if Conversation is None or Message is None:
+        logger.error("MongoDB модели недоступны (Conversation/Message is None)")
+        return False
+    try:
+        global conversation_repo
+        if conversation_repo is None:
+            conversation_repo = get_conversation_repository()
+
+        if conversation_id is None:
+            conversation_id = get_or_create_conversation_id()
+        if message_id is None:
+            message_id = f"msg_{uuid.uuid4().hex[:12]}"
+
+        message = Message(
+            message_id=message_id,
+            role=role,
+            content=content,
+            timestamp=datetime.utcnow(),
+            metadata={},
+        )
+
+        existing = await conversation_repo.get_conversation(conversation_id)
+        if existing is None:
+            conversation = Conversation(
+                conversation_id=conversation_id,
+                user_id="default_user",
+                title=f"Проект {project_id} — {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}",
+                messages=[message],
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+                project_id=project_id,
+            )
+            await conversation_repo.create_conversation(conversation)
+        else:
+            await conversation_repo.add_message(conversation_id, message)
+            # При необходимости синхронизируем project_id
+            if existing.project_id != project_id:
+                await conversation_repo.set_conversation_project(conversation_id, project_id)
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении сообщения проекта в MongoDB: {e}")
+        return False
+
+
+async def get_project_memory_history(
+    project_id: str,
+    max_entries: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Возвращает историю диалогов только из указанного проекта.
+    Используется при memory='project-only'.
+    """
+    if not _check_mongodb_available():
+        return []
+    try:
+        global conversation_repo
+        if conversation_repo is None:
+            conversation_repo = get_conversation_repository()
+
+        conversations = await conversation_repo.get_conversations_by_project(project_id)
+        history: List[Dict[str, Any]] = []
+        for conv in conversations:
+            for msg in conv.messages:
+                history.append({
+                    "role": msg.role,
+                    "content": msg.content,
+                    "timestamp": msg.timestamp.isoformat() if msg.timestamp else None,
+                })
+        if max_entries and len(history) > max_entries:
+            history = history[-max_entries:]
+        return history
+    except Exception as e:
+        logger.error(f"Ошибка при получении памяти проекта {project_id}: {e}")
+        return []
+
+
+async def get_default_memory_history(
+    max_entries: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Возвращает историю только из глобальных (не привязанных к проекту) диалогов.
+    Используется при memory='default'.
+    """
+    if not _check_mongodb_available():
+        return []
+    try:
+        global conversation_repo
+        if conversation_repo is None:
+            conversation_repo = get_conversation_repository()
+
+        conversations = await conversation_repo.get_global_conversations()
+        history: List[Dict[str, Any]] = []
+        for conv in conversations:
+            for msg in conv.messages:
+                history.append({
+                    "role": msg.role,
+                    "content": msg.content,
+                    "timestamp": msg.timestamp.isoformat() if msg.timestamp else None,
+                })
+        if max_entries and len(history) > max_entries:
+            history = history[-max_entries:]
+        return history
+    except Exception as e:
+        logger.error(f"Ошибка при получении глобальной памяти: {e}")
+        return []
+
+
+async def delete_project_memory(project_id: str) -> int:
+    """
+    Удаляет все диалоги проекта из MongoDB (вызывается при удалении проекта).
+    Возвращает количество удалённых диалогов.
+    """
+    if not _check_mongodb_available():
+        return 0
+    try:
+        global conversation_repo
+        if conversation_repo is None:
+            conversation_repo = get_conversation_repository()
+        return await conversation_repo.delete_conversations_by_project(project_id)
+    except Exception as e:
+        logger.error(f"Ошибка при удалении памяти проекта {project_id}: {e}")
+        return 0
+
+
 async def save_to_memory(role: str, message: str):
     """
     Сохраняет сообщение в память в простом формате (для совместимости со старым API)

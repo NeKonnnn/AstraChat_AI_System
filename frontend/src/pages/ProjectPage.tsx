@@ -145,6 +145,7 @@ export default function ProjectPage() {
   );
   const [useKbRag, setUseKbRag] = useState(() => isKnowledgeRagEnabled());
 
+
   const toggleKbRag = () => {
     const next = !useKbRag;
     setKnowledgeRagEnabled(next);
@@ -156,6 +157,7 @@ export default function ProjectPage() {
     window.addEventListener(KNOWLEDGE_RAG_STORAGE_EVENT, onRag);
     return () => window.removeEventListener(KNOWLEDGE_RAG_STORAGE_EVENT, onRag);
   }, []);
+
 
   // Слушаем изменение стиля поля ввода через настройки
   React.useEffect(() => {

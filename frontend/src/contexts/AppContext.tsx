@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useReducer, useEffect, ReactNode } from 'react';
+import { getApiUrl, API_ENDPOINTS } from '../config/api';
 
 // Типы данных
 export interface Message {
@@ -1046,7 +1047,18 @@ export function useAppActions() {
     },
     
     deleteProject: (projectId: string) => {
+      // Отвязываем все чаты проекта
+      state.chats
+        .filter(chat => chat.projectId === projectId)
+        .forEach(chat => {
+          dispatch({ type: 'MOVE_CHAT_TO_PROJECT', payload: { chatId: chat.id, projectId: null } });
+        });
       dispatch({ type: 'DELETE_PROJECT', payload: projectId });
+      // Асинхронно очищаем бэкенд (RAG-файлы + MongoDB-диалоги проекта)
+      const url = getApiUrl((API_ENDPOINTS.PROJECT_DELETE as (id: string) => string)(projectId));
+      fetch(url, { method: 'DELETE' }).catch(err =>
+        console.warn(`Не удалось удалить данные проекта ${projectId} на сервере:`, err)
+      );
     },
     
     getProjects: () => {

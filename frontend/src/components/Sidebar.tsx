@@ -2783,6 +2783,38 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           setShowNewProjectModal(false);
           setPendingChatIdForProject(null);
         }}
+        ensureDraftProjectForRag={(draft) => {
+          const projectId = createProject({
+            name: draft.name,
+            icon: draft.icon,
+            iconType: draft.iconType,
+            iconColor: draft.iconColor,
+            memory: draft.memory,
+            instructions: draft.instructions,
+          });
+          if (pendingChatIdForProject) {
+            moveChatToProject(pendingChatIdForProject, projectId);
+            setPendingChatIdForProject(null);
+          }
+          return projectId;
+        }}
+        finalizeDraftProject={(projectId, updates) => {
+          updateProject(projectId, {
+            name: updates.name,
+            icon: updates.icon,
+            iconType: updates.iconType,
+            iconColor: updates.iconColor,
+            memory: updates.memory,
+            instructions: updates.instructions,
+          });
+          if (pendingChatIdForProject) {
+            moveChatToProject(pendingChatIdForProject, projectId);
+            setPendingChatIdForProject(null);
+          }
+        }}
+        cancelDraftProject={(projectId) => {
+          deleteProject(projectId);
+        }}
         onCreateProject={(projectData) => {
           const projectId = createProject({
             name: projectData.name,
@@ -2792,7 +2824,6 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
             memory: projectData.memory,
             instructions: projectData.instructions,
           });
-          // Если проект создается из меню чата, перемещаем чат в проект
           if (pendingChatIdForProject) {
             moveChatToProject(pendingChatIdForProject, projectId);
             setPendingChatIdForProject(null);

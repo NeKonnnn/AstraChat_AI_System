@@ -81,6 +81,7 @@ class MinIOConnectionConfig(BaseModel):
     bucket_name: str = "astrachat-temp"
     documents_bucket_name: str = "astrachat-documents"
     memory_rag_bucket_name: str = "astrachat-memory-rag"
+    project_rag_bucket_name: str = "astrachat-project-rag"
     
     @model_validator(mode='before')
     @classmethod
@@ -107,6 +108,10 @@ class MinIOConnectionConfig(BaseModel):
         if not data.get("memory_rag_bucket_name"):
             data["memory_rag_bucket_name"] = os.getenv(
                 "MINIO_MEMORY_RAG_BUCKET_NAME", "astrachat-memory-rag"
+            )
+        if not data.get("project_rag_bucket_name"):
+            data["project_rag_bucket_name"] = os.getenv(
+                "MINIO_PROJECT_RAG_BUCKET_NAME", "astrachat-project-rag"
             )
         return data
 

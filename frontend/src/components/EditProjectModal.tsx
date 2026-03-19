@@ -13,7 +13,6 @@ import {
   Select,
   MenuItem,
   FormControl,
-  Chip,
   Avatar,
   Tabs,
   Tab,
@@ -33,7 +32,6 @@ import {
   Luggage as LuggageIcon,
   ExpandMore as ExpandMoreIcon,
   ExpandLess as ExpandLessIcon,
-  AttachFile as AttachFileIcon,
   Lightbulb as LightbulbIcon,
   Image as ImageIcon,
   PlayArrow as PlayArrowIcon,
@@ -60,6 +58,7 @@ import {
 } from '@mui/icons-material';
 import type { Project } from '../contexts/AppContext';
 import { getProjectIconGlyphSx } from '../constants/menuStyles';
+import ProjectRagLibraryInline from './ProjectRagLibraryInline';
 
 const iconOptions = [
   { name: 'folder', icon: FolderIcon },
@@ -127,8 +126,6 @@ export default function EditProjectModal({ open, onClose, project, onSave }: Edi
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showIconPicker, setShowIconPicker] = useState(false);
   const [iconTab, setIconTab] = useState(0);
-  const [files, setFiles] = useState<File[]>([]);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const iconPickerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -141,7 +138,6 @@ export default function EditProjectModal({ open, onClose, project, onSave }: Edi
       setMemory(project.memory || 'default');
       setInstructions(project.instructions || '');
       setShowAdvanced(false);
-      setFiles([]);
     }
   }, [open, project]);
 
@@ -174,16 +170,6 @@ export default function EditProjectModal({ open, onClose, project, onSave }: Edi
       instructions: instructions.trim(),
     });
     handleClose();
-  };
-
-  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
-    if (event.target.files) {
-      setFiles((prev) => [...prev, ...Array.from(event.target.files!)]);
-    }
-  };
-
-  const handleRemoveFile = (index: number) => {
-    setFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
   const renderIcon = () => {
@@ -388,6 +374,13 @@ export default function EditProjectModal({ open, onClose, project, onSave }: Edi
           />
         </Box>
 
+        {/* Файлы RAG — сразу видны, как в настройках «База данных» памяти */}
+        {project && (
+          <Box sx={{ mb: 2, mt: 1 }}>
+            <ProjectRagLibraryInline projectId={project.id} dense />
+          </Box>
+        )}
+
         {/* Расширенные настройки */}
         <Box sx={{ mb: 2 }}>
           <Button
@@ -497,64 +490,6 @@ export default function EditProjectModal({ open, onClose, project, onSave }: Edi
                     },
                   }}
                 />
-              </Box>
-
-              {/* Файлы */}
-              <Box>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
-                  <Typography variant="body2" fontWeight="500">
-                    Файлы
-                  </Typography>
-                  <Tooltip
-                    title="Загрузите документы, изображения или код для использования в качестве базы знаний в рамках этого проекта."
-                    arrow
-                  >
-                    <IconButton
-                      size="small"
-                      sx={{
-                        p: 0,
-                        ml: 0.5,
-                        opacity: 0.7,
-                        '&:hover': {
-                          opacity: 1,
-                          '& .MuiSvgIcon-root': {
-                            color: 'primary.main',
-                          },
-                        },
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <HelpOutlineIcon fontSize="small" color="action" />
-                    </IconButton>
-                  </Tooltip>
-                </Box>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  style={{ display: 'none' }}
-                  onChange={handleFileSelect}
-                />
-                <Button
-                  variant="outlined"
-                  startIcon={<AttachFileIcon />}
-                  onClick={() => fileInputRef.current?.click()}
-                  sx={{ mb: 1 }}
-                >
-                  Добавить файлы
-                </Button>
-                {files.length > 0 && (
-                  <Box sx={{ mt: 1 }}>
-                    {files.map((file, index) => (
-                      <Chip
-                        key={index}
-                        label={file.name}
-                        onDelete={() => handleRemoveFile(index)}
-                        sx={{ mr: 1, mb: 1 }}
-                      />
-                    ))}
-                  </Box>
-                )}
               </Box>
             </Box>
           </Collapse>

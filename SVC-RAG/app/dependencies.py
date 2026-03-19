@@ -1,4 +1,4 @@
-# Зависимости: БД, клиент RAG-MODELS, RagService, KbService
+# Зависимости: БД, клиент RAG-MODELS, RagService, KbService, ProjectRagService
 import logging
 from typing import Optional
 
@@ -10,9 +10,14 @@ from app.database.memory_rag_repository import (
     MemoryRagDocumentRepository,
     MemoryRagVectorRepository,
 )
+from app.database.project_rag_repository import (
+    ProjectRagDocumentRepository,
+    ProjectRagVectorRepository,
+)
 from app.services.rag_service import RagService
 from app.services.kb_service import KbService
 from app.services.memory_rag_service import MemoryRagService
+from app.services.project_rag_service import ProjectRagService
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +32,15 @@ _kb_service: Optional[KbService] = None
 _mem_doc_repo: Optional[MemoryRagDocumentRepository] = None
 _mem_vector_repo: Optional[MemoryRagVectorRepository] = None
 _memory_rag_service: Optional[MemoryRagService] = None
+_proj_doc_repo: Optional[ProjectRagDocumentRepository] = None
+_proj_vector_repo: Optional[ProjectRagVectorRepository] = None
+_project_rag_service: Optional[ProjectRagService] = None
 
 
 async def get_db():
     """Подключение к PostgreSQL (один раз при старте)."""
     global _pg, _doc_repo, _vector_repo, _kb_doc_repo, _kb_vector_repo
-    global _mem_doc_repo, _mem_vector_repo
+    global _mem_doc_repo, _mem_vector_repo, _proj_doc_repo, _proj_vector_repo
     if _pg is None:
         _pg = get_postgres_connection()
         ok = await _pg.connect()
@@ -46,12 +54,16 @@ async def get_db():
         _kb_vector_repo = KbVectorRepository(_pg, embedding_dim=dim)
         _mem_doc_repo = MemoryRagDocumentRepository(_pg)
         _mem_vector_repo = MemoryRagVectorRepository(_pg, embedding_dim=dim)
+        _proj_doc_repo = ProjectRagDocumentRepository(_pg)
+        _proj_vector_repo = ProjectRagVectorRepository(_pg, embedding_dim=dim)
         await _doc_repo.create_tables()
         await _vector_repo.create_tables()
         await _kb_doc_repo.create_tables()
         await _kb_vector_repo.create_tables()
         await _mem_doc_repo.create_tables()
         await _mem_vector_repo.create_tables()
+        await _proj_doc_repo.create_tables()
+        await _proj_vector_repo.create_tables()
     return _pg
 
 
@@ -87,3 +99,15 @@ async def get_memory_rag_service() -> MemoryRagService:
             _mem_doc_repo, _mem_vector_repo, _rag_client
         )
     return _memory_rag_service
+
+
+async def get_project_rag_service() -> ProjectRagService:
+    global _project_rag_service, _rag_client
+    if _project_rag_service is None:
+        await get_db()
+        if _rag_client is None:
+            _rag_client = RagModelsClient()
+        _project_rag_service = ProjectRagService(
+            _proj_doc_repo, _proj_vector_repo, _rag_client
+        )
+    return _project_rag_service

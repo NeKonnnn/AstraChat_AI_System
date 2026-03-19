@@ -50,6 +50,9 @@ class ConversationRepository:
             ("messages.content", "text")
         ])
         
+        # Индекс для быстрой фильтрации по project_id
+        await collection.create_index("project_id")
+        
         logger.info("Индексы для коллекции conversations созданы")
     
     async def create_conversation(self, conversation: Conversation) -> Optional[str]:
@@ -343,6 +346,75 @@ class ConversationRepository:
             
         except Exception as e:
             logger.error(f"Ошибка при установке TTL: {e}")
+            return False
+
+    # ─── Методы для работы с памятью проектов ─────────────────────────────────
+
+    async def get_conversations_by_project(
+        self,
+        project_id: str,
+        limit: int = 200,
+    ) -> List[Conversation]:
+        """Все диалоги конкретного проекта (project_id = given)."""
+        try:
+            collection = self._get_collection()
+            cursor = (
+                collection.find({"project_id": project_id})
+                .sort("updated_at", -1)
+                .limit(limit)
+            )
+            results = await cursor.to_list(length=limit)
+            conversations = []
+            for result in results:
+                result.pop("_id", None)
+                conversations.append(Conversation(**result))
+            return conversations
+        except Exception as e:
+            logger.error(f"Ошибка при получении диалогов проекта {project_id}: {e}")
+            return []
+
+    async def get_global_conversations(self, limit: int = 200) -> List[Conversation]:
+        """Все глобальные (не привязанные к проекту) диалоги."""
+        try:
+            collection = self._get_collection()
+            cursor = (
+                collection.find({"$or": [{"project_id": None}, {"project_id": {"$exists": False}}]})
+                .sort("updated_at", -1)
+                .limit(limit)
+            )
+            results = await cursor.to_list(length=limit)
+            conversations = []
+            for result in results:
+                result.pop("_id", None)
+                conversations.append(Conversation(**result))
+            return conversations
+        except Exception as e:
+            logger.error(f"Ошибка при получении глобальных диалогов: {e}")
+            return []
+
+    async def delete_conversations_by_project(self, project_id: str) -> int:
+        """Удаляет все диалоги проекта. Возвращает количество удалённых."""
+        try:
+            collection = self._get_collection()
+            result = await collection.delete_many({"project_id": project_id})
+            deleted = result.deleted_count
+            logger.info(f"Удалено {deleted} диалогов проекта {project_id}")
+            return deleted
+        except Exception as e:
+            logger.error(f"Ошибка при удалении диалогов проекта {project_id}: {e}")
+            return 0
+
+    async def set_conversation_project(self, conversation_id: str, project_id: Optional[str]) -> bool:
+        """Установить/сбросить привязку диалога к проекту."""
+        try:
+            collection = self._get_collection()
+            await collection.update_one(
+                {"conversation_id": conversation_id},
+                {"$set": {"project_id": project_id, "updated_at": datetime.utcnow()}},
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении project_id диалога {conversation_id}: {e}")
             return False
 
     async def remove_last_message(self, conversation_id: str, role: Optional[str] = None) -> bool:

@@ -267,6 +267,71 @@ class RagClient:
         ]
 
 
+    # ─── RAG проектов: project_rag_documents / project_rag_vectors ─────────────
+
+    async def project_rag_upload_document(
+        self,
+        file_bytes: bytes,
+        filename: str,
+        project_id: str,
+        minio_object: Optional[str] = None,
+        minio_bucket: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Загрузить документ в RAG-хранилище проекта."""
+        files = {"file": (filename, file_bytes, "application/octet-stream")}
+        data: Dict[str, Any] = {}
+        if minio_object:
+            data["minio_object"] = minio_object
+        if minio_bucket:
+            data["minio_bucket"] = minio_bucket
+        return await self._request(
+            "POST", f"/project-rag/projects/{project_id}/documents", files=files, data=data
+        )
+
+    async def project_rag_list_documents(self, project_id: str) -> List[Dict[str, Any]]:
+        """Список документов проекта."""
+        resp = await self._request("GET", f"/project-rag/projects/{project_id}/documents")
+        return resp if isinstance(resp, list) else []
+
+    async def project_rag_delete_document(self, project_id: str, document_id: int) -> Dict[str, Any]:
+        """Удалить один документ из RAG проекта."""
+        return await self._request(
+            "DELETE", f"/project-rag/projects/{project_id}/documents/{document_id}"
+        )
+
+    async def project_rag_delete_project(self, project_id: str) -> Dict[str, Any]:
+        """Удалить все RAG-данные проекта (при удалении проекта)."""
+        return await self._request("DELETE", f"/project-rag/projects/{project_id}")
+
+    async def project_rag_search(
+        self,
+        query: str,
+        project_id: str,
+        k: int = 8,
+        document_id: Optional[int] = None,
+        use_reranking: Optional[bool] = None,
+    ) -> List[Tuple[str, float, Optional[int], Optional[int]]]:
+        """Поиск по RAG-документам проекта."""
+        body: Dict[str, Any] = {"query": query, "k": k}
+        if document_id is not None:
+            body["document_id"] = document_id
+        if use_reranking is not None:
+            body["use_reranking"] = use_reranking
+        resp = await self._request(
+            "POST", f"/project-rag/projects/{project_id}/search", json=body
+        )
+        hits = resp.get("hits", [])
+        return [
+            (
+                h.get("content", ""),
+                float(h.get("score", 0.0)),
+                h.get("document_id"),
+                h.get("chunk_index"),
+            )
+            for h in hits
+        ]
+
+
 _rag_client_singleton: Optional[RagClient] = None
 
 
