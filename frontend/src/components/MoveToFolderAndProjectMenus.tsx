@@ -4,7 +4,7 @@ import {
   MenuItem,
   ListItemIcon,
   ListItemText,
-  Avatar,
+  Box,
 } from '@mui/material';
 import {
   FolderOutlined as FolderIcon,
@@ -12,7 +12,7 @@ import {
   ChatOutlined as ChatIcon,
 } from '@mui/icons-material';
 import type { Folder, Project } from '../contexts/AppContext';
-import { MENU_BORDER_RADIUS_PX, MENU_ICON_MIN_WIDTH, MENU_ICON_TO_TEXT_GAP_PX, MENU_ICON_FONT_SIZE_PX, MENU_MIN_WIDTH_PX } from '../constants/menuStyles';
+import { MENU_BORDER_RADIUS_PX, MENU_ICON_MIN_WIDTH, MENU_ICON_TO_TEXT_GAP_PX, MENU_ICON_FONT_SIZE_PX, MENU_MIN_WIDTH_PX, getProjectIconGlyphSx } from '../constants/menuStyles';
 
 // Включить логи подменю в консоль: в DevTools выполнить window.__SUBMENU_DEBUG__ = true и обновить страницу
 const SUBMENU_DEBUG = typeof window !== 'undefined' && (window as any).__SUBMENU_DEBUG__;
@@ -501,33 +501,45 @@ export function MoveToFolderAndProjectSubmenus(props: MoveToSubmenusProps) {
         {projects.map((project) => {
           const renderProjectIcon = () => {
             const iconColor = project.iconColor || '#9ca3af';
-            const outlineStyle = {
+            const glyphSx = getProjectIconGlyphSx(11, iconColor);
+            const iconWrapSx = {
               width: 20,
               height: 20,
-              bgcolor: 'transparent',
-              border: '1.5px solid',
-              borderColor: iconColor,
+              display: 'flex' as const,
+              alignItems: 'center',
+              justifyContent: 'center',
               color: iconColor,
             };
             if (project.iconType === 'emoji' && project.icon) {
               return (
-                <Avatar sx={{ ...outlineStyle, fontSize: 12 }}>
+                <Box
+                  sx={{
+                    width: 20,
+                    height: 20,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 12,
+                    lineHeight: 1,
+                    transform: 'translateY(-0.25px)',
+                  }}
+                >
                   {project.icon}
-                </Avatar>
+                </Box>
               );
             }
             if (project.iconType === 'icon' && project.icon) {
               const IconComponent = projectIconMap[project.icon] || FolderIcon;
               return (
-                <Avatar sx={outlineStyle}>
-                  <IconComponent sx={{ fontSize: 12 }} />
-                </Avatar>
+                <Box sx={iconWrapSx}>
+                  <IconComponent sx={{ ...glyphSx, color: 'currentColor' }} />
+                </Box>
               );
             }
             return (
-              <Avatar sx={outlineStyle}>
-                <FolderIcon sx={{ fontSize: 12 }} />
-              </Avatar>
+              <Box sx={iconWrapSx}>
+                <FolderIcon sx={{ ...glyphSx, color: 'currentColor' }} />
+              </Box>
             );
           };
 

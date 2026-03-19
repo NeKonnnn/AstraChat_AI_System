@@ -59,6 +59,7 @@ import {
   Email as MailIcon,
 } from '@mui/icons-material';
 import type { Project } from '../contexts/AppContext';
+import { getProjectIconGlyphSx } from '../constants/menuStyles';
 
 const iconOptions = [
   { name: 'folder', icon: FolderIcon },
@@ -187,33 +188,45 @@ export default function EditProjectModal({ open, onClose, project, onSave }: Edi
 
   const renderIcon = () => {
     const iconColor = selectedColor === '#ffffff' ? '#9ca3af' : selectedColor;
-    const outlineStyle = {
+    const glyphSx = getProjectIconGlyphSx(26, iconColor);
+    const iconWrapSx = {
       width: 48,
       height: 48,
-      bgcolor: 'transparent',
-      border: '1.5px solid',
-      borderColor: iconColor,
+      display: 'flex' as const,
+      alignItems: 'center',
+      justifyContent: 'center',
       color: iconColor,
     };
     if (iconType === 'emoji' && selectedEmoji) {
       return (
-        <Avatar sx={{ ...outlineStyle, fontSize: 24 }}>
+        <Box
+          sx={{
+            width: 48,
+            height: 48,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 28,
+            lineHeight: 1,
+            transform: 'translateY(-0.25px)',
+          }}
+        >
           {selectedEmoji}
-        </Avatar>
+        </Box>
       );
     }
     if (iconType === 'icon' && selectedIcon) {
       const IconComponent = iconOptions.find((opt) => opt.name === selectedIcon)?.icon || FolderIcon;
       return (
-        <Avatar sx={outlineStyle}>
-          <IconComponent />
-        </Avatar>
+        <Box sx={iconWrapSx}>
+          <IconComponent sx={{ ...glyphSx, color: 'currentColor' }} />
+        </Box>
       );
     }
     return (
-      <Avatar sx={outlineStyle}>
-        <MoneyIcon />
-      </Avatar>
+      <Box sx={iconWrapSx}>
+        <MoneyIcon sx={{ ...glyphSx, color: 'currentColor' }} />
+      </Box>
     );
   };
 

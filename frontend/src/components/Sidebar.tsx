@@ -80,7 +80,7 @@ import ArchiveModal from './ArchiveModal';
 import NewProjectModal from './NewProjectModal';
 import EditProjectModal from './EditProjectModal';
 import { useMoveToFolderAndProjectMenus, MoveToFolderAndProjectSubmenus } from './MoveToFolderAndProjectMenus';
-import { MENU_BORDER_RADIUS_PX, getMenuColors, MENU_ICON_MIN_WIDTH, MENU_ICON_TO_TEXT_GAP_PX, MENU_ICON_FONT_SIZE_PX, MENU_MIN_WIDTH_PX, SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX, SIDEBAR_PROJECT_AVATAR_SIZE } from '../constants/menuStyles';
+import { MENU_BORDER_RADIUS_PX, getMenuColors, MENU_ICON_MIN_WIDTH, MENU_ICON_TO_TEXT_GAP_PX, MENU_ICON_FONT_SIZE_PX, MENU_MIN_WIDTH_PX, SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX, SIDEBAR_PROJECT_AVATAR_SIZE, getProjectIconGlyphSx } from '../constants/menuStyles';
 import { getSidebarPanelBackground } from '../constants/sidebarPanelColor';
 
 // Задержки подменю «Справка» — как в MoveToFolderAndProjectMenus (убирает мигание)
@@ -1117,35 +1117,44 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
               {projects.map((project) => {
                 const renderProjectIcon = () => {
                   const sizePx = SIDEBAR_PROJECT_AVATAR_SIZE;
-                  const iconFontSizePx = sizePx - 4;
                   const iconColor = project.iconColor || '#9ca3af';
-                  const outlineStyle = {
+                  // Круг убран — глиф растягиваем примерно до «старого круга»
+                  const glyphPx = Math.max(14, Math.round(sizePx * 1.0));
+                  const glyphSx = getProjectIconGlyphSx(glyphPx, iconColor);
+                  const iconWrapSx = {
                     width: `${sizePx}px`,
                     height: `${sizePx}px`,
-                    bgcolor: 'transparent',
-                    border: '1.5px solid',
-                    borderColor: iconColor,
+                    display: 'flex' as const,
+                    alignItems: 'center',
+                    justifyContent: 'center',
                     color: iconColor,
                   };
                   if (project.iconType === 'emoji' && project.icon) {
                     return (
-                      <Avatar sx={{ ...outlineStyle, fontSize: `${iconFontSizePx}px` }}>
+                      <Box
+                        sx={{
+                          ...iconWrapSx,
+                          fontSize: `${glyphPx}px`,
+                          lineHeight: 1,
+                          transform: 'translateY(-0.25px)',
+                        }}
+                      >
                         {project.icon}
-                      </Avatar>
+                      </Box>
                     );
                   }
                   if (project.iconType === 'icon' && project.icon) {
                     const IconComponent = projectIconMap[project.icon] || FolderIcon;
                     return (
-                      <Avatar sx={outlineStyle}>
-                        <IconComponent sx={{ fontSize: `${iconFontSizePx}px` }} />
-                      </Avatar>
+                      <Box sx={iconWrapSx}>
+                        <IconComponent sx={{ ...glyphSx, fontSize: `${glyphPx}px`, color: 'currentColor' }} />
+                      </Box>
                     );
                   }
                   return (
-                    <Avatar sx={outlineStyle}>
-                      <FolderIcon sx={{ fontSize: `${iconFontSizePx}px` }} />
-                    </Avatar>
+                    <Box sx={iconWrapSx}>
+                      <FolderIcon sx={{ ...glyphSx, fontSize: `${glyphPx}px`, color: 'currentColor' }} />
+                    </Box>
                   );
                 };
 

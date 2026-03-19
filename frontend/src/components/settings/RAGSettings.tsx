@@ -11,11 +11,14 @@ import {
   Tooltip,
   Alert,
   Popover,
+  Button,
+  Divider,
 } from '@mui/material';
 import {
   Search as SearchIcon,
   HelpOutline as HelpOutlineIcon,
   ExpandMore as ExpandMoreIcon,
+  LibraryBooks as LibraryBooksIcon,
 } from '@mui/icons-material';
 import { useAppActions } from '../../contexts/AppContext';
 import { getApiUrl } from '../../config/api';
@@ -26,7 +29,7 @@ import {
   DROPDOWN_ITEM_SX,
   DROPDOWN_ITEM_HOVER_BG,
 } from '../../constants/menuStyles';
-import MemoryRagLibrarySection from './MemoryRagLibrarySection';
+import MemoryRagLibraryModal from '../MemoryRagLibraryModal';
 
 type RAGStrategy = 'auto' | 'reranking' | 'hierarchical' | 'hybrid' | 'standard';
 
@@ -36,6 +39,7 @@ export default function RAGSettings({}: RAGSettingsProps) {
   const [selectedStrategy, setSelectedStrategy] = useState<RAGStrategy>('auto');
   const [isLoading, setIsLoading] = useState(false);
   const [strategyPopoverAnchor, setStrategyPopoverAnchor] = useState<HTMLElement | null>(null);
+  const [memoryRagModalOpen, setMemoryRagModalOpen] = useState(false);
   const { showNotification } = useAppActions();
 
   useEffect(() => {
@@ -153,8 +157,6 @@ export default function RAGSettings({}: RAGSettingsProps) {
 
   return (
     <Box sx={{ p: 3 }}>
-      <MemoryRagLibrarySection variant="prominent" />
-
       <Card sx={{ mb: 3 }}>
         <CardContent>
           <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -183,6 +185,65 @@ export default function RAGSettings({}: RAGSettingsProps) {
           </Typography>
 
           <List sx={{ p: 0 }}>
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <ListItemText
+                primary={
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    Управление документами
+                    <Tooltip
+                      title="Загрузка PDF, Word, Excel, TXT в библиотеку памяти (MinIO + pgvector). Подключение поиска к ответам — в зоне ввода сообщения кнопкой «Подключить базу знаний»."
+                      arrow
+                    >
+                      <IconButton
+                        size="small"
+                        sx={{
+                          p: 0,
+                          ml: 0.5,
+                          opacity: 0.7,
+                          '&:hover': {
+                            opacity: 1,
+                            '& .MuiSvgIcon-root': {
+                              color: 'primary.main',
+                            },
+                          },
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        aria-label="Справка по библиотеке документов"
+                      >
+                        <HelpOutlineIcon fontSize="small" color="action" />
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
+                }
+                primaryTypographyProps={{
+                  variant: 'body1',
+                  fontWeight: 500,
+                }}
+              />
+              <Button
+                variant="outlined"
+                color="primary"
+                startIcon={<LibraryBooksIcon />}
+                onClick={() => setMemoryRagModalOpen(true)}
+                sx={{
+                  textTransform: 'none',
+                  minWidth: 180,
+                }}
+              >
+                Открыть базу данных
+              </Button>
+            </ListItem>
+
+            <Divider />
+
             <ListItem
               sx={{
                 px: 0,
@@ -292,6 +353,8 @@ export default function RAGSettings({}: RAGSettingsProps) {
           </Alert>
         </CardContent>
       </Card>
+
+      <MemoryRagLibraryModal open={memoryRagModalOpen} onClose={() => setMemoryRagModalOpen(false)} />
     </Box>
   );
 }

@@ -3,7 +3,6 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box,
   Typography,
-  Avatar,
   Card,
   CardContent,
   Button,
@@ -81,7 +80,7 @@ import { useSocket } from '../contexts/SocketContext';
 import VoiceChatDialog from '../components/VoiceChatDialog';
 import ChatInputBar from '../components/ChatInputBar';
 import { useTheme } from '@mui/material/styles';
-import { MENU_BORDER_RADIUS_PX } from '../constants/menuStyles';
+import { MENU_BORDER_RADIUS_PX, getProjectIconGlyphSx } from '../constants/menuStyles';
 import {
   isKnowledgeRagEnabled,
   setKnowledgeRagEnabled,
@@ -191,33 +190,58 @@ export default function ProjectPage() {
   const renderProjectIcon = () => {
     if (!project) return null;
     const iconColor = project.iconColor || '#9ca3af';
-    const outlineStyle = {
-      width: 32,
-      height: 32,
-      bgcolor: 'transparent',
-      border: '1.5px solid',
-      borderColor: iconColor,
-      color: iconColor,
-    };
+    const slotPx = 32; // раньше это был «круг»
+    const glyphPx = Math.round(slotPx * 0.9);
+    const glyphSx = getProjectIconGlyphSx(glyphPx, iconColor);
     if (project.iconType === 'emoji' && project.icon) {
       return (
-        <Avatar sx={{ ...outlineStyle, fontSize: 18 }}>
+        <Box
+          sx={{
+            width: slotPx,
+            height: slotPx,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: `${glyphPx}px`,
+            lineHeight: 1,
+            color: iconColor,
+            transform: 'translateY(-0.25px)',
+          }}
+        >
           {project.icon}
-        </Avatar>
+        </Box>
       );
     }
     if (project.iconType === 'icon' && project.icon) {
       const IconComponent = projectIconMap[project.icon] || FolderIcon;
       return (
-        <Avatar sx={outlineStyle}>
-          <IconComponent sx={{ fontSize: 18 }} />
-        </Avatar>
+        <Box
+          sx={{
+            width: slotPx,
+            height: slotPx,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: iconColor,
+          }}
+        >
+          <IconComponent sx={{ ...glyphSx, fontSize: `${glyphPx}px`, color: 'currentColor' }} />
+        </Box>
       );
     }
     return (
-      <Avatar sx={outlineStyle}>
-        <FolderIcon sx={{ fontSize: 18 }} />
-      </Avatar>
+      <Box
+        sx={{
+          width: slotPx,
+          height: slotPx,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: iconColor,
+        }}
+      >
+        <FolderIcon sx={{ ...glyphSx, fontSize: `${glyphPx}px`, color: 'currentColor' }} />
+      </Box>
     );
   };
 

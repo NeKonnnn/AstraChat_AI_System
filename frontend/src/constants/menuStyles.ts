@@ -31,6 +31,36 @@ export const SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX = 4;
 /** Размер аватарки-иконки проекта в сайдбаре, px. Минимальная ширина колонки иконок в списке = SIDEBAR_PROJECT_AVATAR_SIZE + 4. */
 export const SIDEBAR_PROJECT_AVATAR_SIZE = 18;
 
+/** Обводка круга вокруг иконки/эмодзи проекта (толще 1.5px — лучше видно на тёмном фоне). */
+export function getProjectAvatarOutlineBorder(sizePx: number): string {
+  return sizePx <= 22 ? '2.25px' : '2.75px';
+}
+
+export function getProjectAvatarOutlineBox(sizePx: number, iconColor: string): Record<string, string | number> {
+  const w = `${sizePx}px`;
+  return {
+    width: w,
+    height: w,
+    bgcolor: 'transparent',
+    border: `${getProjectAvatarOutlineBorder(sizePx)} solid`,
+    borderColor: iconColor,
+    color: iconColor,
+    boxSizing: 'border-box',
+  };
+}
+
+/** Визуально утолщает контур MUI-иконки (деньги, папка и т.д.) за счёт лёгкого ореола currentColor. */
+export function getProjectIconGlyphSx(fontSizePx: number, iconColor: string) {
+  // Слишком сильный «ореол» делает пиктограмму жирной и съедает детали.
+  // Делаем мягче: чуть меньше увеличение и меньше теней.
+  const bump = fontSizePx <= 14 ? 1.03 : 1.02;
+  const s = fontSizePx <= 14 ? 0.24 : 0.3;
+  return {
+    fontSize: `${Math.max(10, Math.round(fontSizePx * bump))}px`,
+    filter: `drop-shadow(0 0 ${s}px ${iconColor}) drop-shadow(${s}px 0 0 ${iconColor}) drop-shadow(-${s}px 0 0 ${iconColor})`,
+  };
+}
+
 /** Цвет выделения пункта меню при наведении (тёмная тема). Задаётся здесь и в theme.palette.action.hover. */
 export const MENU_ITEM_HOVER_DARK = 'rgba(255,255,255,0.1)';
 /** Цвет выделения пункта меню при наведении (светлая тема). */
