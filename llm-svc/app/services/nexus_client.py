@@ -13,8 +13,8 @@ class NexusClient:
         self.session = requests.Session()
         
         # Настройка аутентификации
-        if self.settings.login and self.settings.password:
-            self.session.auth = (self.settings.login, self.settings.password)
+        if self.settings.username and self.settings.password:
+            self.session.auth = (self.settings.username, self.settings.password)
         
         # Настройка SSL сертификата, если указан путь
         if self.settings.cert_path and os.path.exists(self.settings.cert_path):

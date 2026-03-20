@@ -7,7 +7,7 @@ import time
 import logging
 
 from app.models.schemas import ChatResponse, ChatChoice, Message, UsageInfo
-from app.utils import convert_to_dict_messages, convert_to_chat_completion_messages
+from app.utils import convert_to_dict_messages
 from app.core.config import settings
 from app.services.base_llm_handler import BaseLLMHandler
 
@@ -116,16 +116,7 @@ class LlamaHandler(BaseLLMHandler):
                 stream=stream
             )
 
-        try:
-            # Пробуем использовать формат словарей
-            return await self._run_in_executor(lambda: create_completion(convert_to_dict_messages))
-        except TypeError as e:
-            if "Expected type" in str(e) and "got 'list[dict" in str(e):
-                # Если возникает ошибка типа, пробуем использовать правильные типы сообщений
-                logger.info("Falling back to typed messages for chat completion")
-                return await self._run_in_executor(lambda: create_completion(convert_to_chat_completion_messages))
-            else:
-                raise e
+        return await self._run_in_executor(lambda: create_completion(convert_to_dict_messages))
 
     async def generate_response(self, messages: List[Message],
                                 temperature: Optional[float] = None,

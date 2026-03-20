@@ -147,7 +147,7 @@ class LoggingMiddleware(BaseHTTPMiddleware):
                 # Для ошибок или обычных JSON ответов
                 if status_code >= 400 or not self._contains_stream_data(json_obj):
                     pretty_json = json.dumps(json_obj, indent=2, ensure_ascii=False)
-                    logger.info(f"Request {request_id}: Response body (JSON):\n{pretty_json}")
+                    logger.info(f"Request {request_id}: Response body(JSON):\n{pretty_json}")
                 else:
                     # Это успешный JSON, но не потоковый - логируем как текст
                     logger.info(f"Request {request_id}: Response body: {decoded_body}")
@@ -177,3 +177,5 @@ class LoggingMiddleware(BaseHTTPMiddleware):
             response.background = BackgroundTask(combined_task)
         else:
             response.background = BackgroundTask(wrapper)
+
+
