@@ -165,3 +165,5 @@ class ModelLoadResponse(BaseModel):
     success: bool
     message: str
     model_name: Optional[str] = None
+
+ChatRequest = ChatCompletionRequest

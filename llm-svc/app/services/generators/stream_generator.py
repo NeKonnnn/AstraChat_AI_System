@@ -36,7 +36,7 @@ class StreamResponseGenerator(BaseResponseGenerator):
             params = self._prepare_generation_params(
                 messages, temperature, max_tokens, frequency_penalty, presence_penalty, tools
             )
-            async for chunk in self._completion_caller(session_id, params): # Убран ** так как в models_service передается словарь
+            async for chunk in self._completion_caller(session_id, params):
                 delta = chunk.get('choices', [{}])[0].get('delta', {})
                 content = delta.get('content', '')
                 if not content:
@@ -49,9 +49,8 @@ class StreamResponseGenerator(BaseResponseGenerator):
                     buffer += content
                     tool_call_detected = True
                     if '</tool_call>' in buffer:
-                        tool_calls = self.parse_tool_calls_from_buffer(buffer) # Исправлен вызов self
+                        tool_calls = self.parse_tool_calls_from_buffer(buffer)
                         if tool_calls:
-                            # Генерируем последовательность как OpenAI
                             async for tool_chunk in self._stream_tool_calls(response_id, tool_calls[0]):
                                 yield tool_chunk
                         buffer = ""
@@ -65,7 +64,8 @@ class StreamResponseGenerator(BaseResponseGenerator):
 
     async def _stream_tool_calls(self, response_id: str, tool_call: dict) -> AsyncGenerator[str, None]:
         """Строгая имитация OpenAI streaming для LibreChat"""
-        yield f"data: {json.dumps({
+        # Чанк 1: имя функции
+        chunk1 = json.dumps({
             'id': response_id,
             'object': 'chat.completion.chunk',
             'created': int(time.time()),
@@ -83,12 +83,15 @@ class StreamResponseGenerator(BaseResponseGenerator):
                 },
                 'finish_reason': None
             }]
-        }, ensure_ascii=False)}\n\n"
-        
+        }, ensure_ascii=False)
+        yield f"data: {chunk1}\n\n"
+
         args = tool_call['function']['arguments']
         mid = len(args) // 2
+
+        # Чанк 2: первая половина аргументов
         if mid > 0:
-            yield f"data: {json.dumps({
+            chunk2 = json.dumps({
                 'id': response_id,
                 'object': 'chat.completion.chunk',
                 'created': int(time.time()),
@@ -98,9 +101,11 @@ class StreamResponseGenerator(BaseResponseGenerator):
                     'delta': {'tool_calls': [{'index': 0, 'function': {'arguments': args[:mid]}}]},
                     'finish_reason': None
                 }]
-            }, ensure_ascii=False)}\n\n"
-        
-        yield f"data: {json.dumps({
+            }, ensure_ascii=False)
+            yield f"data: {chunk2}\n\n"
+
+        # Чанк 3: вторая половина аргументов + finish_reason
+        chunk3 = json.dumps({
             'id': response_id,
             'object': 'chat.completion.chunk',
             'created': int(time.time()),
@@ -110,19 +115,21 @@ class StreamResponseGenerator(BaseResponseGenerator):
                 'delta': {'tool_calls': [{'index': 0, 'function': {'arguments': args[mid:]}}]},
                 'finish_reason': 'tool_calls'
             }]
-        }, ensure_ascii=False)}\n\n"
+        }, ensure_ascii=False)
+        yield f"data: {chunk3}\n\n"
 
     def _create_chunk(self, response_id: str, content: str) -> str:
-        return f"data: {json.dumps({
+        data = json.dumps({
             'id': response_id,
             'object': 'chat.completion.chunk',
             'created': int(time.time()),
             'model': self.model_name,
             'choices': [{'index': 0, 'delta': {'content': content}, 'finish_reason': None}]
-        }, ensure_ascii=False)}\n\n"
+        }, ensure_ascii=False)
+        return f"data: {data}\n\n"
 
     def _create_error_chunk(self, response_id: str, error_message: str) -> str:
-        return f"data: {json.dumps({
+        data = json.dumps({
             'id': response_id,
             'object': 'chat.completion.chunk',
             'created': int(time.time()),
@@ -132,7 +139,8 @@ class StreamResponseGenerator(BaseResponseGenerator):
                 'delta': {'role': 'assistant', 'content': f'Error: {error_message}'},
                 'finish_reason': 'stop'
             }]
-        }, ensure_ascii=False)}\n\n"
+        }, ensure_ascii=False)
+        return f"data: {data}\n\n"
 
     def parse_tool_calls_from_buffer(self, buffer: str) -> List[dict]:
         tool_calls = []

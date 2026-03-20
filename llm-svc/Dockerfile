@@ -2,16 +2,11 @@ FROM ubuntu:22.04
 
 WORKDIR /app
 
-# Установка переменных окружения для неинтерактивной установки
-ENV DEBIAN_FRONTEND=noninteractive
-ENV TZ=UTC
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=UTC
 
-# Установка timezone без интерактивного промпта
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
-# Установка Python 3.11 и системных зависимостей
-# Примечание: Python 3.12 недоступен в deadsnakes для Ubuntu 22.04,
-# используем Python 3.11 который поддерживается
 RUN apt-get update && apt-get install -y \
     software-properties-common \
     tzdata \
@@ -40,49 +35,52 @@ RUN apt-get update && apt-get install -y \
     libsasl2-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Создание символической ссылки для python
 RUN ln -sf /usr/bin/python3.11 /usr/bin/python && \
     ln -sf /usr/bin/python3.11 /usr/bin/python3
 
-# Флаги для сборки llama.cpp (без Metal!)
+# mcpu=native убран — Docker не знает архитектуру хоста при сборке
 ENV CMAKE_ARGS="-DGGML_METAL=OFF -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS" \
-    CFLAGS="-pthread -mcpu=native" \
-    CXXFLAGS="-pthread -mcpu=native"
+    CFLAGS="-pthread" \
+    CXXFLAGS="-pthread"
 
-# Установка Python зависимостей
+RUN pip install --upgrade pip
+
+# Шаг 1: PyTorch CPU
+RUN pip install --no-cache-dir \
+    torch==2.1.2 \
+    torchaudio==2.1.2
+
+# Шаг 2: llama-cpp-python — готовый CPU wheel, не компилируем из исходников
+RUN pip install --no-cache-dir \
+    llama-cpp-python \
+    --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+
+# Шаг 3: остальные зависимости
 COPY requirements.txt .
-RUN pip install --upgrade pip && \
-    pip install --no-cache-dir --prefer-binary -r requirements.txt
+RUN pip install --no-cache-dir --prefer-binary \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --trusted-host pypi.tuna.tsinghua.edu.cn \
+    -r requirements.txt
 
-# Переменные окружения
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    OMP_NUM_THREADS=8 \
+    OPENBLAS_NUM_THREADS=8 \
+    MKL_NUM_THREADS=8 \
+    VECLIB_MAXIMUM_THREADS=8 \
+    NUMEXPR_NUM_THREADS=8
 
-# Настройка переменных окружения для многопоточности
-
-ENV OMP_NUM_THREADS=8
-ENV OPENBLAS_NUM_THREADS=8
-ENV MKL_NUM_THREADS=8
-ENV VECLIB_MAXIMUM_THREADS=8
-ENV NUMEXPR_NUM_THREADS=8
-
-# Копирование исходного кода и конфигурации
 COPY app/ ./app/
 COPY config/ ./config/
 
-# Создание директории для моделей
 RUN mkdir -p /app/models
 
-# Создание непривилегированного пользователя
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
-
-# Установка прав доступа к папке моделей
 RUN chmod -R 755 /app/models
 
 USER appuser
 
 EXPOSE 8000
 
-# Запускаем uvicorn с параметрами из конфига (app.main:app читает settings)
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

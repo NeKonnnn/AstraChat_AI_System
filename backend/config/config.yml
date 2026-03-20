@@ -83,7 +83,7 @@ mongodb:
 postgresql:
   host: "postgresql"
   port: 5432
-  database: "memoai"
+  database: "astrachat"
   user: "admin"
   password: "password"
   embedding_dim: 384

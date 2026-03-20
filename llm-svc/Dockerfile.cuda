@@ -1,14 +1,16 @@
-# Сборка llm-svc с поддержкой GPU (CUDA) для llama.cpp.
-# Использование: docker compose build --build-arg LLM_SVC_DOCKERFILE=Dockerfile.cuda llm-svc
+# Сборка llm-service с поддержкой GPU (CUDA) для llama.cpp + vllm.
+# Использование: docker compose build llm-service  (если в compose указан этот файл)
 # Требуется: NVIDIA GPU + NVIDIA Container Toolkit (nvidia-docker2).
 
 ARG CUDA_VERSION=12.2
-FROM nvidia/cuda:${CUDA_VERSION}.0-runtime-ubuntu22.04
+FROM nvidia/cuda:${CUDA_VERSION}.0-devel-ubuntu22.04
+
+# devel вместо runtime — нужен nvcc для сборки vllm и llama.cpp если потребуется
 
 WORKDIR /app
 
-ENV DEBIAN_FRONTEND=noninteractive
-ENV TZ=UTC
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=UTC
 
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
@@ -43,15 +45,27 @@ RUN apt-get update && apt-get install -y \
 RUN ln -sf /usr/bin/python3.11 /usr/bin/python && \
     ln -sf /usr/bin/python3.11 /usr/bin/python3
 
-# Сначала ставим все зависимости (в т.ч. llama-cpp-python по умолчанию — CPU)
-COPY requirements.txt .
 ENV PIP_NO_CACHE_DIR=1
-RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
 
-# Затем принудительно ставим llama-cpp-python с CUDA 12.2 (перезаписывает CPU-сборку)
-RUN pip install --no-cache-dir --force-reinstall --no-deps "llama-cpp-python" \
-    --extra-index-url "https://abetlen.github.io/llama-cpp-python/whl/cu122"
+RUN pip install --upgrade pip
+
+# Шаг 1: PyTorch с CUDA 12.1 (cu121 совместим с CUDA 12.2)
+# cu122 пока нет в официальном индексе PyTorch, используем cu121
+RUN pip install --no-cache-dir \
+    torch==2.1.2 \
+    torchaudio==2.1.2
+
+# Шаг 2: vllm — ставим после torch, он подхватит уже установленный torch
+RUN pip install --no-cache-dir vllm>=0.6.0
+
+# Шаг 3: llama-cpp-python с CUDA 12.2 wheels
+RUN pip install --no-cache-dir \
+    llama-cpp-python \
+    --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu122
+
+# Шаг 4: остальные зависимости
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefer-binary -r requirements.txt
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -60,10 +74,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 COPY app/ ./app/
 COPY config/ ./config/
+
 RUN mkdir -p /app/models
+
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 RUN chmod -R 755 /app/models
 
 USER appuser
+
 EXPOSE 8000
+
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -50,7 +50,7 @@ RUN ln -sf /usr/bin/python3.11 /usr/bin/python && \
 
 # Флаги для сборки 
 ENV CMAKE_ARGS="-DGGML_METAL=OFF -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS" \
-    CFLAGS="-pthread -mcpu=native" \
+    CFLAGS="-pthread" \
     CXXFLAGS="-pthread -mcpu=native"
 
 # Установка Python зависимостей 
