@@ -43,21 +43,21 @@ ENV CMAKE_ARGS="-DGGML_METAL=OFF -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS" \
     CFLAGS="-pthread" \
     CXXFLAGS="-pthread"
 
-RUN pip install --upgrade pip
+RUN python3.11 -m pip install --upgrade pip
 
 # Шаг 1: PyTorch CPU
-RUN pip install --no-cache-dir \
+RUN python3.11 -m pip install --no-cache-dir --timeout 120 --retries 5 \
     torch==2.1.2 \
     torchaudio==2.1.2
 
 # Шаг 2: llama-cpp-python — готовый CPU wheel, не компилируем из исходников
-RUN pip install --no-cache-dir \
+RUN python3.11 -m pip install --no-cache-dir --timeout 120 --retries 5 \
     llama-cpp-python \
     --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
 
 # Шаг 3: остальные зависимости
 COPY requirements.txt .
-RUN pip install --no-cache-dir --prefer-binary \
+RUN python3.11 -m pip install --no-cache-dir --prefer-binary --timeout 120 --retries 5 \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
     --trusted-host pypi.tuna.tsinghua.edu.cn \
     -r requirements.txt

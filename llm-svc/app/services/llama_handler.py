@@ -6,7 +6,7 @@ import asyncio
 import time
 import logging
 
-from app.models.schemas import ChatResponse, ChatChoice, Message, UsageInfo
+from app.models.schemas import ChatResponse, ChatChoice, Message, AssistantMessage, UsageInfo
 from app.utils import convert_to_dict_messages
 from app.core.config import settings
 from app.services.base_llm_handler import BaseLLMHandler
@@ -181,7 +181,7 @@ class LlamaHandler(BaseLLMHandler):
             choices=[
                 ChatChoice(
                     index=0,
-                    message=Message(
+                    message=AssistantMessage(
                         role=message["role"],
                         content=message["content"]
                     ),
@@ -202,6 +202,10 @@ class LlamaHandler(BaseLLMHandler):
         self.model = None
         self.is_initialized = False
         logger.info("Model resources cleaned up")
+
+    async def load_model(self, model_name: str) -> bool:
+        """Алиас для совместимости с эндпоинтом /models/load."""
+        return await self.load_model_by_name(model_name)
 
     async def load_model_by_name(self, model_name: str) -> bool:
         """

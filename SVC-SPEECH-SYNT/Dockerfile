@@ -50,8 +50,8 @@ ENV CMAKE_ARGS="-DGGML_METAL=OFF -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS" \
 
 # Установка Python зависимостей
 COPY requirements.txt .
-RUN pip install --upgrade pip && \
-    pip install --no-cache-dir --prefer-binary -r requirements.txt
+RUN python3.11 -m pip install --upgrade pip && \
+    python3.11 -m pip install --no-cache-dir --prefer-binary --timeout 120 --retries 5 -r requirements.txt
 
 # Переменные окружения
 ENV PYTHONDONTWRITEBYTECODE=1 \

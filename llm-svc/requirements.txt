@@ -4,6 +4,7 @@ starlette==0.46.2
 httpx==0.28.1
 uvicorn[standard]==0.35.0
 pydantic==2.11.7
+pydantic-settings>=2.0.0
 python-dotenv==1.0.0
 requests==2.32.4
 tqdm==4.67.1

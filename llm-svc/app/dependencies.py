@@ -7,6 +7,7 @@ async def get_llama_service() -> BaseLLMHandler:
     backend = settings.model.backend.lower()
     if backend == "vllm":
         from app.llm_dependencies import get_llm_handler
+        
         return await get_llm_handler()
     else:
         from app.services.models_service import LlamaService
