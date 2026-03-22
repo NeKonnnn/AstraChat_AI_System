@@ -7,9 +7,10 @@ python-dotenv>=1.0.0
 pyyaml>=6.0.2
 
 # Embedding and Reranker (sentence-transformers)
-sentence-transformers>=3.0.0
+# <3.3.0 — работает с torch 2.2.x; после пересборки base-ml на torch 2.4+ можно снять ограничение
+sentence-transformers>=3.0.0,<3.3.0
 
-# PyTorch
+# PyTorch (версия приходит из astrachat-base-ml, здесь только для локального запуска)
 torch>=2.0.0
 
 # Scientific

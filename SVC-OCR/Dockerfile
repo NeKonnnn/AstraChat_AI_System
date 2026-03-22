@@ -1,79 +1,27 @@
-FROM ubuntu:22.04
+FROM astrachat-base-ml:latest
 
 WORKDIR /app
 
-# Установка переменных окружения 
-ENV DEBIAN_FRONTEND=noninteractive
-ENV TZ=UTC
-
-# Установка timezone без промптов 
-RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
-
-# Установка Python 3.11 и системных зависимостей 
-# Добавлены libgl1 и libglib2.0-0 для работы OpenCV/Pillow, которые нужны Surya
-# Добавлены libldap2-dev и libsasl2-dev для сборки python-ldap
-RUN apt-get update && apt-get install -y \
-    software-properties-common \
-    tzdata \
-    && add-apt-repository -y ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y \
-    python3.11 \
-    python3.11-dev \
-    python3.11-distutils \
-    python3-pip \
-    build-essential \
-    cmake \
-    gcc \
-    g++ \
-    curl \
-    libopenblas-dev \
-    git \
-    pkg-config \
-    ffmpeg \
-    wget \
-    unzip \
-    libsndfile1 \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    libldap2-dev \
-    libsasl2-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Создание символической ссылки для python 
-RUN ln -sf /usr/bin/python3.11 /usr/bin/python && \
-    ln -sf /usr/bin/python3.11 /usr/bin/python3
-
-# Флаги сборки 
-ENV CMAKE_ARGS="-DGGML_METAL=OFF -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS" \
-    CFLAGS="-pthread -mcpu=native" \
-    CXXFLAGS="-pthread -mcpu=native"
-
-# Установка Python зависимостей
+# torchvision нужен только OCR (Surya). Torch уже в базовом образе, pip пропустит его.
 COPY requirements.txt .
-RUN python3.11 -m pip install --upgrade pip && \
-    python3.11 -m pip install --no-cache-dir --prefer-binary --timeout 120 --retries 5 -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3.11 -m pip install --prefer-binary --timeout 300 --retries 10 -r requirements.txt
 
-# Переменные окружения 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    OMP_NUM_THREADS=8 \
+    OPENBLAS_NUM_THREADS=8 \
+    MKL_NUM_THREADS=8
 
-# Копирование исходного кода и конфигурации
 COPY app/ ./app/
 COPY config/ ./config/
 
-# Создание директории для моделей
-RUN mkdir -p /app/models/surya
-
-# Создание непривилегированного пользователя 
-RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
-
-# Установка прав доступа
-RUN chmod -R 755 /app/models
+RUN mkdir -p /app/models/surya && \
+    chown -R appuser:appuser /app && \
+    chmod -R 755 /app/models
 
 USER appuser
 
 EXPOSE 8000
 
-# Запуск (контейнер сам подхватит настройки из .env если запустить с --env-file)
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,4 +1,4 @@
-# GPB-CORSUR-SVC-SPEACH-RECG/app/api/__init__.py
+# SVC-SPEECH-RECG/app/api/__init__.py
 from fastapi import APIRouter
 from .endpoints import transcription, whisperx
 

@@ -59,7 +59,7 @@ except Exception as e:
 
 # -- voice
 try:
-    from backend.voice import speak_text, recognize_speech, recognize_speech_from_file, check_vosk_model
+    from backend.transcription.voice import speak_text, recognize_speech, recognize_speech_from_file, check_vosk_model
     logger.info("voice импортирован успешно")
 except Exception as e:
     logger.error(f"Ошибка импорта voice: {e}")
@@ -88,7 +88,7 @@ except Exception as e:
 
 # -- Transcriber
 try:
-    from backend.universal_transcriber import UniversalTranscriber
+    from backend.transcription.universal_transcriber import UniversalTranscriber
     transcriber = UniversalTranscriber(engine="whisperx")
     logger.info("UniversalTranscriber инициализирован")
 except Exception as e:
