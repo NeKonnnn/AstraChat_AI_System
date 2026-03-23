@@ -11,7 +11,12 @@ except ImportError:
     VideoFileClip = None
     MOVIEPY_AVAILABLE = False
 import numpy as np
-import sounddevice as sd
+try:
+    import sounddevice as sd
+    SOUNDDEVICE_AVAILABLE = True
+except Exception:
+    sd = None
+    SOUNDDEVICE_AVAILABLE = False
 import time
 import requests
 import zipfile

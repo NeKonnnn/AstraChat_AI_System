@@ -43,8 +43,18 @@ except Exception as e:
     MOVIEPY_AVAILABLE = False
     print(f"Неожиданная ошибка при импорте MoviePy: {e}")
 import numpy as np
-import sounddevice as sd
-import soundfile as sf
+try:
+    import sounddevice as sd
+    SOUNDDEVICE_AVAILABLE = True
+except Exception:
+    sd = None
+    SOUNDDEVICE_AVAILABLE = False
+try:
+    import soundfile as sf
+    SOUNDFILE_AVAILABLE = True
+except Exception:
+    sf = None
+    SOUNDFILE_AVAILABLE = False
 import time
 import requests
 import zipfile
@@ -940,17 +950,14 @@ class Transcriber:
                 # Запускаем команду
                 subprocess.run(command, check=True)
             else:
-                # Используем sounddevice для записи и сохранения потока (fallback)
+                if not SOUNDDEVICE_AVAILABLE:
+                    raise RuntimeError("sounddevice недоступен (нет PortAudio или пакет не установлен)")
                 print("Запись аудио с микрофона на 10 секунд...")
-                
-                # Запись аудио с микрофона
-                myrecording = sd.rec(int(10 * self.sample_rate), 
+                myrecording = sd.rec(int(10 * self.sample_rate),
                                    samplerate=self.sample_rate,
                                    channels=1,
                                    dtype='int16')
-                sd.wait()  # Ожидаем окончания записи
-                
-                # Сохраняем запись в wav файл
+                sd.wait()
                 sf.write(temp_audio_file, myrecording, self.sample_rate)
                 
                 print(f"Запись сохранена в {temp_audio_file}")
@@ -1049,21 +1056,16 @@ class Transcriber:
     def record_microphone(self, duration=10):
         """Запись аудио с микрофона и транскрибация"""
         try:
+            if not SOUNDDEVICE_AVAILABLE:
+                raise RuntimeError("sounddevice недоступен (нет PortAudio или пакет не установлен)")
             print(f"Запись аудио с микрофона на {duration} секунд...")
-            
-            # Убедимся, что временная директория существует
             if not os.path.exists(self.temp_dir):
                 os.makedirs(self.temp_dir, exist_ok=True)
-                
             temp_audio_file = os.path.join(self.temp_dir, "mic_recording.wav")
-            
-            # Запись аудио с микрофона
-            myrecording = sd.rec(int(duration * self.sample_rate), 
+            myrecording = sd.rec(int(duration * self.sample_rate),
                                samplerate=self.sample_rate,
                                channels=1,
                                dtype='int16')
-            
-            # Ожидаем окончания записи
             sd.wait()
             
             # Сохраняем запись в wav файл
