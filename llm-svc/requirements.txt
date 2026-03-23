@@ -1,4 +1,4 @@
-# ── Web framework 
+# -- Web framework 
 fastapi==0.116.0
 starlette==0.46.2
 httpx==0.28.1
@@ -12,12 +12,12 @@ pyyaml==6.0.2
 anyio==4.10.0
 python-multipart==0.0.6
 
-# ── Auth ─
+# -- Auth
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 python-ldap==3.4.4
 
-# ── Audio / STT 
+# -- Audio / STT 
 numpy>=1.24.3,<2.0.0
 scipy>=1.10.0
 pydub>=0.25.1
@@ -26,11 +26,11 @@ vosk==0.3.45
 whisperx>=3.1.1
 pyannote.audio>=3.1.1
 
-# ── Tests 
+# -- Tests 
 pytest==8.4.1
 pytest-asyncio==1.1.0
 
 # Ставятся отдельно в Dockerfile:
-# torch, torchaudio  — через pytorch.org index
-# llama-cpp-python   — через abetlen.github.io index
-# vllm               — только в Dockerfile.cuda, требует CUDA
+# torch, torchaudio  - через pytorch.org index
+# llama-cpp-python   - через abetlen.github.io index
+# vllm               - только в Dockerfile.cuda, требует CUDA

@@ -4,10 +4,13 @@ WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+    PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
 
 COPY requirements.txt .
-RUN pip install --upgrade pip && pip install --no-cache-dir --timeout 120 --retries 5 -r requirements.txt
+RUN pip install --upgrade pip
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --timeout 300 --retries 10 -r requirements.txt
 
 COPY app/ ./app/
 COPY config/ ./config/

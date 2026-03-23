@@ -93,8 +93,8 @@ app.add_middleware(
 )
 
 # -- Socket.IO
-from backend.socketio_instance import sio, socket_app
-from backend.socket_handlers import register_handlers
+from backend.realtime import sio, socket_app
+from backend.realtime import register_handlers
 
 register_handlers(sio)
 app.mount("/socket.io", socket_app)

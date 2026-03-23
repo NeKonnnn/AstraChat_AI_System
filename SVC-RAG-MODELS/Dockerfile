@@ -1,42 +1,19 @@
-FROM ubuntu:22.04
+FROM astrachat-base-ml:latest
 
 WORKDIR /app
 
-ENV DEBIAN_FRONTEND=noninteractive
-ENV TZ=UTC
-
-RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
-
-RUN apt-get update && apt-get install -y \
-    software-properties-common \
-    tzdata \
-    && add-apt-repository -y ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y \
-    python3.11 \
-    python3.11-dev \
-    python3.11-distutils \
-    python3-pip \
-    build-essential \
-    curl \
-    git \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN ln -sf /usr/bin/python3.11 /usr/bin/python && \
-    ln -sf /usr/bin/python3.11 /usr/bin/python3
+COPY requirements.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3.11 -m pip install --prefer-binary --timeout 300 --retries 10 -r requirements.txt
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
-
-COPY requirements.txt .
-RUN python3.11 -m pip install --upgrade pip && \
-    python3.11 -m pip install --no-cache-dir --timeout 120 --retries 5 -r requirements.txt
+    PYTHONUNBUFFERED=1
 
 COPY app/ ./app/
 COPY config/ ./config/
 
-RUN mkdir -p /app/models/rag
-RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+RUN mkdir -p /app/models/rag && \
+    chown -R appuser:appuser /app
 
 USER appuser
 

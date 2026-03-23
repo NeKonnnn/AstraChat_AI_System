@@ -2,17 +2,17 @@
 
 # Экспорт основных классов для упрощения импорта
 try:
-    from backend.universal_transcriber import UniversalTranscriber
+    from backend.transcription.universal_transcriber import UniversalTranscriber
 except ImportError:
     UniversalTranscriber = None
 
 try:
-    from backend.whisperx_transcriber import WhisperXTranscriber
+    from backend.transcription.whisperx_transcriber import WhisperXTranscriber
 except ImportError:
     WhisperXTranscriber = None
 
 try:
-    from backend.transcriber import Transcriber
+    from backend.transcription.transcriber import Transcriber
 except ImportError:
     Transcriber = None
 
@@ -22,7 +22,7 @@ except ImportError:
     DocumentProcessor = None
 
 try:
-    from backend.voice import *
+    from backend.transcription.voice import *
 except ImportError:
     pass
 
@@ -38,7 +38,7 @@ except ImportError:
 
 __all__ = [
     'UniversalTranscriber',
-    'WhisperXTranscriber', 
+    'WhisperXTranscriber',
     'Transcriber',
     'DocumentProcessor'
 ]

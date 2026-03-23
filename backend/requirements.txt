@@ -46,12 +46,12 @@ faiss-cpu>=1.8.0
 sentence-transformers>=3.0.0
 rank-bm25>=0.2.2
 
-# LLM интеграция
-llama-cpp-python==0.3.16
+# LLM интеграция (в Docker — только через llm-svc, llama-cpp-python не нужен)
+# llama-cpp-python==0.3.16  # только для локального запуска вне Docker
 
-# Аудио (для клиентской части)
-sounddevice>=0.4.6
-librosa>=0.10.0
+# Аудио (только для локального запуска, не нужны в Docker-контейнере бэкенда)
+# sounddevice>=0.4.6
+# librosa>=0.10.0
 
 # Базы данных
 # MongoDB

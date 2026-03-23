@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 
 from backend.app_state import ask_agent, rag_client, minio_client, settings
 from backend.schemas import DocumentQueryRequest
-from backend.socket_helpers import _is_structure_query
+from backend.realtime.helpers import _is_structure_query
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 logger = logging.getLogger(__name__)

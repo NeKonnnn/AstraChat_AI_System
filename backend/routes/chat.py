@@ -19,7 +19,7 @@ from backend.app_state import (
     get_current_model_path,
 )
 from backend.schemas import ChatMessage
-from backend.socket_helpers import _is_structure_query, _terminal_chat_inference_banner
+from backend.realtime.helpers import _is_structure_query, _terminal_chat_inference_banner
 
 router = APIRouter(tags=["chat"])
 
