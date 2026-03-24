@@ -13,7 +13,7 @@ interface SocketContextType {
   socket: Socket | null;
   isConnected: boolean;
   isConnecting: boolean;
-  sendMessage: (message: string, chatId: string, streaming?: boolean) => void;
+  sendMessage: (message: string, chatId: string, streaming?: boolean, overrideProjectId?: string | null) => void;
   regenerateResponse: (userMessage: string, assistantMessageId: string, chatId: string, alternativeResponses: string[], currentIndex: number, streaming?: boolean) => void;
   stopGeneration: () => void;
   reconnect: () => void;
@@ -28,7 +28,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
 
-  const { addMessage, updateMessage, setLoading, showNotification, getCurrentChat, getChatById } = useAppActions();
+  const { addMessage, updateMessage, setLoading, showNotification, getCurrentChat, getChatById, getProjectById } = useAppActions();
   const currentMessageRef = useRef<string | null>(null);
   const currentChatIdRef = useRef<string | null>(null);
   
@@ -634,7 +634,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const sendMessage = (message: string, chatId: string, streaming: boolean = true) => {
+  const sendMessage = (message: string, chatId: string, streaming: boolean = true, overrideProjectId?: string | null) => {
     if (!socket || !isConnected) {
       showNotification('error', 'Нет соединения с сервером');
       return;
@@ -668,6 +668,12 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     const parsedAgentId = rawAgentId ? parseInt(rawAgentId, 10) : NaN;
     const agentIdForChat = Number.isFinite(parsedAgentId) ? parsedAgentId : null;
 
+    // Получаем данные проекта, к которому привязан чат.
+    // overrideProjectId используется когда чат только что создан и state ещё не обновился.
+    const chatForProject = getChatById(chatId);
+    const projectId = overrideProjectId !== undefined ? overrideProjectId : (chatForProject?.projectId || null);
+    const project = projectId ? getProjectById(projectId) : null;
+
     // Отправляем сообщение через Socket.IO
     const messageData = {
       message,
@@ -679,6 +685,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       use_memory_library_rag: useMemoryLibraryRag,
       /** Бэкенд подставит модель и model_settings из карточки агента (конструктор) */
       agent_id: agentIdForChat,
+      project_id: projectId,
+      project_memory: project?.memory || null,
+      project_instructions: project?.instructions || null,
     };
 
     socket!.emit('chat_message', messageData);

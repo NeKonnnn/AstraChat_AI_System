@@ -30,6 +30,20 @@ from backend.realtime.helpers import (
 logger = logging.getLogger(__name__)
 
 
+async def _get_conversation_project_id(conversation_id: str) -> "Optional[str]":
+    """Возвращает project_id диалога из MongoDB, или None если диалог не привязан к проекту."""
+    if not conversation_id:
+        return None
+    try:
+        from backend.database.init_db import get_conversation_repository
+        repo = get_conversation_repository()
+        conv = await repo.get_conversation(conversation_id)
+        return conv.project_id if conv else None
+    except Exception as e:
+        logger.debug(f"_get_conversation_project_id({conversation_id}): {e}")
+        return None
+
+
 def register_handlers(sio):
     """Регистрирует все Socket.IO обработчики на переданный sio-сервер"""
 
@@ -103,12 +117,40 @@ def register_handlers(sio):
                 import backend.database.memory_service as mem_mod
                 mem_mod.current_conversation_id = conversation_id
 
-            history = await get_recent_dialog_history(
-                max_entries=state.memory_max_messages, conversation_id=conversation_id
-            )
+            # Получаем project_id из payload (фронтенд знает это немедленно),
+            # если не пришёл — fallback на поиск в MongoDB
+            project_id = data.get("project_id") or None
+            if project_id:
+                logger.debug(f"[chat_message] project_id из payload: {project_id}")
+            else:
+                project_id = await _get_conversation_project_id(conversation_id)
+                if project_id:
+                    logger.debug(f"[chat_message] project_id из MongoDB: {project_id}")
 
+            project_memory = data.get("project_memory") or "default"       # 'default' | 'project-only'
+            project_instructions = data.get("project_instructions") or ""  # строка инструкций проекта
+
+            # История: project-only — только диалоги внутри проекта, иначе — текущий диалог
+            if project_id and project_memory == "project-only":
+                from backend.database.memory_service import get_project_memory_history
+                history = await get_project_memory_history(
+                    project_id, max_entries=state.memory_max_messages
+                )
+                logger.debug(f"[chat_message] project-only история: {len(history)} сообщений из проекта {project_id}")
+            else:
+                history = await get_recent_dialog_history(
+                    max_entries=state.memory_max_messages, conversation_id=conversation_id
+                )
+
+            # Сохраняем сообщение пользователя (с привязкой к проекту, если нужно)
             try:
-                await save_dialog_entry("user", user_message, None, user_message_id, conversation_id)
+                if project_id:
+                    from backend.database.memory_service import save_dialog_entry_to_project
+                    await save_dialog_entry_to_project(
+                        "user", user_message, project_id, conversation_id, user_message_id
+                    )
+                else:
+                    await save_dialog_entry("user", user_message, None, user_message_id, conversation_id)
             except RuntimeError as e:
                 if "MongoDB" in str(e):
                     await sio.emit("chat_error", {"error": "MongoDB недоступен."}, room=sid)
@@ -140,6 +182,8 @@ def register_handlers(sio):
                     sio, sid, data, user_message, streaming, conversation_id,
                     use_kb_rag, use_memory_library_rag, loop,
                     use_agent_scoped_kb, agent_kb_doc_ids,
+                    project_id=project_id,
+                    project_instructions=project_instructions,
                 )
                 return
 
@@ -149,6 +193,8 @@ def register_handlers(sio):
                     sio, sid, data, user_message, streaming, conversation_id,
                     history, use_kb_rag, use_memory_library_rag, orchestrator,
                     use_agent_scoped_kb, agent_kb_doc_ids,
+                    project_id=project_id,
+                    project_instructions=project_instructions,
                 )
                 return
 
@@ -158,6 +204,8 @@ def register_handlers(sio):
                 history, use_kb_rag, use_memory_library_rag,
                 agent_profile, sync_stream_cb, loop,
                 use_agent_scoped_kb, agent_kb_doc_ids,
+                project_id=project_id,
+                project_instructions=project_instructions,
             )
 
         except Exception as e:
@@ -177,6 +225,8 @@ async def _handle_multi_llm(
     use_kb_rag, use_memory_library_rag, loop,
     use_agent_scoped_kb=False,
     agent_kb_doc_ids=None,
+    project_id=None,
+    project_instructions=None,
 ):
     orchestrator = get_agent_orchestrator()
     multi_llm_models = orchestrator.get_multi_llm_models()
@@ -192,8 +242,30 @@ async def _handle_multi_llm(
 
     final_user_message = user_message
 
-    # RAG контекст
-    if rag_client:
+    # RAG из документов проекта (приоритет — специфичен для текущего проекта)
+    if rag_client and project_id:
+        try:
+            proj_hits = await rag_client.project_rag_search(user_message, project_id=project_id, k=8)
+            if proj_hits:
+                parts, total = [], 0
+                for i, (content, score, doc_id, chunk_idx) in enumerate(proj_hits, 1):
+                    frag = f"Фрагмент {i} (document_id={doc_id}, чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
+                    if total + len(frag) > 12000:
+                        frag = frag[:max(0, 12000 - total - 80)] + "\n... [обрезано]\n"
+                        parts.append(frag)
+                        break
+                    parts.append(frag)
+                    total += len(frag)
+                final_user_message = (
+                    f"Документы проекта (RAG):\n{chr(10).join(parts)}\n"
+                    f"Вопрос: {user_message}"
+                )
+                logger.info(f"[multi-llm project_rag] {len(proj_hits)} фрагментов, project={project_id}")
+        except Exception as e:
+            logger.error(f"multi-llm project RAG error: {e}")
+
+    # Глобальный RAG контекст (если нет контекста из проекта)
+    if rag_client and final_user_message == user_message:
         try:
             hits = await rag_client.search(user_message, k=8, strategy=state.current_rag_strategy)
             if hits:
@@ -250,6 +322,8 @@ async def _handle_multi_llm(
         except Exception as e:
             logger.error(f"multi-llm memory_rag_search: {e}")
 
+    eff_system_prompt = project_instructions.strip() if project_instructions else None
+
     async def _gen_one(model_name: str):
         try:
             await sio.emit("multi_llm_start", {"model": model_name, "models": multi_llm_models}, room=sid)
@@ -273,7 +347,11 @@ async def _handle_multi_llm(
             with concurrent.futures.ThreadPoolExecutor() as ex:
                 resp = await asyncio.get_event_loop().run_in_executor(
                     ex,
-                    lambda: ask_agent(final_user_message, [], None, streaming, _model_stream_cb if streaming else None, model_path, None),
+                    lambda: ask_agent(
+                        final_user_message, [], None, streaming,
+                        _model_stream_cb if streaming else None, model_path, None,
+                        system_prompt=eff_system_prompt,
+                    ),
                 )
             return {"model": model_name, "response": resp}
         except Exception as e:
@@ -299,6 +377,8 @@ async def _handle_agent_mode(
     history, use_kb_rag, use_memory_library_rag, orchestrator,
     use_agent_scoped_kb=False,
     agent_kb_doc_ids=None,
+    project_id=None,
+    project_instructions=None,
 ):
     await sio.emit("chat_thinking", {"status": "processing", "message": "Обрабатываю запрос через агентную архитектуру..."}, room=sid)
 
@@ -318,10 +398,32 @@ async def _handle_agent_mode(
         "selected_model": None, "socket_id": sid, "streaming": streaming,
         "sio": sio, "stream_callback": agent_stream_cb if streaming else None,
         "_main_event_loop": asyncio.get_running_loop(),
+        "project_instructions": project_instructions or "",
     }
     set_tool_context(context)
 
     effective_message = user_message
+    # Инструкции проекта добавляются как системный префикс к сообщению пользователя
+    if project_instructions and project_instructions.strip():
+        effective_message = f"[Инструкции проекта: {project_instructions.strip()}]\n\n{user_message}"
+
+    # RAG из документов проекта
+    if rag_client and project_id:
+        try:
+            proj_hits = await rag_client.project_rag_search(user_message, project_id=project_id, k=6) or []
+            if proj_hits:
+                parts, tl = [], 0
+                for i, (c, s, did, ch) in enumerate(proj_hits, 1):
+                    frag = f"Документы проекта {i} (doc={did}): {c}\n"
+                    if tl + len(frag) > 8000:
+                        break
+                    parts.append(frag)
+                    tl += len(frag)
+                effective_message = f"Документы проекта (RAG):\n{''.join(parts)}\n\n{effective_message}"
+                logger.info(f"[agent project_rag] {len(proj_hits)} фрагментов, project={project_id}")
+        except Exception as e:
+            logger.error(f"Agent project RAG error: {e}")
+
     if rag_client and (use_kb_rag or use_agent_scoped_kb):
         prefix = "База Знаний (документы)"
         try:
@@ -387,7 +489,11 @@ async def _handle_agent_mode(
         return
 
     try:
-        await save_dialog_entry("assistant", response, None, None, conversation_id)
+        if project_id:
+            from backend.database.memory_service import save_dialog_entry_to_project
+            await save_dialog_entry_to_project("assistant", response, project_id, conversation_id)
+        else:
+            await save_dialog_entry("assistant", response, None, None, conversation_id)
     except Exception as e:
         logger.warning(f"Не удалось сохранить ответ агента: {e}")
 
@@ -398,12 +504,49 @@ async def _handle_direct(
     agent_profile, sync_stream_cb, loop,
     use_agent_scoped_kb=False,
     agent_kb_doc_ids=None,
+    project_id=None,
+    project_instructions=None,
 ):
     final_message = user_message
     images = None
+    proj_hits_for_trace = []  # сохраняем для document_search_trace
 
-    # RAG из загруженных документов
-    if rag_client:
+    # RAG из документов проекта (приоритет — специфичен для текущего проекта)
+    if rag_client and project_id:
+        try:
+            proj_hits = await rag_client.project_rag_search(user_message, project_id=project_id, k=8)
+            if proj_hits:
+                if _is_structure_query(user_message):
+                    seen = {(d, i) for _, _, d, i in proj_hits}
+                    for doc_id in {d for _, _, d, _ in proj_hits if d is not None}:
+                        try:
+                            for c, sc, did, idx in await rag_client.get_document_start_chunks(doc_id, max_chunks=2):
+                                if (did, idx) not in seen:
+                                    proj_hits = [(c, sc, did, idx)] + proj_hits
+                                    seen.add((did, idx))
+                        except Exception:
+                            pass
+                parts, total = [], 0
+                for i, (content, score, doc_id, chunk_idx) in enumerate(proj_hits, 1):
+                    frag = f"Фрагмент {i} (document_id={doc_id}, чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
+                    if total + len(frag) > 12000:
+                        parts.append(frag[:max(0, 12000 - total - 80)] + "\n... [обрезано]\n")
+                        break
+                    parts.append(frag)
+                    total += len(frag)
+                proj_context = "\n".join(parts)
+                final_message = (
+                    f"Документы проекта (RAG):\n{proj_context}\n"
+                    f"Вопрос: {user_message}\n"
+                    f"Ответь на основе этих документов. Перечисляй только то, что явно есть в фрагментах."
+                )
+                proj_hits_for_trace = proj_hits  # запомним для трейса
+                logger.info(f"[direct project_rag] {len(proj_hits)} фрагментов, project={project_id}")
+        except Exception as e:
+            logger.error(f"Direct project RAG error: {e}")
+
+    # Глобальный RAG из загруженных документов (если нет контекста из проекта)
+    if rag_client and final_message == user_message:
         try:
             hits = await rag_client.search(user_message, k=8, strategy=state.current_rag_strategy)
             if hits:
@@ -434,9 +577,30 @@ async def _handle_direct(
         except Exception as e:
             logger.error(f"Direct RAG error: {e}")
 
-    # KB / memory trace
+    # KB / memory / project-RAG trace
     document_search_trace = None
     kb_hits, mem_hits = [], []
+
+    # Трейс project-RAG (всегда строим, если были хиты — вне зависимости от KB-флагов)
+    if proj_hits_for_trace and rag_client:
+        proj_id_name: dict = {}
+        try:
+            for d in await rag_client.project_rag_list_documents(project_id):
+                proj_id_name[d["id"]] = d.get("filename") or str(d["id"])
+        except Exception:
+            pass
+        hits_out, files_used = [], set()
+        for content, score, doc_id, chunk_idx in proj_hits_for_trace:
+            if doc_id is None:
+                continue
+            fn = proj_id_name.get(doc_id, f"doc_{doc_id}")
+            files_used.add(fn)
+            hits_out.append({"file": fn, "anchor": f"chunk@{chunk_idx}({fn})",
+                "relevance": round(float(score), 4), "content": (content or "")[:12000],
+                "chunkIndex": chunk_idx, "documentId": doc_id, "store": "project"})
+        if hits_out:
+            document_search_trace = {"query": user_message, "sourceFiles": sorted(files_used), "hits": hits_out}
+
     if rag_client and (use_kb_rag or use_agent_scoped_kb or use_memory_library_rag):
         if use_kb_rag or use_agent_scoped_kb:
             try:
@@ -472,7 +636,9 @@ async def _handle_direct(
         except Exception:
             pass
 
-        hits_out, files_used = [], set()
+        # Если project-trace уже создан — дополняем его, иначе создаём новый
+        hits_out = document_search_trace["hits"] if document_search_trace else []
+        files_used = set(document_search_trace["sourceFiles"]) if document_search_trace else set()
         for content, score, doc_id, chunk_idx in kb_hits:
             if doc_id is None:
                 continue
@@ -507,6 +673,18 @@ async def _handle_direct(
             final_message = f"{prefix}:\n{''.join(parts)}\n\n{final_message}"
 
     eff_model_path = agent_profile["model_path"] or get_current_model_path()
+
+    # Формируем итоговый системный промпт: инструкции проекта + промпт агента
+    base_system_prompt = agent_profile["system_prompt"] or ""
+    if project_instructions and project_instructions.strip():
+        if base_system_prompt:
+            eff_system_prompt = f"{project_instructions.strip()}\n\n{base_system_prompt}"
+        else:
+            eff_system_prompt = project_instructions.strip()
+        logger.debug(f"[direct] project_instructions применены к system_prompt (project={project_id})")
+    else:
+        eff_system_prompt = base_system_prompt or None
+
     _terminal_chat_inference_banner(
         sid=sid, conversation_id=conversation_id, user_preview=final_message,
         mode_label="Прямой чат с LLM (одна модель)"
@@ -520,7 +698,7 @@ async def _handle_direct(
             final_message, history=history,
             max_tokens=agent_profile["max_tokens"], streaming=stream, stream_callback=cb,
             model_path=eff_model_path, custom_prompt_id=None, images=images,
-            system_prompt=agent_profile["system_prompt"], temperature=agent_profile["temperature"],
+            system_prompt=eff_system_prompt, temperature=agent_profile["temperature"],
         )
 
     if streaming:
@@ -541,7 +719,11 @@ async def _handle_direct(
 
     try:
         meta = {"document_search": document_search_trace} if document_search_trace else None
-        await save_dialog_entry("assistant", response, meta, None, conversation_id)
+        if project_id:
+            from backend.database.memory_service import save_dialog_entry_to_project
+            await save_dialog_entry_to_project("assistant", response, project_id, conversation_id)
+        else:
+            await save_dialog_entry("assistant", response, meta, None, conversation_id)
     except RuntimeError as e:
         logger.warning(f"Не удалось сохранить ответ: {e}")
 

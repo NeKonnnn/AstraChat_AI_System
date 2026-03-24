@@ -327,8 +327,8 @@ export default function ProjectPage() {
       // Устанавливаем как текущий чат
       setCurrentChat(chatId);
       
-      // Отправляем сообщение
-      await sendMessage(inputMessage.trim(), chatId);
+      // Отправляем сообщение; передаём projectId явно, так как state может не успеть обновиться
+      await sendMessage(inputMessage.trim(), chatId, true, projectId);
       
       // Переходим на страницу чата
       navigate('/');
