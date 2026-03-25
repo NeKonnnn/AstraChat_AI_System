@@ -40,7 +40,7 @@ model:
   
   # name: "qwen-coder-30b"
   name: "qwen2.5-7b"
-  ctx_size: 4096
+  ctx_size: 8192
   # gpu_layers: 0 = только CPU. Для моделей 30B+ на CPU нужно ~32 ГБ RAM, иначе загрузка может зависнуть.
   # Если есть NVIDIA GPU — укажите gpu_layers: -1 (все слои на GPU) для быстрой загрузки и работы.
   gpu_layers: -1  # -1 = все слои на GPU

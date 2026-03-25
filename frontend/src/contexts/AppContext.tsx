@@ -1024,7 +1024,7 @@ export function useAppActions() {
     getChatById: (chatId: string) => {
       return state.chats.find(chat => chat.id === chatId) || null;
     },
-    
+
     getArchivedChats: () => {
       return state.chats.filter(chat => chat.isArchived === true);
     },
