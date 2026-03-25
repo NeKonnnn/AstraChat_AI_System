@@ -50,8 +50,11 @@ RUN python3.11 -m pip install --no-cache-dir --timeout 120 --retries 5 \
     torch==2.1.2 \
     torchaudio==2.1.2
 
-# Шаг 2: llama-cpp-python — готовый CPU wheel, не компилируем из исходников
+# Шаг 2: llama-cpp-python — готовый CPU wheel (manylinux/glibc), не musllinux.
+# Если pip возьмёт musllinux wheel на Ubuntu, при импорте будет:
+# libc.musl-x86_64.so.1: cannot open shared object file
 RUN python3.11 -m pip install --no-cache-dir --timeout 120 --retries 5 \
+    --only-binary llama-cpp-python \
     llama-cpp-python \
     --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
 
