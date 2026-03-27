@@ -43,7 +43,8 @@ export const MODEL_SETTINGS_ACCORDION_SX: SxProps<Theme> = {
 /** Сетка полей (размер контекста, температура, top_p и т.д.) */
 export const MODEL_SETTINGS_GRID_SX: SxProps<Theme> = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))',
+  // Чуть шире ячейки, чтобы длинные подписи полей не обрезались.
+  gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
   gap: 2,
 };
 

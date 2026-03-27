@@ -28,6 +28,7 @@ from backend.realtime.helpers import (
 )
 
 logger = logging.getLogger(__name__)
+_VALID_RAG_STRATEGIES = {"auto", "reranking", "hierarchical", "hybrid", "standard"}
 
 
 async def _get_conversation_project_id(conversation_id: str) -> "Optional[str]":
@@ -104,6 +105,12 @@ def register_handlers(sio):
             conversation_id = data.get("conversation_id", None)
             use_kb_rag = bool(data.get("use_kb_rag", False))
             use_memory_library_rag = bool(data.get("use_memory_library_rag", False))
+            requested_rag_strategy = str(data.get("rag_strategy") or "").strip().lower()
+            effective_rag_strategy = (
+                requested_rag_strategy
+                if requested_rag_strategy in _VALID_RAG_STRATEGIES
+                else state.current_rag_strategy
+            )
             agent_profile = await _resolve_agent_chat_params(data.get("agent_id"))
             agent_kb_enabled = bool(agent_profile.get("file_search_enabled"))
             agent_kb_doc_ids = agent_profile.get("kb_document_ids") or []
@@ -184,6 +191,7 @@ def register_handlers(sio):
                     use_agent_scoped_kb, agent_kb_doc_ids,
                     project_id=project_id,
                     project_instructions=project_instructions,
+                    rag_strategy=effective_rag_strategy,
                 )
                 return
 
@@ -195,6 +203,7 @@ def register_handlers(sio):
                     use_agent_scoped_kb, agent_kb_doc_ids,
                     project_id=project_id,
                     project_instructions=project_instructions,
+                    rag_strategy=effective_rag_strategy,
                 )
                 return
 
@@ -206,6 +215,7 @@ def register_handlers(sio):
                 use_agent_scoped_kb, agent_kb_doc_ids,
                 project_id=project_id,
                 project_instructions=project_instructions,
+                rag_strategy=effective_rag_strategy,
             )
 
         except Exception as e:
@@ -227,6 +237,7 @@ async def _handle_multi_llm(
     agent_kb_doc_ids=None,
     project_id=None,
     project_instructions=None,
+    rag_strategy="auto",
 ):
     orchestrator = get_agent_orchestrator()
     multi_llm_models = orchestrator.get_multi_llm_models()
@@ -267,7 +278,7 @@ async def _handle_multi_llm(
     # Глобальный RAG контекст (если нет контекста из проекта)
     if rag_client and final_user_message == user_message:
         try:
-            hits = await rag_client.search(user_message, k=8, strategy=state.current_rag_strategy)
+            hits = await rag_client.search(user_message, k=8, strategy=rag_strategy)
             if hits:
                 parts, total = [], 0
                 for i, (content, score, doc_id, chunk_idx) in enumerate(hits, 1):
@@ -379,6 +390,7 @@ async def _handle_agent_mode(
     agent_kb_doc_ids=None,
     project_id=None,
     project_instructions=None,
+    rag_strategy="auto",
 ):
     await sio.emit("chat_thinking", {"status": "processing", "message": "Обрабатываю запрос через агентную архитектуру..."}, room=sid)
 
@@ -506,6 +518,7 @@ async def _handle_direct(
     agent_kb_doc_ids=None,
     project_id=None,
     project_instructions=None,
+    rag_strategy="auto",
 ):
     final_message = user_message
     images = None
@@ -548,7 +561,7 @@ async def _handle_direct(
     # Глобальный RAG из загруженных документов (если нет контекста из проекта)
     if rag_client and final_message == user_message:
         try:
-            hits = await rag_client.search(user_message, k=8, strategy=state.current_rag_strategy)
+            hits = await rag_client.search(user_message, k=8, strategy=rag_strategy)
             if hits:
                 if _is_structure_query(user_message):
                     seen = {(d, i) for _, _, d, i in hits}

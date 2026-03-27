@@ -19,7 +19,8 @@ import {
   MODEL_SETTINGS_HELP_ICON_BUTTON_SX,
   MODEL_SETTINGS_INPUT_SX,
   MODEL_SETTINGS_SWITCH_ROW_COMPACT_SX,
-  modelSettingsSwitchSx,
+  AGENT_CONSTRUCTOR_FIELD_FONT_SIZE,
+  AGENT_CONSTRUCTOR_FIELD_LINE_HEIGHT,
   MODEL_SETTINGS_DEFAULT,
   MODEL_SETTINGS_MAX_DEFAULT,
   type ModelSettingsState,
@@ -255,10 +256,8 @@ export default function ModelSettingsFields({
         </Tooltip>
       </Box>
       <Switch
-        size="small"
         checked={checked}
         onChange={(e) => onToggle(e.target.checked)}
-        sx={modelSettingsSwitchSx(darkPanel)}
       />
     </Box>
   );
@@ -289,7 +288,9 @@ export default function ModelSettingsFields({
           <AccordionSummary expandIcon={<ExpandMoreIcon sx={darkPanel ? { color: 'rgba(255,255,255,0.7)' } : undefined} />}>
             <Box sx={MODEL_SETTINGS_LABEL_WRAPPER_SX}>
               <SettingsIcon />
-              <Typography variant="subtitle1">Тонкая настройка</Typography>
+              <Typography sx={{ fontSize: AGENT_CONSTRUCTOR_FIELD_FONT_SIZE, lineHeight: AGENT_CONSTRUCTOR_FIELD_LINE_HEIGHT, fontWeight: 500 }}>
+                Тонкая настройка
+              </Typography>
             </Box>
           </AccordionSummary>
           <AccordionDetails>

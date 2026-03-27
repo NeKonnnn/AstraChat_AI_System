@@ -664,6 +664,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     // Читаем флаг "Base знаний" из localStorage (устанавливается в UnifiedChatPage)
     const useKbRag = localStorage.getItem('use_kb_rag') === 'true';
     const useMemoryLibraryRag = localStorage.getItem('use_memory_library_rag') === 'true';
+    const ragStrategy = localStorage.getItem('rag_strategy') || 'auto';
     const rawAgentId = typeof localStorage !== 'undefined' ? localStorage.getItem('active_agent_id') : null;
     const parsedAgentId = rawAgentId ? parseInt(rawAgentId, 10) : NaN;
     const agentIdForChat = Number.isFinite(parsedAgentId) ? parsedAgentId : null;
@@ -683,6 +684,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       conversation_id: chatId,     // Передаем ID диалога
       use_kb_rag: useKbRag,
       use_memory_library_rag: useMemoryLibraryRag,
+      rag_strategy: ragStrategy,
       /** Бэкенд подставит модель и model_settings из карточки агента (конструктор) */
       agent_id: agentIdForChat,
       project_id: projectId,
@@ -730,6 +732,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     const rawAgentId = typeof localStorage !== 'undefined' ? localStorage.getItem('active_agent_id') : null;
     const parsedAgentId = rawAgentId ? parseInt(rawAgentId, 10) : NaN;
     const agentIdForChat = Number.isFinite(parsedAgentId) ? parsedAgentId : null;
+    const ragStrategy = localStorage.getItem('rag_strategy') || 'auto';
 
     const messageData = {
       message: userMessage,
@@ -739,6 +742,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       assistant_message_id: assistantMessageId, // ID сообщения помощника для обновления
       conversation_id: chatId,
       agent_id: agentIdForChat,
+      rag_strategy: ragStrategy,
     };
 
     socket.emit('chat_message', messageData);

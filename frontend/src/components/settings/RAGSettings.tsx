@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useTheme } from '@mui/material/styles';
 import {
   Box,
@@ -33,25 +33,38 @@ import {
 import MemoryRagLibraryModal from '../MemoryRagLibraryModal';
 
 type RAGStrategy = 'auto' | 'reranking' | 'hierarchical' | 'hybrid' | 'standard';
+const RAG_STRATEGY_STORAGE_KEY = 'rag_strategy';
 
 interface RAGSettingsProps {}
 
 export default function RAGSettings({}: RAGSettingsProps) {
   const theme = useTheme();
   const dropdownItemSx = useMemo(() => getDropdownItemSx(theme.palette.mode === 'dark'), [theme.palette.mode]);
-  const [selectedStrategy, setSelectedStrategy] = useState<RAGStrategy>('auto');
+  const [selectedStrategy, setSelectedStrategy] = useState<RAGStrategy>(() => {
+    const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(RAG_STRATEGY_STORAGE_KEY) : null;
+    if (saved === 'auto' || saved === 'reranking' || saved === 'hierarchical' || saved === 'hybrid' || saved === 'standard') {
+      return saved;
+    }
+    return 'auto';
+  });
   const [isLoading, setIsLoading] = useState(false);
   const [strategyPopoverAnchor, setStrategyPopoverAnchor] = useState<HTMLElement | null>(null);
   const [memoryRagModalOpen, setMemoryRagModalOpen] = useState(false);
+  const isInitializedRef = useRef(false);
   const { showNotification } = useAppActions();
 
   useEffect(() => {
     loadRAGSettings();
   }, []);
 
-  // Автосохранение настроек RAG
+  // Автосохранение настроек RAG после первичной загрузки.
   useEffect(() => {
+    if (!isInitializedRef.current) return;
+
     const timeoutId = setTimeout(() => {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(RAG_STRATEGY_STORAGE_KEY, selectedStrategy);
+      }
       saveRAGSettings().then(() => {
         // После сохранения обновляем информацию о применяемом методе
         loadRAGSettings();
@@ -69,17 +82,19 @@ export default function RAGSettings({}: RAGSettingsProps) {
         const data = await response.json();
         if (data.strategy) {
           setSelectedStrategy(data.strategy);
+          if (typeof localStorage !== 'undefined') {
+            localStorage.setItem(RAG_STRATEGY_STORAGE_KEY, data.strategy);
+          }
         }
       } else if (response.status === 404) {
-        // Если endpoint не найден, используем значение по умолчанию
-        setSelectedStrategy('auto');
+        // Оставляем текущее значение (локальное), если endpoint не найден
       }
     } catch (error) {
       console.error('Ошибка загрузки настроек RAG:', error);
-      // Используем значение по умолчанию при ошибке
-      setSelectedStrategy('auto');
+      // Оставляем текщее значение (локальное), если сервер недоступен
     } finally {
       setIsLoading(false);
+      isInitializedRef.current = true;
     }
   };
 
