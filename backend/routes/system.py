@@ -10,7 +10,7 @@ from fastapi import APIRouter
 
 from backend.app_state import (
     ask_agent, save_dialog_entry, get_recent_dialog_history, clear_dialog_history,
-    speak_text, recognize_speech, recognize_speech_from_file, check_vosk_model,
+    speak_text, recognize_speech, recognize_speech_from_file, check_stt_available,
     rag_client, model_settings, update_model_settings, reload_model_by_path,
     get_model_info, initialize_model, minio_client, UniversalTranscriber,
     settings,
@@ -48,7 +48,7 @@ async def socket_test():
 async def health_check():
     try:
         model_info = get_model_info() if get_model_info else {"loaded": False}
-        vosk_status = check_vosk_model() if check_vosk_model else False
+        stt_status = check_stt_available() if check_stt_available else False
 
         rag_available = False
         if rag_client:
@@ -63,7 +63,7 @@ async def health_check():
             "timestamp": datetime.now().isoformat(),
             "services": {
                 "llm_model": model_info.get("loaded", False),
-                "vosk_model": vosk_status,
+                "stt_whisperx": stt_status,
                 "rag_service": rag_available,
                 "transcriber": UniversalTranscriber is not None,
             },
@@ -100,7 +100,7 @@ async def get_system_status():
                 "speak_text": speak_text is not None,
                 "recognize_speech": recognize_speech is not None,
                 "recognize_speech_from_file": recognize_speech_from_file is not None,
-                "check_vosk_model": check_vosk_model is not None,
+                "check_stt_available": check_stt_available is not None,
             },
         },
         "transcription": {

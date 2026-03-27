@@ -73,7 +73,7 @@ COPY app/ ./app/
 COPY config/ ./config/
 
 # Создание директории для моделей (модели монтируются томами, копирование не требуется)
-RUN mkdir -p /app/models/vosk /app/models/whisperx_models
+RUN mkdir -p /app/models/whisperx_models
 
 # Создание непривилегированного пользователя 
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app

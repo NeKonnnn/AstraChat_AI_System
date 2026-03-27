@@ -20,7 +20,7 @@ services:
     networks:
       - astrachat-network
 
-  # STT Service (WhisperX / Vosk)
+  # STT Service (WhisperX)
   stt-service:
     build:
       context: ./SVC-SPEECH-RECG
@@ -35,7 +35,6 @@ services:
               count: all
               capabilities: [gpu]
     volumes:
-      - ./SVC-SPEECH-RECG/vosk_models:/app/models/vosk:ro
       - ./whisperx_models:/app/models/whisperx_models
       - ./SVC-SPEECH-RECG/config:/app/config:ro
     restart: unless-stopped

@@ -10,8 +10,6 @@ import logging.config
 
 from app.core.config import settings
 from app.api import router as api_router
-# Оставляем только хендлеры распознавания речи
-from app.dependencies.vosk_handler import get_vosk_handler, cleanup_vosk_handler
 from app.dependencies.whisperx_handler import get_whisperx_handler, cleanup_whisperx_handler
 
 from fastapi import Request
@@ -44,13 +42,6 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     # Инициализация при запуске
     try:
-        # Инициализируем обработчик Vosk (если включен)
-        if settings.vosk.enabled:
-            print("\n" + "=" * 80)
-            print("🎙️ STARTING VOSK HANDLER")
-            await get_vosk_handler()
-            logger.info("Vosk handler initialized")
-        
         # Инициализируем обработчик WhisperX (если включен)
         if settings.whisperx.enabled:
             print("🚀 STARTING WHISPERX HANDLER")
@@ -72,7 +63,6 @@ async def lifespan(app: FastAPI):
     yield
 
     # Очистка при завершении
-    await cleanup_vosk_handler()
     await cleanup_whisperx_handler()
     logger.info("Application shut down gracefully")
 

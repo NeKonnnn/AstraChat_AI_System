@@ -79,7 +79,7 @@ export default function SettingsPage() {
 
 
   const [transcriptionSettings, setTranscriptionSettings] = useState({
-    engine: "whisperx" as "whisperx" | "vosk",
+    engine: "whisperx" as "whisperx",
     language: "ru",
     auto_detect: true,
   });
@@ -997,11 +997,10 @@ export default function SettingsPage() {
                   label="Движок транскрибации"
                   onChange={(e) => setTranscriptionSettings(prev => ({ 
                     ...prev, 
-                    engine: e.target.value as "whisperx" | "vosk"
+                    engine: e.target.value as "whisperx"
                   }))}
                 >
-                  <MenuItem value="whisperx">WhisperX (точный, медленный)</MenuItem>
-                  <MenuItem value="vosk">Vosk (быстрый, менее точный)</MenuItem>
+                  <MenuItem value="whisperx">WhisperX</MenuItem>
                 </Select>
               </FormControl>
               

@@ -45,7 +45,7 @@ class GenerationConfig(BaseModel):
 
 class AppConfig(BaseModel):
     title: str = "AI Models API Service"
-    description: str = "Unified API service for LLM, Speech Recognition (Vosk) and Text-to-Speech (Silero) models"
+    description: str = "Unified API service for LLM, Speech Recognition (WhisperX) and Text-to-Speech (Silero) models"
     version: str = "1.0.0"
 
 
@@ -73,14 +73,6 @@ class SecurityConfig(BaseModel):
     enabled: bool = True
     api_key: Optional[str] = None
     api_key_header: str = "X-API-Key"
-
-
-class VoskConfig(BaseModel):
-    enabled: bool = True
-    model_path: str = os.environ.get("VOSK_MODEL_PATH", "/app/models/vosk-model-small-ru-0.22")
-    sample_rate: int = 16000
-    max_file_size: int = 50 * 1024 * 1024  # 50MB
-    supported_languages: List[str] = ["ru", "en"]
 
 
 class SileroConfig(BaseModel):
@@ -163,7 +155,6 @@ class Settings(BaseModel):
     logging: LoggingConfig = LoggingConfig()
     caching: CachingConfig = CachingConfig()
     security: SecurityConfig = SecurityConfig()
-    vosk: VoskConfig = VoskConfig()
     silero: SileroConfig = SileroConfig()
     whisperx: WhisperXConfig = WhisperXConfig()
     diarization: DiarizationConfig = DiarizationConfig()

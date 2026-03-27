@@ -17,20 +17,10 @@ cors:
 # Настройки приложения
 app:
   title: "astrachat STT Service"
-  description: "Microservice for Speech Recognition (Vosk + WhisperX)"
+  description: "Microservice for Speech Recognition (WhisperX)"
   version: "1.0.0"
 
-# --- VOSK (Обычная транскрипция) ---
-vosk:
-  enabled: true
-  model_path: "/app/models/vosk"  # Путь внутри контейнера
-  sample_rate: 16000
-  max_file_size: 52428800  # 50MB
-  supported_languages:
-    - "ru"
-    - "en"
-
-# --- WHISPERX (Продвинутая транскрипция) ---
+# --- WHISPERX ---
 whisperx:
   enabled: true
   models_dir: "/app/models/whisperx_models" # Путь внутри контейнера

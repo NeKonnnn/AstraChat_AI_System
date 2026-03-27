@@ -32,6 +32,22 @@ def resolve_llm_svc_model_id_for_request(model_path: Optional[str], fallback_mod
     return fallback_model_name
 
 
+def same_llm_svc_model_id(loaded: str, requested: str) -> bool:
+    """
+    Совпадение «та же модель» для llm-svc: в /v1/health часто короткое имя из конфига,
+    а в агенте - полное имя файла без .gguf
+    """
+    if not loaded or not requested:
+        return False
+    a, b = loaded.strip().lower(), requested.strip().lower()
+    if a == b:
+        return True
+    # Длинное имя начинается с короткого и дефиса: ...-instruct-...
+    if a.startswith(b + "-") or b.startswith(a + "-"):
+        return True
+    return False
+
+
 def _clean_llm_response(text: str) -> str:
     """Очистка ответа LLM от артефактов chat template (im_start/im_end теги, HTML entities)."""
     if not text:
@@ -197,10 +213,10 @@ class LLMClient:
             logger.error(f"Ошибка чата LLM: {e}")
             raise
     async def get_transcription_health(self) -> Dict[str, Any]:
-        """Проверка состояния STT сервиса"""
+        """Проверка состояния STT (WhisperX)"""
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(f"{self.stt_url}/v1/health")
+                response = await client.get(f"{self.stt_url}/v1/whisperx/health")
                 if response.status_code == 200:
                     return response.json()
                 return {"status": "unhealthy", "code": response.status_code}
@@ -222,43 +238,6 @@ class LLMClient:
     # STT МЕТОДЫ (ИСПОЛЬЗУЮТ self.stt_url)
     # ==========================================
 
-    async def transcribe_audio(
-        self,
-        audio_file: bytes,
-        filename: str = "audio.wav",
-        language: str = "ru"
-    ) -> Dict[str, Any]:
-        """Транскрибация аудио файла через Vosk"""
-        try:
-            # Определяем content-type по расширению файла
-            ext = os.path.splitext(filename)[1].lower()
-            content_type_map = {
-                ".wav": "audio/wav",
-                ".webm": "audio/webm",
-                ".ogg": "audio/ogg",
-                ".mp3": "audio/mpeg",
-                ".m4a": "audio/mp4",
-                ".flac": "audio/flac",
-            }
-            content_type = content_type_map.get(ext, "audio/wav")
-            files = {"file": (filename, io.BytesIO(audio_file), content_type)}
-            data = {"language": language}
-            
-            # Таймаут 15 минут для больших файлов 
-            transcribe_timeout = httpx.Timeout(900.0, connect=10.0, read=900.0, write=60.0)
-            async with httpx.AsyncClient(timeout=transcribe_timeout) as client:
-                response = await client.post(
-                    f"{self.stt_url}/v1/transcribe",
-                    files=files,
-                    data=data,
-                    headers={"Accept": "application/json"}
-                )
-                response.raise_for_status()
-                return response.json()
-        except Exception as e:
-            logger.error(f"Ошибка транскрибации Vosk: {e}")
-            raise
-    
     async def transcribe_audio_whisperx(
         self,
         audio_file: bytes,
@@ -389,7 +368,7 @@ class LLMClient:
         min_speakers: int = 1,
         max_speakers: int = 10,
         min_duration: float = 0.5,
-        engine: str = "vosk",
+        engine: str = "whisperx",
     ) -> Dict[str, Any]:
         """
         Комбинированная транскрибация с диаризацией.
@@ -417,16 +396,10 @@ class LLMClient:
                 return {"success": True, "text": "", "segments": [], "speakers_count": 0}
             
             # Шаг 2: Транскрипция
-            logger.info(f"[transcribe_with_diarization] Шаг 2: транскрипция (engine={engine})...")
-            engine_normalized = (engine or "vosk").lower()
-            if engine_normalized == "whisperx":
-                transcription_result = await self.transcribe_audio_whisperx(
-                    audio_file, filename=filename, language=language
-                )
-            else:
-                transcription_result = await self.transcribe_audio(
-                    audio_file, filename=filename, language=language
-                )
+            logger.info(f"[transcribe_with_diarization] Шаг 2: транскрипция (WhisperX, запрошенный engine={engine})...")
+            transcription_result = await self.transcribe_audio_whisperx(
+                audio_file, filename=filename, language=language
+            )
 
             full_text = (
                 transcription_result.get("text", "")
@@ -651,6 +624,22 @@ class LLMService:
         except Exception as e:
             logger.error(f"Ошибка инициализации LLMService: {e}")
             return False
+
+    async def _sync_loaded_model_name_from_health(self) -> None:
+        """Подтягивает self.model_name из GET /v1/health llm-svc (если модель переключили в обход бэкенда)."""
+        try:
+            health = await self.client.health_check()
+            if health.get("status") != "healthy":
+                return
+            if health.get("model_loaded") and health.get("model_name"):
+                actual = health["model_name"]
+                if self.model_name != actual:
+                    logger.info(
+                        f"[LLMService] Синхронизация model_name с llm-svc: {self.model_name!r} → {actual!r}"
+                    )
+                self.model_name = actual
+        except Exception as e:
+            logger.debug(f"[LLMService] Пропуск синхронизации model_name по health: {e}")
     
     def prepare_messages(self, prompt: str, history: Optional[List[Dict[str, str]]] = None, 
                         system_prompt: Optional[str] = None) -> List[Dict[str, str]]:
@@ -756,6 +745,8 @@ class LLMService:
                                 })
                             break
             
+            await self._sync_loaded_model_name_from_health()
+
             # Определение модели (явный id из агента / запроса; иначе глобальная загруженная)
             model_to_use = resolve_llm_svc_model_id_for_request(model_path, self.model_name)
             if str(model_path or "").strip():
@@ -766,10 +757,11 @@ class LLMService:
 
             # Приоритет агента: если запрошена другая модель — переключаем llm-svc перед генерацией.
             # Это убирает ситуацию «в ответе используется глобальная», когда llm-svc игнорирует поле model.
-            if model_to_use and model_to_use != self.model_name:
+            # Не сравниваем строки вслепую: health может отдавать короткое имя, агент — полное имя .gguf (та же модель).
+            if model_to_use and not same_llm_svc_model_id(self.model_name, model_to_use):
                 async with self._model_switch_lock:
                     # double-check под локом
-                    if model_to_use != self.model_name:
+                    if not same_llm_svc_model_id(self.model_name, model_to_use):
                         logger.info(f"[generate_response] Переключаю llm-svc на модель: {model_to_use!r}")
                         ok = await self.client.load_model(model_to_use)
                         if ok:
@@ -867,7 +859,6 @@ class LLMService:
             return f"Ошибка потока: {str(e)}"
 
     # Прокси-методы (для поддержки старых вызовов через LLMService)
-    async def transcribe_audio(self, *args, **kwargs): return await self.client.transcribe_audio(*args, **kwargs)
     async def synthesize_speech(self, *args, **kwargs): return await self.client.synthesize_speech(*args, **kwargs)
     async def transcribe_audio_whisperx(self, *args, **kwargs): return await self.client.transcribe_audio_whisperx(*args, **kwargs)
     async def diarize_audio(self, *args, **kwargs): return await self.client.diarize_audio(*args, **kwargs)
@@ -965,12 +956,6 @@ def _wrap_sync(coro):
     except RuntimeError:
         # Только RuntimeError (нет event loop) - пробуем asyncio.run
         return asyncio.run(coro)
-
-def transcribe_audio_llm_svc(audio_file: bytes, **kwargs) -> str:
-    async def _call():
-        s = await get_llm_service(); r = await s.transcribe_audio(audio_file, **kwargs)
-        return r.get("text", "") if isinstance(r, dict) else ""
-    return _wrap_sync(_call())
 
 def synthesize_speech_llm_svc(text: str, **kwargs) -> bytes:
     async def _call():

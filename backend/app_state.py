@@ -59,14 +59,14 @@ except Exception as e:
 
 # -- voice
 try:
-    from backend.transcription.voice import speak_text, recognize_speech, recognize_speech_from_file, check_vosk_model
+    from backend.transcription.voice import speak_text, recognize_speech, recognize_speech_from_file, check_stt_available
     logger.info("voice импортирован успешно")
 except Exception as e:
     logger.error(f"Ошибка импорта voice: {e}")
     speak_text = None
     recognize_speech = None
     recognize_speech_from_file = None
-    check_vosk_model = None
+    check_stt_available = None
 
 # -- MinIO
 try:
@@ -163,7 +163,8 @@ def load_app_settings() -> dict:
         if os.path.exists(SETTINGS_FILE):
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            current_transcription_engine = data.get("transcription_engine", "whisperx")
+            _eng = data.get("transcription_engine", "whisperx")
+            current_transcription_engine = "whisperx" if _eng == "vosk" else _eng
             current_transcription_language = data.get("transcription_language", "ru")
             memory_max_messages = data.get("memory_max_messages", 20)
             memory_include_system_prompts = data.get("memory_include_system_prompts", True)

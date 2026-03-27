@@ -34,7 +34,7 @@ import {
 import { useAppActions } from '../../contexts/AppContext';
 import { getApiUrl } from '../../config/api';
 
-type Engine = 'whisperx' | 'vosk';
+type Engine = 'whisperx';
 type Language = 'ru' | 'en' | 'auto';
 
 export default function TranscriptionSettings() {
@@ -70,7 +70,7 @@ export default function TranscriptionSettings() {
       const response = await fetch(getApiUrl('/api/transcription/settings'));
       if (response.ok) {
         const data = await response.json();
-        setTranscriptionSettings(prev => ({ ...prev, ...data }));
+        setTranscriptionSettings(prev => ({ ...prev, ...data, engine: 'whisperx' as Engine }));
       }
     } catch (error) {
       console.error('Ошибка загрузки настроек транскрибации:', error);
@@ -111,38 +111,13 @@ export default function TranscriptionSettings() {
     showNotification('info', 'Настройки транскрибации сброшены к значениям по умолчанию');
   };
 
-  const getEngineLabel = (engine: Engine): string => {
-    switch (engine) {
-      case 'whisperx':
-        return 'WhisperX';
-      case 'vosk':
-        return 'Vosk';
-      default:
-        return 'WhisperX';
-    }
-  };
+  const getEngineLabel = (_engine: Engine): string => 'WhisperX';
 
-  const getEngineDescription = (engine: Engine): string => {
-    switch (engine) {
-      case 'whisperx':
-        return 'Высокая точность распознавания, поддержка множества языков, хорошо работает с шумом. Требует больше ресурсов и работает медленнее, чем Vosk.';
-      case 'vosk':
-        return 'Быстрая работа и низкое потребление ресурсов, подходит для работы в реальном времени. Меньшая точность по сравнению с WhisperX, хуже справляется с шумом.';
-      default:
-        return '';
-    }
-  };
+  const getEngineDescription = (_engine: Engine): string =>
+    'Высокая точность распознавания, поддержка множества языков, хорошо работает с шумом.';
 
-  const getEngineUseCase = (engine: Engine): string => {
-    switch (engine) {
-      case 'whisperx':
-        return 'Используйте для максимальной точности транскрипции, особенно при записях с шумом или на разных языках.';
-      case 'vosk':
-        return 'Используйте когда важна скорость или ограничены ресурсы; подходит для быстрой предобработки и онлайн-распознавания.';
-      default:
-        return '';
-    }
-  };
+  const getEngineUseCase = (_engine: Engine): string =>
+    'Используйте для транскрипции записей и голосового ввода.';
 
   return (
     <Box sx={{ p: 3 }}>
@@ -186,7 +161,7 @@ export default function TranscriptionSettings() {
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                     Движок транскрибации
                     <Tooltip
-                      title="Выберите движок распознавания речи. WhisperX — точнее, Vosk — быстрее."
+                      title="Движок распознавания речи: WhisperX."
                       arrow
                     >
                       <IconButton
@@ -219,7 +194,7 @@ export default function TranscriptionSettings() {
                   }}
                 >
                   <Typography sx={{ color: 'white', fontWeight: 500, fontSize: '0.875rem' }}>
-                    {transcriptionSettings.engine === 'whisperx' ? 'WhisperX' : 'Vosk'}
+                    WhisperX
                   </Typography>
                   <ExpandMoreIcon sx={{ ...DROPDOWN_CHEVRON_SX, transform: enginePopoverAnchor ? 'rotate(180deg)' : 'none' }} />
                 </Box>
@@ -232,7 +207,7 @@ export default function TranscriptionSettings() {
                   slotProps={{ paper: { sx: getDropdownPopoverPaperSx(enginePopoverAnchor) } }}
                 >
                   <Box sx={{ py: 0.5 }}>
-                    {(['whisperx', 'vosk'] as const).map((engine) => (
+                    {(['whisperx'] as const).map((engine) => (
                       <Box
                         key={engine}
                         onClick={() => { handleSettingChange('engine', engine); setEnginePopoverAnchor(null); }}
@@ -243,7 +218,7 @@ export default function TranscriptionSettings() {
                           bgcolor: transcriptionSettings.engine === engine ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
                         }}
                       >
-                        {engine === 'whisperx' ? 'WhisperX' : 'Vosk'}
+                        WhisperX
                       </Box>
                     ))}
                   </Box>

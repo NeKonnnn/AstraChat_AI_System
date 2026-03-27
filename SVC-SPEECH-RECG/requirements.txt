@@ -1,4 +1,4 @@
-# ===== SVC-SPEECH-RECG: STT Service (Vosk + WhisperX) =====
+# ===== SVC-SPEECH-RECG: STT Service (WhisperX) =====
 
 # Web framework
 fastapi>=0.115.0
@@ -15,9 +15,6 @@ requests>=2.31.0
 
 # Конфигурация
 pyyaml>=6.0.2
-
-# Vosk STT
-vosk>=0.3.45
 
 # PyTorch + torchaudio (совместимые с pyannote.audio 3.1.1 и whisperx)
 # pyannote.audio 3.1.x требует torchaudio <= 2.1.x

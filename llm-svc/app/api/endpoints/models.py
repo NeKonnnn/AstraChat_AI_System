@@ -2,8 +2,8 @@ import logging
 import os
 from fastapi import APIRouter, Depends, HTTPException
 from app.models.schemas import ModelsListResponse, ModelInfoResponse, ModelLoadRequest, ModelLoadResponse
-from app.api.dependencies import get_llama_service
-from app.services.models_service import LlamaService
+from app.api.dependencies import get_llm_handler_without_loaded_gate
+from app.services.base_llm_handler import BaseLLMHandler
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -11,7 +11,7 @@ router = APIRouter()
 
 @router.get("/models", response_model=ModelsListResponse)
 async def list_models(
-    llama_service: LlamaService = Depends(get_llama_service),
+    llama_service: BaseLLMHandler = Depends(get_llm_handler_without_loaded_gate),
 ):
     """Список доступных моделей. Не требует загруженной модели."""
     logger.info("Models list requested")
@@ -36,7 +36,7 @@ async def list_models(
             logger.info(f"Found {len(models_list)} models in {models_dir}")
         except Exception as e:
             logger.error(f"Error scanning models directory: {e}")
-    if not models_list and llama_service.is_loaded and llama_service.model_name:
+    if not models_list and llama_service.is_loaded() and llama_service.model_name:
         models_list.append({
             "id": llama_service.model_name,
             "object": "model",
@@ -47,7 +47,7 @@ async def list_models(
 
 @router.get("/models/current", response_model=ModelInfoResponse)
 async def get_current_model_info(
-    llama_service: LlamaService = Depends(get_llama_service),
+    llama_service: BaseLLMHandler = Depends(get_llm_handler_without_loaded_gate),
 ):
     """Получить детальную информацию о текущей загруженной модели."""
     logger.info("Current model info requested")
@@ -55,12 +55,13 @@ async def get_current_model_info(
     file_exists = os.path.exists(model_path) if model_path else False
     file_size = os.path.getsize(model_path) if file_exists else None
     file_size_mb = round(file_size / (1024 * 1024), 2) if file_size else None
+    loaded = llama_service.is_loaded()
     return ModelInfoResponse(
-        model_name=llama_service.model_name if llama_service.is_loaded else None,
+        model_name=llama_service.model_name if loaded else None,
         model_path=model_path,
-        is_loaded=llama_service.is_loaded,
-        context_size=llama_service.n_ctx if llama_service.is_loaded else None,
-        gpu_layers=llama_service.n_gpu_layers if llama_service.is_loaded else None,
+        is_loaded=loaded,
+        context_size=llama_service.n_ctx if loaded else None,
+        gpu_layers=llama_service.n_gpu_layers if loaded else None,
         file_size=file_size,
         file_size_mb=file_size_mb,
         file_exists=file_exists,
@@ -70,7 +71,7 @@ async def get_current_model_info(
 @router.post("/models/load", response_model=ModelLoadResponse)
 async def load_model(
     request: ModelLoadRequest,
-    llama_service: LlamaService = Depends(get_llama_service),
+    llama_service: BaseLLMHandler = Depends(get_llm_handler_without_loaded_gate),
 ):
     """Загрузить/переключить модель по имени (имя файла без .gguf) или по полному пути."""
     model_name = (request.model or "").strip()
