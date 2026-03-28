@@ -1,6 +1,5 @@
 import os
 import sys
-import queue
 import re
 
 try:
@@ -18,7 +17,6 @@ except Exception:
     SOUNDDEVICE_AVAILABLE = False
     sd = None
 import time
-import json
 from pathlib import Path
 import logging
 
@@ -27,24 +25,15 @@ logger = logging.getLogger(__name__)
 # Проверяем, нужно ли использовать llm-svc  
 USE_LLM_SVC = os.getenv('USE_LLM_SVC', 'false').lower() == 'true'
 
-# Импортируем Vosk только если НЕ используем llm-svc  
-if not USE_LLM_SVC:
-    try:
-        from vosk import Model, KaldiRecognizer
-        VOSK_AVAILABLE = True
-    except ImportError:
-        logger.warning("Vosk не доступен локально, требуется llm-svc")
-        VOSK_AVAILABLE = False
-else:
-    VOSK_AVAILABLE = False
-    logger.info("Используется llm-svc для распознавания речи")
+if USE_LLM_SVC:
+    logger.info("Используется llm-svc для распознавания речи (WhisperX)")
 
 # Импортируем функции связи с микросервисами
 try:
-    from backend.llm_client import synthesize_speech_llm_svc, transcribe_audio_llm_svc, transcribe_audio_whisperx_llm_svc
+    from backend.llm_client import synthesize_speech_llm_svc, transcribe_audio_whisperx_llm_svc
     from backend.agent_llm_svc import ask_agent
 except ImportError:
-    from llm_client import synthesize_speech_llm_svc, transcribe_audio_llm_svc, transcribe_audio_whisperx_llm_svc
+    from llm_client import synthesize_speech_llm_svc, transcribe_audio_whisperx_llm_svc
     from agent_llm_svc import ask_agent
 
 from backend.database.memory_service import save_to_memory
@@ -59,17 +48,23 @@ except ImportError:
     librosa_available = False
     logger.warning("librosa не установлена, изменение темпа аудио будет недоступно")
 
-# Константы  
+# Константы
 SAMPLE_RATE = 16000
-VOSK_MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "model_small")
-SILERO_MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'silero_models')
+MIC_RECORD_SECONDS = 6.0
+_backend_dir = os.path.dirname(os.path.dirname(__file__))
+if os.environ.get("SILERO_MODELS_DIR"):
+    SILERO_MODELS_DIR = os.environ["SILERO_MODELS_DIR"]
+elif os.path.basename(os.path.normpath(_backend_dir)) == "backend":
+    SILERO_MODELS_DIR = os.path.join(os.path.dirname(_backend_dir), "silero_models")
+else:
+    SILERO_MODELS_DIR = os.path.join(_backend_dir, "models", "silero")
 MODELS_URLS = {
     'ru': 'https://models.silero.ai/models/tts/ru/v3_1_ru.pt',
     'en': 'https://models.silero.ai/models/tts/en/v3_en.pt'
 }
 MODEL_PATHS = {
     'ru': os.path.join(SILERO_MODELS_DIR, 'ru', 'model.pt'),
-    'en': os.path.join(SILERO_MODELS_DIR, 'en', 'model.pt')
+    'en': os.path.join(SILERO_MODELS_DIR, 'en', 'model.pt'),
 }
 
 # Глобальные переменные для TTS  
@@ -253,252 +248,79 @@ def speak_text(text, speaker='baya', voice_id='ru', speech_rate=1.0, save_to_fil
         return True
     return False
 
-# ---------- Функции для распознавания речи (Vosk) ---------- #
+# ---------- Распознавание речи (WhisperX) ---------- #
 
-def check_vosk_model():
-    """Проверка наличия модели распознавания речи  """
-    if USE_LLM_SVC: return True
-    if not os.path.exists(VOSK_MODEL_PATH):
-        print(f"ОШИБКА: Модель распознавания речи не найдена в {VOSK_MODEL_PATH}")
+def check_stt_available():
+    """STT доступен: микросервис WhisperX или локальный WhisperX."""
+    if USE_LLM_SVC:
+        return True
+    try:
+        from backend.transcription import whisperx_transcriber as wxt
+        return bool(wxt.WHISPERX_AVAILABLE)
+    except Exception:
         return False
-    return True
+
 
 def recognize_speech():
-    """Распознавание речи с микрофона  """
-    if not check_vosk_model():
-        raise Exception("Модель распознавания речи не найдена")
-    
+    """Запись короткого фрагмента с микрофона и распознавание через WhisperX."""
+    if not check_stt_available():
+        raise Exception("STT недоступен: включите USE_LLM_SVC или установите локальный WhisperX")
+    if not SOUNDDEVICE_AVAILABLE:
+        raise Exception("Для записи с микрофона нужен пакет sounddevice и PortAudio")
+    import tempfile
+    import wave
+    frames = int(MIC_RECORD_SECONDS * SAMPLE_RATE)
+    print(f"Говорите (~{int(MIC_RECORD_SECONDS)} с)...")
+    rec = sd.rec(frames, samplerate=SAMPLE_RATE, channels=1, dtype="int16")
+    sd.wait()
+    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    path = tmp.name
+    tmp.close()
     try:
-        from vosk import Model, KaldiRecognizer
-        model = Model(VOSK_MODEL_PATH)
-        q = queue.Queue()
+        with wave.open(path, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(SAMPLE_RATE)
+            wf.writeframes(rec.tobytes())
+        return recognize_speech_from_file(path)
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
 
-        def callback(indata, frames, time, status):
-            if status:
-                print("Ошибка:", status, file=sys.stderr)
-            q.put(bytes(indata))
-
-        print("Скажи что-нибудь (Ctrl+C для выхода)...")
-        with sd.RawInputStream(samplerate=SAMPLE_RATE, blocksize=8000, dtype='int16',
-                              channels=1, callback=callback):
-            rec = KaldiRecognizer(model, SAMPLE_RATE)
-            while True:
-                data = q.get()
-                if rec.AcceptWaveform(data):
-                    result = json.loads(rec.Result())
-                    return result.get("text", "")
-    except Exception as e:
-        print(f"Ошибка при распознавании речи: {e}")
-        return ""
 
 def recognize_speech_from_file(file_path):
-    """Распознавание речи из файла"""
-    
-    # Сначала проверяем режим микросервиса
+    """Распознавание речи из файла через WhisperX (сервис или локально)."""
     if USE_LLM_SVC:
-        try:
-            print(f"[LLM-SVC] Распознавание речи через WhisperX: {file_path}")
-            with open(file_path, 'rb') as f:
-                audio_data = f.read()
-            
-            # WhisperX даёт значительно лучшее качество распознавания чем Vosk
-            result = transcribe_audio_whisperx_llm_svc(audio_data, filename=os.path.basename(file_path), language="ru")
-            print(f"[LLM-SVC] Распознанный текст (WhisperX): '{result}'")
-            return result
-        except Exception as e:
-            print(f"[LLM-SVC] Ошибка WhisperX: {e}. Пробуем Vosk...")
-            try:
-                with open(file_path, 'rb') as f:
-                    audio_data = f.read()
-                result = transcribe_audio_llm_svc(audio_data, filename=os.path.basename(file_path), language="ru")
-                print(f"[LLM-SVC] Распознанный текст (Vosk fallback): '{result}'")
-                return result
-            except Exception as e2:
-                print(f"[LLM-SVC] Ошибка Vosk fallback: {e2}. Пробуем локально.")
-    
-    # Локальное распознавание
-    if not check_vosk_model():
-        raise Exception("Модель распознавания речи не найдена")
-    
+        print(f"[LLM-SVC] Распознавание через WhisperX: {file_path}")
+        with open(file_path, 'rb') as f:
+            audio_data = f.read()
+        result = transcribe_audio_whisperx_llm_svc(
+            audio_data, filename=os.path.basename(file_path), language="ru"
+        )
+        print(f"[LLM-SVC] Распознанный текст: '{result}'")
+        return result
+
+    if not check_stt_available():
+        raise Exception("Локальный WhisperX недоступен. Установите зависимости или USE_LLM_SVC=true")
     try:
-        import wave
-        import numpy as np
-        print(f"Обрабатываю файл: {file_path}")
-        
-        if not os.path.exists(file_path):
-            raise Exception(f"Файл не найден: {file_path}")
-        
-        file_size = os.path.getsize(file_path)
-        print(f"Размер файла: {file_size} байт")
-        
-        if file_size < 10:
-            print("Файл слишком мал для содержания аудио")
-            return ""
-        
-        converted_file_path = None
-        try:
-            # Определение формата по сигнатуре  
-            with open(file_path, 'rb') as f:
-                header = f.read(12)
-            
-            is_wav = header.startswith(b'RIFF') and b'WAVE' in header
-            is_webm = header.startswith(b'\x1a\x45\xdf\xa3')
-            
-            if not is_wav:
-                print(f"Файл не в формате WAV, конвертирую...")
-                try:
-                    from pydub import AudioSegment
-                    if is_webm:
-                        print("Обнаружен WebM формат")
-                        audio = AudioSegment.from_file(file_path, format="webm")
-                    else:
-                        print("Пытаюсь загрузить в автоматическом режиме")
-                        audio = AudioSegment.from_file(file_path)
-                    
-                    # Принудительно в параметры Vosk: 16kHz, mono, 16-bit
-                    audio = audio.set_frame_rate(SAMPLE_RATE).set_channels(1).set_sample_width(2)
-                    
-                    import tempfile
-                    temp_dir = tempfile.gettempdir()
-                    converted_file_path = os.path.join(temp_dir, f"converted_{os.path.basename(file_path)}.wav")
-                    audio.export(converted_file_path, format="wav")
-                    file_path = converted_file_path
-                    
-                except ImportError:
-                    print("pydub не установлен, не могу конвертировать")
-                    return ""
-                except Exception as e:
-                    print(f"Ошибка конвертации: {e}")
-                    pass
-        except Exception as e:
-            print(f"Ошибка при определении формата: {e}")
-
-        # Начало чтения аудио-данных
-        try:
-            with wave.open(file_path, 'rb') as wf:
-                channels = wf.getnchannels()
-                sampwidth = wf.getsampwidth()
-                framerate = wf.getframerate()
-                nframes = wf.getnframes()
-                
-                if nframes == 0:
-                    print("Аудиофайл не содержит данных")
-                    return ""
-                
-                frames = wf.readframes(nframes)
-                if len(frames) == 0:
-                    print("Не удалось прочитать аудиоданные")
-                    return ""
-
-                # Конвертация в numpy массив для ресэмплинга и моно  
-                if sampwidth == 1: dtype = np.uint8
-                elif sampwidth == 2: dtype = np.int16
-                elif sampwidth == 4: dtype = np.int32
-                else: dtype = np.int16
-                
-                audio_array = np.frombuffer(frames, dtype=dtype)
-                if len(audio_array) == 0:
-                    print("Пустой аудио массив")
-                    return ""
-                
-                # Конвертируем в моно если нужно  
-                if channels == 2:
-                    print("Конвертирую стерео в моно")
-                    if len(audio_array) % 2 != 0:
-                        audio_array = audio_array[:-1]
-                    audio_array = audio_array.reshape(-1, 2)
-                    audio_array = np.mean(audio_array, axis=1).astype(dtype)
-                    channels = 1
-                
-                # Конвертируем в 16-бит если нужно  
-                if sampwidth != 2:
-                    print(f"Конвертирую разрядность с {sampwidth*8} на 16 бит")
-                    if sampwidth == 1:
-                        audio_array = ((audio_array.astype(np.float32) - 128) * 256).astype(np.int16)
-                    elif sampwidth == 4:
-                        audio_array = (audio_array // 65536).astype(np.int16)
-                    sampwidth = 2
-                
-                # Ресэмплинг если нужно 
-                if framerate != SAMPLE_RATE:
-                    print(f"Конвертирую частоту с {framerate} на {SAMPLE_RATE}")
-                    if len(audio_array) > 1:
-                        ratio = SAMPLE_RATE / framerate
-                        new_length = max(1, int(len(audio_array) * ratio))
-                        indices = np.linspace(0, len(audio_array) - 1, new_length)
-                        audio_array = np.interp(indices, np.arange(len(audio_array)), 
-                                               audio_array.astype(np.float32)).astype(np.int16)
-                        framerate = SAMPLE_RATE
-                
-                frames = audio_array.tobytes()
-        
-        except (wave.Error, EOFError, Exception) as e:
-            print(f"Ошибка чтения WAV файла: {e}")
-            print("Попытка чтения как raw аудио...")
-            
-            # Попытка обработать как raw аудио  
-            try:
-                with open(file_path, 'rb') as f:
-                    raw_data = f.read()
-                if len(raw_data) < 4: return ""
-                if raw_data.startswith(b'RIFF'):
-                    header_size = 44
-                    if len(raw_data) > header_size: raw_data = raw_data[header_size:]
-                    else: return ""
-                if len(raw_data) % 2 != 0: raw_data = raw_data[:-1]
-                frames = raw_data
-                framerate = SAMPLE_RATE
-                sampwidth = 2
-                channels = 1
-            except Exception as e2:
-                print(f"Ошибка чтения raw аудио: {e2}")
-                return ""
-        
-        # Инициализируем модель распознавания локально  
-        from vosk import Model, KaldiRecognizer
-        model = Model(VOSK_MODEL_PATH)
-        rec = KaldiRecognizer(model, framerate)
-        
-        print("Начинаю распознавание...")
-        results = []
-        chunk_size = framerate * sampwidth * channels // 10 # 0.1 секунды
-        
-        # Цикл распознавания по чанкам  
-        for i in range(0, len(frames), chunk_size):
-            chunk = frames[i:i + chunk_size]
-            if len(chunk) == 0: break
-            if rec.AcceptWaveform(chunk):
-                part = json.loads(rec.Result())
-                if part.get("text", "").strip():
-                    results.append(part["text"].strip())
-                    print(f"Частичный результат: {part['text']}")
-        
-        # Финальный результат  
-        final_result = json.loads(rec.FinalResult())
-        if final_result.get("text", "").strip():
-            results.append(final_result["text"].strip())
-            print(f"Финальный результат: {final_result['text']}")
-        
-        full_text = " ".join(results).strip()
-        return full_text
-        
+        from backend.transcription.whisperx_transcriber import WhisperXTranscriber
+        wx = WhisperXTranscriber()
+        ok, text = wx.transcribe_audio_file(file_path)
+        wx.cleanup()
+        return text if ok else ""
     except Exception as e:
-        print(f"Ошибка при распознавании речи из файла: {e}")
+        print(f"Ошибка локального WhisperX: {e}")
         import traceback
         traceback.print_exc()
         return ""
-    finally:
-        # Очистка временных файлов  
-        if 'converted_file_path' in locals() and converted_file_path and os.path.exists(converted_file_path):
-            try:
-                os.remove(converted_file_path)
-                print(f"Удален временный файл: {converted_file_path}")
-            except: pass
+
 
 def run_voice():
     """Запуск голосового интерфейса в консоли  """
-    if not check_vosk_model():
-        raise Exception("Модель распознавания речи не найдена")
+    if not check_stt_available():
+        raise Exception("STT недоступен: включите USE_LLM_SVC или установите локальный WhisperX")
     
     init_tts()
     

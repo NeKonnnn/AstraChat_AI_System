@@ -36,6 +36,9 @@ wheels/
 *.egg
 MANIFEST
 
+# бэкап воска
+_backup_vosk_removal/
+
 # Model weights and directories
 model_small/
 /models/

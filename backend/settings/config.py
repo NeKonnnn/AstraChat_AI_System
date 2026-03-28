@@ -280,6 +280,21 @@ class Settings(BaseModel):
                     for key, value in llm_svc_data.items():
                         if key not in settings_data["llm_service"]:
                             settings_data["llm_service"][key] = value
+
+            # microservices.llm (config.yml) — алиас к llm_service
+            if "microservices" in config_data and "llm" in config_data.get("microservices", {}):
+                llm_ms = config_data["microservices"]["llm"]
+                if isinstance(llm_ms, dict):
+                    if llm_ms.get("url") and "base_url" not in settings_data["llm_service"]:
+                        settings_data["llm_service"]["base_url"] = llm_ms["url"]
+                    if "timeout" in llm_ms and "timeout" not in settings_data["llm_service"]:
+                        settings_data["llm_service"]["timeout"] = llm_ms["timeout"]
+                    models_block = llm_ms.get("models")
+                    if isinstance(models_block, dict):
+                        if models_block.get("default") and "default_model" not in settings_data["llm_service"]:
+                            settings_data["llm_service"]["default_model"] = models_block["default"]
+                        if models_block.get("fallback") is not None and "fallback_model" not in settings_data["llm_service"]:
+                            settings_data["llm_service"]["fallback_model"] = models_block["fallback"]
             
             # Создаем экземпляр Settings
             settings = cls(**settings_data)

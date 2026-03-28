@@ -29,6 +29,8 @@ class LlamaHandler(BaseLLMHandler):
         self.n_gpu_layers = settings.model.gpu_layers
         self.verbose = settings.model.verbose
         self.is_initialized = False
+        # Удерживается на время cleanup()+initialize() при смене модели; другие эндпоинты ждут, а не получают 503.
+        self._model_switch_lock = asyncio.Lock()
 
     @classmethod
     def get_instance(cls):
@@ -225,24 +227,25 @@ class LlamaHandler(BaseLLMHandler):
         if not os.path.exists(model_path):
             logger.error(f"Model file not found: {model_path}")
             return False
-        if self.model_name == model_name and self.is_loaded():
-            logger.info(f"Model {model_name} already loaded")
-            return True
-        try:
-            await self.cleanup()
-            self.model_path = model_path
-            self.model_name = model_name
-            await self.initialize()
-            logger.info(f"Switched to model: {model_name}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to load model {model_name}: {e}")
-            # Восстанавливаем предыдущую модель из конфига, чтобы сервис не оставался в 503
+        async with self._model_switch_lock:
+            if self.model_name == model_name and self.is_loaded():
+                logger.info(f"Model {model_name} already loaded")
+                return True
             try:
-                self.model_path = settings.model.path
-                self.model_name = settings.model.name
+                await self.cleanup()
+                self.model_path = model_path
+                self.model_name = model_name
                 await self.initialize()
-                logger.info(f"Restored default model: {self.model_name}")
-            except Exception as restore_e:
-                logger.error(f"Failed to restore default model: {restore_e}")
-            return False
+                logger.info(f"Switched to model: {model_name}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to load model {model_name}: {e}")
+                # Восстанавливаем предыдущую модель из конфига, чтобы сервис не оставался в 503
+                try:
+                    self.model_path = settings.model.path
+                    self.model_name = settings.model.name
+                    await self.initialize()
+                    logger.info(f"Restored default model: {self.model_name}")
+                except Exception as restore_e:
+                    logger.error(f"Failed to restore default model: {restore_e}")
+                return False

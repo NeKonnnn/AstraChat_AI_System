@@ -115,7 +115,7 @@ export interface AppState {
   
   // Транскрибация
   transcriptionSettings: {
-    engine: 'whisperx' | 'vosk';
+    engine: 'whisperx';
     language: string;
     auto_detect: boolean;
   };
@@ -158,7 +158,7 @@ type AppAction =
   | { type: 'SET_RECORDING'; payload: boolean }
   | { type: 'SET_SPEAKING'; payload: boolean }
   | { type: 'SET_VOICE_SETTINGS'; payload: { voice_id: string; speech_rate: number } }
-  | { type: 'SET_TRANSCRIPTION_SETTINGS'; payload: { engine: 'whisperx' | 'vosk'; language: string; auto_detect: boolean } }
+  | { type: 'SET_TRANSCRIPTION_SETTINGS'; payload: { engine: 'whisperx'; language: string; auto_detect: boolean } }
   | { type: 'SET_LOADED_DOCUMENT'; payload: string | null }
   | { type: 'ADD_NOTIFICATION'; payload: { type: string; message: string } }
   | { type: 'REMOVE_NOTIFICATION'; payload: string }
@@ -902,7 +902,7 @@ export function useAppActions() {
       dispatch({ type: 'SET_SPEAKING', payload: speaking });
     },
     
-    setTranscriptionSettings: (settings: { engine: 'whisperx' | 'vosk'; language: string; auto_detect: boolean }) => {
+    setTranscriptionSettings: (settings: { engine: 'whisperx'; language: string; auto_detect: boolean }) => {
       dispatch({ type: 'SET_TRANSCRIPTION_SETTINGS', payload: settings });
     },
     

@@ -12,11 +12,6 @@ except ImportError:
     WhisperXTranscriber = None
 
 try:
-    from backend.transcription.transcriber import Transcriber
-except ImportError:
-    Transcriber = None
-
-try:
     from backend.document_processor import DocumentProcessor
 except ImportError:
     DocumentProcessor = None
@@ -39,6 +34,5 @@ except ImportError:
 __all__ = [
     'UniversalTranscriber',
     'WhisperXTranscriber',
-    'Transcriber',
     'DocumentProcessor'
 ]

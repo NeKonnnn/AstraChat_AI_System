@@ -132,7 +132,10 @@ async def get_transcription_settings():
 async def update_transcription_settings(settings_data: TranscriptionSettings):
     try:
         if settings_data.engine:
-            state.current_transcription_engine = settings_data.engine.lower()
+            eng = settings_data.engine.lower()
+            if eng == "vosk":
+                eng = "whisperx"
+            state.current_transcription_engine = eng
             if state.transcriber and hasattr(state.transcriber, "switch_engine"):
                 state.transcriber.switch_engine(state.current_transcription_engine)
         if settings_data.language:

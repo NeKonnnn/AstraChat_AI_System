@@ -42,8 +42,6 @@ microservices:
     enabled: true
     url: "http://stt-service:8000"
     timeout: 900
-    vosk:
-      enabled: true
     whisperx:
       enabled: true
       compute_type: "int8"

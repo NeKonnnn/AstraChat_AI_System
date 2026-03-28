@@ -44,10 +44,6 @@ generation:
   default_max_tokens: 1
   stream: false
 
-vosk:
-  enabled: false
-  model_path: "/dev/null"
-
 silero:
   enabled: false
   models_dir: "/dev/null"
