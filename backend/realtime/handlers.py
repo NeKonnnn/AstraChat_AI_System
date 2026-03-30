@@ -19,6 +19,7 @@ from backend.app_state import (
     reload_model_by_path, model_load_lock,
     stop_generation_flags, stop_transcription_flags,
     get_current_model_path,
+    get_rag_chat_top_k,
 )
 from backend.realtime.helpers import (
     _is_structure_query,
@@ -26,9 +27,18 @@ from backend.realtime.helpers import (
     _resolve_agent_chat_params,
     kb_search_agent_documents,
 )
+from backend.realtime.rag_evidence import (
+    build_rag_id_to_filename,
+    filter_rag_hits_by_score,
+    maybe_rag_no_evidence_message,
+    rag_document_label,
+    rag_guard_env,
+)
+from backend.rag_query.post_generation import maybe_replace_ungrounded
+from backend.rag_query.prompts import RAG_STRICT_NOT_FOUND_MESSAGE, merge_strict_rag_system_prompt
 
 logger = logging.getLogger(__name__)
-_VALID_RAG_STRATEGIES = {"auto", "reranking", "hierarchical", "hybrid", "standard"}
+_VALID_RAG_STRATEGIES = {"auto", "hierarchical", "hybrid", "standard", "graph"}
 
 
 async def _get_conversation_project_id(conversation_id: str) -> "Optional[str]":
@@ -167,6 +177,21 @@ def register_handlers(sio):
             orchestrator = get_agent_orchestrator()
             use_agent_mode = orchestrator and orchestrator.get_mode() == "agent"
             use_multi_llm_mode = orchestrator and orchestrator.get_mode() == "multi-llm"
+            chat_mode = "multi-llm" if use_multi_llm_mode else ("agent" if use_agent_mode else "direct")
+            logger.info(
+                "[RAG] chat_message mode=%s effective_strategy=%s payload_rag_strategy=%r "
+                "settings_rag_strategy=%s agentic_rag_enabled=%s "
+                "use_kb_rag=%s use_memory_library_rag=%s use_agent_scoped_kb=%s project_id=%s",
+                chat_mode,
+                effective_rag_strategy,
+                requested_rag_strategy or "",
+                getattr(state, "current_rag_strategy", "auto"),
+                getattr(state, "agentic_rag_enabled", True),
+                use_kb_rag,
+                use_memory_library_rag,
+                use_agent_scoped_kb,
+                project_id,
+            )
 
             # -- stream helpers
             async def async_stream_cb(chunk, acc):
@@ -251,16 +276,25 @@ async def _handle_multi_llm(
         extra_line="Ниже для каждой модели - отдельный блок перед вызовом LLM.",
     )
 
+    min_sim, rag_block = rag_guard_env()
+    context_added = False
+    global_attempted = False
     final_user_message = user_message
 
     # RAG из документов проекта (приоритет — специфичен для текущего проекта)
     if rag_client and project_id:
         try:
-            proj_hits = await rag_client.project_rag_search(user_message, project_id=project_id, k=8)
+            proj_rows = list(await rag_client.project_rag_list_documents(project_id) or [])
+            proj_id_name = build_rag_id_to_filename(proj_rows)
+            proj_hits = await rag_client.project_rag_search(
+                user_message, project_id=project_id, k=get_rag_chat_top_k(), strategy=rag_strategy
+            )
+            proj_hits = filter_rag_hits_by_score(proj_hits, min_sim)
             if proj_hits:
                 parts, total = [], 0
                 for i, (content, score, doc_id, chunk_idx) in enumerate(proj_hits, 1):
-                    frag = f"Фрагмент {i} (document_id={doc_id}, чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
+                    title = rag_document_label(doc_id, proj_id_name)
+                    frag = f"Фрагмент {i} (документ «{title}», чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
                     if total + len(frag) > 12000:
                         frag = frag[:max(0, 12000 - total - 80)] + "\n... [обрезано]\n"
                         parts.append(frag)
@@ -271,18 +305,24 @@ async def _handle_multi_llm(
                     f"Документы проекта (RAG):\n{chr(10).join(parts)}\n"
                     f"Вопрос: {user_message}"
                 )
+                context_added = True
                 logger.info(f"[multi-llm project_rag] {len(proj_hits)} фрагментов, project={project_id}")
         except Exception as e:
             logger.error(f"multi-llm project RAG error: {e}")
 
     # Глобальный RAG контекст (если нет контекста из проекта)
     if rag_client and final_user_message == user_message:
+        global_attempted = True
         try:
-            hits = await rag_client.search(user_message, k=8, strategy=rag_strategy)
+            glob_rows = list(await rag_client.list_documents() or [])
+            glob_id_name = build_rag_id_to_filename(glob_rows)
+            hits = await rag_client.search(user_message, k=get_rag_chat_top_k(), strategy=rag_strategy)
+            hits = filter_rag_hits_by_score(hits, min_sim)
             if hits:
                 parts, total = [], 0
                 for i, (content, score, doc_id, chunk_idx) in enumerate(hits, 1):
-                    frag = f"Фрагмент {i} (document_id={doc_id}, чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
+                    title = rag_document_label(doc_id, glob_id_name)
+                    frag = f"Фрагмент {i} (документ «{title}», чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
                     if total + len(frag) > 12000:
                         frag = frag[:max(0, 12000 - total - 80)] + "\n... [обрезано]\n"
                         parts.append(frag)
@@ -290,6 +330,7 @@ async def _handle_multi_llm(
                     parts.append(frag)
                     total += len(frag)
                 final_user_message = f"Контекст: {chr(10).join(parts)}\nВопрос: {user_message}"
+                context_added = True
         except Exception as e:
             logger.error(f"multi-llm RAG error: {e}")
 
@@ -297,43 +338,84 @@ async def _handle_multi_llm(
     if rag_client and (use_kb_rag or use_agent_scoped_kb):
         prefix = "База Знаний (постоянные документы)"
         try:
+            kb_id_name = build_rag_id_to_filename(
+                list(await rag_client.kb_list_documents() or [])
+            )
             if use_agent_scoped_kb:
                 hits = await kb_search_agent_documents(
-                    rag_client, user_message, agent_kb_doc_ids or [], k=8
+                    rag_client, user_message, agent_kb_doc_ids or [], k=get_rag_chat_top_k()
                 )
             else:
-                hits = await rag_client.kb_search(user_message, k=8)
+                hits = await rag_client.kb_search(user_message, k=get_rag_chat_top_k(), strategy=rag_strategy)
+            hits = filter_rag_hits_by_score(list(hits or []), min_sim)
             if hits:
                 parts, total = [], 0
                 for i, (content, score, doc_id, chunk_idx) in enumerate(hits, 1):
-                    frag = f"Фрагмент {i} (doc_id={doc_id}): {content}\n"
+                    title = rag_document_label(doc_id, kb_id_name)
+                    frag = f"Фрагмент {i} (документ «{title}»): {content}\n"
                     if total + len(frag) > 10000:
                         parts.append(frag[:max(0, 10000 - total - 60)] + "\n...\n")
                         break
                     parts.append(frag)
                     total += len(frag)
                 final_user_message = f"{prefix}:\n{''.join(parts)}\n\n{final_user_message}"
+                context_added = True
         except Exception as e:
             logger.error(f"multi-llm kb_search: {e}")
 
     if use_memory_library_rag and rag_client:
         try:
-            hits = await rag_client.memory_rag_search(user_message, k=8)
+            mem_id_name = build_rag_id_to_filename(
+                list(await rag_client.memory_rag_list_documents() or [])
+            )
+            hits = await rag_client.memory_rag_search(user_message, k=get_rag_chat_top_k(), strategy=rag_strategy)
+            hits = filter_rag_hits_by_score(list(hits or []), min_sim)
             prefix = "Документы из настроек (библиотека памяти)"
             if hits:
                 parts, total = [], 0
                 for i, (content, score, doc_id, chunk_idx) in enumerate(hits, 1):
-                    frag = f"Фрагмент {i} (doc_id={doc_id}): {content}\n"
+                    title = rag_document_label(doc_id, mem_id_name)
+                    frag = f"Фрагмент {i} (документ «{title}»): {content}\n"
                     if total + len(frag) > 10000:
                         parts.append(frag[:max(0, 10000 - total - 60)] + "\n...\n")
                         break
                     parts.append(frag)
                     total += len(frag)
                 final_user_message = f"{prefix}:\n{''.join(parts)}\n\n{final_user_message}"
+                context_added = True
         except Exception as e:
             logger.error(f"multi-llm memory_rag_search: {e}")
 
     eff_system_prompt = project_instructions.strip() if project_instructions else None
+    if context_added:
+        eff_system_prompt = merge_strict_rag_system_prompt(eff_system_prompt)
+
+    canned = await maybe_rag_no_evidence_message(
+        rag_client,
+        block_when_no_evidence=rag_block,
+        context_added=context_added,
+        global_attempted=global_attempted,
+        project_id=project_id,
+        use_kb_rag=use_kb_rag,
+        use_memory_library_rag=use_memory_library_rag,
+        use_agent_scoped_kb=use_agent_scoped_kb,
+        agent_kb_doc_ids=agent_kb_doc_ids,
+        implicit_global_corpus=False,
+    )
+    if canned:
+        for i, model_name in enumerate(multi_llm_models):
+            await sio.emit(
+                "multi_llm_complete",
+                {
+                    "model": model_name,
+                    "response": canned,
+                    "error": False,
+                    "index": i,
+                    "total": len(multi_llm_models),
+                },
+                room=sid,
+            )
+        return
 
     async def _gen_one(model_name: str):
         try:
@@ -364,6 +446,10 @@ async def _handle_multi_llm(
                         system_prompt=eff_system_prompt,
                     ),
                 )
+            if context_added and isinstance(resp, str) and resp.strip():
+                resp = await maybe_replace_ungrounded(
+                    final_user_message[:20000], resp, RAG_STRICT_NOT_FOUND_MESSAGE
+                )
             return {"model": model_name, "response": resp}
         except Exception as e:
             return {"model": model_name, "response": f"Ошибка: {e}", "error": True}
@@ -393,6 +479,7 @@ async def _handle_agent_mode(
     rag_strategy="auto",
 ):
     await sio.emit("chat_thinking", {"status": "processing", "message": "Обрабатываю запрос через агентную архитектуру..."}, room=sid)
+    agentic_rag_enabled = bool(getattr(state, "agentic_rag_enabled", True))
 
     async def agent_stream_cb(chunk, acc):
         if stop_generation_flags.get(sid, False):
@@ -411,6 +498,10 @@ async def _handle_agent_mode(
         "sio": sio, "stream_callback": agent_stream_cb if streaming else None,
         "_main_event_loop": asyncio.get_running_loop(),
         "project_instructions": project_instructions or "",
+        "project_id": project_id,
+        "rag_strategy": rag_strategy,
+        "agentic_rag_enabled": agentic_rag_enabled,
+        "agentic_max_iterations": int(getattr(state, "agentic_max_iterations", 2)),
     }
     set_tool_context(context)
 
@@ -419,10 +510,12 @@ async def _handle_agent_mode(
     if project_instructions and project_instructions.strip():
         effective_message = f"[Инструкции проекта: {project_instructions.strip()}]\n\n{user_message}"
 
-    # RAG из документов проекта
-    if rag_client and project_id:
+    # Legacy pre-retrieval (fallback, если Agentic RAG отключен)
+    if (not agentic_rag_enabled) and rag_client and project_id:
         try:
-            proj_hits = await rag_client.project_rag_search(user_message, project_id=project_id, k=6) or []
+            proj_hits = await rag_client.project_rag_search(
+                user_message, project_id=project_id, k=get_rag_chat_top_k(), strategy=rag_strategy
+            ) or []
             if proj_hits:
                 parts, tl = [], 0
                 for i, (c, s, did, ch) in enumerate(proj_hits, 1):
@@ -436,15 +529,15 @@ async def _handle_agent_mode(
         except Exception as e:
             logger.error(f"Agent project RAG error: {e}")
 
-    if rag_client and (use_kb_rag or use_agent_scoped_kb):
+    if (not agentic_rag_enabled) and rag_client and (use_kb_rag or use_agent_scoped_kb):
         prefix = "База Знаний (документы)"
         try:
             if use_agent_scoped_kb:
                 hits = await kb_search_agent_documents(
-                    rag_client, user_message, agent_kb_doc_ids or [], k=6
+                    rag_client, user_message, agent_kb_doc_ids or [], k=get_rag_chat_top_k()
                 ) or []
             else:
-                hits = await rag_client.kb_search(user_message, k=6) or []
+                hits = await rag_client.kb_search(user_message, k=get_rag_chat_top_k(), strategy=rag_strategy) or []
             if hits:
                 parts, tl = [], 0
                 for i, (c, s, did, ch) in enumerate(hits, 1):
@@ -457,10 +550,10 @@ async def _handle_agent_mode(
         except Exception as e:
             logger.error(f"Agent kb_search: {e}")
 
-    if use_memory_library_rag and rag_client:
+    if (not agentic_rag_enabled) and use_memory_library_rag and rag_client:
         prefix = "Документы из настроек (библиотека памяти)"
         try:
-            hits = await rag_client.memory_rag_search(user_message, k=6) or []
+            hits = await rag_client.memory_rag_search(user_message, k=get_rag_chat_top_k(), strategy=rag_strategy) or []
             if hits:
                 parts, tl = [], 0
                 for i, (c, s, did, ch) in enumerate(hits, 1):
@@ -520,14 +613,30 @@ async def _handle_direct(
     project_instructions=None,
     rag_strategy="auto",
 ):
+    min_sim, rag_block = rag_guard_env()
+    context_added = False
+    global_attempted = False
     final_message = user_message
     images = None
     proj_hits_for_trace = []  # сохраняем для document_search_trace
+    global_hits_for_trace: list = []  # глобальная библиотека (не project/kb/memory) — для трейса в UI
+
+    proj_id_name: dict = {}
+    glob_id_name: dict = {}
+    if rag_client and project_id:
+        try:
+            proj_rows = list(await rag_client.project_rag_list_documents(project_id) or [])
+            proj_id_name = build_rag_id_to_filename(proj_rows)
+        except Exception:
+            pass
 
     # RAG из документов проекта (приоритет — специфичен для текущего проекта)
     if rag_client and project_id:
         try:
-            proj_hits = await rag_client.project_rag_search(user_message, project_id=project_id, k=8)
+            proj_hits = await rag_client.project_rag_search(
+                user_message, project_id=project_id, k=get_rag_chat_top_k(), strategy=rag_strategy
+            )
+            proj_hits = filter_rag_hits_by_score(proj_hits, min_sim)
             if proj_hits:
                 if _is_structure_query(user_message):
                     seen = {(d, i) for _, _, d, i in proj_hits}
@@ -541,7 +650,8 @@ async def _handle_direct(
                             pass
                 parts, total = [], 0
                 for i, (content, score, doc_id, chunk_idx) in enumerate(proj_hits, 1):
-                    frag = f"Фрагмент {i} (document_id={doc_id}, чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
+                    title = rag_document_label(doc_id, proj_id_name)
+                    frag = f"Фрагмент {i} (документ «{title}», чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
                     if total + len(frag) > 12000:
                         parts.append(frag[:max(0, 12000 - total - 80)] + "\n... [обрезано]\n")
                         break
@@ -554,14 +664,22 @@ async def _handle_direct(
                     f"Ответь на основе этих документов. Перечисляй только то, что явно есть в фрагментах."
                 )
                 proj_hits_for_trace = proj_hits  # запомним для трейса
+                context_added = True
                 logger.info(f"[direct project_rag] {len(proj_hits)} фрагментов, project={project_id}")
         except Exception as e:
             logger.error(f"Direct project RAG error: {e}")
 
     # Глобальный RAG из загруженных документов (если нет контекста из проекта)
     if rag_client and final_message == user_message:
+        global_attempted = True
         try:
-            hits = await rag_client.search(user_message, k=8, strategy=rag_strategy)
+            hits = await rag_client.search(user_message, k=get_rag_chat_top_k(), strategy=rag_strategy)
+            try:
+                glob_rows = list(await rag_client.list_documents() or [])
+                glob_id_name = build_rag_id_to_filename(glob_rows)
+            except Exception:
+                pass
+            hits = filter_rag_hits_by_score(hits, min_sim)
             if hits:
                 if _is_structure_query(user_message):
                     seen = {(d, i) for _, _, d, i in hits}
@@ -573,9 +691,11 @@ async def _handle_direct(
                                     seen.add((did, idx))
                         except Exception:
                             pass
+                global_hits_for_trace = list(hits)
                 parts, total = [], 0
                 for i, (content, score, doc_id, chunk_idx) in enumerate(hits, 1):
-                    frag = f"Фрагмент {i} (document_id={doc_id}, чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
+                    title = rag_document_label(doc_id, glob_id_name)
+                    frag = f"Фрагмент {i} (документ «{title}», чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
                     if total + len(frag) > 12000:
                         parts.append(frag[:max(0, 12000 - total - 80)] + "\n... [обрезано]\n")
                         break
@@ -587,67 +707,87 @@ async def _handle_direct(
                     f"Вопрос: {user_message}\n"
                     f"Ответь на основе этих документов. Перечисляй только то, что явно есть в фрагментах."
                 )
+                context_added = True
         except Exception as e:
             logger.error(f"Direct RAG error: {e}")
 
     # KB / memory / project-RAG trace
     document_search_trace = None
     kb_hits, mem_hits = [], []
+    kb_id_name: dict = {}
+    mem_id_name: dict = {}
 
     # Трейс project-RAG (всегда строим, если были хиты — вне зависимости от KB-флагов)
     if proj_hits_for_trace and rag_client:
-        proj_id_name: dict = {}
-        try:
-            for d in await rag_client.project_rag_list_documents(project_id):
-                proj_id_name[d["id"]] = d.get("filename") or str(d["id"])
-        except Exception:
-            pass
+        trace_proj_map = proj_id_name
+        if not trace_proj_map:
+            try:
+                trace_proj_map = build_rag_id_to_filename(
+                    list(await rag_client.project_rag_list_documents(project_id) or [])
+                )
+            except Exception:
+                trace_proj_map = {}
         hits_out, files_used = [], set()
         for content, score, doc_id, chunk_idx in proj_hits_for_trace:
             if doc_id is None:
                 continue
-            fn = proj_id_name.get(doc_id, f"doc_{doc_id}")
+            try:
+                fn = trace_proj_map.get(int(doc_id))
+            except (TypeError, ValueError):
+                fn = None
+            if not fn:
+                fn = f"doc_{doc_id}"
             files_used.add(fn)
             hits_out.append({"file": fn, "anchor": f"chunk@{chunk_idx}({fn})",
                 "relevance": round(float(score), 4), "content": (content or "")[:12000],
                 "chunkIndex": chunk_idx, "documentId": doc_id, "store": "project"})
         if hits_out:
-            document_search_trace = {"query": user_message, "sourceFiles": sorted(files_used), "hits": hits_out}
+            document_search_trace = {
+                "query": user_message,
+                "strategy": rag_strategy,
+                "sourceFiles": sorted(files_used),
+                "hits": hits_out,
+            }
 
     if rag_client and (use_kb_rag or use_agent_scoped_kb or use_memory_library_rag):
+        kb_rows: list = []
+        mem_rows: list = []
+        kb_hits: list = []
+        mem_hits: list = []
+        if use_kb_rag or use_agent_scoped_kb:
+            try:
+                kb_rows = list(await rag_client.kb_list_documents() or [])
+            except Exception:
+                kb_rows = []
+        if use_memory_library_rag:
+            try:
+                mem_rows = list(await rag_client.memory_rag_list_documents() or [])
+            except Exception:
+                mem_rows = []
+
         if use_kb_rag or use_agent_scoped_kb:
             try:
                 if use_agent_scoped_kb:
                     kb_hits = list(
                         await kb_search_agent_documents(
-                            rag_client, user_message, agent_kb_doc_ids or [], k=8
+                            rag_client, user_message, agent_kb_doc_ids or [], k=get_rag_chat_top_k()
                         )
                         or []
                     )
                 else:
-                    kb_hits = list(await rag_client.kb_search(user_message, k=8) or [])
+                    kb_hits = list(await rag_client.kb_search(user_message, k=get_rag_chat_top_k(), strategy=rag_strategy) or [])
             except Exception as e:
                 logger.error(f"KB search: {e}")
+            kb_hits = filter_rag_hits_by_score(kb_hits, min_sim)
         if use_memory_library_rag:
             try:
-                mem_hits = list(await rag_client.memory_rag_search(user_message, k=8) or [])
+                mem_hits = list(await rag_client.memory_rag_search(user_message, k=get_rag_chat_top_k(), strategy=rag_strategy) or [])
             except Exception as e:
                 logger.error(f"memory_rag: {e}")
+            mem_hits = filter_rag_hits_by_score(mem_hits, min_sim)
 
-        # build trace
-        kb_id_name, mem_id_name = {}, {}
-        try:
-            if (use_kb_rag or use_agent_scoped_kb) and kb_hits:
-                for d in await rag_client.kb_list_documents():
-                    kb_id_name[d["id"]] = d.get("filename") or str(d["id"])
-        except Exception:
-            pass
-        try:
-            if use_memory_library_rag and mem_hits:
-                for d in await rag_client.memory_rag_list_documents():
-                    mem_id_name[d["id"]] = d.get("filename") or str(d["id"])
-        except Exception:
-            pass
+        kb_id_name = build_rag_id_to_filename(kb_rows)
+        mem_id_name = build_rag_id_to_filename(mem_rows)
 
         # Если project-trace уже создан — дополняем его, иначе создаём новый
         hits_out = document_search_trace["hits"] if document_search_trace else []
@@ -655,7 +795,12 @@ async def _handle_direct(
         for content, score, doc_id, chunk_idx in kb_hits:
             if doc_id is None:
                 continue
-            fn = kb_id_name.get(doc_id, f"doc_{doc_id}")
+            try:
+                fn = kb_id_name.get(int(doc_id))
+            except (TypeError, ValueError):
+                fn = None
+            if not fn:
+                fn = f"doc_{doc_id}"
             files_used.add(fn)
             hits_out.append({"file": fn, "anchor": f"chunk@{chunk_idx}({fn})",
                 "relevance": round(float(score), 4), "content": (content or "")[:12000],
@@ -663,27 +808,80 @@ async def _handle_direct(
         for content, score, doc_id, chunk_idx in mem_hits:
             if doc_id is None:
                 continue
-            fn = mem_id_name.get(doc_id, f"doc_{doc_id}")
+            try:
+                fn = mem_id_name.get(int(doc_id))
+            except (TypeError, ValueError):
+                fn = None
+            if not fn:
+                fn = f"doc_{doc_id}"
             files_used.add(fn)
             hits_out.append({"file": fn, "anchor": f"chunk@{chunk_idx}({fn})",
                 "relevance": round(float(score), 4), "content": (content or "")[:12000],
                 "chunkIndex": chunk_idx, "documentId": doc_id, "store": "memory"})
-        document_search_trace = {"query": user_message, "sourceFiles": sorted(files_used), "hits": hits_out}
+        document_search_trace = {
+            "query": user_message,
+            "strategy": rag_strategy,
+            "sourceFiles": sorted(files_used),
+            "hits": hits_out,
+        }
 
-    for hits_list, prefix in [
-        (kb_hits, "База Знаний (постоянные документы)"),
-        (mem_hits, "Документы из настроек (библиотека памяти)"),
+    # Глобальный RAG (загрузки в /api/documents) — раньше не попадал в трейс → в UI не было PDF/файлов из глобального корпуса
+    if global_hits_for_trace and rag_client:
+        trace_glob_map = glob_id_name if glob_id_name else {}
+        if not trace_glob_map:
+            try:
+                trace_glob_map = build_rag_id_to_filename(
+                    list(await rag_client.list_documents() or [])
+                )
+            except Exception:
+                trace_glob_map = {}
+        hits_out = list(document_search_trace["hits"]) if document_search_trace else []
+        files_used = set(document_search_trace["sourceFiles"]) if document_search_trace else set()
+        for content, score, doc_id, chunk_idx in global_hits_for_trace:
+            if doc_id is None:
+                continue
+            try:
+                fn = trace_glob_map.get(int(doc_id))
+            except (TypeError, ValueError):
+                fn = None
+            if not fn:
+                fn = f"doc_{doc_id}"
+            files_used.add(fn)
+            hits_out.append(
+                {
+                    "file": fn,
+                    "anchor": f"chunk@{chunk_idx}({fn})",
+                    "relevance": round(float(score), 4),
+                    "content": (content or "")[:12000],
+                    "chunkIndex": chunk_idx,
+                    "documentId": doc_id,
+                    "store": "global",
+                }
+            )
+        if hits_out:
+            document_search_trace = {
+                "query": user_message,
+                "strategy": rag_strategy,
+                "sourceFiles": sorted(files_used),
+                "hits": hits_out,
+            }
+
+    for hits_list, prefix, idnm in [
+        (kb_hits, "База Знаний (постоянные документы)", kb_id_name),
+        (mem_hits, "Документы из настроек (библиотека памяти)", mem_id_name),
     ]:
         if hits_list:
             parts, total = [], 0
             for i, (content, score, doc_id, chunk_idx) in enumerate(hits_list, 1):
-                frag = f"Фрагмент {i} (doc_id={doc_id}): {content}\n"
+                title = rag_document_label(doc_id, idnm)
+                frag = f"Фрагмент {i} (документ «{title}»): {content}\n"
                 if total + len(frag) > 10000:
                     parts.append(frag[:max(0, 10000 - total - 60)] + "\n...\n")
                     break
                 parts.append(frag)
                 total += len(frag)
             final_message = f"{prefix}:\n{''.join(parts)}\n\n{final_message}"
+            context_added = True
 
     eff_model_path = agent_profile["model_path"] or get_current_model_path()
 
@@ -698,12 +896,29 @@ async def _handle_direct(
     else:
         eff_system_prompt = base_system_prompt or None
 
+    if context_added:
+        eff_system_prompt = merge_strict_rag_system_prompt(eff_system_prompt)
+
+    canned = await maybe_rag_no_evidence_message(
+        rag_client,
+        block_when_no_evidence=rag_block,
+        context_added=context_added,
+        global_attempted=global_attempted,
+        project_id=project_id,
+        use_kb_rag=use_kb_rag,
+        use_memory_library_rag=use_memory_library_rag,
+        use_agent_scoped_kb=use_agent_scoped_kb,
+        agent_kb_doc_ids=agent_kb_doc_ids,
+        implicit_global_corpus=False,
+    )
+
     _terminal_chat_inference_banner(
         sid=sid, conversation_id=conversation_id, user_preview=final_message,
         mode_label="Прямой чат с LLM (одна модель)"
         + (" - параметры из выбранного агента" if agent_profile["model_path"] else ""),
         model_path_for_call=eff_model_path,
-        extra_line="RAG/KB уже учтены в final_message при необходимости.",
+        extra_line="RAG/KB уже учтены в final_message при необходимости."
+        + (" [RAG: ответ без LLM — нет релевантных фрагментов]" if canned else ""),
     )
 
     def _run_ask(stream, cb):
@@ -714,7 +929,11 @@ async def _handle_direct(
             system_prompt=eff_system_prompt, temperature=agent_profile["temperature"],
         )
 
-    if streaming:
+    if canned:
+        response = canned
+        if streaming:
+            await sio.emit("chat_chunk", {"chunk": canned, "accumulated": canned}, room=sid)
+    elif streaming:
         with concurrent.futures.ThreadPoolExecutor() as ex:
             response = await asyncio.get_event_loop().run_in_executor(ex, lambda: _run_ask(True, sync_stream_cb))
         if response is None or stop_generation_flags.get(sid, False):
@@ -724,6 +943,11 @@ async def _handle_direct(
     else:
         with concurrent.futures.ThreadPoolExecutor() as ex:
             response = await asyncio.get_event_loop().run_in_executor(ex, lambda: _run_ask(False, None))
+
+    if context_added and not canned and response:
+        response = await maybe_replace_ungrounded(
+            final_message[:20000], response, RAG_STRICT_NOT_FOUND_MESSAGE
+        )
 
     if stop_generation_flags.get(sid, False):
         stop_generation_flags[sid] = False

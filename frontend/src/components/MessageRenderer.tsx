@@ -1,8 +1,7 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Box, IconButton, Typography, Tooltip, Link, Paper, Table, TableBody, TableCell, TableContainer, TableHead, TableRow } from '@mui/material';
 import { ContentCopy as CopyIcon, Check as CheckIcon, Info as InfoIcon, Warning as WarningIcon, Error as ErrorIcon, CheckCircle as SuccessIcon, GetApp as DownloadIcon } from '@mui/icons-material';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import Editor from '@monaco-editor/react';
 import * as XLSX from 'xlsx';
 import CodeSelectionMenu from './CodeSelectionMenu';
 
@@ -46,6 +45,36 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
   
   const clickTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  // Стабильные пути для Monaco-моделей: назначаются один раз и не меняются при стриминге
+  const codeBlockPathsRef = useRef<Map<string, string>>(new Map());
+
+  const sanitizeRawContent = useCallback((raw: string): string => {
+    if (!raw) return raw;
+    // Нормализуем только экранированные формы тега em в обычные HTML-теги,
+    // чтобы <em>...</em> рендерился как курсив.
+    return raw
+      .replace(/&lt;\s*em\s*&gt;/gi, '<em>')
+      .replace(/&lt;\s*\/\s*em\s*&gt;/gi, '</em>')
+      .replace(/<\\\/\s*em\s*>/gi, '</em>');
+  }, []);
+
+  const getSelectionPlainText = useCallback((): string => {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) return '';
+
+    const range = selection.getRangeAt(0);
+    const temp = document.createElement('div');
+    temp.appendChild(range.cloneContents());
+
+    // Удаляем номера строк из выделения кода перед копированием.
+    temp.querySelectorAll('.react-syntax-highlighter-line-number').forEach((el) => el.remove());
+
+    const fromInnerText = (temp as HTMLDivElement).innerText || '';
+    const fromTextContent = temp.textContent || '';
+    const fallback = selection.toString() || '';
+
+    return (fromInnerText || fromTextContent || fallback).replace(/\u00A0/g, ' ').trimEnd();
+  }, []);
 
   // Слушаем изменения размера шрифта
   useEffect(() => {
@@ -134,7 +163,7 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
     const selection = window.getSelection();
     
     if (selection && selection.toString().trim()) {
-      const text = selection.toString().trim();
+      const text = getSelectionPlainText().trim();
       
       const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
       if (range && containerRef.current && containerRef.current.contains(range.commonAncestorContainer)) {
@@ -175,7 +204,7 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
     const selection = window.getSelection();
     
     if (selection && selection.toString().trim()) {
-      const text = selection.toString().trim();
+      const text = getSelectionPlainText().trim();
       
       const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
       if (range && containerRef.current && containerRef.current.contains(range.commonAncestorContainer)) {
@@ -679,7 +708,11 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
     }
     
     if (code !== undefined) {
-      // Маппинг языков для SyntaxHighlighter
+      // Убираем только служебный завершающий перенос из markdown-блока,
+      // чтобы не рисовать "лишнюю" пустую строку внизу.
+      code = code.replace(/\r\n/g, '\n').replace(/\n$/, '');
+
+      // Маппинг языков для Monaco
       const languageMap: { [key: string]: string } = {
         'js': 'javascript',
         'ts': 'typescript',
@@ -689,9 +722,40 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
         'yml': 'yaml',
         'cmd': 'batch',
         'ps1': 'powershell',
+        'shell': 'shell',
+        'cpp': 'cpp',
+        'c++': 'cpp',
+        'cc': 'cpp',
+        'cxx': 'cpp',
+        'cs': 'csharp',
+        'c#': 'csharp',
+        'java': 'java',
+        'rust': 'rust',
+        'rs': 'rust',
+        'haskell': 'haskell',
+        'hs': 'haskell',
+        'vba': 'vb',
+        'vb': 'vb',
+        'pascal': 'pascal',
+        'fortran': 'fortran',
+        'f90': 'fortran',
+        'f95': 'fortran',
       };
       
-      const highlightLanguage = languageMap[language] || language;
+      const editorLanguage = languageMap[language] || language || 'plaintext';
+      const codeLineCount = Math.max(1, code.split('\n').length);
+      const editorHeight = Math.max(120, codeLineCount * 22 + 18);
+
+      // Получаем или создаём стабильный путь для этого блока кода.
+      // Путь должен быть уникальным глобально (разные MessageRenderer-экземпляры),
+      // поэтому используем случайный суффикс, генерируемый единожды через ref.
+      const pathKey = `${editorLanguage}-${index}`;
+      let editorPath = codeBlockPathsRef.current.get(pathKey);
+      if (!editorPath) {
+        const uid = Math.random().toString(36).substring(2, 10);
+        editorPath = `readonly://${editorLanguage}/${uid}-${index}.code`;
+        codeBlockPathsRef.current.set(pathKey, editorPath);
+      }
       
       return (
         <Box key={index} sx={{ position: 'relative', my: 2 }}>
@@ -756,31 +820,69 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
                 cursor: 'text',
                 userSelect: 'text',
                 position: 'relative',
+                '& .monaco-editor .margin': {
+                  backgroundColor: '#1e1e1e',
+                },
               }}
             >
-              <SyntaxHighlighter
-                language={highlightLanguage}
-                style={vscDarkPlus}
-                customStyle={{
-                  margin: 0,
-                  padding: '16px',
-                  backgroundColor: '#1e1e1e',
-                  fontSize: '0.875rem',
-                  lineHeight: 1.5,
-                  borderRadius: '0 0 4px 4px',
+              <Editor
+                height={`${editorHeight}px`}
+                language={editorLanguage}
+                value={code}
+                path={editorPath}
+                keepCurrentModel
+                theme="memo-monaco-dark"
+                loading={null}
+                beforeMount={(monaco) => {
+                  monaco.editor.defineTheme('memo-monaco-dark', {
+                    base: 'vs-dark',
+                    inherit: true,
+                    rules: [],
+                    colors: {
+                      'editor.background': '#1e1e1e',
+                      'editor.selectionBackground': '#3b6ea899',
+                      'editor.inactiveSelectionBackground': '#3b6ea855',
+                      'editor.selectionHighlightBackground': '#4e7fbf55',
+                      'editor.wordHighlightBackground': '#6f6f6f40',
+                      'editor.wordHighlightStrongBackground': '#4e7fbf66',
+                      'editor.lineHighlightBackground': '#2a2d2e66',
+                      'editorGutter.background': '#1e1e1e',
+                      'editorLineNumber.foreground': '#6a9955',
+                      'editorLineNumber.activeForeground': '#b5cea8',
+                    },
+                  });
                 }}
-                wrapLines={true}
-                wrapLongLines={true}
-                showLineNumbers={code.split('\n').length > 5}
-                lineNumberStyle={{
-                  minWidth: '2.5em',
-                  paddingRight: '1em',
-                  color: '#858585',
-                  textAlign: 'right',
+                options={{
+                  readOnly: true,
+                  readOnlyMessage: { value: 'Код только для чтения' },
+                  minimap: { enabled: false },
+                  contextmenu: true,
+                  folding: true,
+                  foldingStrategy: 'auto',
+                  glyphMargin: true,
+                  lineNumbers: codeLineCount > 5 ? 'on' : 'off',
+                  lineNumbersMinChars: 3,
+                  renderLineHighlight: 'all',
+                  scrollBeyondLastLine: false,
+                  wordWrap: 'on',
+                  wrappingIndent: 'same',
+                  occurrencesHighlight: 'singleFile',
+                  selectionHighlight: true,
+                  matchBrackets: 'always',
+                  guides: { indentation: true },
+                  cursorStyle: 'line',
+                  automaticLayout: true,
+                  padding: { top: 12, bottom: 12 },
+                  fontSize: 14,
+                  lineHeight: 22,
+                  scrollbar: {
+                    vertical: 'hidden',
+                    horizontal: 'hidden',
+                    alwaysConsumeMouseWheel: false,
+                  },
+                  overviewRulerLanes: 0,
                 }}
-              >
-                {code}
-              </SyntaxHighlighter>
+              />
             </Box>
           </Box>
         </Box>
@@ -830,6 +932,9 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
   const renderMarkdownText = (text: string, index: number) => {
     if (!text.trim()) return null;
 
+    // Нормализуем em-теги перед markdown/inline парсингом.
+    text = sanitizeRawContent(text);
+
     // Обрабатываем специальные блоки с эмодзи (✅, ⚠️, ❌, ℹ️, 📝, 💡)
     const specialBlockRegex = /^[►✅⚠️❌ℹ️📝💡🔔]\s*(.+)$/gim;
     const specialLines: { type: 'info' | 'warning' | 'error' | 'success', content: string }[] = [];
@@ -876,7 +981,9 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
     
     // Обрабатываем оставшийся курсив (который не внутри жирного)
     text = text.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-    text = text.replace(/_([^_]+)_/g, '<em>$1</em>');
+    // Применяем "_" как курсив только на границах слова,
+    // чтобы не ломать snake_case (например, df_date).
+    text = text.replace(/(^|[^\w])_([^_\n]+)_(?=[^\w]|$)/g, '$1<em>$2</em>');
 
     // Обрабатываем зачеркнутый текст
     text = text.replace(/~~(.*?)~~/g, '<del>$1</del>');
@@ -1415,14 +1522,28 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
     return result.length === 1 ? result[0] : <>{result}</>;
   };
 
+  const renderedContent = useMemo(
+    () => parseMarkdown(sanitizeRawContent(content)),
+    [content, isStreaming, sanitizeRawContent, fontSize]
+  );
+
   return (
     <Box 
       ref={containerRef}
       sx={{ position: 'relative' }}
       onMouseUp={onSendMessage && !menuVisible ? handleTextSelection : undefined}
       onDoubleClick={onSendMessage && !menuVisible ? handleDoubleClick : undefined}
+      onCopy={(event) => {
+        const selected = getSelectionPlainText();
+        if (!selected) return;
+
+        // Форсируем plain text в буфере, чтобы при Ctrl+V вставлялся
+        // текст как видит пользователь, без HTML-разметки.
+        event.preventDefault();
+        event.clipboardData.setData('text/plain', selected);
+      }}
     >
-      {parseMarkdown(content)}
+      {renderedContent}
       
       {onSendMessage && menuVisible && menuAnchorRef.current && menuPositionRef.current && (
         <CodeSelectionMenu
@@ -1445,8 +1566,7 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
 // Ререндер произойдет ТОЛЬКО если изменятся props: content, isStreaming, onSendMessage
 const MessageRenderer = React.memo(MessageRendererComponent, (prevProps, nextProps) => {
   return prevProps.content === nextProps.content &&
-         prevProps.isStreaming === nextProps.isStreaming &&
-         prevProps.onSendMessage === nextProps.onSendMessage;
+         prevProps.isStreaming === nextProps.isStreaming;
 });
 
 MessageRenderer.displayName = 'MessageRenderer';

@@ -167,7 +167,7 @@ export const MODEL_SETTINGS_DEFAULT: ModelSettingsState = {
   presence_penalty: 0.0,
   use_gpu: false,
   streaming: true,
-  streaming_speed: 50,
+  streaming_speed: 20,
 };
 
 export const MODEL_SETTINGS_MAX_DEFAULT: ModelSettingsMaxValues = {

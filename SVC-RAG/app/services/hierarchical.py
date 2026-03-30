@@ -169,13 +169,12 @@ class OptimizedDocumentIndex:
                 })
 
             level_0_chunks = hierarchical_doc["level_0_chunks"]
-            for i, chunk in enumerate(level_0_chunks):
-                if i % 2 == 0 or i == 0 or i == len(level_0_chunks) - 1:
-                    vectors_to_save.append({
-                        "content": chunk["content"],
-                        "chunk_index": chunk["chunk_index"],
-                        "metadata": {"level": 0, "doc_name": doc_name, "type": "detail_chunk", "source": doc_name},
-                    })
+            for chunk in level_0_chunks:
+                vectors_to_save.append({
+                    "content": chunk["content"],
+                    "chunk_index": chunk["chunk_index"],
+                    "metadata": {"level": 0, "doc_name": doc_name, "type": "detail_chunk", "source": doc_name},
+                })
 
             texts = [v["content"] if len(v["content"]) <= 10000 else v["content"][:10000] for v in vectors_to_save]
             embeddings = await self.rag_client.embed(texts)
@@ -234,9 +233,14 @@ class OptimizedDocumentIndex:
             results_l2 = results_l2[: min(k, 3)]
             results_l1 = results_l1[:k]
             all_results = results_l2 + results_l1
+            # Fallback: если нет summary-чанков — возвращаем детальные
+            if not all_results:
+                all_results = pairs
         else:
+            # Детальный поиск: только level-0 чанки, без summary-обёрток
             pairs = await self.vector_repo.similarity_search(query_embedding, limit=limit)
-            all_results = pairs
+            detail_only = [(v, s) for v, s in pairs if v.metadata.get("type", "") == "detail_chunk"]
+            all_results = detail_only if detail_only else pairs
 
         return [
             (v.content, float(score), v.document_id, v.chunk_index)

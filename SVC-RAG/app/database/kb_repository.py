@@ -2,10 +2,12 @@
 # Таблицы kb_documents, kb_vectors — хранятся постоянно, не зависят от чата
 import json
 import logging
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.database.connection import PostgreSQLConnection
 from app.database.models import Document, DocumentVector
+from app.text_sanitize import strip_null_bytes
+from app.database.search_filters import DocumentVectorSearchFilters
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +36,8 @@ class KbDocumentRepository:
 
     async def create_document(self, document: Document) -> Optional[int]:
         meta = json.dumps(document.metadata) if document.metadata else "{}"
+        fn = strip_null_bytes(document.filename)
+        body = strip_null_bytes(document.content)
         async with await self.db.acquire() as conn:
             row = await conn.fetchrow(
                 """
@@ -41,8 +45,8 @@ class KbDocumentRepository:
                 VALUES ($1, $2, $3::jsonb, $4, $5)
                 RETURNING id
                 """,
-                document.filename,
-                document.content,
+                fn,
+                body,
                 meta,
                 document.created_at,
                 document.updated_at,
@@ -152,7 +156,8 @@ class KbVectorRepository:
         values = []
         for v in vectors:
             meta = json.dumps(v.metadata) if v.metadata else "{}"
-            values.append((v.document_id, v.chunk_index, str(v.embedding), v.content, meta))
+            chunk = strip_null_bytes(v.content)
+            values.append((v.document_id, v.chunk_index, str(v.embedding), chunk, meta))
         placeholders = []
         flat = []
         for i, (doc_id, idx, emb, content, meta) in enumerate(values):
@@ -174,26 +179,45 @@ class KbVectorRepository:
         query_embedding: List[float],
         limit: int = 10,
         document_id: Optional[int] = None,
+        filters: Optional[DocumentVectorSearchFilters] = None,
     ) -> List[Tuple[DocumentVector, float]]:
         emb_str = str(query_embedding)
-        if document_id:
-            q = """
-                SELECT id, document_id, chunk_index, embedding::text, content, metadata,
-                       1 - (embedding <=> $1::vector) as similarity
-                FROM kb_vectors WHERE document_id = $2
-                ORDER BY embedding <=> $1::vector LIMIT $3
-            """
-            async with await self.db.acquire() as conn:
-                rows = await conn.fetch(q, emb_str, document_id, limit)
-        else:
-            q = """
-                SELECT id, document_id, chunk_index, embedding::text, content, metadata,
-                       1 - (embedding <=> $1::vector) as similarity
-                FROM kb_vectors
-                ORDER BY embedding <=> $1::vector LIMIT $2
-            """
-            async with await self.db.acquire() as conn:
-                rows = await conn.fetch(q, emb_str, limit)
+        use_join = filters is not None and filters.active()
+        join_sql = "JOIN kb_documents d ON d.id = v.document_id" if use_join else ""
+        clauses: List[str] = []
+        params: List[Any] = [emb_str]
+        pi = 2
+        if document_id is not None:
+            clauses.append(f"v.document_id = ${pi}")
+            params.append(document_id)
+            pi += 1
+        if use_join and filters is not None:
+            if filters.date_from is not None:
+                clauses.append(f"d.created_at >= ${pi}")
+                params.append(filters.date_from)
+                pi += 1
+            if filters.date_to is not None:
+                clauses.append(f"d.created_at <= ${pi}")
+                params.append(filters.date_to)
+                pi += 1
+            fn = (filters.filename_contains or "").strip()
+            if fn:
+                clauses.append(f"d.filename ILIKE ${pi}")
+                params.append(f"%{fn}%")
+                pi += 1
+        where_sql = " AND ".join(clauses) if clauses else "TRUE"
+        from_sql = f"kb_vectors v {join_sql}".strip()
+        q = f"""
+            SELECT v.id, v.document_id, v.chunk_index, v.embedding::text, v.content, v.metadata,
+                   1 - (v.embedding <=> $1::vector) as similarity
+            FROM {from_sql}
+            WHERE {where_sql}
+            ORDER BY v.embedding <=> $1::vector
+            LIMIT ${pi}
+        """
+        params.append(limit)
+        async with await self.db.acquire() as conn:
+            rows = await conn.fetch(q, *params)
         result = []
         for row in rows:
             emb = [float(x.strip()) for x in row["embedding"].strip("[]").split(",")]
@@ -214,6 +238,25 @@ class KbVectorRepository:
                 )
             )
         return result
+
+    async def get_chunk_contents_by_indices(
+        self, document_id: int, chunk_indices: List[int]
+    ) -> Dict[int, str]:
+        if not chunk_indices:
+            return {}
+        uniq = sorted({int(i) for i in chunk_indices if i is not None and int(i) >= 0})
+        if not uniq:
+            return {}
+        async with await self.db.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT chunk_index, content FROM kb_vectors
+                WHERE document_id = $1 AND chunk_index = ANY($2::int[])
+                """,
+                document_id,
+                uniq,
+            )
+        return {int(r["chunk_index"]): r["content"] or "" for r in rows}
 
     async def get_vectors_by_document(self, document_id: int) -> List[DocumentVector]:
         async with await self.db.acquire() as conn:
@@ -244,3 +287,37 @@ class KbVectorRepository:
         async with await self.db.acquire() as conn:
             await conn.execute("DELETE FROM kb_vectors WHERE document_id = $1", document_id)
         return True
+
+    async def get_all_document_ids(self) -> List[int]:
+        """Уникальные document_id в KB."""
+        async with await self.db.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT DISTINCT document_id FROM kb_vectors ORDER BY document_id"
+            )
+        return [r["document_id"] for r in rows]
+
+    async def get_vector_by_document_and_chunk(
+        self, document_id: int, chunk_index: int
+    ) -> Optional[DocumentVector]:
+        """Точечный запрос одного вектора по (document_id, chunk_index)."""
+        async with await self.db.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT id, document_id, chunk_index, embedding::text, content, metadata "
+                "FROM kb_vectors WHERE document_id = $1 AND chunk_index = $2",
+                document_id,
+                chunk_index,
+            )
+        if not row:
+            return None
+        emb = [float(x.strip()) for x in row["embedding"].strip("[]").split(",")]
+        meta = row["metadata"]
+        if isinstance(meta, str):
+            meta = json.loads(meta) if meta else {}
+        return DocumentVector(
+            id=row["id"],
+            document_id=row["document_id"],
+            chunk_index=row["chunk_index"],
+            embedding=emb,
+            content=row["content"],
+            metadata=meta or {},
+        )

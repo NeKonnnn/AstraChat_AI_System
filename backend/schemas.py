@@ -68,7 +68,15 @@ class DocumentQueryRequest(BaseModel):
 
 
 class RAGSettings(BaseModel):
-    strategy: str = "auto"  # auto | reranking | hierarchical | hybrid | standard
+    strategy: Optional[str] = None  # auto | hierarchical | hybrid | standard | graph
+    agentic_rag_enabled: Optional[bool] = None
+    agentic_max_iterations: Optional[int] = None
+    # Препроцесс запроса перед поиском в SVC-RAG (доп. вызовы LLM при включении)
+    rag_query_fix_typos: Optional[bool] = None
+    rag_multi_query_enabled: Optional[bool] = None
+    rag_hyde_enabled: Optional[bool] = None
+    # Сколько чанков подмешивать в контекст чата (1–64, по умолчанию 5)
+    rag_chat_top_k: Optional[int] = None
 
 
 class AgentModeRequest(BaseModel):

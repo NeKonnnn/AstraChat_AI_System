@@ -2,10 +2,12 @@
 # Каждый документ привязан к project_id; при удалении проекта все его данные удаляются каскадом.
 import json
 import logging
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.database.connection import PostgreSQLConnection
 from app.database.models import Document, DocumentVector
+from app.text_sanitize import strip_null_bytes
+from app.database.search_filters import DocumentVectorSearchFilters
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,9 @@ class ProjectRagDocumentRepository:
 
     async def create_document(self, project_id: str, document: Document) -> Optional[int]:
         meta = json.dumps(document.metadata) if document.metadata else "{}"
+        pid = strip_null_bytes(project_id)
+        fn = strip_null_bytes(document.filename)
+        body = strip_null_bytes(document.content)
         async with await self.db.acquire() as conn:
             row = await conn.fetchrow(
                 """
@@ -46,9 +51,9 @@ class ProjectRagDocumentRepository:
                 VALUES ($1, $2, $3, $4::jsonb, $5, $6)
                 RETURNING id
                 """,
-                project_id,
-                document.filename,
-                document.content,
+                pid,
+                fn,
+                body,
                 meta,
                 document.created_at,
                 document.updated_at,
@@ -143,7 +148,8 @@ class ProjectRagVectorRepository:
         values = []
         for v in vectors:
             meta = json.dumps(v.metadata) if v.metadata else "{}"
-            values.append((v.document_id, v.chunk_index, str(v.embedding), v.content, meta))
+            chunk = strip_null_bytes(v.content)
+            values.append((v.document_id, v.chunk_index, str(v.embedding), chunk, meta))
         placeholders = []
         flat = []
         for i, (doc_id, idx, emb, content, meta) in enumerate(values):
@@ -170,38 +176,51 @@ class ProjectRagVectorRepository:
         limit: int = 10,
         project_id: Optional[str] = None,
         document_id: Optional[int] = None,
+        filters: Optional[DocumentVectorSearchFilters] = None,
     ) -> List[Tuple[DocumentVector, float]]:
         emb_str = str(query_embedding)
+        use_meta = filters is not None and filters.active()
+        join_sql = ""
+        if document_id is not None or project_id is not None or use_meta:
+            join_sql = "JOIN project_rag_documents d ON d.id = v.document_id"
+        clauses: List[str] = []
+        params: List[Any] = [emb_str]
+        pi = 2
         if document_id is not None:
-            q = """
-                SELECT v.id, v.document_id, v.chunk_index, v.embedding::text, v.content, v.metadata,
-                       1 - (v.embedding <=> $1::vector) as similarity
-                FROM project_rag_vectors v
-                WHERE v.document_id = $2
-                ORDER BY v.embedding <=> $1::vector LIMIT $3
-            """
-            async with await self.db.acquire() as conn:
-                rows = await conn.fetch(q, emb_str, document_id, limit)
+            clauses.append(f"v.document_id = ${pi}")
+            params.append(document_id)
+            pi += 1
         elif project_id is not None:
-            q = """
-                SELECT v.id, v.document_id, v.chunk_index, v.embedding::text, v.content, v.metadata,
-                       1 - (v.embedding <=> $1::vector) as similarity
-                FROM project_rag_vectors v
-                JOIN project_rag_documents d ON d.id = v.document_id
-                WHERE d.project_id = $2
-                ORDER BY v.embedding <=> $1::vector LIMIT $3
-            """
-            async with await self.db.acquire() as conn:
-                rows = await conn.fetch(q, emb_str, project_id, limit)
-        else:
-            q = """
-                SELECT id, document_id, chunk_index, embedding::text, content, metadata,
-                       1 - (embedding <=> $1::vector) as similarity
-                FROM project_rag_vectors
-                ORDER BY embedding <=> $1::vector LIMIT $2
-            """
-            async with await self.db.acquire() as conn:
-                rows = await conn.fetch(q, emb_str, limit)
+            clauses.append(f"d.project_id = ${pi}")
+            params.append(project_id)
+            pi += 1
+        if use_meta and filters is not None:
+            if filters.date_from is not None:
+                clauses.append(f"d.created_at >= ${pi}")
+                params.append(filters.date_from)
+                pi += 1
+            if filters.date_to is not None:
+                clauses.append(f"d.created_at <= ${pi}")
+                params.append(filters.date_to)
+                pi += 1
+            fn = (filters.filename_contains or "").strip()
+            if fn:
+                clauses.append(f"d.filename ILIKE ${pi}")
+                params.append(f"%{fn}%")
+                pi += 1
+        where_sql = " AND ".join(clauses) if clauses else "TRUE"
+        from_sql = f"project_rag_vectors v {join_sql}".strip()
+        q = f"""
+            SELECT v.id, v.document_id, v.chunk_index, v.embedding::text, v.content, v.metadata,
+                   1 - (v.embedding <=> $1::vector) as similarity
+            FROM {from_sql}
+            WHERE {where_sql}
+            ORDER BY v.embedding <=> $1::vector
+            LIMIT ${pi}
+        """
+        params.append(limit)
+        async with await self.db.acquire() as conn:
+            rows = await conn.fetch(q, *params)
         return [self._row_to_dv(row) for row in rows]
 
     def _row_to_dv(self, row) -> Tuple[DocumentVector, float]:
@@ -221,9 +240,75 @@ class ProjectRagVectorRepository:
             float(row["similarity"]),
         )
 
+    async def get_chunk_contents_by_indices(
+        self, document_id: int, chunk_indices: List[int]
+    ) -> Dict[int, str]:
+        if not chunk_indices:
+            return {}
+        uniq = sorted({int(i) for i in chunk_indices if i is not None and int(i) >= 0})
+        if not uniq:
+            return {}
+        async with await self.db.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT chunk_index, content FROM project_rag_vectors
+                WHERE document_id = $1 AND chunk_index = ANY($2::int[])
+                """,
+                document_id,
+                uniq,
+            )
+        return {int(r["chunk_index"]): r["content"] or "" for r in rows}
+
     async def delete_vectors_by_document(self, document_id: int) -> bool:
         async with await self.db.acquire() as conn:
             await conn.execute(
                 "DELETE FROM project_rag_vectors WHERE document_id = $1", document_id
             )
         return True
+
+    async def get_all_document_ids(self, project_id: Optional[str] = None) -> List[int]:
+        """Уникальные document_id в project RAG."""
+        async with await self.db.acquire() as conn:
+            if project_id is not None:
+                rows = await conn.fetch(
+                    """
+                    SELECT DISTINCT v.document_id
+                    FROM project_rag_vectors v
+                    JOIN project_rag_documents d ON d.id = v.document_id
+                    WHERE d.project_id = $1
+                    ORDER BY v.document_id
+                    """,
+                    project_id,
+                )
+            else:
+                rows = await conn.fetch(
+                    "SELECT DISTINCT document_id FROM project_rag_vectors ORDER BY document_id"
+                )
+        return [r["document_id"] for r in rows]
+
+    async def get_vector_by_document_and_chunk(
+        self, document_id: int, chunk_index: int
+    ) -> Optional[Tuple["DocumentVector", float]]:
+        """Точечный запрос одного вектора по (document_id, chunk_index)."""
+        async with await self.db.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT id, document_id, chunk_index, embedding::text, content, metadata "
+                "FROM project_rag_vectors WHERE document_id = $1 AND chunk_index = $2",
+                document_id,
+                chunk_index,
+            )
+        if not row:
+            return None
+        emb = [float(x.strip()) for x in row["embedding"].strip("[]").split(",")]
+        meta = row["metadata"]
+        if isinstance(meta, str):
+            meta = json.loads(meta) if meta else {}
+        from app.database.models import DocumentVector
+        return DocumentVector(
+            id=row["id"],
+            document_id=row["document_id"],
+            chunk_index=row["chunk_index"],
+            embedding=emb,
+            content=row["content"],
+            metadata=meta or {},
+        )

@@ -27,7 +27,7 @@ rag_models_client:
   base_url: "http://rag-models:8000"
   timeout: 60.0
 
-# PostgreSQL с pgvector 
+# PostgreSQL с pgvector
 postgresql:
   host: "postgresql"
   port: 5432
@@ -39,9 +39,41 @@ postgresql:
 # Параметры поиска
 rag:
   enabled: true
+
+  # --- Гибридный поиск (BM25 + вектор, только global store) ---
   use_hybrid_search: true
-  hybrid_bm25_weight: 0.3
+  hybrid_bm25_weight: 0.35
+
+  # --- Реранкинг (cross-encoder через SVC-RAG-MODELS) ---
   use_reranking: true
-  rerank_top_k: 20
+  rerank_top_k: 40
+  # Минимальный скор после реранка (0 = не отсекать; формула: 0.7*CrossEncoder + 0.3*cosine).
+  # Положительные значения могут выбросить все чанки — подбирайте осторожно.
+  rerank_min_score: 0
+
+  # --- Минимальное косинусное сходство до реранка ---
+  # Отсекает явно нерелевантные чанки из pgvector до отправки в cross-encoder.
+  # 0 = не фильтровать; 0.25 = агрессивная фильтрация (рекомендуется при k=5).
+  min_vector_similarity: 0.25
+
+  # --- Чанкинг ---
   chunk_size: 1000
-  chunk_overlap: 200
+  chunk_overlap: 250
+
+  # --- Sentence window (расширение найденного чанка соседями) ---
+  # 0 = выкл; 1 = чанк + по 1 соседу слева/справа.
+  # При k=5 и overlap=250 чанки уже перекрываются — window не нужен, только раздувает контекст.
+  sentence_window: 0
+
+  # --- Иерархическое индексирование (только global store) ---
+  # Включается для документов длиннее hierarchical_threshold символов.
+  use_hierarchical_indexing: true
+  hierarchical_threshold: 8000
+  hierarchical_chunk_size: 1500
+  hierarchical_chunk_overlap: 200
+  intermediate_summary_chunks: 8
+  # Суммаризировать документ через LLM при индексации (требует работающего llm-service).
+  create_full_summary_via_llm: false
+
+  # --- Graph RAG ---
+  enable_graph_rag: true

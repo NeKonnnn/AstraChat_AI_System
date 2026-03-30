@@ -58,7 +58,7 @@ export default function ModelsSettings() {
     presence_penalty: 0.0,
     use_gpu: false,
     streaming: true,
-    streaming_speed: 50,
+    streaming_speed: 20,
   });
 
   const [maxValues, setMaxValues] = useState({
@@ -175,7 +175,7 @@ export default function ModelsSettings() {
   };
 
   const resetModelSettings = () => {
-    setModelSettings({ ...MODEL_SETTINGS_DEFAULT, streaming_speed: 50 });
+    setModelSettings({ ...MODEL_SETTINGS_DEFAULT, streaming_speed: 20 });
     showNotification('success', 'Настройки модели восстановлены до значений по умолчанию');
   };
 

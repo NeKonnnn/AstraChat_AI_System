@@ -189,7 +189,9 @@ class LangGraphOrchestrator:
 - Загружено документов: {len(available_docs)}
 - Названия: {', '.join(available_docs[:3])}{'...' if len(available_docs) > 3 else ''}
 
-Если запрос касается анализа документов, поиска информации в файлах или подсчета элементов в документах, используй инструмент 'search_documents' с соответствующим поисковым запросом.
+Если запрос касается анализа документов, поиска информации в файлах или подсчета элементов в документах, используй:
+- 'retrieve_rag_context' для Agentic RAG (предпочтительно, если нужно объединить project/kb/memory/global),
+- 'search_documents' как fallback.
 """
             
             planning_prompt = f"""Ты - система планирования задач AI-ассистента. Твоя задача - определить, какие инструменты нужны для выполнения запроса пользователя.
@@ -235,9 +237,9 @@ class LangGraphOrchestrator:
 {{
     "needs_tools": true,
     "plan": [
-        {{"tool": "search_documents", "input": "Python"}}
+        {{"tool": "retrieve_rag_context", "input": "{{\"query\": \"Python\", \"stores\": [\"project\",\"kb\",\"memory\",\"global\"], \"k\": 8}}"}}
     ],
-    "reasoning": "Нужен поиск в документах"
+    "reasoning": "Нужен Agentic RAG поиск по всем подключенным хранилищам"
 }}
 
 2. Запрос: "Сколько всего идей в файле? Назови первые 3 из них!"
@@ -564,7 +566,7 @@ class LangGraphOrchestrator:
                 # Выполняем инструмент
                 try:
                     # Для инструментов агентов передаем контекст
-                    if tool_name in ["search_documents"]:
+                    if tool_name in ["search_documents", "retrieve_rag_context"]:
                         # Эти инструменты используют агентов, которые могут нуждаться в контексте
                         result = tool.func(tool_input)
                     else:
@@ -572,6 +574,40 @@ class LangGraphOrchestrator:
                         result = tool.func(tool_input)
                     
                     logger.info(f"[EXECUTOR] Результат: {str(result)[:200]}...")
+
+                    # Легковесная итеративность Agentic RAG:
+                    # если retrieval дал мало evidence, делаем вторую попытку с расширенным охватом.
+                    if tool_name == "retrieve_rag_context":
+                        try:
+                            parsed = json.loads(result) if isinstance(result, str) else {}
+                            hits = parsed.get("hits") or []
+                            max_iter = int(merged_context.get("agentic_max_iterations", 2))
+                            if len(hits) < 3 and max_iter > 1:
+                                query_text = ""
+                                if isinstance(tool_input, str) and tool_input.strip():
+                                    if tool_input.strip().startswith("{"):
+                                        q_payload = json.loads(tool_input)
+                                        query_text = str(q_payload.get("query") or "").strip()
+                                    else:
+                                        query_text = tool_input.strip()
+                                if query_text:
+                                    fallback_payload = json.dumps(
+                                        {
+                                            "query": query_text,
+                                            "stores": ["project", "kb", "memory", "global"],
+                                            "k": 14,
+                                            "strategy": merged_context.get("rag_strategy", "auto"),
+                                        },
+                                        ensure_ascii=False,
+                                    )
+                                    logger.info("[EXECUTOR] Agentic RAG iteration #2 (expanded stores)")
+                                    retry_result = tool.func(fallback_payload)
+                                    retry_parsed = json.loads(retry_result) if isinstance(retry_result, str) else {}
+                                    retry_hits = retry_parsed.get("hits") or []
+                                    if len(retry_hits) > len(hits):
+                                        result = retry_result
+                        except Exception as iter_e:
+                            logger.warning("[EXECUTOR] Agentic RAG iteration error: %s", iter_e)
                     
                     tool_results.append({
                         "tool": tool_name,
@@ -778,6 +814,10 @@ class LangGraphOrchestrator:
 
 Результаты инструментов:
 {context_str}
+
+Правила для поиска по документам (retrieve_rag_context / search_documents):
+- Если JSON от retrieve_rag_context содержит "hits": [] или нет содержательных фрагментов — ответь кратко, что в документах не найдено релевантной информации, и не выдумывай факты из головы.
+- Не подменяй отсутствие источников общими знаниями, если пользователь явно опирался на файлы.
 
 Сформируй связный ответ, используя предоставленную информацию. Если были ошибки, упомяни о них.
 

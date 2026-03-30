@@ -58,10 +58,8 @@ RUN pip install --no-cache-dir \
 # Шаг 2: vllm — ставим после torch, он подхватит уже установленный torch
 RUN pip install --no-cache-dir vllm>=0.6.0
 
-# Шаг 3: llama-cpp-python с CUDA 12.2 wheels
-RUN pip install --no-cache-dir \
-    llama-cpp-python \
-    --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu122
+# Шаг 3: llama-cpp-python (собираем из исходников, чтобы избежать musl-колёс)
+RUN pip install --no-cache-dir --no-binary=llama-cpp-python llama-cpp-python==0.3.16
 
 # Шаг 4: остальные зависимости
 COPY requirements.txt .

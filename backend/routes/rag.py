@@ -5,40 +5,141 @@ routes/rag.py - настройки RAG, База Знаний (KB), библио
 import logging
 import os
 
+import httpx
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 import backend.app_state as state
 from backend.app_state import rag_client, minio_client, settings, save_app_settings
+from backend.rag_query.semantic_cache import bump_rag_semantic_cache
 from backend.schemas import RAGSettings
 
 router = APIRouter(tags=["rag"])
 logger = logging.getLogger(__name__)
 
-_VALID_STRATEGIES = {"auto", "reranking", "hierarchical", "hybrid", "standard"}
+_VALID_STRATEGIES = {"auto", "hierarchical", "hybrid", "standard", "graph"}
+
+
+def _is_upstream_httpx_timeout(exc: BaseException) -> bool:
+    seen = set()
+    cur = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, httpx.TimeoutException):
+            return True
+        cur = cur.__cause__
+    return False
+
+
+def _rag_settings_response_dict() -> dict:
+    """Текущее состояние настроек RAG для JSON (после GET/PUT/reset)."""
+    return {
+        "strategy": state.current_rag_strategy,
+        "applied_method": state.current_rag_strategy,
+        "method_description": {
+            "auto": "Автоматический выбор стратегии.",
+            "hierarchical": "Иерархический поиск по суммаризациям.",
+            "hybrid": "Гибридный поиск: вектор + BM25.",
+            "standard": "Стандартный векторный поиск.",
+            "graph": "Графовый RAG: расширение по связям между чанками.",
+        }.get(state.current_rag_strategy, ""),
+        "agentic_rag_enabled": bool(getattr(state, "agentic_rag_enabled", True)),
+        "agentic_max_iterations": int(getattr(state, "agentic_max_iterations", 2)),
+        "rag_query_fix_typos": bool(getattr(state, "rag_query_fix_typos", False)),
+        "rag_multi_query_enabled": bool(getattr(state, "rag_multi_query_enabled", False)),
+        "rag_hyde_enabled": bool(getattr(state, "rag_hyde_enabled", False)),
+        "rag_chat_top_k": state.get_rag_chat_top_k(),
+    }
 
 
 # -- RAG settings
 @router.get("/api/rag/settings")
 async def get_rag_settings():
-    s = state.current_rag_strategy
-    descriptions = {
-        "auto": "Автоматический выбор стратегии.",
-        "reranking": "Переранжирование результатов поиска.",
-        "hierarchical": "Иерархический поиск по суммаризациям.",
-        "hybrid": "Гибридный поиск: вектор + BM25.",
-        "standard": "Стандартный векторный поиск.",
-    }
-    return {"strategy": s, "applied_method": s, "method_description": descriptions.get(s, "")}
+    return _rag_settings_response_dict()
+
+
+@router.post("/api/rag/settings/reset")
+async def reset_rag_settings():
+    """Сброс всех настроек RAG из UI к значениям по умолчанию (как после чистой установки)."""
+    try:
+        state.current_rag_strategy = "auto"
+        state.agentic_rag_enabled = True
+        state.agentic_max_iterations = 2
+        state.rag_query_fix_typos = False
+        state.rag_multi_query_enabled = False
+        state.rag_hyde_enabled = False
+        state.rag_chat_top_k = 5
+        save_app_settings(
+            {
+                "rag_strategy": "auto",
+                "agentic_rag_enabled": True,
+                "agentic_max_iterations": 2,
+                "rag_query_fix_typos": False,
+                "rag_multi_query_enabled": False,
+                "rag_hyde_enabled": False,
+                "rag_chat_top_k": 5,
+            }
+        )
+        bump_rag_semantic_cache()
+        return {"message": "Настройки RAG сброшены", "success": True, **_rag_settings_response_dict()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.put("/api/rag/settings")
 async def update_rag_settings(settings_data: RAGSettings):
-    if settings_data.strategy not in _VALID_STRATEGIES:
-        raise HTTPException(status_code=400, detail=f"Недопустимая стратегия. Допустимые: {_VALID_STRATEGIES}")
+    strat = settings_data.strategy
+    if strat is not None and strat == "reranking":
+        strat = "hybrid"
+    if strat is not None and strat not in _VALID_STRATEGIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Недопустимая стратегия. Допустимые: {_VALID_STRATEGIES}",
+        )
+    if (
+        settings_data.strategy is None
+        and settings_data.agentic_rag_enabled is None
+        and settings_data.agentic_max_iterations is None
+        and settings_data.rag_query_fix_typos is None
+        and settings_data.rag_multi_query_enabled is None
+        and settings_data.rag_hyde_enabled is None
+        and settings_data.rag_chat_top_k is None
+    ):
+        raise HTTPException(status_code=400, detail="Нет полей для обновления")
     try:
-        state.current_rag_strategy = settings_data.strategy
-        save_app_settings({"rag_strategy": state.current_rag_strategy})
-        return {"message": "Настройки RAG обновлены", "success": True, "strategy": state.current_rag_strategy}
+        updates: dict = {}
+        if strat is not None:
+            state.current_rag_strategy = strat
+            updates["rag_strategy"] = state.current_rag_strategy
+        if settings_data.agentic_rag_enabled is not None:
+            state.agentic_rag_enabled = bool(settings_data.agentic_rag_enabled)
+            updates["agentic_rag_enabled"] = state.agentic_rag_enabled
+        if settings_data.agentic_max_iterations is not None:
+            ami = int(settings_data.agentic_max_iterations)
+            state.agentic_max_iterations = max(1, min(ami, 5))
+            updates["agentic_max_iterations"] = state.agentic_max_iterations
+        if settings_data.rag_query_fix_typos is not None:
+            state.rag_query_fix_typos = bool(settings_data.rag_query_fix_typos)
+            updates["rag_query_fix_typos"] = state.rag_query_fix_typos
+        if settings_data.rag_multi_query_enabled is not None:
+            state.rag_multi_query_enabled = bool(settings_data.rag_multi_query_enabled)
+            updates["rag_multi_query_enabled"] = state.rag_multi_query_enabled
+        if settings_data.rag_hyde_enabled is not None:
+            state.rag_hyde_enabled = bool(settings_data.rag_hyde_enabled)
+            updates["rag_hyde_enabled"] = state.rag_hyde_enabled
+        if settings_data.rag_chat_top_k is not None:
+            try:
+                rk = int(settings_data.rag_chat_top_k)
+                state.rag_chat_top_k = max(1, min(rk, 64))
+                updates["rag_chat_top_k"] = state.rag_chat_top_k
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="rag_chat_top_k: ожидается целое число 1–64")
+        if updates:
+            save_app_settings(updates)
+            if "rag_chat_top_k" in updates:
+                bump_rag_semantic_cache()
+        return {"message": "Настройки RAG обновлены", "success": True, **_rag_settings_response_dict()}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -52,7 +153,9 @@ async def kb_upload_document(file: UploadFile = File(...)):
         content = await file.read()
         if not content:
             raise HTTPException(status_code=400, detail="Файл пустой")
-        return await rag_client.kb_upload_document(file_bytes=content, filename=file.filename or "unknown")
+        out = await rag_client.kb_upload_document(file_bytes=content, filename=file.filename or "unknown")
+        bump_rag_semantic_cache()
+        return out
     except HTTPException:
         raise
     except Exception as e:
@@ -75,7 +178,9 @@ async def kb_delete_document(document_id: int):
     if not rag_client:
         raise HTTPException(status_code=503, detail="RAG service недоступен")
     try:
-        return await rag_client.kb_delete_document(document_id)
+        out = await rag_client.kb_delete_document(document_id)
+        bump_rag_semantic_cache()
+        return out
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -119,8 +224,17 @@ async def memory_rag_upload(file: UploadFile = File(...)):
                     minio_client.delete_file(file_object_name, bucket_name=memory_bucket)
                 except Exception:
                     pass
-            raise HTTPException(status_code=422, detail=str(e))
+            if _is_upstream_httpx_timeout(e):
+                raise HTTPException(
+                    status_code=504,
+                    detail=(
+                        "Таймаут ответа SVC-RAG при индексации (большой файл или медленный embed). "
+                        "Увеличьте SVC_RAG_INDEX_READ_TIMEOUT (секунды) для backend, по умолчанию 900."
+                    ),
+                ) from e
+            raise HTTPException(status_code=502, detail=str(e)) from e
 
+        bump_rag_semantic_cache()
         return result
     except HTTPException:
         raise
@@ -153,6 +267,7 @@ async def memory_rag_delete(document_id: int):
                 minio_client.delete_file(mo, bucket_name=mb)
             except Exception as e:
                 logger.warning(f"MinIO delete memory-rag: {e}")
+        bump_rag_semantic_cache()
         return {"ok": True, "document_id": document_id}
     except HTTPException:
         raise

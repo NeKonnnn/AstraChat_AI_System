@@ -17,9 +17,19 @@ from backend.app_state import (
     clear_dialog_history, rag_client, get_agent_orchestrator,
     minio_client, speak_text, recognize_speech_from_file,
     get_current_model_path,
+    get_rag_chat_top_k,
 )
 from backend.schemas import ChatMessage
 from backend.realtime.helpers import _is_structure_query, _terminal_chat_inference_banner
+from backend.realtime.rag_evidence import (
+    build_rag_id_to_filename,
+    filter_rag_hits_by_score,
+    maybe_rag_no_evidence_message,
+    rag_document_label,
+    rag_guard_env,
+)
+from backend.rag_query.post_generation import maybe_replace_ungrounded
+from backend.rag_query.prompts import RAG_STRICT_NOT_FOUND_MESSAGE, merge_strict_rag_system_prompt
 
 router = APIRouter(tags=["chat"])
 
@@ -68,8 +78,24 @@ async def chat_with_ai(message: ChatMessage):
             response = None
             if rag_client:
                 try:
-                    hits = await rag_client.search(message.message, k=12, strategy=state.current_rag_strategy)
-                    if hits:
+                    min_sim, rag_block = rag_guard_env()
+                    hits = await rag_client.search(message.message, k=get_rag_chat_top_k(), strategy=state.current_rag_strategy)
+                    hits = filter_rag_hits_by_score(hits, min_sim)
+                    canned = await maybe_rag_no_evidence_message(
+                        rag_client,
+                        block_when_no_evidence=rag_block,
+                        context_added=bool(hits),
+                        global_attempted=True,
+                        project_id=None,
+                        use_kb_rag=False,
+                        use_memory_library_rag=False,
+                        use_agent_scoped_kb=False,
+                        agent_kb_doc_ids=None,
+                        implicit_global_corpus=True,
+                    )
+                    if canned:
+                        response = canned
+                    elif hits:
                         if _is_structure_query(message.message):
                             seen = {(d, i) for _, _, d, i in hits}
                             for doc_id in {d for _, _, d, _ in hits if d}:
@@ -80,21 +106,18 @@ async def chat_with_ai(message: ChatMessage):
                                             seen.add((did, idx))
                                 except Exception:
                                     pass
+                        id_map = build_rag_id_to_filename(list(await rag_client.list_documents() or []))
                         parts, total = [], 0
                         for i, (content, score, doc_id, chunk_idx) in enumerate(hits, 1):
-                            frag = f"Фрагмент {i} (document_id={doc_id}, чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
+                            title = rag_document_label(doc_id, id_map)
+                            frag = f"Фрагмент {i} (документ «{title}», чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
                             if total + len(frag) > 12000:
                                 parts.append(frag[:max(0, 12000 - total - 80)] + "\n... [обрезано]\n")
                                 break
                             parts.append(frag)
                             total += len(frag)
                         doc_context = "\n".join(parts)
-                        prompt = f"""На основе предоставленного контекста из документов ответь на вопрос пользователя.
-Если информации в контексте недостаточно, укажи это.
-Отвечай только на основе информации из контекста. Не придумывай информацию.
-Перечисляй только то, что явно есть во фрагментах; не дублируй одни и те же пункты.
-
-Контекст из документов:
+                        prompt = f"""CONTEXT (фрагменты из документов):
 
 {doc_context}
 
@@ -107,7 +130,16 @@ async def chat_with_ai(message: ChatMessage):
                             user_preview=prompt, mode_label="REST /api/chat — ответ с RAG",
                             model_path_for_call=current_model_path,
                         )
-                        response = ask_agent(prompt, history=[], streaming=False, model_path=current_model_path)
+                        response = ask_agent(
+                            prompt,
+                            history=[],
+                            streaming=False,
+                            model_path=current_model_path,
+                            system_prompt=merge_strict_rag_system_prompt(None),
+                        )
+                        response = await maybe_replace_ungrounded(
+                            prompt[:20000], response, RAG_STRICT_NOT_FOUND_MESSAGE
+                        )
                 except Exception as e:
                     logger.error(f"ПРЯМОЙ РЕЖИМ: ошибка при получении контекста документов через SVC-RAG: {e}")
 
@@ -121,15 +153,7 @@ async def chat_with_ai(message: ChatMessage):
                 )
                 response = ask_agent(message.message, history=history, streaming=False, model_path=current_model_path)
             else:
-                logger.info("ПРЯМОЙ РЕЖИМ: контекст документов недоступен, используем обычный AI agent")
-                current_model_path = get_current_model_path()
-                _terminal_chat_inference_banner(
-                    sid="HTTP-POST-/api/chat", conversation_id=None,
-                    user_preview=message.message, mode_label="REST /api/chat — прямой LLM (fallback)",
-                    model_path_for_call=current_model_path,
-                )
-                response = ask_agent(message.message, history=history, streaming=False, model_path=current_model_path)
-                logger.info(f"ПРЯМОЙ РЕЖИМ: Получен ответ от AI agent, длина: {len(response)} символов")
+                logger.info(f"ПРЯМОЙ РЕЖИМ: ответ готов, длина: {len(response)} символов")
 
         await save_dialog_entry("user", message.message)
         await save_dialog_entry("assistant", response)
@@ -198,11 +222,13 @@ async def websocket_chat(websocket: WebSocket):
                     doc_context = None
                     if rag_client:
                         try:
-                            hits = await rag_client.search(user_message, k=8, strategy=state.current_rag_strategy)
+                            hits = await rag_client.search(user_message, k=get_rag_chat_top_k(), strategy=state.current_rag_strategy)
                             if hits:
+                                id_map = build_rag_id_to_filename(list(await rag_client.list_documents() or []))
                                 parts, total = [], 0
                                 for i, (content, score, doc_id, chunk_idx) in enumerate(hits, 1):
-                                    frag = f"Фрагмент {i} (document_id={doc_id}, чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
+                                    title = rag_document_label(doc_id, id_map)
+                                    frag = f"Фрагмент {i} (документ «{title}», чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
                                     if total + len(frag) > 12000:
                                         frag = frag[:max(0, 12000 - total - 80)] + "\n... [обрезано]\n"
                                         parts.append(frag)

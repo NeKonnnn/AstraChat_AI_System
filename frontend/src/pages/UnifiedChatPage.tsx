@@ -102,6 +102,351 @@ interface AgentStatus {
   orchestrator_active: boolean;
 }
 
+// ================================
+// ИНТЕРФЕЙС ДАННЫХ ДЛЯ КАРТОЧКИ СООБЩЕНИЯ
+// (callback-и передаются через ref, чтобы React.memo не реагировал на их пересоздание)
+// ================================
+interface MessageCardData {
+  handleSendMessageFromRenderer: (prompt: string) => void;
+  handleCopyMessage: (content: string) => void;
+  handleEditClick: (message: Message) => void;
+  handleRegenerate: (message: Message) => void;
+  synthesizeSpeech: (text: string) => void;
+  handleEnterShareMode: () => void;
+  handleToggleMessage: (userMsgId: string, assistantMsgId: string) => void;
+  updateMessage: (chatId: string, messageId: string, content?: string, isStreaming?: boolean, multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>, alternativeResponses?: string[], currentResponseIndex?: number) => void;
+  formatTimestamp: (ts: string) => string;
+  currentChatId: string | undefined;
+  messageRefs: React.MutableRefObject<(HTMLDivElement | null)[]>;
+}
+
+interface MessageCardProps {
+  message: Message;
+  index: number;
+  isPairStart: boolean;
+  isSelected: boolean;
+  nextMessageId: string | null;
+  shareMode: boolean;
+  isSpeaking: boolean;
+  isDarkMode: boolean;
+  interfaceSettings: {
+    userNoBorder: boolean;
+    assistantNoBorder: boolean;
+    leftAlignMessages: boolean;
+    showUserName: boolean;
+  };
+  username: string | undefined;
+  dataRef: React.MutableRefObject<MessageCardData>;
+}
+
+const MessageCardComponent = ({
+  message, index, isPairStart, isSelected, nextMessageId,
+  shareMode, isSpeaking, isDarkMode, interfaceSettings, username, dataRef,
+}: MessageCardProps): React.ReactElement => {
+  const isUser = message.role === 'user';
+  const [isHovered, setIsHovered] = useState(false);
+  const shouldShowBorder = isUser
+    ? !interfaceSettings.userNoBorder
+    : !interfaceSettings.assistantNoBorder;
+
+  const messageContent = (
+    <>
+      <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.3 }}>
+        <Avatar
+          sx={{ width: 24, height: 24, mr: 1, bgcolor: isUser ? 'primary.dark' : 'transparent' }}
+          src={isUser ? undefined : '/astra.png'}
+        >
+          {isUser ? <PersonIcon /> : null}
+        </Avatar>
+        <Typography variant="caption" sx={{ opacity: 0.8, fontSize: '0.75rem', fontWeight: 500 }}>
+          {isUser ? (interfaceSettings.showUserName && username ? username : 'Вы') : 'AstraChat'}
+        </Typography>
+        <Typography variant="caption" sx={{ ml: 'auto', opacity: 0.6, fontSize: '0.7rem' }}>
+          {dataRef.current.formatTimestamp(message.timestamp)}
+        </Typography>
+      </Box>
+
+      <Box sx={{ width: '100%' }}>
+        {!isUser && message.documentSearch && (
+          <DocumentSearchPanel trace={message.documentSearch} />
+        )}
+        {message.multiLLMResponses && message.multiLLMResponses.length > 0 ? (
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {message.multiLLMResponses.map((response, respIndex) => (
+              <Card
+                key={respIndex}
+                sx={{
+                  border: '1px solid',
+                  borderColor: response.error ? 'error.main' : 'divider',
+                  bgcolor: response.error ? 'error.light' : 'background.paper',
+                }}
+              >
+                <CardContent>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                    <Typography variant="caption" fontWeight="bold" color={response.error ? 'error' : 'primary'}>
+                      {response.model}
+                    </Typography>
+                    {response.isStreaming && <Chip label="Генерируется..." size="small" color="info" />}
+                    {response.error && <Chip label="Ошибка" size="small" color="error" />}
+                  </Box>
+                  {response.error ? (
+                    <Alert severity="error" sx={{ mt: 1 }}>
+                      <Typography variant="body2">{response.content}</Typography>
+                    </Alert>
+                  ) : (
+                    <MessageRenderer
+                      content={response.content}
+                      isStreaming={response.isStreaming}
+                      onSendMessage={dataRef.current.handleSendMessageFromRenderer}
+                    />
+                  )}
+                </CardContent>
+              </Card>
+            ))}
+          </Box>
+        ) : (
+          <MessageRenderer
+            content={(() => {
+              if (message.alternativeResponses && message.alternativeResponses.length > 0 && message.currentResponseIndex !== undefined) {
+                const currentIndex = message.currentResponseIndex;
+                if (currentIndex >= 0 && currentIndex < message.alternativeResponses.length) {
+                  const alt = message.alternativeResponses[currentIndex];
+                  return alt !== undefined
+                    ? (message.isStreaming ? alt : alt.trimEnd())
+                    : message.content;
+                }
+              }
+              return message.isStreaming ? message.content : message.content.trimEnd();
+            })()}
+            isStreaming={message.isStreaming}
+            onSendMessage={dataRef.current.handleSendMessageFromRenderer}
+          />
+        )}
+      </Box>
+    </>
+  );
+
+  return (
+    <Box
+      ref={(el: HTMLDivElement | null) => { dataRef.current.messageRefs.current[index] = el; }}
+      data-message-index={index}
+      sx={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start', mb: 1.5, width: '100%' }}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+    >
+      {shareMode && isPairStart && (
+        <Checkbox
+          checked={isSelected}
+          onChange={() => dataRef.current.handleToggleMessage(message.id, nextMessageId!)}
+          sx={{ mt: 1, mr: 1, p: 0.5 }}
+        />
+      )}
+
+      <Box
+        sx={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: interfaceSettings.leftAlignMessages ? 'flex-start' : (isUser ? 'flex-end' : 'flex-start'),
+          flex: 1,
+        }}
+      >
+        {shouldShowBorder ? (
+          <Card
+            className="message-bubble"
+            data-theme={isDarkMode ? 'dark' : 'light'}
+            sx={{
+              maxWidth: interfaceSettings.leftAlignMessages ? '100%' : (isUser ? '75%' : '100%'),
+              minWidth: '180px',
+              width: interfaceSettings.leftAlignMessages ? '100%' : (isUser ? undefined : '100%'),
+              backgroundColor: isUser ? 'primary.main' : isDarkMode ? 'background.paper' : '#f8f9fa',
+              color: isUser ? 'primary.contrastText' : isDarkMode ? 'text.primary' : '#333',
+              boxShadow: isDarkMode ? '0 2px 8px rgba(0,0,0,0.15)' : '0 2px 8px rgba(0,0,0,0.1)',
+            }}
+          >
+            <CardContent sx={{ p: 1.2, '&:last-child': { pb: 1.2 } }}>
+              {messageContent}
+            </CardContent>
+          </Card>
+        ) : (
+          <Box sx={{ width: '100%', p: 1.2 }}>
+            {messageContent}
+          </Box>
+        )}
+
+        {/* Кнопки действий снизу карточки */}
+        <Box sx={{
+          display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 0.5,
+          mt: 1, minHeight: 28,
+          opacity: isHovered ? 1 : 0,
+          visibility: isHovered ? 'visible' : 'hidden',
+        }}>
+          {/* Навигация по вариантам ответов */}
+          {!isUser && message.alternativeResponses && message.alternativeResponses.length > 1 && (
+            <>
+              <Tooltip title="Предыдущий вариант">
+                <span>
+                  <IconButton
+                    size="small"
+                    onClick={() => {
+                      const ci = message.currentResponseIndex ?? 0;
+                      if (ci > 0) {
+                        const ni = ci - 1;
+                        dataRef.current.updateMessage(
+                          dataRef.current.currentChatId!, message.id,
+                          message.alternativeResponses![ni],
+                          undefined, undefined, message.alternativeResponses, ni,
+                        );
+                      }
+                    }}
+                    disabled={(message.currentResponseIndex ?? 0) === 0}
+                    sx={{ opacity: 0.7, p: 0.5, borderRadius: '6px', minWidth: '28px', width: '28px', height: '28px',
+                      '&:hover:not(:disabled)': { opacity: 1, '& .MuiSvgIcon-root': { color: 'primary.main' } } }}
+                  >
+                    <ChevronLeftIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+              <Typography variant="caption" sx={{ opacity: 0.7, fontSize: '0.7rem', minWidth: '35px', textAlign: 'center' }}>
+                {((message.currentResponseIndex ?? 0) + 1)}/{message.alternativeResponses.length}
+              </Typography>
+              <Tooltip title="Следующий вариант">
+                <span>
+                  <IconButton
+                    size="small"
+                    onClick={() => {
+                      const ci = message.currentResponseIndex ?? 0;
+                      if (ci < message.alternativeResponses!.length - 1) {
+                        const ni = ci + 1;
+                        dataRef.current.updateMessage(
+                          dataRef.current.currentChatId!, message.id,
+                          message.alternativeResponses![ni],
+                          undefined, undefined, message.alternativeResponses, ni,
+                        );
+                      }
+                    }}
+                    disabled={(message.currentResponseIndex ?? 0) >= message.alternativeResponses!.length - 1}
+                    sx={{ opacity: 0.7, p: 0.5, borderRadius: '6px', minWidth: '28px', width: '28px', height: '28px',
+                      '&:hover:not(:disabled)': { opacity: 1, '& .MuiSvgIcon-root': { color: 'primary.main' } } }}
+                  >
+                    <ChevronRightIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+              <Box sx={{ width: '1px', height: '16px', bgcolor: 'divider', mx: 0.5 }} />
+            </>
+          )}
+
+          <Tooltip title="Копировать">
+            <IconButton
+              size="small"
+              onClick={() => {
+                if (message.multiLLMResponses && message.multiLLMResponses.length > 0) {
+                  dataRef.current.handleCopyMessage(
+                    message.multiLLMResponses.map(r => `[${r.model}]\n${r.content}`).join('\n\n---\n\n')
+                  );
+                } else {
+                  dataRef.current.handleCopyMessage(message.content);
+                }
+              }}
+              className="message-copy-button"
+              data-theme={isDarkMode ? 'dark' : 'light'}
+              sx={{ opacity: 0.7, p: 0.5, borderRadius: '6px', minWidth: '28px', width: '28px', height: '28px',
+                '&:hover': { opacity: 1, '& .MuiSvgIcon-root': { color: 'primary.main' } },
+                '& .MuiSvgIcon-root': { fontSize: '18px !important', width: '18px !important', height: '18px !important' } }}
+            >
+              <CopyIcon />
+            </IconButton>
+          </Tooltip>
+
+          <Tooltip title="Редактировать">
+            <IconButton
+              size="small"
+              onClick={() => dataRef.current.handleEditClick(message)}
+              className="message-edit-button"
+              data-theme={isDarkMode ? 'dark' : 'light'}
+              sx={{ opacity: 0.7, p: 0.5, borderRadius: '6px', minWidth: '28px', width: '28px', height: '28px',
+                '&:hover': { opacity: 1, '& .MuiSvgIcon-root': { color: 'primary.main' } },
+                '& .MuiSvgIcon-root': { fontSize: '18px !important', width: '18px !important', height: '18px !important' } }}
+            >
+              <EditIcon />
+            </IconButton>
+          </Tooltip>
+
+          {!isUser && (
+            <Tooltip title="Перегенерировать">
+              <IconButton
+                size="small"
+                onClick={() => dataRef.current.handleRegenerate(message)}
+                className="message-regenerate-button"
+                data-theme={isDarkMode ? 'dark' : 'light'}
+                sx={{ opacity: 0.7, p: 0.5, borderRadius: '6px', minWidth: '28px', width: '28px', height: '28px',
+                  '&:hover': { opacity: 1, '& .MuiSvgIcon-root': { color: 'primary.main' } },
+                  '& .MuiSvgIcon-root': { fontSize: '18px !important', width: '18px !important', height: '18px !important' } }}
+              >
+                <RefreshIcon />
+              </IconButton>
+            </Tooltip>
+          )}
+
+          <Tooltip title="Прочесть вслух">
+            <IconButton
+              size="small"
+              onClick={() => {
+                let textToSpeak = message.content;
+                if (!isUser && message.alternativeResponses && message.alternativeResponses.length > 0 && message.currentResponseIndex !== undefined) {
+                  const ci = message.currentResponseIndex;
+                  if (ci >= 0 && ci < message.alternativeResponses.length) textToSpeak = message.alternativeResponses[ci];
+                }
+                if (!isUser && message.multiLLMResponses && message.multiLLMResponses.length > 0) {
+                  textToSpeak = message.multiLLMResponses.filter(r => !r.error).map(r => r.content).join(' ');
+                }
+                dataRef.current.synthesizeSpeech(textToSpeak);
+              }}
+              className="message-speak-button"
+              data-theme={isDarkMode ? 'dark' : 'light'}
+              disabled={isSpeaking}
+              sx={{ opacity: 0.7, p: 0.5, borderRadius: '6px', minWidth: '28px', width: '28px', height: '28px',
+                '&:hover:not(:disabled)': { opacity: 1, '& .MuiSvgIcon-root': { color: 'primary.main' } },
+                '&:disabled': { opacity: 0.4 },
+                '& .MuiSvgIcon-root': { fontSize: '18px !important', width: '18px !important', height: '18px !important' } }}
+            >
+              <VolumeUpIcon />
+            </IconButton>
+          </Tooltip>
+
+          {!isUser && !shareMode && (
+            <Tooltip title="Поделиться">
+              <IconButton
+                size="small"
+                onClick={() => dataRef.current.handleEnterShareMode()}
+                className="message-share-button"
+                data-theme={isDarkMode ? 'dark' : 'light'}
+                sx={{ opacity: 0.7, p: 0.5, borderRadius: '6px', minWidth: '28px', width: '28px', height: '28px',
+                  '&:hover': { opacity: 1, '& .MuiSvgIcon-root': { color: 'primary.main' } },
+                  '& .MuiSvgIcon-root': { fontSize: '18px !important', width: '18px !important', height: '18px !important' } }}
+              >
+                <ShareIcon />
+              </IconButton>
+            </Tooltip>
+          )}
+        </Box>
+      </Box>
+    </Box>
+  );
+};
+
+// Мемоизируем: ре-рендер только когда меняется сам message, shareMode, isSelected, isSpeaking или настройки
+const MessageCard = React.memo(MessageCardComponent, (prev, next) =>
+  prev.message === next.message &&
+  prev.shareMode === next.shareMode &&
+  prev.isSelected === next.isSelected &&
+  prev.isSpeaking === next.isSpeaking &&
+  prev.isDarkMode === next.isDarkMode &&
+  prev.interfaceSettings === next.interfaceSettings,
+);
+
+// ================================
+
 export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: UnifiedChatPageProps) {
   const navigate = useNavigate();
   
@@ -225,7 +570,9 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messageRefs = useRef<(HTMLDivElement | null)[]>([]);
-  
+  // Ref со всеми callback-ами для MessageCard (обновляется перед каждым рендером)
+  const messageCardDataRef = useRef<MessageCardData>({} as MessageCardData);
+
   // Context и Socket
   const { state } = useAppContext();
   const { 
@@ -1688,492 +2035,13 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   };
 
   // ================================
-  // КОМПОНЕНТЫ СООБЩЕНИЙ
+  // (MessageCard определён на уровне модуля, выше UnifiedChatPage)
   // ================================
 
-    const MessageCard = ({ message, index }: { message: Message; index: number }): React.ReactElement => {
-    const isUser = message.role === 'user';
-    const [isHovered, setIsHovered] = useState(false);
-    const shouldShowBorder = isUser 
-      ? !interfaceSettings.userNoBorder 
-      : !interfaceSettings.assistantNoBorder;
-    
-    const messageContent = (
-      <>
-        <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.3 }}>
-          <Avatar
-            sx={{
-              width: 24,
-              height: 24,
-              mr: 1,
-              bgcolor: isUser ? 'primary.dark' : 'transparent',
-            }}
-            src={isUser ? undefined : '/astra.png'}
-          >
-            {isUser ? <PersonIcon /> : null}
-          </Avatar>
-          <Typography variant="caption" sx={{ opacity: 0.8, fontSize: '0.75rem', fontWeight: 500 }}>
-            {isUser 
-              ? (interfaceSettings.showUserName && user?.username ? user.username : 'Вы')
-              : 'AstraChat'}
-          </Typography>
-          <Typography variant="caption" sx={{ ml: 'auto', opacity: 0.6, fontSize: '0.7rem' }}>
-            {formatTimestamp(message.timestamp)}
-          </Typography>
-        </Box>
-        
-        <Box sx={{ width: '100%' }}>
-          {!isUser && message.documentSearch && (
-            <DocumentSearchPanel trace={message.documentSearch} />
-          )}
-          {message.multiLLMResponses && message.multiLLMResponses.length > 0 ? (
-            // Отображение нескольких ответов от разных моделей
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-              {message.multiLLMResponses.map((response, index) => (
-                <Card
-                  key={index}
-                  sx={{
-                    border: '1px solid',
-                    borderColor: response.error ? 'error.main' : 'divider',
-                    bgcolor: response.error ? 'error.light' : 'background.paper',
-                  }}
-                >
-                  <CardContent>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                      <Typography variant="caption" fontWeight="bold" color={response.error ? 'error' : 'primary'}>
-                        {response.model}
-                      </Typography>
-                      {response.isStreaming && (
-                        <Chip label="Генерируется..." size="small" color="info" />
-                      )}
-                      {response.error && (
-                        <Chip label="Ошибка" size="small" color="error" />
-                      )}
-                    </Box>
-                    {response.error ? (
-                      <Alert severity="error" sx={{ mt: 1 }}>
-                        <Typography variant="body2">{response.content}</Typography>
-                      </Alert>
-                    ) : (
-                      <MessageRenderer 
-                        content={response.content} 
-                        isStreaming={response.isStreaming}
-                        onSendMessage={handleSendMessageFromRenderer}
-                      />
-                    )}
-                  </CardContent>
-                </Card>
-              ))}
-            </Box>
-          ) : (
-            // Обычное отображение одного ответа (с поддержкой альтернативных вариантов)
-            <MessageRenderer 
-              content={(() => {
-                // Если есть альтернативные ответы, показываем текущий вариант
-                if (message.alternativeResponses && message.alternativeResponses.length > 0 && message.currentResponseIndex !== undefined) {
-                  const currentIndex = message.currentResponseIndex;
-                  
-                  if (currentIndex >= 0 && currentIndex < message.alternativeResponses.length) {
-                    const alternativeContent = message.alternativeResponses[currentIndex];
-                    // Убираем лишние пробелы и переносы строк в конце (только если не идет стриминг)
-                    const resultContent = alternativeContent !== undefined 
-                      ? (message.isStreaming ? alternativeContent : alternativeContent.trimEnd())
-                      : message.content;
-                    
-                    // Всегда используем альтернативный контент, если установлен currentResponseIndex
-                    // Это важно для стриминга - alternativeContent обновляется при каждом чанке
-                    return resultContent;
-                  }
-                }
-                // Fallback на message.content, если нет альтернативных ответов
-                // Убираем лишние пробелы и переносы строк в конце (только если не идет стриминг)
-                return message.isStreaming ? message.content : message.content.trimEnd();
-              })()} 
-              isStreaming={message.isStreaming}
-              onSendMessage={handleSendMessageFromRenderer}
-            />
-          )}
-        </Box>
-      </>
-    );
-    
-    // Проверяем, является ли это сообщение частью пары для выбора
-    const isPairStart = isUser && index < messages.length - 1 && messages[index + 1].role === 'assistant';
-    const isSelected = isPairStart && 
-      selectedMessages.has(message.id) && 
-      selectedMessages.has(messages[index + 1].id);
+  // NOTE: MessageCard теперь определён на уровне модуля (вне UnifiedChatPage).
+  // Это предотвращает пересоздание типа компонента при каждом рендере родителя
+  // (что вызывало полный unmount/remount Monaco Editor при каждом нажатии клавиши).
 
-    return (
-      <Box
-        ref={(el: HTMLDivElement | null) => {
-          messageRefs.current[index] = el;
-        }}
-        data-message-index={index}
-        sx={{
-          display: 'flex',
-          flexDirection: 'row',
-          alignItems: 'flex-start',
-          mb: 1.5,
-          width: '100%',
-        }}
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
-      >
-        {/* Чекбокс в режиме "Поделиться" */}
-        {shareMode && isPairStart && (
-          <Checkbox
-            checked={isSelected}
-            onChange={() => handleToggleMessage(message.id, messages[index + 1].id)}
-            sx={{
-              mt: 1,
-              mr: 1,
-              p: 0.5,
-            }}
-          />
-        )}
-
-        <Box
-          sx={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: interfaceSettings.leftAlignMessages ? 'flex-start' : (isUser ? 'flex-end' : 'flex-start'),
-            flex: 1,
-          }}
-        >
-        {shouldShowBorder ? (
-          <Card
-            className="message-bubble"
-            data-theme={isDarkMode ? 'dark' : 'light'}
-            sx={{
-              maxWidth: interfaceSettings.leftAlignMessages ? '100%' : (isUser ? '75%' : '100%'),
-              minWidth: '180px',
-              width: interfaceSettings.leftAlignMessages ? '100%' : (isUser ? undefined : '100%'),
-              backgroundColor: isUser 
-                ? 'primary.main' 
-                : isDarkMode ? 'background.paper' : '#f8f9fa',
-              color: isUser ? 'primary.contrastText' : isDarkMode ? 'text.primary' : '#333',
-              boxShadow: isDarkMode 
-                ? '0 2px 8px rgba(0, 0, 0, 0.15)' 
-                : '0 2px 8px rgba(0, 0, 0, 0.1)',
-            }}
-          >
-            <CardContent sx={{ p: 1.2, '&:last-child': { pb: 1.2 } }}>
-              {messageContent}
-            </CardContent>
-          </Card>
-        ) : (
-          <Box sx={{ width: '100%', p: 1.2 }}>
-            {messageContent}
-          </Box>
-        )}
-        
-        {/* Кнопки действий снизу карточки - для всех сообщений при наведении */}
-        <Box sx={{ 
-          display: 'flex', 
-          justifyContent: 'center',
-          alignItems: 'center',
-          gap: 0.5,
-          mt: 1,
-          minHeight: 28, /* Минимальная высота для кнопок */
-          opacity: isHovered ? 1 : 0, /* Мгновенное появление/исчезновение */
-          visibility: isHovered ? 'visible' : 'hidden', /* Скрываем кнопку, но сохраняем место */
-        }}>
-          {/* Навигация по вариантам ответов (только для сообщений помощника с альтернативными ответами) */}
-          {!isUser && message.alternativeResponses && message.alternativeResponses.length > 1 && (
-            <>
-              <Tooltip title="Предыдущий вариант">
-                <span>
-                  <IconButton
-                    size="small"
-                    onClick={() => {
-                      const currentIndex = message.currentResponseIndex ?? 0;
-                      if (currentIndex > 0) {
-                        const newIndex = currentIndex - 1;
-                        const newContent = message.alternativeResponses![newIndex];
-                        updateMessage(
-                          currentChat!.id,
-                          message.id,
-                          newContent,
-                          undefined,
-                          undefined,
-                          message.alternativeResponses,
-                          newIndex
-                        );
-                      }
-                    }}
-                    disabled={(message.currentResponseIndex ?? 0) === 0}
-                    sx={{
-                      opacity: 0.7,
-                      p: 0.5,
-                      borderRadius: '6px',
-                      minWidth: '28px',
-                      width: '28px',
-                      height: '28px',
-                      '&:hover:not(:disabled)': {
-                        opacity: 1,
-                        '& .MuiSvgIcon-root': {
-                          color: 'primary.main',
-                        },
-                      },
-                    }}
-                  >
-                    <ChevronLeftIcon fontSize="small" />
-                  </IconButton>
-                </span>
-              </Tooltip>
-              
-              <Typography variant="caption" sx={{
-                opacity: 0.7,
-                fontSize: '0.7rem',
-                minWidth: '35px',
-                textAlign: 'center',
-              }}>
-                {((message.currentResponseIndex ?? 0) + 1)}/{message.alternativeResponses.length}
-              </Typography>
-              
-              <Tooltip title="Следующий вариант">
-                <span>
-                  <IconButton
-                    size="small"
-                    onClick={() => {
-                      const currentIndex = message.currentResponseIndex ?? 0;
-                      if (currentIndex < message.alternativeResponses!.length - 1) {
-                        const newIndex = currentIndex + 1;
-                        const newContent = message.alternativeResponses![newIndex];
-                        updateMessage(
-                          currentChat!.id,
-                          message.id,
-                          newContent,
-                          undefined,
-                          undefined,
-                          message.alternativeResponses,
-                          newIndex
-                        );
-                      }
-                    }}
-                    disabled={(message.currentResponseIndex ?? 0) >= message.alternativeResponses!.length - 1}
-                    sx={{
-                      opacity: 0.7,
-                      p: 0.5,
-                      borderRadius: '6px',
-                      minWidth: '28px',
-                      width: '28px',
-                      height: '28px',
-                      '&:hover:not(:disabled)': {
-                        opacity: 1,
-                        '& .MuiSvgIcon-root': {
-                          color: 'primary.main',
-                        },
-                      },
-                    }}
-                  >
-                    <ChevronRightIcon fontSize="small" />
-                  </IconButton>
-                </span>
-              </Tooltip>
-              
-              {/* Разделитель между навигацией и остальными кнопками */}
-              <Box sx={{ width: '1px', height: '16px', bgcolor: 'divider', mx: 0.5 }} />
-            </>
-          )}
-          
-          <Tooltip title="Копировать">
-            <IconButton
-              size="small"
-              onClick={() => {
-                if (message.multiLLMResponses && message.multiLLMResponses.length > 0) {
-                  // Для multi-llm копируем все ответы
-                  const allResponses = message.multiLLMResponses
-                    .map(r => `[${r.model}]\n${r.content}`)
-                    .join('\n\n---\n\n');
-                  handleCopyMessage(allResponses);
-                } else {
-                  handleCopyMessage(message.content);
-                }
-              }}
-              className="message-copy-button"
-              data-theme={isDarkMode ? 'dark' : 'light'}
-              sx={{ 
-                opacity: 0.7,
-                p: 0.5,
-                borderRadius: '6px',
-                minWidth: '28px',
-                width: '28px',
-                height: '28px',
-                '&:hover': {
-                  opacity: 1,
-                  '& .MuiSvgIcon-root': {
-                    color: 'primary.main',
-                  },
-                },
-                '& .MuiSvgIcon-root': {
-                  fontSize: '18px !important',
-                  width: '18px !important',
-                  height: '18px !important',
-                },
-              }}
-            >
-              <CopyIcon />
-            </IconButton>
-          </Tooltip>
-          
-          {/* Кнопка редактирования - для всех сообщений */}
-          <Tooltip title="Редактировать">
-            <IconButton
-              size="small"
-              onClick={() => handleEditClick(message)}
-              className="message-edit-button"
-              data-theme={isDarkMode ? 'dark' : 'light'}
-              sx={{ 
-                opacity: 0.7,
-                p: 0.5,
-                borderRadius: '6px',
-                minWidth: '28px',
-                width: '28px',
-                height: '28px',
-                '&:hover': {
-                  opacity: 1,
-                  '& .MuiSvgIcon-root': {
-                    color: 'primary.main',
-                  },
-                },
-                '& .MuiSvgIcon-root': {
-                  fontSize: '18px !important',
-                  width: '18px !important',
-                  height: '18px !important',
-                },
-              }}
-            >
-              <EditIcon />
-            </IconButton>
-          </Tooltip>
-          
-          {/* Кнопка перегенерации - только для сообщений LLM/агента */}
-          {!isUser && (
-            <Tooltip title="Перегенерировать">
-              <IconButton
-                size="small"
-                onClick={() => handleRegenerate(message)}
-                className="message-regenerate-button"
-                data-theme={isDarkMode ? 'dark' : 'light'}
-                sx={{ 
-                  opacity: 0.7,
-                  p: 0.5,
-                  borderRadius: '6px',
-                  minWidth: '28px',
-                  width: '28px',
-                  height: '28px',
-                  '&:hover': {
-                    opacity: 1,
-                    '& .MuiSvgIcon-root': {
-                      color: 'primary.main',
-                    },
-                  },
-                  '& .MuiSvgIcon-root': {
-                    fontSize: '18px !important',
-                    width: '18px !important',
-                    height: '18px !important',
-                  },
-                }}
-              >
-                <RefreshIcon />
-              </IconButton>
-            </Tooltip>
-          )}
-          
-          {/* Кнопка озвучивания - для всех сообщений */}
-          <Tooltip title="Прочесть вслух">
-            <IconButton
-              size="small"
-              onClick={() => {
-                // Получаем текущий контент сообщения
-                let textToSpeak = message.content;
-                
-                // Если есть альтернативные ответы, берём текущий вариант (только для LLM)
-                if (!isUser && message.alternativeResponses && message.alternativeResponses.length > 0 && message.currentResponseIndex !== undefined) {
-                  const currentIndex = message.currentResponseIndex;
-                  if (currentIndex >= 0 && currentIndex < message.alternativeResponses.length) {
-                    textToSpeak = message.alternativeResponses[currentIndex];
-                  }
-                }
-                
-                // Для multi-llm берём первый ответ или все ответы (только для LLM)
-                if (!isUser && message.multiLLMResponses && message.multiLLMResponses.length > 0) {
-                  textToSpeak = message.multiLLMResponses
-                    .filter(r => !r.error)
-                    .map(r => r.content)
-                    .join(' ');
-                }
-                
-                synthesizeSpeech(textToSpeak);
-              }}
-              className="message-speak-button"
-              data-theme={isDarkMode ? 'dark' : 'light'}
-              disabled={isSpeaking}
-              sx={{ 
-                opacity: 0.7,
-                p: 0.5,
-                borderRadius: '6px',
-                minWidth: '28px',
-                width: '28px',
-                height: '28px',
-                '&:hover:not(:disabled)': {
-                  opacity: 1,
-                  '& .MuiSvgIcon-root': {
-                    color: 'primary.main',
-                  },
-                },
-                '&:disabled': {
-                  opacity: 0.4,
-                },
-                '& .MuiSvgIcon-root': {
-                  fontSize: '18px !important',
-                  width: '18px !important',
-                  height: '18px !important',
-                },
-              }}
-            >
-              <VolumeUpIcon />
-            </IconButton>
-          </Tooltip>
-          
-          {/* Кнопка "Поделиться" - только для сообщений ассистента */}
-          {!isUser && !shareMode && (
-            <Tooltip title="Поделиться">
-              <IconButton
-                size="small"
-                onClick={handleEnterShareMode}
-                className="message-share-button"
-                data-theme={isDarkMode ? 'dark' : 'light'}
-                sx={{ 
-                  opacity: 0.7,
-                  p: 0.5,
-                  borderRadius: '6px',
-                  minWidth: '28px',
-                  width: '28px',
-                  height: '28px',
-                  '&:hover': {
-                    opacity: 1,
-                    '& .MuiSvgIcon-root': {
-                      color: 'primary.main',
-                    },
-                  },
-                  '& .MuiSvgIcon-root': {
-                    fontSize: '18px !important',
-                    width: '18px !important',
-                    height: '18px !important',
-                  },
-                }}
-              >
-                <ShareIcon />
-              </IconButton>
-            </Tooltip>
-          )}
-        </Box>
-        </Box>
-      </Box>
-    );
-  };
 
   // ================================
   // ДИАЛОГИ
@@ -2234,6 +2102,23 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   // ================================
   // ОСНОВНОЙ РЕНДЕР
   // ================================
+
+  // Обновляем dataRef перед каждым рендером, чтобы MessageCard всегда видел актуальные callback-и
+  // (MessageCard мемоизирован и не ре-рендерится при изменении inputMessage,
+  //  но его onClick-обработчики через dataRef.current всегда получают свежие функции)
+  messageCardDataRef.current = {
+    handleSendMessageFromRenderer,
+    handleCopyMessage,
+    handleEditClick,
+    handleRegenerate,
+    synthesizeSpeech,
+    handleEnterShareMode,
+    handleToggleMessage,
+    updateMessage,
+    formatTimestamp,
+    currentChatId: currentChat?.id,
+    messageRefs,
+  };
 
   // Если режим multi-llm, показываем специальный UI
   if (agentStatus?.mode === 'multi-llm') {
@@ -2729,9 +2614,30 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
               mx: 'auto',
               px: interfaceSettings.widescreenMode ? 4 : 2,
             }}>
-              {messages.map((message, index) => (
-                <MessageCard key={message.id || index} message={message} index={index} />
-              ))}
+              {messages.map((message, index) => {
+                const isUserMsg = message.role === 'user';
+                const isPairStart = isUserMsg && index < messages.length - 1 && messages[index + 1].role === 'assistant';
+                const isSelected = isPairStart &&
+                  selectedMessages.has(message.id) &&
+                  selectedMessages.has(messages[index + 1].id);
+                const nextMessageId = isPairStart ? messages[index + 1].id : null;
+                return (
+                  <MessageCard
+                    key={message.id || index}
+                    message={message}
+                    index={index}
+                    isPairStart={isPairStart}
+                    isSelected={isSelected}
+                    nextMessageId={nextMessageId}
+                    shareMode={shareMode}
+                    isSpeaking={isSpeaking}
+                    isDarkMode={isDarkMode}
+                    interfaceSettings={interfaceSettings}
+                    username={user?.username}
+                    dataRef={messageCardDataRef}
+                  />
+                );
+              })}
               
               {/* Индикатор размышления - показывается только до начала потоковой генерации, сразу после сообщений */}
               {state.isLoading && !messages.some(msg => msg.isStreaming) && (

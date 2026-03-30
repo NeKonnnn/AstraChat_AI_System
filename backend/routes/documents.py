@@ -9,9 +9,19 @@ from datetime import datetime
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
-from backend.app_state import ask_agent, rag_client, minio_client, settings
+from backend.app_state import ask_agent, rag_client, minio_client, settings, get_rag_chat_top_k
 from backend.schemas import DocumentQueryRequest
 from backend.realtime.helpers import _is_structure_query
+from backend.realtime.rag_evidence import (
+    build_rag_id_to_filename,
+    filter_rag_hits_by_score,
+    rag_document_label,
+    rag_guard_env,
+    RAG_NO_RELEVANT_CONTEXT_MESSAGE,
+)
+from backend.rag_query.post_generation import maybe_replace_ungrounded
+from backend.rag_query.prompts import RAG_STRICT_NOT_FOUND_MESSAGE, merge_strict_rag_system_prompt
+from backend.rag_query.semantic_cache import bump_rag_semantic_cache
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 logger = logging.getLogger(__name__)
@@ -72,6 +82,8 @@ async def upload_document(file: UploadFile = File(...)):
                     pass
             raise HTTPException(status_code=400, detail=rag_result.get("error", "Ошибка индексации"))
 
+        bump_rag_semantic_cache()
+
         result = {"message": "Документ успешно загружен", "filename": file.filename,
                   "success": True, "rag_document_id": rag_result.get("document_id")}
         if is_image and minio_client and file_object_name:
@@ -92,9 +104,15 @@ async def query_document(request: DocumentQueryRequest):
         raise HTTPException(status_code=503, detail="AI agent не доступен")
     try:
         from backend.app_state import current_rag_strategy
-        hits = await rag_client.search(request.query, k=12, strategy=current_rag_strategy)
+        min_sim, _ = rag_guard_env()
+        hits = await rag_client.search(request.query, k=get_rag_chat_top_k(), strategy=current_rag_strategy)
+        hits = filter_rag_hits_by_score(hits, min_sim)
         if not hits:
-            return {"response": "В загруженных документах не найдено информации.", "query": request.query, "success": True}
+            return {
+                "response": RAG_NO_RELEVANT_CONTEXT_MESSAGE,
+                "query": request.query,
+                "success": True,
+            }
 
         if _is_structure_query(request.query):
             seen = {(d, i) for _, _, d, i in hits}
@@ -107,9 +125,11 @@ async def query_document(request: DocumentQueryRequest):
                 except Exception:
                     pass
 
+        id_map = build_rag_id_to_filename(list(await rag_client.list_documents() or []))
         parts, total = [], 0
         for i, (content, score, doc_id, chunk_idx) in enumerate(hits, 1):
-            frag = f"Фрагмент {i} (document_id={doc_id}, чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
+            title = rag_document_label(doc_id, id_map)
+            frag = f"Фрагмент {i} (документ «{title}», чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
             if total + len(frag) > 12000:
                 parts.append(frag[:max(0, 12000 - total - 80)] + "\n... [обрезано]\n")
                 break
@@ -117,10 +137,14 @@ async def query_document(request: DocumentQueryRequest):
             total += len(frag)
 
         prompt = (
-            f"На основе контекста из документов ответь на вопрос. Не придумывай информацию.\n\n"
-            f"Контекст:\n{chr(10).join(parts)}\n\nВопрос: {request.query}\n\nОтвет:"
+            f"CONTEXT:\n{chr(10).join(parts)}\n\nВопрос: {request.query}\n\nОтвет:"
         )
-        response_text = ask_agent(prompt)
+        response_text = ask_agent(
+            prompt, system_prompt=merge_strict_rag_system_prompt(None)
+        )
+        response_text = await maybe_replace_ungrounded(
+            prompt[:20000], response_text, RAG_STRICT_NOT_FOUND_MESSAGE
+        )
         return {"response": response_text, "query": request.query, "success": True, "timestamp": datetime.now().isoformat()}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -162,6 +186,8 @@ async def delete_document(filename: str):
             await rag_client.delete_document_by_filename(filename)
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Ошибка RAG-сервиса: {e}")
+
+        bump_rag_semantic_cache()
 
         new_docs = await rag_client.list_documents()
         return {"message": f"Документ {filename} удален", "success": True,

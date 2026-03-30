@@ -26,6 +26,7 @@ import {
   DialogContent,
   DialogActions,
   Chip,
+  Tooltip,
 } from '@mui/material';
 import {
   Save as SaveIcon,
@@ -36,6 +37,7 @@ import {
   Computer as ComputerIcon,
   Memory as MemoryIcon,
   LibraryBooks as LibraryBooksIcon,
+  HelpOutline as HelpOutlineIcon,
 } from '@mui/icons-material';
 import { useAppActions } from '../contexts/AppContext';
 import AgentArchitectureSettings from '../components/AgentArchitectureSettings';
@@ -48,6 +50,10 @@ import {
   setKnowledgeRagEnabled,
   KNOWLEDGE_RAG_STORAGE_EVENT,
 } from '../utils/knowledgeRagStorage';
+import {
+  MODEL_SETTINGS_LABEL_WRAPPER_SX,
+  MODEL_SETTINGS_HELP_ICON_BUTTON_SX,
+} from '../constants/modelSettingsStyles';
 
 export default function SettingsPage() {
   const [isExpanded, setIsExpanded] = useState(true);
@@ -64,7 +70,7 @@ export default function SettingsPage() {
     repeat_penalty: 1.05,
     use_gpu: false,
     streaming: true,
-    streaming_speed: 50, // Скорость потоковой генерации в миллисекундах
+    streaming_speed: 20, // Скорость потоковой генерации в миллисекундах
   });
 
   const [maxValues, setMaxValues] = useState({
@@ -1093,34 +1099,90 @@ export default function SettingsPage() {
                </Typography>
              </Alert>
              
-             <Box display="grid" gridTemplateColumns="repeat(auto-fit, minmax(250px, 1fr))" gap={2}>
-               <TextField
-                 label="Максимум сообщений в контексте"
-                 type="number"
-                 value={memorySettings.max_messages}
-                 onChange={(e) => {
-                   const value = parseInt(e.target.value);
-                   if (value >= 5 && value <= 100) {
-                     setMemorySettings(prev => ({ 
-                       ...prev, 
-                       max_messages: value 
-                     }));
+             <Box
+               sx={{
+                 display: 'flex',
+                 flexDirection: { xs: 'column', sm: 'row' },
+                 gap: 2,
+                 alignItems: { sm: 'flex-start' },
+                 flexWrap: 'wrap',
+               }}
+             >
+               <Box sx={{ maxWidth: { xs: '100%', sm: 300 }, minWidth: { sm: 260 }, flex: { sm: '0 0 auto' } }}>
+                 <TextField
+                   fullWidth
+                   size="small"
+                   type="number"
+                   label={
+                     <Box sx={MODEL_SETTINGS_LABEL_WRAPPER_SX} component="span">
+                       Максимум сообщений в контексте
+                       <Tooltip
+                         title="Количество последних сообщений, которые ассистент запоминает в диалоге. Диапазон 5–100 (шаг в поле — 5). Больше сообщений — богаче контекст, выше нагрузка на память и время ответа."
+                         arrow
+                       >
+                         <IconButton
+                           size="small"
+                           sx={MODEL_SETTINGS_HELP_ICON_BUTTON_SX}
+                           onClick={(e) => e.stopPropagation()}
+                           aria-label="Справка: максимум сообщений в контексте"
+                         >
+                           <HelpOutlineIcon fontSize="small" color="action" />
+                         </IconButton>
+                       </Tooltip>
+                     </Box>
                    }
-                 }}
-                 inputProps={{ min: 5, max: 100, step: 5 }}
-                 fullWidth
-                 helperText="Количество последних сообщений, которые ассистент запоминает (5-100)"
-                 error={memorySettings.max_messages < 5 || memorySettings.max_messages > 100}
-               />
-               
-               <TextField
-                 label="Размер контекста (токены)"
-                 type="number"
-                 value={Math.round(memorySettings.max_messages * 150)}
-                 disabled
-                 fullWidth
-                 helperText="Примерный размер контекста в токенах (только для чтения)"
-               />
+                   value={memorySettings.max_messages}
+                   onChange={(e) => {
+                     const raw = e.target.value;
+                     if (raw === '') return;
+                     const v = parseInt(raw, 10);
+                     if (Number.isNaN(v)) return;
+                     const clamped = Math.max(5, Math.min(100, v));
+                     setMemorySettings((prev) =>
+                       clamped !== prev.max_messages ? { ...prev, max_messages: clamped } : prev
+                     );
+                   }}
+                   onBlur={(e) => {
+                     const raw = e.target.value.trim();
+                     let v = parseInt(raw, 10);
+                     if (raw === '' || Number.isNaN(v)) {
+                       v = memorySettings.max_messages;
+                     }
+                     v = Math.max(5, Math.min(100, v));
+                     setMemorySettings((prev) => (v !== prev.max_messages ? { ...prev, max_messages: v } : prev));
+                   }}
+                   inputProps={{ min: 5, max: 100, step: 5 }}
+                   InputLabelProps={{ shrink: true }}
+                 />
+               </Box>
+               <Box sx={{ maxWidth: { xs: '100%', sm: 236 }, minWidth: 0, flex: { sm: '0 0 auto' } }}>
+                 <TextField
+                   fullWidth
+                   size="small"
+                   type="number"
+                   disabled
+                   label={
+                     <Box sx={MODEL_SETTINGS_LABEL_WRAPPER_SX} component="span">
+                       Размер контекста (токены)
+                       <Tooltip
+                         title="Примерный размер контекста в токенах (только для чтения): значение считается как «максимум сообщений» × 150 — грубая оценка для ориентира, не лимит модели."
+                         arrow
+                       >
+                         <IconButton
+                           size="small"
+                           sx={MODEL_SETTINGS_HELP_ICON_BUTTON_SX}
+                           onClick={(e) => e.stopPropagation()}
+                           aria-label="Справка: размер контекста в токенах"
+                         >
+                           <HelpOutlineIcon fontSize="small" color="action" />
+                         </IconButton>
+                       </Tooltip>
+                     </Box>
+                   }
+                   value={Math.round(memorySettings.max_messages * 150)}
+                   InputLabelProps={{ shrink: true }}
+                 />
+               </Box>
              </Box>
              
              <Box mt={2}>

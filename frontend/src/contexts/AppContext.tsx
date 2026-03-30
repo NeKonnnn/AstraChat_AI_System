@@ -1,5 +1,4 @@
 import React, { createContext, useContext, useReducer, useEffect, ReactNode } from 'react';
-import { getApiUrl, API_ENDPOINTS } from '../config/api';
 
 // Типы данных
 export interface Message {
@@ -115,7 +114,7 @@ export interface AppState {
   
   // Транскрибация
   transcriptionSettings: {
-    engine: 'whisperx';
+    engine: 'whisperx' | 'vosk';
     language: string;
     auto_detect: boolean;
   };
@@ -158,7 +157,7 @@ type AppAction =
   | { type: 'SET_RECORDING'; payload: boolean }
   | { type: 'SET_SPEAKING'; payload: boolean }
   | { type: 'SET_VOICE_SETTINGS'; payload: { voice_id: string; speech_rate: number } }
-  | { type: 'SET_TRANSCRIPTION_SETTINGS'; payload: { engine: 'whisperx'; language: string; auto_detect: boolean } }
+  | { type: 'SET_TRANSCRIPTION_SETTINGS'; payload: { engine: 'whisperx' | 'vosk'; language: string; auto_detect: boolean } }
   | { type: 'SET_LOADED_DOCUMENT'; payload: string | null }
   | { type: 'ADD_NOTIFICATION'; payload: { type: string; message: string } }
   | { type: 'REMOVE_NOTIFICATION'; payload: string }
@@ -243,7 +242,7 @@ const initialState: AppState = {
     presence_penalty: 0.0,
     use_gpu: false,
     streaming: true,
-    streaming_speed: 100, // Default streaming speed
+    streaming_speed: 20, // Default streaming speed
   },
   availableModels: [],
   isRecording: false,
@@ -902,7 +901,7 @@ export function useAppActions() {
       dispatch({ type: 'SET_SPEAKING', payload: speaking });
     },
     
-    setTranscriptionSettings: (settings: { engine: 'whisperx'; language: string; auto_detect: boolean }) => {
+    setTranscriptionSettings: (settings: { engine: 'whisperx' | 'vosk'; language: string; auto_detect: boolean }) => {
       dispatch({ type: 'SET_TRANSCRIPTION_SETTINGS', payload: settings });
     },
     
@@ -1024,7 +1023,7 @@ export function useAppActions() {
     getChatById: (chatId: string) => {
       return state.chats.find(chat => chat.id === chatId) || null;
     },
-
+    
     getArchivedChats: () => {
       return state.chats.filter(chat => chat.isArchived === true);
     },
@@ -1047,18 +1046,7 @@ export function useAppActions() {
     },
     
     deleteProject: (projectId: string) => {
-      // Отвязываем все чаты проекта
-      state.chats
-        .filter(chat => chat.projectId === projectId)
-        .forEach(chat => {
-          dispatch({ type: 'MOVE_CHAT_TO_PROJECT', payload: { chatId: chat.id, projectId: null } });
-        });
       dispatch({ type: 'DELETE_PROJECT', payload: projectId });
-      // Асинхронно очищаем бэкенд (RAG-файлы + MongoDB-диалоги проекта)
-      const url = getApiUrl((API_ENDPOINTS.PROJECT_DELETE as (id: string) => string)(projectId));
-      fetch(url, { method: 'DELETE' }).catch(err =>
-        console.warn(`Не удалось удалить данные проекта ${projectId} на сервере:`, err)
-      );
     },
     
     getProjects: () => {

@@ -106,7 +106,7 @@ async def load_model(request: ModelLoadRequest):
 async def get_model_settings():
     defaults = {"context_size": 2048, "output_tokens": 512, "temperature": 0.7, "top_p": 0.95,
                 "repeat_penalty": 1.05, "top_k": 40, "min_p": 0.05, "frequency_penalty": 0.0,
-                "presence_penalty": 0.0, "use_gpu": False, "streaming": True, "streaming_speed": 50}
+                "presence_penalty": 0.0, "use_gpu": False, "streaming": True, "streaming_speed": 20}
     if not model_settings:
         return defaults
     try:

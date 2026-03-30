@@ -6,6 +6,17 @@ import logging
 from typing import Dict, List, Any, Optional
 from .base_agent import BaseAgent
 
+from backend.realtime.rag_evidence import (
+    build_rag_id_to_filename,
+    filter_rag_hits_by_score,
+    rag_document_label,
+    rag_guard_env,
+    RAG_NO_RELEVANT_CONTEXT_MESSAGE,
+)
+from backend.app_state import get_rag_chat_top_k
+from backend.rag_query.post_generation import maybe_replace_ungrounded
+from backend.rag_query.prompts import RAG_STRICT_NOT_FOUND_MESSAGE, merge_strict_rag_system_prompt
+
 logger = logging.getLogger(__name__)
 
 class DocumentAgent(BaseAgent):
@@ -38,18 +49,21 @@ class DocumentAgent(BaseAgent):
 
             # Выполняем поиск по документам через SVC-RAG
             logger.info(f"[DocumentAgent] Поиск в документах через SVC-RAG: {message}")
-            hits = await rag_client.search(message, k=3, strategy=current_rag_strategy)
+            min_sim, _ = rag_guard_env()
+            hits = await rag_client.search(message, k=get_rag_chat_top_k(), strategy=current_rag_strategy)
+            hits = filter_rag_hits_by_score(hits, min_sim)
 
             if not hits:
-                return "В загруженных документах не найдено информации по вашему запросу."
+                return RAG_NO_RELEVANT_CONTEXT_MESSAGE
 
             logger.info(f"[DocumentAgent] Найдено фрагментов: {len(hits)}")
 
-            # Формируем контекст из найденных документов
+            id_map = build_rag_id_to_filename(list(await rag_client.list_documents() or []))
             context_parts = []
             for i, (content, score, doc_id, chunk_idx) in enumerate(hits, 1):
+                title = rag_document_label(doc_id, id_map)
                 context_parts.append(
-                    f"Фрагмент {i} (document_id={doc_id}, чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
+                    f"Фрагмент {i} (документ «{title}», чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
                 )
             
             document_context = "\n".join(context_parts)
@@ -57,11 +71,7 @@ class DocumentAgent(BaseAgent):
             # Используем LLM для формирования ответа на основе контекста
             from backend.agent_llm_svc import ask_agent
 
-            prompt = f"""На основе предоставленного контекста из документов ответь на вопрос пользователя.
-Если информации в контексте недостаточно, укажи это.
-Отвечай только на основе информации из контекста. Не придумывай информацию.
-
-Контекст из документов:
+            prompt = f"""CONTEXT:
 
 {document_context}
 
@@ -75,10 +85,25 @@ class DocumentAgent(BaseAgent):
             logger.info("Отправляем запрос к LLM с контекстом документов...")
             if selected_model:
                 logger.info(f"DocumentAgent использует модель: {selected_model}")
-                response = ask_agent(prompt, history=[], streaming=False, model_path=selected_model)
+                response = ask_agent(
+                    prompt,
+                    history=[],
+                    streaming=False,
+                    model_path=selected_model,
+                    system_prompt=merge_strict_rag_system_prompt(None),
+                )
             else:
                 logger.info("DocumentAgent использует модель по умолчанию")
-                response = ask_agent(prompt, history=[], streaming=False)
+                response = ask_agent(
+                    prompt,
+                    history=[],
+                    streaming=False,
+                    system_prompt=merge_strict_rag_system_prompt(None),
+                )
+
+            response = await maybe_replace_ungrounded(
+                prompt[:20000], response, RAG_STRICT_NOT_FOUND_MESSAGE
+            )
 
             logger.info(f"Получен ответ от LLM, длина: {len(response)} символов")
             

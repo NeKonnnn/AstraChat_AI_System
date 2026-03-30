@@ -5,6 +5,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
+from app.api.rag_common import RagSearchEvalBody, RagSearchFiltersBody, eval_search_kwargs_from_body, filters_body_to_domain
 from app.dependencies import get_memory_rag_service
 from app.services.memory_rag_service import MemoryRagService
 
@@ -28,11 +29,14 @@ class MemoryRagDocumentItem(BaseModel):
     file_type: Optional[str] = None
 
 
-class MemoryRagSearchRequest(BaseModel):
+class MemoryRagSearchRequest(RagSearchEvalBody):
     query: str
     k: int = 8
     document_id: Optional[int] = None
     use_reranking: Optional[bool] = None
+    strategy: Optional[str] = None
+    vector_query: Optional[str] = None
+    filters: Optional[RagSearchFiltersBody] = None
 
 
 class MemoryRagSearchHit(BaseModel):
@@ -111,6 +115,10 @@ async def memory_rag_search(
         k=body.k,
         document_id=body.document_id,
         use_reranking=body.use_reranking,
+        strategy=body.strategy,
+        vector_query=body.vector_query,
+        filters=filters_body_to_domain(body.filters),
+        **eval_search_kwargs_from_body(body),
     )
     return MemoryRagSearchResponse(
         hits=[

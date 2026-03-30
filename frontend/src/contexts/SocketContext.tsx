@@ -31,6 +31,15 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   const { addMessage, updateMessage, setLoading, showNotification, getCurrentChat, getChatById, getProjectById } = useAppActions();
   const currentMessageRef = useRef<string | null>(null);
   const currentChatIdRef = useRef<string | null>(null);
+
+  const normalizeRagStrategy = (raw: string | null): string => {
+    const s = (raw || 'auto').trim().toLowerCase();
+    if (s === 'reranking') return 'hybrid';
+    if (s === 'auto' || s === 'hierarchical' || s === 'hybrid' || s === 'standard' || s === 'graph') {
+      return s;
+    }
+    return 'auto';
+  };
   
   // Ref для отслеживания режима перегенерации
   const regenerationStateRef = useRef<{
@@ -664,7 +673,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     // Читаем флаг "Base знаний" из localStorage (устанавливается в UnifiedChatPage)
     const useKbRag = localStorage.getItem('use_kb_rag') === 'true';
     const useMemoryLibraryRag = localStorage.getItem('use_memory_library_rag') === 'true';
-    const ragStrategy = localStorage.getItem('rag_strategy') || 'auto';
+    const ragStrategy = normalizeRagStrategy(localStorage.getItem('rag_strategy'));
     const rawAgentId = typeof localStorage !== 'undefined' ? localStorage.getItem('active_agent_id') : null;
     const parsedAgentId = rawAgentId ? parseInt(rawAgentId, 10) : NaN;
     const agentIdForChat = Number.isFinite(parsedAgentId) ? parsedAgentId : null;
@@ -732,7 +741,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     const rawAgentId = typeof localStorage !== 'undefined' ? localStorage.getItem('active_agent_id') : null;
     const parsedAgentId = rawAgentId ? parseInt(rawAgentId, 10) : NaN;
     const agentIdForChat = Number.isFinite(parsedAgentId) ? parsedAgentId : null;
-    const ragStrategy = localStorage.getItem('rag_strategy') || 'auto';
+    const ragStrategy = normalizeRagStrategy(localStorage.getItem('rag_strategy'));
 
     const messageData = {
       message: userMessage,

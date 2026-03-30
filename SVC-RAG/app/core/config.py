@@ -63,8 +63,15 @@ class RagServiceConfig(BaseModel):
     # Реранкинг через SVC-RAG-MODELS
     use_reranking: bool = os.environ.get("RAG_USE_RERANKING", "false").lower() == "true"
     rerank_top_k: int = int(os.environ.get("RAG_RERANK_TOP_K", "20"))
+    # Порог по финальному скору после реранка: 0.7*логит(CrossEncoder) + 0.3*cosine; не шкала 0..1.
+    # 0 = не отсекать; положительные значения часто выкидывают все чанки — подбирайте с осторожностью.
+    rerank_min_score: float = float(os.environ.get("RAG_RERANK_MIN_SCORE", "0"))
+    sentence_window: int = int(os.environ.get("RAG_SENTENCE_WINDOW", "0"))
     chunk_size: int = 1000
     chunk_overlap: int = 200
+    # Минимальный косинусный скор чанка после pgvector — отсекает явно нерелевантные результаты до реранка.
+    # 0 = не фильтровать; рекомендуемое значение 0.10–0.20.
+    min_vector_similarity: float = float(os.environ.get("RAG_MIN_VECTOR_SIMILARITY", "0.10"))
 
     # Иерархическое индексирование 
     use_hierarchical_indexing: bool = os.environ.get("RAG_USE_HIERARCHICAL", "true").lower() == "true"
@@ -73,6 +80,9 @@ class RagServiceConfig(BaseModel):
     hierarchical_chunk_overlap: int = int(os.environ.get("RAG_HIERARCHICAL_CHUNK_OVERLAP", "200"))
     intermediate_summary_chunks: int = int(os.environ.get("RAG_INTERMEDIATE_SUMMARY_CHUNKS", "8"))
     create_full_summary_via_llm: bool = os.environ.get("RAG_CREATE_FULL_SUMMARY_VIA_LLM", "false").lower() == "true"
+    enable_graph_rag: bool = os.environ.get("RAG_ENABLE_GRAPH", "true").lower() == "true"
+    # Разрешить LLM-as-a-Judge в POST /search (доп. вызов llm-service; только при eval_llm_judge=true в теле)
+    eval_llm_judge_allowed: bool = os.environ.get("RAG_EVAL_LLM_JUDGE_ALLOWED", "false").lower() == "true"
 
 
 class LLMServiceConfig(BaseModel):

@@ -14,6 +14,7 @@ from app.database.project_rag_repository import (
     ProjectRagDocumentRepository,
     ProjectRagVectorRepository,
 )
+from app.database.graph_repository import GraphRepository
 from app.services.rag_service import RagService
 from app.services.kb_service import KbService
 from app.services.memory_rag_service import MemoryRagService
@@ -35,12 +36,14 @@ _memory_rag_service: Optional[MemoryRagService] = None
 _proj_doc_repo: Optional[ProjectRagDocumentRepository] = None
 _proj_vector_repo: Optional[ProjectRagVectorRepository] = None
 _project_rag_service: Optional[ProjectRagService] = None
+_graph_repo: Optional[GraphRepository] = None
 
 
 async def get_db():
     """Подключение к PostgreSQL (один раз при старте)."""
     global _pg, _doc_repo, _vector_repo, _kb_doc_repo, _kb_vector_repo
     global _mem_doc_repo, _mem_vector_repo, _proj_doc_repo, _proj_vector_repo
+    global _graph_repo
     if _pg is None:
         _pg = get_postgres_connection()
         ok = await _pg.connect()
@@ -56,6 +59,7 @@ async def get_db():
         _mem_vector_repo = MemoryRagVectorRepository(_pg, embedding_dim=dim)
         _proj_doc_repo = ProjectRagDocumentRepository(_pg)
         _proj_vector_repo = ProjectRagVectorRepository(_pg, embedding_dim=dim)
+        _graph_repo = GraphRepository(_pg)
         await _doc_repo.create_tables()
         await _vector_repo.create_tables()
         await _kb_doc_repo.create_tables()
@@ -64,6 +68,7 @@ async def get_db():
         await _mem_vector_repo.create_tables()
         await _proj_doc_repo.create_tables()
         await _proj_vector_repo.create_tables()
+        await _graph_repo.create_tables()
     return _pg
 
 
@@ -74,7 +79,7 @@ async def get_rag_service() -> RagService:
         await get_db()
         if _rag_client is None:
             _rag_client = RagModelsClient()
-        _rag_service = RagService(_doc_repo, _vector_repo, _rag_client)
+        _rag_service = RagService(_doc_repo, _vector_repo, _rag_client, _graph_repo)
     return _rag_service
 
 
@@ -85,7 +90,7 @@ async def get_kb_service() -> KbService:
         await get_db()
         if _rag_client is None:
             _rag_client = RagModelsClient()
-        _kb_service = KbService(_kb_doc_repo, _kb_vector_repo, _rag_client)
+        _kb_service = KbService(_kb_doc_repo, _kb_vector_repo, _rag_client, _graph_repo)
     return _kb_service
 
 
@@ -96,7 +101,7 @@ async def get_memory_rag_service() -> MemoryRagService:
         if _rag_client is None:
             _rag_client = RagModelsClient()
         _memory_rag_service = MemoryRagService(
-            _mem_doc_repo, _mem_vector_repo, _rag_client
+            _mem_doc_repo, _mem_vector_repo, _rag_client, _graph_repo
         )
     return _memory_rag_service
 
@@ -108,6 +113,6 @@ async def get_project_rag_service() -> ProjectRagService:
         if _rag_client is None:
             _rag_client = RagModelsClient()
         _project_rag_service = ProjectRagService(
-            _proj_doc_repo, _proj_vector_repo, _rag_client
+            _proj_doc_repo, _proj_vector_repo, _rag_client, _graph_repo
         )
     return _project_rag_service

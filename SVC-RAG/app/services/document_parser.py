@@ -1,6 +1,6 @@
 import logging
 from io import BytesIO
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -23,6 +23,13 @@ except ImportError:
     PYPDF2_AVAILABLE = False
 
 try:
+    import fitz  # PyMuPDF
+
+    PYMUPDF_AVAILABLE = True
+except ImportError:
+    PYMUPDF_AVAILABLE = False
+
+try:
     import pdfplumber
 
     PDFPLUMBER_AVAILABLE = True
@@ -35,6 +42,13 @@ try:
     OPENPYXL_AVAILABLE = True
 except ImportError:
     OPENPYXL_AVAILABLE = False
+
+try:
+    import xlrd
+
+    XLRD_AVAILABLE = True
+except ImportError:
+    XLRD_AVAILABLE = False
 
 try:
     from pdf2image import convert_from_bytes as pdf_convert_from_bytes
@@ -103,87 +117,164 @@ def extract_text_from_docx(file_data: bytes) -> str:
     return "\n".join(parts)
 
 
+def _pdf_magic_bytes(data: bytes) -> bool:
+    return bool(data and len(data) >= 5 and data[:5] == b"%PDF-")
+
+
 async def extract_text_from_pdf_bytes(file_data: bytes) -> Dict[str, Any]:
     """
-    Извлечение текста из PDF: сначала текстовый слой (pdfplumber/PyPDF2),
-    при его отсутствии — OCR по растрированным страницам (Surya).
-    Встроенные в PDF картинки (рисунки, скриншоты) не извлекаются и не отправляются в OCR —
-    индексируется только текст из текстового слоя и, для сканов, распознанный по страницам текст.
+    PyMuPDF + pdfplumber + PyPDF2 — выбирается самый длинный извлечённый текст;
+    при пустом или слишком коротком слое относительно числа страниц — OCR (pdf2image + ocr-service).
     """
-    print(f"Извлекаем текст из PDF файла (размер: {len(file_data)} байт)")
-    text = ""
-    confidence_scores = []
+    logger.info("PDF: извлечение текста, размер=%s байт", len(file_data))
+    candidates: List[tuple] = []
+    n_pages = 0
 
+    if PYMUPDF_AVAILABLE:
+        try:
+            doc = fitz.open(stream=file_data, filetype="pdf")
+            if getattr(doc, "needs_pass", False):
+                try:
+                    doc.authenticate("")
+                except Exception:
+                    pass
+            n_pages = doc.page_count
+            parts: List[str] = []
+            for i in range(n_pages):
+                parts.append(doc.load_page(i).get_text() or "")
+            doc.close()
+            t = "\n".join(parts)
+            if t.strip():
+                candidates.append(("pymupdf", t))
+                logger.info("PDF: PyMuPDF извлёк %s символов, страниц=%s", len(t), n_pages)
+        except Exception as e:
+            logger.warning("PDF: PyMuPDF ошибка: %s", e)
+
+    text_pb = ""
     if PDFPLUMBER_AVAILABLE:
         try:
             with pdfplumber.open(BytesIO(file_data)) as pdf:
+                n_pages = max(n_pages, len(pdf.pages))
                 for page in pdf.pages:
-                    page_text = page.extract_text() or ""
-                    text += page_text
-                    if page_text.strip():
-                        confidence_scores.append(95.0)
-                    else:
-                        confidence_scores.append(50.0)
-            print(f"PDFPlumber успешно извлек {len(text)} символов")
+                    text_pb += page.extract_text() or ""
+            if text_pb.strip():
+                candidates.append(("pdfplumber", text_pb))
+                logger.info("PDF: pdfplumber извлёк %s символов", len(text_pb))
         except Exception as e:
-            print(f"Ошибка при извлечении текста с помощью pdfplumber: {e}")
+            logger.warning("PDF: pdfplumber ошибка: %s", e)
 
-    if (not text or not text.strip()) and PYPDF2_AVAILABLE:
+    if PYPDF2_AVAILABLE:
         try:
             reader = PyPDF2.PdfReader(BytesIO(file_data))
+            n_pages = max(n_pages, len(reader.pages))
+            text_p2 = ""
             for page in reader.pages:
-                page_text = page.extract_text() or ""
-                text += page_text
-                if page_text.strip():
-                    confidence_scores.append(85.0)
-                else:
-                    confidence_scores.append(40.0)
-            print(f"PyPDF2 успешно извлек {len(text)} символов")
+                text_p2 += page.extract_text() or ""
+            if text_p2.strip():
+                candidates.append(("pypdf2", text_p2))
+                logger.info("PDF: PyPDF2 извлёк %s символов", len(text_p2))
         except Exception as e2:
-            print(f"Ошибка при извлечении текста с помощью PyPDF2: {e2}")
+            logger.warning("PDF: PyPDF2 ошибка: %s", e2)
 
-    # Если текст не извлечён (сканированный PDF), пробуем OCR через Surya
-    if (not text or not text.strip()) and PDF2IMAGE_AVAILABLE and PIL_AVAILABLE:
-        print("PDF не содержит текста, возможно это сканированный документ. Пробуем OCR через Surya...")
+    text = ""
+    confidence_scores: List[float] = []
+    if candidates:
+        label, text = max(candidates, key=lambda x: len(x[1].strip()))
+        logger.info("PDF: для индекса выбран движок «%s» (%s символов)", label, len(text.strip()))
+
+    pages_eff = max(n_pages, 1)
+    min_chars_expected = max(50, pages_eff * 30)
+    weak_layer = bool(text.strip()) and len(text.strip()) < min_chars_expected
+
+    need_ocr = (not text.strip() or weak_layer) and PDF2IMAGE_AVAILABLE and PIL_AVAILABLE
+    if need_ocr:
+        if weak_layer:
+            logger.info(
+                "PDF: текстовый слой короткий (%s симв., ожидание ~≥%s для %s стр.) — пробуем OCR",
+                len(text.strip()),
+                min_chars_expected,
+                pages_eff,
+            )
+        else:
+            logger.info("PDF: текстовый слой пуст — rasterize+OCR (poppler + ocr-service)")
         try:
-            images = pdf_convert_from_bytes(file_data, dpi=300)
-            print(f"PDF конвертирован в {len(images)} изображений для OCR")
+            try:
+                images = pdf_convert_from_bytes(file_data, dpi=300)
+            except Exception as e_dpi:
+                logger.warning("PDF: pdf2image dpi=300 не удалось (%s), пробуем dpi=150", e_dpi)
+                images = pdf_convert_from_bytes(file_data, dpi=150)
+            logger.info("PDF: растеризация в %s страниц для OCR", len(images))
 
             ocr_text = ""
-            ocr_confidence_scores = []
+            ocr_confidence_scores: List[float] = []
             for i, image in enumerate(images):
-                print(f"Обрабатываем страницу {i+1}/{len(images)} с помощью Surya OCR...")
                 buf = BytesIO()
                 image.save(buf, format="PNG")
                 buf.seek(0)
                 page_image_data = buf.getvalue()
-
                 result = await _call_ocr_service(page_image_data, f"page_{i+1}.png", languages="ru,en")
-
                 if result.get("success"):
                     page_text = result.get("text", "")
-                    page_conf = result.get("confidence", 50.0)
                     ocr_text += f"\n--- Страница {i+1} ---\n{page_text}\n"
-                    ocr_confidence_scores.append(page_conf)
+                    ocr_confidence_scores.append(float(result.get("confidence", 50.0) or 50.0))
                 else:
-                    print(f"OCR ошибка для страницы {i+1}: {result.get('error', 'Unknown error')}")
+                    logger.warning("PDF OCR: страница %s: %s", i + 1, result.get("error", "Unknown"))
                     ocr_confidence_scores.append(50.0)
 
             if ocr_text.strip():
-                text = ocr_text
-                confidence_scores = ocr_confidence_scores
-                print(f"Surya OCR успешно извлек {len(text)} символов из {len(images)} страниц")
+                if len(ocr_text.strip()) >= len(text.strip()):
+                    text = ocr_text
+                    confidence_scores = ocr_confidence_scores
+                    logger.info("PDF: использован OCR-текст (%s символов)", len(text.strip()))
+                else:
+                    logger.info(
+                        "PDF: OCR не дал больше текста (%s vs %s симв.) — оставляем текстовый слой",
+                        len(ocr_text.strip()),
+                        len(text.strip()),
+                    )
             else:
-                print("Surya OCR не смог извлечь текст из PDF")
+                logger.warning("PDF: OCR не вернул текст")
         except Exception as e:
-            print(f"Не удалось применить OCR к PDF: {e}")
+            logger.warning("PDF: OCR недоступен или сбой (poppler/pdf2image/ocr-service): %s", e)
+
+    if text.strip() and not confidence_scores:
+        confidence_scores = [95.0] * max(1, n_pages or 1)
 
     avg_confidence = sum(confidence_scores) / len(confidence_scores) if confidence_scores else 0.0
     confidence_per_word = 100.0 if avg_confidence > 90.0 else avg_confidence
     confidence_info = _create_confidence_info_for_text(text or "", confidence_per_word, "pdf")
-    confidence_info["pages_processed"] = len(confidence_scores)
+    confidence_info["pages_processed"] = len(confidence_scores) if confidence_scores else (n_pages or 0)
 
-    return {"text": text or "", "confidence_info": confidence_info}
+    if not (text or "").strip():
+        logger.error(
+            "PDF: итоговый текст пуст (страниц≈%s). Нужны рабочие PyMuPDF/pdfplumber, для сканов — poppler в образе и "
+            "доступный ocr-service (SVC_OCR_URL).",
+            n_pages,
+        )
+
+    return {
+        "text": text or "",
+        "confidence_info": confidence_info,
+        "file_type": "pdf",
+        "pages": int(confidence_info.get("pages_processed") or 0),
+    }
+
+
+def extract_text_from_xls_xlrd(file_data: bytes) -> str:
+    """Старый формат Excel .xls (не .xlsx)."""
+    if not XLRD_AVAILABLE:
+        raise RuntimeError("xlrd не установлен")
+    book = xlrd.open_workbook(file_contents=file_data)
+    parts: List[str] = []
+    for si in range(book.nsheets):
+        sh = book.sheet_by_index(si)
+        parts.append(f"Лист: {sh.name}")
+        for ri in range(sh.nrows):
+            row = sh.row(ri)
+            vals = [str(c.value) for c in row if c.value not in ("", None)]
+            if vals:
+                parts.append("\t".join(vals))
+    return "\n".join(parts)
 
 
 def extract_text_from_xlsx(file_data: bytes) -> str:
@@ -310,6 +401,12 @@ async def parse_document(file_data: bytes, filename: str) -> Optional[Dict[str, 
     # Корректно извлекаем только сам суффикс (".docx", ".pdf" и т.п.)
     dot = name.rfind(".")
     ext = name[dot:] if dot != -1 else ""
+    if ext != ".pdf" and _pdf_magic_bytes(file_data):
+        logger.info(
+            "parse_document: файл «%s» без .pdf, но с сигнатурой PDF — парсим как PDF",
+            filename or "?",
+        )
+        return await extract_text_from_pdf_bytes(file_data)
     if ext == ".docx":
         if not DOCX_AVAILABLE:
             return None
@@ -320,10 +417,28 @@ async def parse_document(file_data: bytes, filename: str) -> Optional[Dict[str, 
         }
     if ext == ".pdf":
         return await extract_text_from_pdf_bytes(file_data)
-    if ext in (".xlsx", ".xls"):
+    if ext == ".xlsx":
         if not OPENPYXL_AVAILABLE:
+            logger.warning("Парсинг .xlsx: openpyxl не установлен")
             return None
-        text = extract_text_from_xlsx(file_data)
+        try:
+            text = extract_text_from_xlsx(file_data)
+        except Exception as e:
+            logger.error("Ошибка парсинга .xlsx: %s", e)
+            return None
+        return {
+            "text": text,
+            "confidence_info": _create_confidence_info_for_text(text, 100.0, "excel"),
+        }
+    if ext == ".xls":
+        if not XLRD_AVAILABLE:
+            logger.warning("Парсинг .xls: xlrd не установлен")
+            return None
+        try:
+            text = extract_text_from_xls_xlrd(file_data)
+        except Exception as e:
+            logger.error("Ошибка парсинга .xls: %s", e)
+            return None
         return {
             "text": text,
             "confidence_info": _create_confidence_info_for_text(text, 100.0, "excel"),

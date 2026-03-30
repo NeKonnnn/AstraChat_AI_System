@@ -142,9 +142,39 @@ voice_chat_stop_flag: bool = False
 current_transcription_engine: str = "whisperx"
 current_transcription_language: str = "ru"
 current_rag_strategy: str = "auto"
+agentic_rag_enabled: bool = True
+agentic_max_iterations: int = 2
 memory_max_messages: int = 20
 memory_include_system_prompts: bool = True
 memory_clear_on_restart: bool = False
+
+
+def _env_rag_pipeline_bool(name: str, default: bool = False) -> bool:
+    v = os.getenv(name, "").strip().lower()
+    if not v:
+        return default
+    return v not in ("0", "false", "no", "off")
+
+
+# Препроцесс RAG-запроса (см. Настройки → RAG); до записи в settings.json — из ENV
+rag_query_fix_typos: bool = _env_rag_pipeline_bool("RAG_QUERY_FIX_TYPOS", False)
+rag_multi_query_enabled: bool = _env_rag_pipeline_bool("RAG_MULTI_QUERY_ENABLED", False)
+rag_hyde_enabled: bool = _env_rag_pipeline_bool("RAG_HYDE_ENABLED", False)
+
+try:
+    _rk = int(os.getenv("RAG_CHAT_TOP_K", "5"))
+except ValueError:
+    _rk = 5
+rag_chat_top_k: int = max(1, min(_rk, 64))
+
+
+def get_rag_chat_top_k() -> int:
+    """Сколько чанков запрашивать у SVC-RAG (чат, агент, API с документами)."""
+    try:
+        v = int(rag_chat_top_k)
+    except (TypeError, ValueError):
+        v = 5
+    return max(1, min(v, 64))
 
 # -- путь к файлу настроек
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -157,7 +187,8 @@ def load_app_settings() -> dict:
     """Загрузить настройки приложения из файла"""
     global current_transcription_engine, current_transcription_language
     global memory_max_messages, memory_include_system_prompts, memory_clear_on_restart
-    global current_rag_strategy
+    global current_rag_strategy, agentic_rag_enabled, agentic_max_iterations
+    global rag_query_fix_typos, rag_multi_query_enabled, rag_hyde_enabled, rag_chat_top_k
 
     try:
         if os.path.exists(SETTINGS_FILE):
@@ -170,6 +201,29 @@ def load_app_settings() -> dict:
             memory_include_system_prompts = data.get("memory_include_system_prompts", True)
             memory_clear_on_restart = data.get("memory_clear_on_restart", False)
             current_rag_strategy = data.get("rag_strategy", "auto")
+            # Режим «reranking» убран из UI; старые сохранения → гибрид (реранк по конфигу SVC-RAG).
+            if current_rag_strategy == "reranking":
+                current_rag_strategy = "hybrid"
+                data["rag_strategy"] = "hybrid"
+                save_app_settings({"rag_strategy": "hybrid"})
+            if "agentic_rag_enabled" in data:
+                agentic_rag_enabled = bool(data["agentic_rag_enabled"])
+            try:
+                ami = int(data.get("agentic_max_iterations", 2))
+                agentic_max_iterations = max(1, min(ami, 5))
+            except (TypeError, ValueError):
+                agentic_max_iterations = 2
+            if "rag_query_fix_typos" in data:
+                rag_query_fix_typos = bool(data["rag_query_fix_typos"])
+            if "rag_multi_query_enabled" in data:
+                rag_multi_query_enabled = bool(data["rag_multi_query_enabled"])
+            if "rag_hyde_enabled" in data:
+                rag_hyde_enabled = bool(data["rag_hyde_enabled"])
+            if "rag_chat_top_k" in data:
+                try:
+                    rag_chat_top_k = max(1, min(int(data["rag_chat_top_k"]), 64))
+                except (TypeError, ValueError):
+                    pass
             logger.info(f"Настройки загружены из {SETTINGS_FILE}")
             return data
     except Exception as e:
@@ -182,6 +236,8 @@ def load_app_settings() -> dict:
         "memory_include_system_prompts": memory_include_system_prompts,
         "memory_clear_on_restart": memory_clear_on_restart,
         "rag_strategy": current_rag_strategy,
+        "agentic_rag_enabled": agentic_rag_enabled,
+        "agentic_max_iterations": agentic_max_iterations,
         "current_model_path": None,
     }
 

@@ -21,6 +21,22 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
+        # Uvicorn может поднять порог root-логгера — явно включаем INFO для наших модулей (баннеры метрик RAG)
+        root = logging.getLogger()
+        if root.level > logging.INFO:
+            root.setLevel(logging.INFO)
+        for _name in (
+            "app",
+            "app.services",
+            "app.services.rag_search_helpers",
+            "app.services.retrieval_eval",
+            "app.services.rag_service",
+            "app.services.kb_service",
+            "app.services.memory_rag_service",
+            "app.services.project_rag_service",
+        ):
+            logging.getLogger(_name).setLevel(logging.INFO)
+
         await get_db()
         logger.info("SVC-RAG: БД подключена, таблицы готовы")
     except Exception as e:

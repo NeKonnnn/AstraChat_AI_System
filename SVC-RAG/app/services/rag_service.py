@@ -1,5 +1,6 @@
 # Индексация документов и поиск: парсинг → чанки → эмбеддинги (RAG-MODELS) → pgvector, опционально BM25 и реранк
 import logging
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -10,6 +11,17 @@ from app.clients.rag_models_client import RagModelsClient
 from app.core.config import get_settings
 from app.database.models import Document, DocumentVector
 from app.database.repository import DocumentRepository, VectorRepository
+from app.database.search_filters import DocumentVectorSearchFilters
+from app.services.hit_postprocess import apply_rerank_min_and_window
+from app.services.retrieval_eval import log_retrieval_with_eval
+from app.services.rag_search_helpers import (
+    diversify_hits_by_document,
+    effective_use_reranking,
+    filter_by_min_vector_similarity,
+    resolve_auto_pipeline_strategy,
+    vector_fetch_limit,
+)
+from app.database.graph_repository import GraphRepository
 from app.services.chunker import split_into_chunks
 from app.services.document_parser import parse_document
 from app.services.hierarchical import DocumentSummarizer, OptimizedDocumentIndex
@@ -30,12 +42,15 @@ class RagService:
         document_repo: DocumentRepository,
         vector_repo: VectorRepository,
         rag_models_client: RagModelsClient,
+        graph_repo: Optional[GraphRepository] = None,
     ):
         self.document_repo = document_repo
         self.vector_repo = vector_repo
         self.rag_client = rag_models_client
         cfg = get_settings().rag
         self._cfg = cfg
+        self.graph_repo = graph_repo
+        self.graph_enabled: bool = bool(getattr(cfg, "enable_graph_rag", True))
 
         # BM25 / гибридный поиск 
         self.use_hybrid_search: bool = cfg.use_hybrid_search
@@ -78,6 +93,20 @@ class RagService:
             )
             self._optimized_index = OptimizedDocumentIndex(self.rag_client, self.vector_repo)
 
+    async def _finalize_hit_rows(
+        self,
+        rows: List[Tuple[str, float, Optional[int], Optional[int]]],
+        *,
+        used_rerank: bool,
+    ) -> List[Tuple[str, float, Optional[int], Optional[int]]]:
+        return await apply_rerank_min_and_window(
+            self.vector_repo,
+            rows,
+            rerank_min_score=float(getattr(self._cfg, "rerank_min_score", 0) or 0),
+            sentence_window=int(getattr(self._cfg, "sentence_window", 0) or 0),
+            used_rerank=used_rerank,
+        )
+
     async def index_document(
         self,
         file_data: bytes,
@@ -101,8 +130,15 @@ class RagService:
 
         text = (parsed.get("text") or "").strip()
         confidence_info = parsed.get("confidence_info")
+        ftype = (parsed.get("file_type") or "").lower()
 
         if not text:
+            if ftype == "pdf":
+                return {
+                    "ok": False,
+                    "error": "PDF без извлекаемого текста (скан без OCR или сбой ocr-service/poppler). См. логи svc-rag.",
+                    "document_id": None,
+                }
             return {"ok": False, "error": "Не удалось извлечь текст или формат не поддерживается", "document_id": None}
 
         use_hierarchical = (
@@ -194,6 +230,15 @@ class RagService:
             for i, emb in enumerate(embeddings)
         ]
         created = await self.vector_repo.create_vectors_batch(vectors)
+        if self.graph_repo and self.graph_enabled:
+            try:
+                await self.graph_repo.rebuild_document_graph(
+                    store_type="global",
+                    document_id=doc_id,
+                    chunks=[(v.chunk_index, v.content) for v in vectors],
+                )
+            except Exception as e:
+                logger.warning("Graph индекс не собран для документа %s: %s", doc_id, e)
 
         # После добавления документа помечаем BM25 индекс на пересборку
         if self.use_hybrid_search:
@@ -213,59 +258,163 @@ class RagService:
         document_id: Optional[int] = None,
         use_reranking: Optional[bool] = None,
         strategy: Optional[str] = None,
+        vector_query: Optional[str] = None,
+        filters: Optional[DocumentVectorSearchFilters] = None,
+        eval_gold_document_ids: Optional[List[int]] = None,
+        eval_gold_chunks: Optional[List[Tuple[int, int]]] = None,
+        eval_llm_judge: bool = False,
     ) -> List[Tuple[str, float, Optional[int], Optional[int]]]:
         """
         Поиск: эмбеддинг запроса → векторный поиск → опционально гибрид с BM25 → опционально rerank.
 
         strategy:
-        - "auto" (по умолчанию) - как в backend DocumentProcessor: приоритет reranking → hierarchical → hybrid → standard.
+        - "auto" (по умолчанию) - умный выбор пайплайна среди hierarchical / graph / hybrid / standard
+          по доступности (BM25, граф, OptimizedDocumentIndex) и эвристикам запроса; RAG_AUTO_MODE=heuristic|priority.
+          Реранк для auto остаётся с семантикой режима auto (как в effective_use_reranking).
         - "reranking" - векторный/гибридный/иерархический поиск + rerank.
         - "hierarchical" - умный поиск по иерархии (OptimizedDocumentIndex).
-        - "hybrid" - только гибрид (BM25 + векторный), без rerank.
+        - "hybrid" - гибрид (BM25 + векторный); cross-encoder rerank — если RAG_USE_RERANKING=true в SVC-RAG.
         - "standard" - только векторный поиск (pgvector), без BM25 и rerank.
+        - "graph" - seed retrieval + расширение по графу связей чанков.
         Также поддерживается "flat" как синоним "standard".
 
         Возвращает список (content, score, document_id, chunk_index), где score - комбинированный
         скор (для reranking: 0.7 * rerank_score + 0.3 * original_score, как в backend).
         """
-        if not query or not query.strip():
+        q_text = (query or "").strip()
+        vq_text = (vector_query or "").strip()
+        if not q_text and not vq_text:
             return []
+        embed_source = vq_text or q_text
+        t_search_start = time.perf_counter()
 
         user_strategy = (strategy or "auto").lower()
         if user_strategy == "flat":
             user_strategy = "standard"
 
+        original_strategy = user_strategy
+        rerank_key = user_strategy
+        if user_strategy == "auto":
+            hybrid_ok = bool(self.use_hybrid_search and self.bm25_index is not None)
+            graph_ok = bool(self.graph_repo and self.graph_enabled)
+            hier_ok = self._optimized_index is not None
+            picked = resolve_auto_pipeline_strategy(
+                q_text,
+                store="global",
+                document_id=document_id,
+                hierarchical_available=hier_ok,
+                graph_available=graph_ok,
+                hybrid_available=hybrid_ok,
+            )
+            user_strategy = picked
+            rerank_key = "auto"
+            logger.info(
+                "[SVC-RAG] global strategy=auto → %s (hybrid_ready=%s graph=%s hierarchical=%s)",
+                picked,
+                hybrid_ok,
+                graph_ok,
+                hier_ok,
+            )
+
         # Явный иерархический поиск - отдельная ветка
+        if user_strategy == "hierarchical" and self._optimized_index is None:
+            logger.info(
+                "[SVC-RAG] search store=global strategy=hierarchical недоступен (optimized_index выключен/не создан) → обычный pgvector/BM25/rerank путь"
+            )
         if user_strategy == "hierarchical" and self._optimized_index is not None:
             try:
-                return await self._optimized_index.smart_search_async(query, k=k, search_strategy="auto")
+                hits_h = await self._optimized_index.smart_search_async(q_text, k=k, search_strategy="auto")
+                final_h = await self._finalize_hit_rows(list(hits_h), used_rerank=False)
+                await log_retrieval_with_eval(
+                    store="global (глобальные документы)",
+                    strategy_resolved="hierarchical",
+                    pipeline="OptimizedDocumentIndex.smart_search_async",
+                    extra_lines=[f"k={k}", f"document_id={document_id}"],
+                    final_hits=final_h,
+                    k_requested=k,
+                    query_for_eval=q_text,
+                    search_started_perf=t_search_start,
+                    gold_document_ids=eval_gold_document_ids,
+                    gold_chunks=eval_gold_chunks,
+                    llm_judge=eval_llm_judge,
+                )
+                return final_h
             except Exception as e:
                 logger.warning("Иерархический поиск не удался, fallback на плоский: %s", e)
+                user_strategy = "hybrid" if (self.use_hybrid_search and self.bm25_index) else "standard"
+                logger.info("[SVC-RAG] после сбоя hierarchical используем pipeline=%s", user_strategy)
 
-        # Определяем, использовать ли rerank 
+        if user_strategy == "graph":
+            return await self._graph_search(
+                q_text,
+                k=k,
+                document_id=document_id,
+                use_reranking=use_reranking,
+                vector_query=vq_text or None,
+                filters=filters,
+                search_started_perf=t_search_start,
+                eval_gold_document_ids=eval_gold_document_ids,
+                eval_gold_chunks=eval_gold_chunks,
+                eval_llm_judge=eval_llm_judge,
+            )
+
         cfg_rerank_enabled = self._cfg.use_reranking
-        if user_strategy == "standard" or user_strategy == "hybrid":
-            use_rerank = False
-        elif user_strategy == "reranking":
-            use_rerank = cfg_rerank_enabled
-        else:  # "auto" или любые другие значения по умолчанию
-            use_rerank = (use_reranking if use_reranking is not None else cfg_rerank_enabled) and cfg_rerank_enabled
+        use_rerank = effective_use_reranking(use_reranking, cfg_rerank_enabled, rerank_key)
 
-        limit = self._cfg.rerank_top_k if use_rerank else max(k, 50)
+        # Как в KB/project/memory: широкий пул из pgvector + диверсификация по document_id.
+        # Иначе при rerank_top_k=20 весь пул забивают чанки 1–2 больших DOCX, а PDF (напр. CV) не попадает в реранк.
+        fetch_lim = vector_fetch_limit(
+            k,
+            graph=False,
+            document_id=document_id,
+            use_rerank=use_rerank,
+            rerank_top_k=int(self._cfg.rerank_top_k or 20),
+        )
 
         try:
-            query_embedding = await self.rag_client.embed_single(query)
+            query_embedding = await self.rag_client.embed_single(embed_source)
         except Exception as e:
             logger.warning("Embed query failed: %s", e)
+            await log_retrieval_with_eval(
+                store="global (глобальные документы)",
+                strategy_resolved=user_strategy,
+                pipeline="(ошибка эмбеддинга запроса)",
+                extra_lines=[f"k={k}"],
+                final_hits=[],
+                k_requested=k,
+                query_for_eval=q_text,
+                search_started_perf=t_search_start,
+                gold_document_ids=eval_gold_document_ids,
+                gold_chunks=eval_gold_chunks,
+                llm_judge=eval_llm_judge,
+            )
             return []
 
         pairs = await self.vector_repo.similarity_search(
             query_embedding,
-            limit=limit,
+            limit=fetch_lim,
             document_id=document_id,
+            filters=filters,
         )
         if not pairs:
+            await log_retrieval_with_eval(
+                store="global (глобальные документы)",
+                strategy_resolved=user_strategy,
+                pipeline="pgvector_cosine → нет кандидатов",
+                extra_lines=[f"k={k}", f"лимит_pgvector={fetch_lim}", f"document_id={document_id}"],
+                final_hits=[],
+                k_requested=k,
+                query_for_eval=q_text,
+                search_started_perf=t_search_start,
+                gold_document_ids=eval_gold_document_ids,
+                gold_chunks=eval_gold_chunks,
+                llm_judge=eval_llm_judge,
+            )
             return []
+
+        # Фильтрация явно нерелевантных чанков до реранка/гибрида
+        min_sim = float(getattr(self._cfg, "min_vector_similarity", 0.0) or 0.0)
+        pairs = filter_by_min_vector_similarity(pairs, min_sim, k)
 
         # Гибридный поиск (BM25 + векторный) 
         use_hybrid = self.use_hybrid_search and not document_id
@@ -274,14 +423,46 @@ class RagService:
         elif user_strategy == "hybrid":
             use_hybrid = self.use_hybrid_search and not document_id
 
+        hybrid_applied = False
         if use_hybrid and self.bm25_index:
-            hybrid_results = await self._hybrid_combine(query, pairs, k=limit)
+            hybrid_results = await self._hybrid_combine(q_text, pairs, k=fetch_lim)
             pairs = [(v, score) for v, score in hybrid_results]
+            hybrid_applied = True
+
+        if document_id is None and pairs:
+            pool_div = max(int(self._cfg.rerank_top_k or 20), k * 6, 56)
+            pairs = diversify_hits_by_document(pairs, min(pool_div, len(pairs)))
+
+        pipeline_desc = "pgvector_cosine_similarity"
+        if document_id is not None:
+            pipeline_desc += " (doc_scoped)"
+        if use_hybrid:
+            if hybrid_applied:
+                pipeline_desc += " + bm25_hybrid_merge"
+            else:
+                pipeline_desc += " + bm25_skipped(no_index_yet_or_disabled)"
+        if use_rerank:
+            pipeline_desc += " + cross_encoder_rerank"
+        else:
+            pipeline_desc += " (no_rerank)"
+
+        report_extras = [
+            f"k={k}",
+            f"лимит_векторов_pgvector={fetch_lim}",
+            f"гибрид_BM25_в_конфиге={self.use_hybrid_search}",
+            (
+                f"гибрид_применён={'да' if hybrid_applied else 'нет'}"
+                if use_hybrid
+                else "гибрид=выключен_для_этой_стратегии"
+            ),
+            f"реранк_cross_encoder={'да' if use_rerank else 'нет'}",
+        ]
 
         if use_rerank and len(pairs) > 1:
             passages = [v.content for v, _ in pairs]
             try:
-                reranked = await self.rag_client.rerank(query, passages, top_k=k)
+                # top_k=len(pairs) — получаем полный ранжированный список для пост-реранк диверсификации
+                reranked = await self.rag_client.rerank(q_text, passages, top_k=len(pairs))
                 out = []
                 for idx, sc in reranked:
                     if idx < len(pairs):
@@ -290,11 +471,42 @@ class RagService:
                         original_score = float(orig_score)
                         final_score = 0.7 * rerank_score + 0.3 * original_score
                         out.append((v.content, final_score, v.document_id, v.chunk_index))
-                return out
+                logger.info("[SVC-RAG] search store=global rerank=ok hits=%s", len(out))
+                final_out = await self._finalize_hit_rows(out[:k], used_rerank=True)
+                await log_retrieval_with_eval(
+                    store="global (глобальные документы)",
+                    strategy_resolved=user_strategy,
+                    pipeline=pipeline_desc,
+                    extra_lines=report_extras + ["реранк_статус=успех"],
+                    final_hits=final_out,
+                    k_requested=k,
+                    query_for_eval=q_text,
+                    search_started_perf=t_search_start,
+                    gold_document_ids=eval_gold_document_ids,
+                    gold_chunks=eval_gold_chunks,
+                    llm_judge=eval_llm_judge,
+                )
+                return final_out
             except Exception as e:
                 logger.warning("Rerank failed, using vector order: %s", e)
 
-        return [(v.content, score, v.document_id, v.chunk_index) for v, score in pairs[:k]]
+        out_pairs = [(v.content, score, v.document_id, v.chunk_index) for v, score in pairs[:k]]
+        logger.info("[SVC-RAG] search store=global done hits=%s (final order без rerank или после сбоя rerank)", len(out_pairs))
+        final_pairs = await self._finalize_hit_rows(out_pairs, used_rerank=False)
+        await log_retrieval_with_eval(
+            store="global (глобальные документы)",
+            strategy_resolved=user_strategy,
+            pipeline=pipeline_desc,
+            extra_lines=report_extras + ["реранк_статус=нет_или_сбой"],
+            final_hits=final_pairs,
+            k_requested=k,
+            query_for_eval=q_text,
+            search_started_perf=t_search_start,
+            gold_document_ids=eval_gold_document_ids,
+            gold_chunks=eval_gold_chunks,
+            llm_judge=eval_llm_judge,
+        )
+        return final_pairs
 
     async def _build_bm25_index(self) -> None:
         """Построение BM25 индекса из всех документов """
@@ -403,9 +615,8 @@ class RagService:
                 combined[key]["bm25_score"] = bm25_score
                 combined[key]["final_score"] += normalized_bm25 * self.hybrid_bm25_weight
             else:
-                # Для чанков, которых нет в векторном топе, пытаемся найти их через БД
-                vectors = await self.vector_repo.get_vectors_by_document(doc_id)
-                vec = next((vv for vv in vectors if vv.chunk_index == chunk_index), None)
+                # Точечный запрос вместо загрузки всех векторов документа
+                vec = await self.vector_repo.get_vector_by_document_and_chunk(doc_id, chunk_index)
                 if not vec:
                     continue
                 combined[key] = {
@@ -418,7 +629,172 @@ class RagService:
         final = sorted(combined.values(), key=lambda x: x["final_score"], reverse=True)[:k]
         return [(item["vector"], float(item["final_score"])) for item in final]
 
+    async def _graph_search(
+        self,
+        query: str,
+        k: int = 10,
+        document_id: Optional[int] = None,
+        use_reranking: Optional[bool] = None,
+        vector_query: Optional[str] = None,
+        filters: Optional[DocumentVectorSearchFilters] = None,
+        *,
+        search_started_perf: float,
+        eval_gold_document_ids: Optional[List[int]] = None,
+        eval_gold_chunks: Optional[List[Tuple[int, int]]] = None,
+        eval_llm_judge: bool = False,
+    ) -> List[Tuple[str, float, Optional[int], Optional[int]]]:
+        """Graph RAG: seed retrieval -> expansion по графу -> optional rerank."""
+        q_text = (query or "").strip()
+        embed_source = (vector_query or "").strip() or q_text
+        pipeline_base = "pgvector_cosine_seeds → graph_expand_neighbors → (опционально) cross_encoder_rerank"
+        graph_extras = [
+            f"k={k}",
+            f"document_id={document_id}",
+            f"seed_limit={max(k * 4, 36)}",
+        ]
+        try:
+            query_embedding = await self.rag_client.embed_single(embed_source)
+        except Exception as e:
+            logger.warning("Embed query failed for graph search: %s", e)
+            await log_retrieval_with_eval(
+                store="global (глобальные документы)",
+                strategy_resolved="graph",
+                pipeline=f"{pipeline_base} (ошибка эмбеддинга запроса)",
+                extra_lines=graph_extras,
+                final_hits=[],
+                k_requested=k,
+                query_for_eval=q_text,
+                search_started_perf=search_started_perf,
+                gold_document_ids=eval_gold_document_ids,
+                gold_chunks=eval_gold_chunks,
+                llm_judge=eval_llm_judge,
+            )
+            return []
+
+        seed_limit = max(k * 4, 36)
+        pairs = await self.vector_repo.similarity_search(
+            query_embedding,
+            limit=seed_limit,
+            document_id=document_id,
+            filters=filters,
+        )
+        if not pairs:
+            await log_retrieval_with_eval(
+                store="global (глобальные документы)",
+                strategy_resolved="graph",
+                pipeline=f"{pipeline_base} → нет seed-кандидатов",
+                extra_lines=graph_extras,
+                final_hits=[],
+                k_requested=k,
+                query_for_eval=q_text,
+                search_started_perf=search_started_perf,
+                gold_document_ids=eval_gold_document_ids,
+                gold_chunks=eval_gold_chunks,
+                llm_judge=eval_llm_judge,
+            )
+            return []
+
+        seed_pairs = [
+            (v.document_id, v.chunk_index)
+            for v, _ in pairs[: min(12, len(pairs))]
+            if v.document_id is not None
+        ]
+        seed_chunk_indexes = [p[1] for p in seed_pairs]
+        graph_scores: Dict[Tuple[int, int], float] = {}
+        if self.graph_repo and self.graph_enabled:
+            try:
+                graph_scores = await self.graph_repo.expand_neighbors(
+                    store_type="global",
+                    document_id=document_id,
+                    seed_chunk_indexes=seed_chunk_indexes,
+                    max_hops=2,
+                    max_nodes=max(k * 4, 40),
+                    seed_doc_chunk_pairs=seed_pairs if document_id is None else None,
+                )
+            except Exception as e:
+                logger.warning("Graph expand failed, fallback to seeds: %s", e)
+
+        scored: List[Tuple[DocumentVector, float]] = []
+        for vec, base_score in pairs:
+            gscore = graph_scores.get((vec.document_id, vec.chunk_index), 0.0)
+            final = 0.7 * float(base_score) + 0.3 * float(gscore)
+            scored.append((vec, final))
+        scored.sort(key=lambda x: x[1], reverse=True)
+
+        if (use_reranking if use_reranking is not None else self._cfg.use_reranking) and len(scored) > 1:
+            n_take = min(len(scored), max(k * 2, 12))
+            subset = scored[:n_take]
+            passages = [v.content for v, _ in subset]
+            try:
+                reranked = await self.rag_client.rerank(q_text, passages, top_k=k)
+                out: List[Tuple[str, float, Optional[int], Optional[int]]] = []
+                for idx, sc in reranked:
+                    if idx < len(subset):
+                        v, graph_mix_score = subset[idx]
+                        final_score = 0.7 * float(sc) + 0.3 * float(graph_mix_score)
+                        out.append((v.content, final_score, v.document_id, v.chunk_index))
+                if out:
+                    logger.info(
+                        "[SVC-RAG] search store=global strategy=graph done hits=%s rerank=ok seeds=%s graph_nodes=%s",
+                        len(out[:k]),
+                        len(seed_chunk_indexes),
+                        len(graph_scores),
+                    )
+                    final_g = await self._finalize_hit_rows(out[:k], used_rerank=True)
+                    await log_retrieval_with_eval(
+                        store="global (глобальные документы)",
+                        strategy_resolved="graph",
+                        pipeline=pipeline_base,
+                        extra_lines=graph_extras
+                        + [
+                            f"seeds={len(seed_chunk_indexes)} graph_nodes={len(graph_scores)}",
+                            "реранк_статус=успех",
+                        ],
+                        final_hits=final_g,
+                        k_requested=k,
+                        query_for_eval=q_text,
+                        search_started_perf=search_started_perf,
+                        gold_document_ids=eval_gold_document_ids,
+                        gold_chunks=eval_gold_chunks,
+                        llm_judge=eval_llm_judge,
+                    )
+                    return final_g
+            except Exception as e:
+                logger.warning("Graph rerank failed: %s", e)
+
+        out_final = [(v.content, score, v.document_id, v.chunk_index) for v, score in scored[:k]]
+        logger.info(
+            "[SVC-RAG] search store=global strategy=graph done hits=%s rerank=no seeds=%s graph_nodes=%s",
+            len(out_final),
+            len(seed_chunk_indexes),
+            len(graph_scores),
+        )
+        final_nf = await self._finalize_hit_rows(out_final, used_rerank=False)
+        await log_retrieval_with_eval(
+            store="global (глобальные документы)",
+            strategy_resolved="graph",
+            pipeline=pipeline_base,
+            extra_lines=graph_extras
+            + [
+                f"seeds={len(seed_chunk_indexes)} graph_nodes={len(graph_scores)}",
+                "реранк_статус=нет_или_сбой",
+            ],
+            final_hits=final_nf,
+            k_requested=k,
+            query_for_eval=q_text,
+            search_started_perf=search_started_perf,
+            gold_document_ids=eval_gold_document_ids,
+            gold_chunks=eval_gold_chunks,
+            llm_judge=eval_llm_judge,
+        )
+        return final_nf
+
     async def delete_document(self, document_id: int) -> bool:
+        if self.graph_repo and self.graph_enabled:
+            try:
+                await self.graph_repo.delete_document_graph("global", document_id)
+            except Exception:
+                pass
         await self.vector_repo.delete_vectors_by_document(document_id)
         await self.document_repo.delete_document(document_id)
         if self.use_hybrid_search:

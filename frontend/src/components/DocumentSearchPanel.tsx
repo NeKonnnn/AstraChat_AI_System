@@ -55,17 +55,18 @@ function getFileIcon(filename: string) {
 const CARD_H = 46;
 const ICON_BOX = 26;
 
-/** Панель «база знаний»: только файлы с попаданиями в поиск + раскрываемый трейс запроса и чанков */
+/** Панель «база знаний»: файлы только из фактических хитов retrieval; sourceFiles — запасной вариант без hits */
 export function DocumentSearchPanel({ trace }: { trace: DocumentSearchTrace }) {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
   const [sourcesOpen, setSourcesOpen] = useState(true);
   const [searchOpen, setSearchOpen] = useState(false);
 
+  const fromHits = Array.from(
+    new Set(trace.hits.map((h) => h.file).filter(Boolean))
+  ).sort();
   const files =
-    trace.sourceFiles.length > 0
-      ? trace.sourceFiles
-      : Array.from(new Set(trace.hits.map((h) => h.file).filter(Boolean)));
+    fromHits.length > 0 ? fromHits : [...trace.sourceFiles].sort();
 
   const subtleToggleSx = {
     display: 'flex',

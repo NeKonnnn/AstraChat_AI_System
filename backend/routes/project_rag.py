@@ -8,6 +8,7 @@ import os
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from backend.app_state import rag_client, minio_client, settings
+from backend.rag_query.semantic_cache import bump_rag_semantic_cache
 
 router = APIRouter(tags=["project-rag"])
 logger = logging.getLogger(__name__)
@@ -59,6 +60,7 @@ async def project_rag_upload(project_id: str, file: UploadFile = File(...)):
                     pass
             logger.error(f"SVC-RAG project-rag индексация: {e}")
             raise HTTPException(status_code=422, detail=str(e))
+        bump_rag_semantic_cache()
         return result
     except HTTPException:
         raise
@@ -95,6 +97,7 @@ async def project_rag_delete_document(project_id: str, document_id: int):
                 minio_client.delete_file(mo, bucket_name=mb)
             except Exception as ex:
                 logger.warning(f"Не удалось удалить объект MinIO project-rag: {ex}")
+        bump_rag_semantic_cache()
         return {"ok": True, "document_id": document_id}
     except HTTPException:
         raise
@@ -115,6 +118,7 @@ async def project_rag_search(project_id: str, body: dict):
             k=body.get("k", 8),
             document_id=body.get("document_id"),
             use_reranking=body.get("use_reranking"),
+            strategy=body.get("strategy"),
         )
         return {
             "hits": [
@@ -155,6 +159,7 @@ async def delete_project(project_id: str):
             logger.info(
                 f"project_id={project_id}: удалено RAG-документов: {rag_out.get('deleted_count', 0)}"
             )
+            bump_rag_semantic_cache()
         except Exception as e:
             logger.error(f"Ошибка удаления RAG проекта {project_id}: {e}")
             errors.append(f"RAG: {e}")
