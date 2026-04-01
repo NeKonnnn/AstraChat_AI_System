@@ -163,6 +163,7 @@ export default function AgentArchitectureSettings() {
       if (response.ok) {
         setSuccess(`Режим изменен на: ${mode === 'agent' ? 'Агентный' : 'Прямой'}`);
         await loadAgentStatus();
+        window.dispatchEvent(new CustomEvent('astrachatAgentStatusChanged'));
       } else {
         throw new Error('Не удалось изменить режим');
       }

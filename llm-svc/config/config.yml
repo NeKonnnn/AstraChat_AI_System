@@ -26,8 +26,8 @@ model:
   # Локальная модель (путь в контейнере)
   # Для GGUF моделей (llama.cpp):
   # path: "/app/models/llm/Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf"
-  path: "/app/models/llm/Qwen3.5-9B-UD-Q8_K_XL.gguf"
-  # path: "/app/models/llm/qwen2.5-7b-instruct-q3_k_m.gguf"
+  # path: "/app/models/llm/Qwen3.5-9B-UD-Q8_K_XL.gguf"
+  path: "/app/models/llm/qwen2.5-7b-instruct-q3_k_m.gguf"
   # Для HuggingFace моделей (vLLM) - указывайте путь к папке с моделью:
   # Альтернатива: Qwen3-VL поддерживается vLLM
   # path: "/app/models/llm/Qwen3-Omni-30B-A3B-Instruct-AWQ-4bit"  

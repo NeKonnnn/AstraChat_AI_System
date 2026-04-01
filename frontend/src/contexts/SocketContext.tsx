@@ -630,9 +630,28 @@ export function SocketProvider({ children }: { children: ReactNode }) {
           updateMessage(currentChatIdRef.current, currentMessageRef.current, undefined, false);
           currentMessageRef.current = null;
         }
-        if (multiLLMMessageRef.current) {
-          multiLLMMessageRef.current = null;
-          multiLLMResponsesRef.current.clear();
+        // Multi-LLM: снять стриминг в списке сообщений; ref не трогаем — придут multi_llm_complete
+        if (multiLLMMessageRef.current && currentChatIdRef.current) {
+          const snap = Array.from(multiLLMResponsesRef.current.values()).map((r) => ({
+            ...r,
+            isStreaming: false,
+          }));
+          if (snap.length > 0) {
+            updateMessage(
+              currentChatIdRef.current,
+              multiLLMMessageRef.current,
+              undefined,
+              false,
+              snap
+            );
+          } else {
+            updateMessage(
+              currentChatIdRef.current,
+              multiLLMMessageRef.current,
+              undefined,
+              false
+            );
+          }
         }
         // НЕ очищаем currentChatIdRef при остановке - он нужен для следующих запросов
         // currentChatIdRef.current = null; // УДАЛЕНО

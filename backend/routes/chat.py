@@ -18,7 +18,9 @@ from backend.app_state import (
     minio_client, speak_text, recognize_speech_from_file,
     get_current_model_path,
     get_rag_chat_top_k,
+    reload_model_by_path, model_load_lock,
 )
+from backend.realtime.handlers import _multi_llm_llm_svc_pool_style_path
 from backend.schemas import ChatMessage
 from backend.realtime.helpers import _is_structure_query, _terminal_chat_inference_banner
 from backend.realtime.rag_evidence import (
@@ -254,6 +256,33 @@ async def websocket_chat(websocket: WebSocket):
                             "type": "multi_llm_start", "model": model_name,
                             "total_models": len(models), "models": models,
                         }))
+                        if _multi_llm_llm_svc_pool_style_path(model_path):
+
+                            def _reload_pool() -> bool:
+                                return reload_model_by_path(model_path) if reload_model_by_path else True
+
+                            if not await asyncio.to_thread(_reload_pool):
+                                return {
+                                    "model": model_name,
+                                    "response": f"Ошибка загрузки {model_name}",
+                                    "error": True,
+                                }
+                        else:
+
+                            def _reload_with_lock() -> bool:
+                                with model_load_lock:
+                                    if reload_model_by_path and not reload_model_by_path(model_path):
+                                        return False
+                                    import time
+                                    time.sleep(0.5)
+                                return True
+
+                            if not await asyncio.to_thread(_reload_with_lock):
+                                return {
+                                    "model": model_name,
+                                    "response": f"Ошибка загрузки {model_name}",
+                                    "error": True,
+                                }
                         if streaming:
                             accumulated_text = ""
                             def model_stream_cb(chunk, acc):

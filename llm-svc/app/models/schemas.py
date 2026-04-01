@@ -140,6 +140,7 @@ class HealthResponse(BaseModel):
     status: str
     model_loaded: bool
     model_name: Optional[str] = None
+    loaded_models: Optional[List[str]] = None
 class ModelsListResponse(BaseModel):
     data: List[Dict[str, Any]]
     object: str = "list"
@@ -165,5 +166,11 @@ class ModelLoadResponse(BaseModel):
     success: bool
     message: str
     model_name: Optional[str] = None
+
+
+class ModelPoolTrimResponse(BaseModel):
+    success: bool
+    message: str
+    remaining_models: Optional[List[str]] = None
 
 ChatRequest = ChatCompletionRequest

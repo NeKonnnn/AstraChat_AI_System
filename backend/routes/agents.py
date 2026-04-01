@@ -3,8 +3,9 @@ routes/agents.py - агентная архитектура, оркестрато
 """
 
 import logging
+import os
 from datetime import datetime
-from typing import Dict
+from typing import Dict, List
 
 from fastapi import APIRouter, HTTPException
 
@@ -37,7 +38,24 @@ async def get_agent_status():
 async def set_agent_mode(request: AgentModeRequest):
     try:
         o = _get_orchestrator_or_503()
+        prev_mode = o.get_mode()
         o.set_mode(request.mode)
+        # Выход из multi-LLM: выгрузить лишние GGUF из пула llm-svc 
+        if prev_mode == "multi-llm" and request.mode != "multi-llm":
+            try:
+                try:
+                    from backend.agent_llm_svc import USE_LLM_SVC
+                    from backend.llm_client import get_llm_service
+                except ModuleNotFoundError:
+                    from agent_llm_svc import USE_LLM_SVC
+                    from llm_client import get_llm_service
+                if USE_LLM_SVC:
+                    svc = await get_llm_service()
+                    ok = await svc.client.unload_excess_llm_models()
+                    await svc._sync_loaded_model_name_from_health()
+                    logger.info(f"llm-svc pool trim после выхода из multi-llm: success={ok}")
+            except Exception as e:
+                logger.warning(f"Не удалось очистить пул llm-svc после multi-llm: {e}")
         return {"message": f"Режим изменён на: {request.mode}", "success": True, "timestamp": datetime.now().isoformat()}
     except HTTPException:
         raise
@@ -50,6 +68,9 @@ async def set_multi_llm_models(request: MultiLLMModelsRequest):
     try:
         o = _get_orchestrator_or_503()
         o.set_multi_llm_models(request.models)
+        # Без фонового POST /v1/models/load: он гонялся параллельно с первым multi-LLM чатом и
+        # давал двойную загрузку одной GGUF в llm-svc → обрыв соединения / падение процесса.
+        # Догрузка второй модели — только в realtime.handlers._gen_one (asyncio.to_thread).
         return {"message": f"Модели установлены: {', '.join(request.models)}", "success": True,
                 "models": request.models, "timestamp": datetime.now().isoformat()}
     except HTTPException:

@@ -1,9 +1,16 @@
 import logging
 import os
 from fastapi import APIRouter, Depends, HTTPException
-from app.models.schemas import ModelsListResponse, ModelInfoResponse, ModelLoadRequest, ModelLoadResponse
+from app.models.schemas import (
+    ModelsListResponse,
+    ModelInfoResponse,
+    ModelLoadRequest,
+    ModelLoadResponse,
+    ModelPoolTrimResponse,
+)
 from app.api.dependencies import get_llm_handler_without_loaded_gate
 from app.services.base_llm_handler import BaseLLMHandler
+from app.services.llama_handler import LlamaHandler
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -80,10 +87,15 @@ async def load_model(
     try:
         success = await llama_service.load_model(model_name)
         if success:
+            rid = (
+                LlamaHandler.normalize_model_id(model_name)
+                if isinstance(llama_service, LlamaHandler)
+                else model_name
+            )
             return ModelLoadResponse(
                 success=True,
-                message=f"Model '{llama_service.model_name}' loaded successfully",
-                model_name=llama_service.model_name
+                message=f"Model '{rid}' loaded successfully",
+                model_name=rid,
             )
         return ModelLoadResponse(
             success=False,
@@ -91,4 +103,31 @@ async def load_model(
         )
     except Exception as e:
         logger.exception(f"Error loading model {model_name}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/models/unload-excess", response_model=ModelPoolTrimResponse)
+async def unload_excess_models(
+    llama_service: BaseLLMHandler = Depends(get_llm_handler_without_loaded_gate),
+):
+    """
+    Оставить в пуле только модель из конфига сервиса; остальные выгрузить
+    Вызывается бэкендом при выходе из режима multi-LLM
+    """
+    if not isinstance(llama_service, LlamaHandler):
+        return ModelPoolTrimResponse(
+            success=True,
+            message="Pool trim applies only to llama.cpp handler; skipped",
+            remaining_models=None,
+        )
+    try:
+        ok = await llama_service.trim_pool_to_config_default()
+        remaining = llama_service.get_loaded_model_ids()
+        return ModelPoolTrimResponse(
+            success=ok,
+            message="Pool trimmed to config default model" if ok else "Trim completed with warnings",
+            remaining_models=remaining or None,
+        )
+    except Exception as e:
+        logger.exception("unload-excess failed")
         raise HTTPException(status_code=500, detail=str(e))

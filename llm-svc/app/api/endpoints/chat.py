@@ -22,6 +22,12 @@ async def chat_completion(
                 f"Messages: {len(request.messages)}, "
                 f"Temperature: {request.temperature}, "
                 f"Stream: {request.stream}")
+    if not llama_service.is_model_id_loaded(request.model):
+        loaded = getattr(llama_service, "get_loaded_model_ids", lambda: [])()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Model '{request.model}' is not loaded. Loaded: {loaded}",
+        )
     try:
         if request.stream:
             # Потоковый режим - возвращаем StreamingResponse
@@ -29,7 +35,8 @@ async def chat_completion(
                 messages=request.messages,
                 temperature=request.temperature,
                 max_tokens=request.max_tokens,
-                stream=True
+                stream=True,
+                chat_model_id=request.model,
             )
             return StreamingResponse(
                 response_generator,
@@ -41,7 +48,8 @@ async def chat_completion(
                 messages=request.messages,
                 temperature=request.temperature,
                 max_tokens=request.max_tokens,
-                stream=False
+                stream=False,
+                chat_model_id=request.model,
             )
             logger.info("Chat request: Response generated successfully")
             return response

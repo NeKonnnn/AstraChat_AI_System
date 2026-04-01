@@ -398,6 +398,7 @@ export default function AgentsSettings() {
         // Перезагружаем статус для обновления данных
         await loadAgentStatus();
         await loadLanggraphStatus();
+        window.dispatchEvent(new CustomEvent('astrachatAgentStatusChanged'));
       } else {
         throw new Error('Не удалось переключить режим');
       }

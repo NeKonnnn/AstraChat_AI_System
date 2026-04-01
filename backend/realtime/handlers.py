@@ -41,6 +41,14 @@ logger = logging.getLogger(__name__)
 _VALID_RAG_STRATEGIES = {"auto", "hierarchical", "hybrid", "standard", "graph"}
 
 
+def _multi_llm_llm_svc_pool_style_path(model_path: str) -> bool:
+    """Пути multi-LLM через llm-svc: не держим глобальный model_load_lock — пул и load на стороне llm-svc."""
+    if model_path.startswith("llm-svc://"):
+        return True
+    norm = model_path.replace("\\", "/").lower()
+    return norm.startswith("models/") or "/models/" in norm
+
+
 async def _get_conversation_project_id(conversation_id: str) -> "Optional[str]":
     """Возвращает project_id диалога из MongoDB, или None если диалог не привязан к проекту."""
     if not conversation_id:
@@ -403,6 +411,17 @@ async def _handle_multi_llm(
         implicit_global_corpus=False,
     )
     if canned:
+        # Иначе фронт не получит total_models (ожидается в multi_llm_start) и зависнет индикатор загрузки
+        if multi_llm_models:
+            await sio.emit(
+                "multi_llm_start",
+                {
+                    "model": multi_llm_models[0],
+                    "models": multi_llm_models,
+                    "total_models": len(multi_llm_models),
+                },
+                room=sid,
+            )
         for i, model_name in enumerate(multi_llm_models):
             await sio.emit(
                 "multi_llm_complete",
@@ -417,20 +436,71 @@ async def _handle_multi_llm(
             )
         return
 
+    n_models = len(multi_llm_models)
+
     async def _gen_one(model_name: str):
+        idx = multi_llm_models.index(model_name)
+
+        async def _emit_complete(res: dict) -> dict:
+            # Сразу после готовности этой модели — иначе фронт ждёт gather по всем и «вечно генерирует»
+            await sio.emit(
+                "multi_llm_complete",
+                {
+                    "model": res.get("model", model_name),
+                    "response": res.get("response", "") or "",
+                    "error": bool(res.get("error", False)),
+                    "index": idx,
+                    "total": n_models,
+                },
+                room=sid,
+            )
+            return res
+
         try:
-            await sio.emit("multi_llm_start", {"model": model_name, "models": multi_llm_models}, room=sid)
+            await sio.emit(
+                "multi_llm_start",
+                {
+                    "model": model_name,
+                    "models": multi_llm_models,
+                    "total_models": n_models,
+                },
+                room=sid,
+            )
 
             if model_name.startswith("llm-svc://"):
                 model_path = model_name
             else:
                 model_path = os.path.join("models", model_name) if not os.path.isabs(model_name) else model_name
-                with model_load_lock:
-                    if reload_model_by_path and not reload_model_by_path(model_path):
-                        return {"model": model_name, "response": f"Ошибка загрузки {model_name}", "error": True}
-                    import time; time.sleep(0.5)
+
+            # reload_model_by_path синхронный (внутри — httpx/блокировки); на event loop вторая
+            # модель из gather не стартует, пока первая не вернётся — кажется «обе грузятся столько же».
+            if _multi_llm_llm_svc_pool_style_path(model_path):
+
+                def _reload_pool() -> bool:
+                    return reload_model_by_path(model_path) if reload_model_by_path else True
+
+                if not await asyncio.to_thread(_reload_pool):
+                    return await _emit_complete(
+                        {"model": model_name, "response": f"Ошибка загрузки {model_name}", "error": True}
+                    )
+            else:
+
+                def _reload_with_lock() -> bool:
+                    with model_load_lock:
+                        if reload_model_by_path and not reload_model_by_path(model_path):
+                            return False
+                        import time
+                        time.sleep(0.5)
+                    return True
+
+                if not await asyncio.to_thread(_reload_with_lock):
+                    return await _emit_complete(
+                        {"model": model_name, "response": f"Ошибка загрузки {model_name}", "error": True}
+                    )
 
             def _model_stream_cb(chunk, acc):
+                if stop_generation_flags.get(sid, False):
+                    return False
                 asyncio.run_coroutine_threadsafe(
                     sio.emit("multi_llm_chunk", {"model": model_name, "chunk": chunk, "accumulated": acc}, room=sid),
                     loop,
@@ -450,23 +520,36 @@ async def _handle_multi_llm(
                 resp = await maybe_replace_ungrounded(
                     final_user_message[:20000], resp, RAG_STRICT_NOT_FOUND_MESSAGE
                 )
-            return {"model": model_name, "response": resp}
+            return await _emit_complete(
+                {
+                    "model": model_name,
+                    "response": resp if isinstance(resp, str) else "",
+                    "error": False,
+                }
+            )
         except Exception as e:
-            return {"model": model_name, "response": f"Ошибка: {e}", "error": True}
+            return await _emit_complete(
+                {"model": model_name, "response": f"Ошибка: {e}", "error": True}
+            )
 
-    results = await asyncio.gather(*[_gen_one(m) for m in multi_llm_models], return_exceptions=True)
+    # llm-svc с пулом слотов: параллельные _gen_one без глобального model_load_lock.
+    results: list = await asyncio.gather(*[_gen_one(m) for m in multi_llm_models], return_exceptions=True)
 
+    # Успешные пути уже вызвали multi_llm_complete внутри _gen_one; здесь только сбой gather
     for i, result in enumerate(results):
-        if isinstance(result, Exception):
-            await sio.emit("multi_llm_complete", {
-                "model": "unknown", "response": str(result), "error": True,
-                "index": i, "total": len(multi_llm_models),
-            }, room=sid)
-        else:
-            await sio.emit("multi_llm_complete", {
-                "model": result.get("model"), "response": result.get("response", ""),
-                "error": result.get("error", False), "index": i, "total": len(multi_llm_models),
-            }, room=sid)
+        if isinstance(result, dict):
+            continue
+        await sio.emit(
+            "multi_llm_complete",
+            {
+                "model": multi_llm_models[i] if i < len(multi_llm_models) else "unknown",
+                "response": str(result),
+                "error": True,
+                "index": i,
+                "total": n_models,
+            },
+            room=sid,
+        )
 
 
 async def _handle_agent_mode(

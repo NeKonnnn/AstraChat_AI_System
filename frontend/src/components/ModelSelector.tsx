@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Box,
   Typography,
@@ -75,12 +75,7 @@ export default function ModelSelector({ isDarkMode, onModelSelect }: ModelSelect
   
   const { showNotification } = useAppActions();
 
-  useEffect(() => {
-    loadModels();
-    loadCurrentModel();
-  }, []);
-
-  const loadModels = async () => {
+  const loadModels = useCallback(async () => {
     try {
       setIsLoading(true);
       const response = await fetch(getApiUrl('/api/models'));
@@ -93,9 +88,9 @@ export default function ModelSelector({ isDarkMode, onModelSelect }: ModelSelect
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
-  const loadCurrentModel = async () => {
+  const loadCurrentModel = useCallback(async () => {
     try {
       const response = await fetch(getApiUrl('/api/models/current'));
       if (response.ok) {
@@ -107,7 +102,21 @@ export default function ModelSelector({ isDarkMode, onModelSelect }: ModelSelect
     } catch (err) {
       
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    loadModels();
+    loadCurrentModel();
+  }, [loadModels, loadCurrentModel]);
+
+  useEffect(() => {
+    const onAgentStatusChanged = () => {
+      loadModels();
+      loadCurrentModel();
+    };
+    window.addEventListener('astrachatAgentStatusChanged', onAgentStatusChanged);
+    return () => window.removeEventListener('astrachatAgentStatusChanged', onAgentStatusChanged);
+  }, [loadModels, loadCurrentModel]);
 
   const handleClick = (event: React.MouseEvent<HTMLElement>) => {
     setAnchorEl(event.currentTarget);

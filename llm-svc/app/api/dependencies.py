@@ -7,12 +7,7 @@ async def get_llama_service(
     llm_handler: BaseLLMHandler = Depends(get_llm_handler),
 ) -> BaseLLMHandler:
     """Зависимость для получения сервиса LLM."""
-    # Пока llama.cpp делает cleanup()+load, is_loaded() кратко False — без ожидания параллельные
-    # /health и /chat/completions получали 503. Блокировка смены модели сериализует ожидание.
-    lock = getattr(llm_handler, "_model_switch_lock", None)
-    if lock is not None:
-        async with lock:
-            pass
+    # Не ждём _model_switch_lock
     if not llm_handler.is_loaded():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -25,14 +20,11 @@ async def get_llm_handler_without_loaded_gate(
     llm_handler: BaseLLMHandler = Depends(get_llm_handler),
 ) -> BaseLLMHandler:
     """
-    Доступ к handler без требования is_loaded()
-    Нужен для POST /v1/models/load (первая загрузка) и GET /v1/models (список .gguf с диска)
-    Ожидание той же блокировки смены модели, что и у get_llama_service
+    Доступ к handler без требования is_loaded().
+    Не ждём _model_switch_lock: иначе GET /v1/health и прочие запросы висят на всё время
+    чтения GGUF в другом запросе, а бэкенд шлёт health часто
+    Согласованность пула обеспечивает _registry_lock внутри LlamaHandler
     """
-    lock = getattr(llm_handler, "_model_switch_lock", None)
-    if lock is not None:
-        async with lock:
-            pass
     return llm_handler
 
 

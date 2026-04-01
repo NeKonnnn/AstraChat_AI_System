@@ -16,9 +16,11 @@ import os
 
 def resolve_llm_svc_model_id_for_request(model_path: Optional[str], fallback_model_name: str) -> str:
     """
-    Из пути llm-svc://<id> получает <id> для JSON model в /v1/chat/completions.
-    Частая опечатка: 1lm-svc:// (цифра 1) — иначе startswith('llm-svc') не срабатывает
-    и в запрос уходит глобально загруженная модель (QVikhr и т.д.).
+    Получает <id> для JSON model в /v1/chat/completions и для POST /v1/models/load.
+
+    - llm-svc://<id> (и опечатка 1lm-svc://) → <id>
+    - models/<name> или путь к .gguf → имя файла без .gguf (как в GET /v1/models)
+    - иначе → fallback (имя загруженной в llm-svc модели из health)
     """
     if not model_path or not str(model_path).strip():
         return fallback_model_name
@@ -29,6 +31,20 @@ def resolve_llm_svc_model_id_for_request(model_path: Optional[str], fallback_mod
         low = s.lower()
     if low.startswith("llm-svc://"):
         return s[10:]
+    # Multi-LLM / выбор с диска: backend передаёт models/<id> без префикса llm-svc://
+    norm = s.replace("\\", "/")
+    base = os.path.basename(norm.rstrip("/"))
+    if base and base not in (".", ".."):
+        if base.lower().endswith(".gguf"):
+            base = base[:-5]
+        looks_like_filesystem_path = (
+            low.startswith("models/")
+            or "/models/" in low
+            or low.endswith(".gguf")
+            or ("/" in norm)
+        )
+        if looks_like_filesystem_path:
+            return base
     return fallback_model_name
 
 
@@ -45,6 +61,24 @@ def same_llm_svc_model_id(loaded: str, requested: str) -> bool:
     # Длинное имя начинается с короткого и дефиса: ...-instruct-...
     if a.startswith(b + "-") or b.startswith(a + "-"):
         return True
+    return False
+
+
+def pool_contains_model(health: Optional[Dict[str, Any]], model_id: Optional[str]) -> bool:
+    """
+    True, если model_id уже в RAMе llm-svc
+    """
+    if not health or not model_id or not str(model_id).strip():
+        return False
+    mid = str(model_id).strip()
+    loaded = health.get("loaded_models")
+    if isinstance(loaded, list) and len(loaded) > 0:
+        for lid in loaded:
+            if lid and same_llm_svc_model_id(str(lid), mid):
+                return True
+        return False
+    if health.get("model_loaded") and health.get("model_name"):
+        return same_llm_svc_model_id(str(health["model_name"]), mid)
     return False
 
 
@@ -189,7 +223,36 @@ class LLMClient:
         except Exception as e:
             logger.error(f"Ошибка вызова llm-svc load_model: {e}")
             return False
-    
+
+    async def load_model_if_needed(self, model_name: str) -> bool:
+        """POST /v1/models/load только если модели ещё нет в пуле"""
+        if not model_name or not model_name.strip():
+            return False
+        model_name = model_name.strip()
+        health = await self.health_check()
+        if pool_contains_model(health, model_name):
+            logger.info(f"llm-svc: модель {model_name!r} уже в пуле, пропуск load_model")
+            return True
+        return await self.load_model(model_name)
+
+    async def unload_excess_llm_models(self) -> bool:
+        """Оставить в llm-svc только модель из конфига сервиса"""
+        t = httpx.Timeout(1200.0, connect=10.0, read=1200.0, write=60.0)
+        try:
+            async with httpx.AsyncClient(timeout=t) as client:
+                response = await client.post(
+                    f"{self.llm_url}/v1/models/unload-excess",
+                    headers=self._get_headers(),
+                )
+                if not response.is_success:
+                    logger.error(f"llm-svc unload-excess failed: {response.status_code} {response.text}")
+                    return False
+                data = response.json()
+                return bool(data.get("success", True))
+        except Exception as e:
+            logger.error(f"Ошибка вызова llm-svc unload-excess: {e}")
+            return False
+
     async def chat_completion(
         self,
         messages: List[Dict[str, str]],
@@ -625,12 +688,15 @@ class LLMService:
             logger.error(f"Ошибка инициализации LLMService: {e}")
             return False
 
-    async def _sync_loaded_model_name_from_health(self) -> None:
-        """Подтягивает self.model_name из GET /v1/health llm-svc (если модель переключили в обход бэкенда)."""
+    async def _sync_loaded_model_name_from_health(self):
+        """
+        Подтягивает self.model_name из GET /v1/health llm-svc
+        Возвращает (model_loaded_ok, health_json) для проверки пула loaded_models
+        """
         try:
             health = await self.client.health_check()
             if health.get("status") != "healthy":
-                return
+                return False, health
             if health.get("model_loaded") and health.get("model_name"):
                 actual = health["model_name"]
                 if self.model_name != actual:
@@ -638,8 +704,11 @@ class LLMService:
                         f"[LLMService] Синхронизация model_name с llm-svc: {self.model_name!r} → {actual!r}"
                     )
                 self.model_name = actual
+                return True, health
+            return False, health
         except Exception as e:
             logger.debug(f"[LLMService] Пропуск синхронизации model_name по health: {e}")
+            return False, {}
     
     def prepare_messages(self, prompt: str, history: Optional[List[Dict[str, str]]] = None, 
                         system_prompt: Optional[str] = None) -> List[Dict[str, str]]:
@@ -745,32 +814,37 @@ class LLMService:
                                 })
                             break
             
-            await self._sync_loaded_model_name_from_health()
+            llm_ready, health = await self._sync_loaded_model_name_from_health()
 
-            # Определение модели (явный id из агента / запроса; иначе глобальная загруженная)
+            # Определение модели (явный id из агента / запроса; иначе глобальная из конфига/кэша)
             model_to_use = resolve_llm_svc_model_id_for_request(model_path, self.model_name)
             if str(model_path or "").strip():
                 logger.info(
                     f"[generate_response] model_path={model_path!r} → запрошена model={model_to_use!r} "
-                    f"(загружена в llm-svc сейчас: {self.model_name!r})"
+                    f"(llm-svc RAM: {llm_ready}, кэш имени: {self.model_name!r})"
                 )
 
-            # Приоритет агента: если запрошена другая модель — переключаем llm-svc перед генерацией.
-            # Это убирает ситуацию «в ответе используется глобальная», когда llm-svc игнорирует поле model.
-            # Не сравниваем строки вслепую: health может отдавать короткое имя, агент — полное имя .gguf (та же модель).
-            if model_to_use and not same_llm_svc_model_id(self.model_name, model_to_use):
+            in_pool = pool_contains_model(health, model_to_use)
+            if model_to_use and in_pool:
+                self.model_name = model_to_use
+            elif model_to_use and (not llm_ready or not same_llm_svc_model_id(self.model_name, model_to_use)):
                 async with self._model_switch_lock:
-                    # double-check под локом
-                    if not same_llm_svc_model_id(self.model_name, model_to_use):
-                        logger.info(f"[generate_response] Переключаю llm-svc на модель: {model_to_use!r}")
-                        ok = await self.client.load_model(model_to_use)
+                    llm_ready2, health2 = await self._sync_loaded_model_name_from_health()
+                    if pool_contains_model(health2, model_to_use):
+                        self.model_name = model_to_use
+                    elif not llm_ready2 or not same_llm_svc_model_id(self.model_name, model_to_use):
+                        logger.info(
+                            f"[generate_response] Загрузка/переключение llm-svc на модель: {model_to_use!r} "
+                            f"(было в RAM: {llm_ready2})"
+                        )
+                        ok = await self.client.load_model_if_needed(model_to_use)
                         if ok:
                             self.model_name = model_to_use
                             logger.info(f"[generate_response] llm-svc модель активна: {self.model_name!r}")
                         else:
                             logger.warning(
-                                f"[generate_response] Не удалось переключить llm-svc на {model_to_use!r}; "
-                                f"использую текущее состояние: {self.model_name!r}"
+                                f"[generate_response] Не удалось загрузить llm-svc {model_to_use!r}; "
+                                f"кэш имени: {self.model_name!r}"
                             )
                             model_to_use = self.model_name
             
@@ -848,7 +922,7 @@ class LLMService:
                                             break
                                         if stream_callback(chunk, accumulated_text) is False:
                                             logger.info("[_stream_generation] Прервано колбэком")
-                                            return None
+                                            return _clean_llm_response(accumulated_text) if accumulated_text else None
                             except json.JSONDecodeError:
                                 continue
             return _clean_llm_response(accumulated_text)

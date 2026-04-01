@@ -57,6 +57,8 @@ def global_mock_llama():
         instance.generate_response = AsyncMock(side_effect=generate_response)
         instance.initialize = AsyncMock()
         instance.cleanup = AsyncMock()
+        instance.is_model_id_loaded = MagicMock(return_value=True)
+        instance.get_loaded_model_ids = MagicMock(return_value=["test-model"])
 
         mock_handler.return_value = instance
         mock_handler.get_instance.return_value = instance

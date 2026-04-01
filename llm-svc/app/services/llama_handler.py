@@ -1,5 +1,6 @@
 from llama_cpp import Llama
 from typing import List, Dict, Any, Optional, Callable, AsyncGenerator, Union
+from collections import OrderedDict
 import os
 import json
 import asyncio
@@ -13,239 +14,386 @@ from app.services.base_llm_handler import BaseLLMHandler
 
 logger = logging.getLogger(__name__)
 
-# Таймаут загрузки модели (сек). Большие модели на CPU при нехватке RAM могут "зависать" навсегда.
-# 30B Q8 на CPU без GPU требует ~32GB RAM; при свопе процесс выглядит зависшим.
 MODEL_LOAD_TIMEOUT = int(os.environ.get("LLM_MODEL_LOAD_TIMEOUT", "600"))
+MAX_LOADED_MODELS = max(1, int(os.environ.get("LLM_MAX_LOADED_MODELS", "4")))
+
+
+class _Slot:
+    def __init__(self, llama: Llama, path: str):
+        self.llama = llama
+        self.path = path
+        self.gen_lock = asyncio.Lock()
 
 
 class LlamaHandler(BaseLLMHandler):
     _instance = None
 
     def __init__(self):
-        self.model: Optional[Llama] = None
-        self.model_path = settings.model.path
-        self.model_name = settings.model.name
+        super().__init__()
+        self._model_slots: "OrderedDict[str, _Slot]" = OrderedDict()
+        self._primary_model_id: Optional[str] = None
+        self._config_model_path = settings.model.path
+        self._config_model_name = settings.model.name
         self.n_ctx = settings.model.ctx_size
         self.n_gpu_layers = settings.model.gpu_layers
         self.verbose = settings.model.verbose
-        self.is_initialized = False
-        # Удерживается на время cleanup()+initialize() при смене модели; другие эндпоинты ждут, а не получают 503.
+        self._registry_lock = asyncio.Lock()
         self._model_switch_lock = asyncio.Lock()
+        self.is_initialized = False
+
+    @property
+    def model(self) -> Optional[Llama]:
+        pid = self._primary_model_id
+        if pid and pid in self._model_slots:
+            return self._model_slots[pid].llama
+        if self._model_slots:
+            first = next(iter(self._model_slots.values()))
+            return first.llama
+        return None
+
+    @property
+    def model_path(self) -> Optional[str]:
+        pid = self._primary_model_id
+        if pid and pid in self._model_slots:
+            return self._model_slots[pid].path
+        if self._model_slots:
+            return next(iter(self._model_slots.values())).path
+        return self._config_model_path
+
+    @property
+    def model_name(self) -> str:
+        if self._primary_model_id:
+            return self._primary_model_id
+        if self._model_slots:
+            return next(iter(self._model_slots.keys()))
+        return self._config_model_name
 
     @classmethod
     def get_instance(cls):
-        """Получение экземпляра синглтона."""
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
 
-    async def initialize(self):
-        """Асинхронная инициализация модели."""
-        if self.is_initialized:
-            return
+    @staticmethod
+    def normalize_model_id(model_name: str) -> str:
+        model_name = os.path.basename(str(model_name).strip())
+        if model_name.lower().endswith(".gguf"):
+            model_name = model_name[:-5]
+        return model_name
 
+    def get_loaded_model_ids(self) -> List[str]:
+        return list(self._model_slots.keys())
+
+    def is_model_id_loaded(self, model_id: Optional[str]) -> bool:
+        if not model_id or str(model_id).strip() in ("", "abstract-model"):
+            return bool(self._model_slots)
+        mid = self.normalize_model_id(model_id)
+        if mid in self._model_slots:
+            return True
+        low = mid.lower()
+        return any(k.lower() == low for k in self._model_slots.keys())
+
+    def _resolve_slot_id(self, chat_model_id: Optional[str]) -> str:
+        if not self._model_slots:
+            raise ValueError("Model not loaded")
+        raw = (chat_model_id or "").strip()
+        if raw in ("", "abstract-model"):
+            if self._primary_model_id and self._primary_model_id in self._model_slots:
+                return self._primary_model_id
+            return next(iter(self._model_slots.keys()))
+        mid = self.normalize_model_id(raw)
+        if mid in self._model_slots:
+            return mid
+        low = mid.lower()
+        for k in self._model_slots.keys():
+            if k.lower() == low:
+                return k
+        raise ValueError(
+            f"Model '{chat_model_id}' is not loaded (loaded: {list(self._model_slots.keys())})"
+        )
+
+    def _touch_lru(self, slot_id: str) -> None:
+        if slot_id in self._model_slots:
+            self._model_slots.move_to_end(slot_id)
+
+    async def _dispose_slot(self, slot: _Slot) -> None:
         try:
-            print("=" * 80)
-            print("🚀 INITIALIZING LLAMA.CPP BACKEND")
-            print("=" * 80)
-            print(f"📁 Model path: {self.model_path}")
-            print(f"📝 Model name: {self.model_name}")
-            print(f"💾 Context size: {self.n_ctx} tokens")
-            print(f"🎮 GPU layers: {self.n_gpu_layers}")
-            print(f"🔊 Verbose: {self.verbose}")
-            print("-" * 80)
-            print("⏳ Loading model...")
-            logger.info(f"Loading model from {self.model_path} (timeout={MODEL_LOAD_TIMEOUT}s)")
-
-            loop = asyncio.get_event_loop()
-            load_task = loop.run_in_executor(
-                None,
-                lambda: Llama(
-                    model_path=self.model_path,
-                    n_threads=7,
-                    n_threads_batch=7,
-                    n_ctx=self.n_ctx,
-                    n_gpu_layers=self.n_gpu_layers,
-                    verbose=True,  # при загрузке всегда verbose — видно прогресс или зависание
-                )
-            )
-            try:
-                self.model = await asyncio.wait_for(load_task, timeout=MODEL_LOAD_TIMEOUT)
-            except asyncio.TimeoutError:
-                load_task.cancel()
-                msg = (
-                    f"Загрузка модели не завершилась за {MODEL_LOAD_TIMEOUT} с. "
-                    "Чаще всего это нехватка RAM: модель 30B Q8 требует ~32 ГБ. "
-                    "Проверьте: docker stats (память контейнера), включите GPU (gpu_layers: -1 в конфиге), "
-                    "или используйте модель меньше (например 7B–8B). Таймаут задаётся переменной LLM_MODEL_LOAD_TIMEOUT."
-                )
-                logger.error(msg)
-                print("❌ " + msg)
-                raise RuntimeError(msg)
-
-            self.is_initialized = True
-            print("✅ llama.cpp model loaded successfully!")
-            print("=" * 80)
-            logger.info("Model loaded successfully")
+            if slot.llama is not None:
+                del slot.llama
         except Exception as e:
-            print("❌ Failed to load llama.cpp model!")
-            print(f"   Error: {str(e)}")
-            print("=" * 80)
-            logger.error(f"Failed to load model: {str(e)}")
-            raise
+            logger.warning(f"dispose_slot: {e}")
+        slot.llama = None  # type: ignore
 
-    async def _run_in_executor(self, func: Callable):
-        """Утилита для запуска блокирующих операций в executor'е."""
+    def _build_llama_sync(self, model_path: str) -> Llama:
+        return Llama(
+            model_path=model_path,
+            n_threads=7,
+            n_threads_batch=7,
+            n_ctx=self.n_ctx,
+            n_gpu_layers=self.n_gpu_layers,
+            verbose=True,
+        )
+
+    async def _instantiate_llama(self, model_path: str) -> Llama:
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, func)
+        load_task = loop.run_in_executor(None, lambda: self._build_llama_sync(model_path))
+        return await asyncio.wait_for(load_task, timeout=MODEL_LOAD_TIMEOUT)
 
-    def is_loaded(self) -> bool:
-        """Проверка, загружена ли модель."""
-        return self.is_initialized and self.model is not None
+    async def initialize(self):
+        if self._model_slots:
+            self.is_initialized = True
+            return
+        if not os.path.isfile(self._config_model_path):
+            logger.warning(
+                f"Model file not found at {self._config_model_path}. "
+                "Service starts without LLM until POST /v1/models/load."
+            )
+            self.is_initialized = False
+            return
+        ok = await self.load_model_by_name(self._config_model_name)
+        self.is_initialized = ok
+        if ok and self._primary_model_id is None:
+            self._primary_model_id = self.normalize_model_id(self._config_model_name)
 
-    async def _try_create_completion(self, messages: List[Message],
-                                     temperature: float, max_tokens: int,
-                                     stream: bool) -> Union[Dict[str, Any], AsyncGenerator[Dict[str, Any], None]]:
-        """Попытка создания завершения чата с обработкой разных форматов сообщений."""
+    async def _try_create_completion(
+        self,
+        llama: Llama,
+        messages: List[Message],
+        temperature: float,
+        max_tokens: int,
+        stream: bool,
+    ) -> Union[Dict[str, Any], AsyncGenerator[Dict[str, Any], None]]:
 
-        # Создаем функцию для создания completion
-        def create_completion( messages_formatter: Callable):
+        def create_completion(messages_formatter: Callable):
             formatted_messages = messages_formatter(messages)
-            return self.model.create_chat_completion(
+            return llama.create_chat_completion(
                 messages=formatted_messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                stream=stream
+                stream=stream,
             )
 
         return await self._run_in_executor(lambda: create_completion(convert_to_dict_messages))
 
-    async def generate_response(self, messages: List[Message],
-                                temperature: Optional[float] = None,
-                                max_tokens: Optional[int] = None,
-                                stream: bool = False) -> Union[ChatResponse, AsyncGenerator[str, None]]:
-        """Универсальный метод для генерации ответа, поддерживающий оба режима."""
+    async def _run_in_executor(self, func: Callable):
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, func)
+
+    def is_loaded(self) -> bool:
+        return bool(self._model_slots)
+
+    async def generate_response(
+        self,
+        messages: List[Message],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        stream: bool = False,
+        chat_model_id: Optional[str] = None,
+    ) -> Union[ChatResponse, AsyncGenerator[str, None]]:
         if not self.is_loaded():
             raise ValueError("Model not loaded")
-
-        # Используем значения по умолчанию из конфига, если не указаны
+        slot_id = self._resolve_slot_id(chat_model_id)
+        self._touch_lru(slot_id)
+        slot = self._model_slots[slot_id]
         temperature = temperature or settings.generation.default_temperature
         max_tokens = max_tokens or settings.generation.default_max_tokens
-
         start_time = time.time()
 
-        if stream:
-            # Потоковый режим - возвращаем асинхронный генератор
-            stream_result = await self._try_create_completion(
-                messages, temperature, max_tokens, stream=True
-            )
+        async with slot.gen_lock:
+            if stream:
+                stream_result = await self._try_create_completion(
+                    slot.llama, messages, temperature, max_tokens, stream=True
+                )
 
-            async def stream_generator():
-                try:
-                    # Асинхронно итерируемся по потоку
-                    while True:
-                        # Получаем следующий chunk из потока
-                        chunk = await self._run_in_executor(lambda: next(stream_result, None))
-                        if chunk is None:
-                            break
+                async def stream_generator():
+                    try:
+                        while True:
+                            chunk = await self._run_in_executor(lambda: next(stream_result, None))
+                            if chunk is None:
+                                break
+                            yield f"data: {json.dumps(chunk)}\n\n"
+                    except StopIteration:
+                        pass
+                    finally:
+                        yield "data: [DONE]\n\n"
 
-                        # Форматируем chunk в строку SSE
-                        yield f"data: {json.dumps(chunk)}\n\n"
-                except StopIteration:
-                    pass
-                finally:
-                    # Завершаем поток
-                    yield "data: [DONE]\n\n"
-
-            processing_time = time.time() - start_time
-            logger.info(f"Stream response generated in {processing_time:.2f}s")
-            return stream_generator()
-        else:
-            # Обычный режим - возвращаем готовый ответ
+                logger.info(f"Stream [{slot_id}] started in {time.time() - start_time:.2f}s")
+                return stream_generator()
             response = await self._try_create_completion(
-                messages, temperature, max_tokens, stream=False
+                slot.llama, messages, temperature, max_tokens, stream=False
             )
+            logger.info(f"Response [{slot_id}] in {time.time() - start_time:.2f}s")
+            return self._format_response(response, slot_id)
 
-            processing_time = time.time() - start_time
-            logger.info(f"Response generated in {processing_time:.2f}s")
-
-            return self._format_response(response)
-
-    def _format_response(self, raw_response: Dict[str, Any]) -> ChatResponse:
-        """Форматирование ответа в совместимый с OpenAI формат."""
+    def _format_response(self, raw_response: Dict[str, Any], response_model_id: str) -> ChatResponse:
         choice = raw_response["choices"][0]
         message = choice["message"]
-
         return ChatResponse(
             id=f"chatcmpl-{int(time.time())}",
             created=int(time.time()),
-            model=self.model_name,
+            model=response_model_id,
             choices=[
                 ChatChoice(
                     index=0,
                     message=AssistantMessage(
                         role=message["role"],
-                        content=message["content"]
+                        content=message["content"],
                     ),
-                    finish_reason=choice.get("finish_reason", "stop")
+                    finish_reason=choice.get("finish_reason", "stop"),
                 )
             ],
             usage=UsageInfo(
                 prompt_tokens=raw_response.get("usage", {}).get("prompt_tokens", 0),
                 completion_tokens=raw_response.get("usage", {}).get("completion_tokens", 0),
-                total_tokens=raw_response.get("usage", {}).get("total_tokens", 0)
-            )
+                total_tokens=raw_response.get("usage", {}).get("total_tokens", 0),
+            ),
         )
 
     async def cleanup(self):
-        """Очистка ресурсов модели."""
-        if self.model:
-            del self.model
-        self.model = None
-        self.is_initialized = False
-        logger.info("Model resources cleaned up")
+        async with self._registry_lock:
+            slots = list(self._model_slots.values())
+            self._model_slots.clear()
+            self._primary_model_id = None
+            self.is_initialized = False
+        for s in slots:
+            await self._dispose_slot(s)
+        logger.info("All model slots cleaned up")
 
     async def load_model(self, model_name: str) -> bool:
-        """Алиас для совместимости с эндпоинтом /models/load."""
         return await self.load_model_by_name(model_name)
 
+    async def _restore_default_after_failed_load(self, failed_id: str) -> None:
+        dname = self.normalize_model_id(settings.model.name)
+        dpath = settings.model.path
+        if not os.path.isfile(dpath) or dname == failed_id:
+            return
+        async with self._registry_lock:
+            if dname in self._model_slots:
+                self._primary_model_id = dname
+                return
+        try:
+            llama = await self._instantiate_llama(dpath)
+            async with self._registry_lock:
+                self._model_slots[dname] = _Slot(llama, dpath)
+                self._model_slots.move_to_end(dname)
+                self._primary_model_id = dname
+                self.is_initialized = True
+            logger.info(f"Restored default model {dname} after failed load of {failed_id}")
+        except Exception as e:
+            logger.error(f"Failed to restore default model: {e}")
+
     async def load_model_by_name(self, model_name: str) -> bool:
-        """
-        Переключение на другую модель по имени (имя файла без .gguf).
-        Путь к файлу: /app/models/llm/{model_name}.gguf
-        """
-        import os
-        # Санитизация: только базовое имя, без пути и без .gguf
-        model_name = os.path.basename(model_name).strip()
-        if model_name.lower().endswith(".gguf"):
-            model_name = model_name[:-5]
-        if not model_name:
+        model_id = self.normalize_model_id(model_name)
+        if not model_id:
             logger.error("load_model_by_name: пустое имя модели")
             return False
         models_dir = "/app/models/llm"
-        model_path = os.path.join(models_dir, f"{model_name}.gguf")
+        model_path = os.path.join(models_dir, f"{model_id}.gguf")
         if not os.path.exists(model_path):
             logger.error(f"Model file not found: {model_path}")
             return False
+
         async with self._model_switch_lock:
-            if self.model_name == model_name and self.is_loaded():
-                logger.info(f"Model {model_name} already loaded")
-                return True
-            try:
-                await self.cleanup()
-                self.model_path = model_path
-                self.model_name = model_name
-                await self.initialize()
-                logger.info(f"Switched to model: {model_name}")
-                return True
-            except Exception as e:
-                logger.error(f"Failed to load model {model_name}: {e}")
-                # Восстанавливаем предыдущую модель из конфига, чтобы сервис не оставался в 503
+            async with self._registry_lock:
+                if model_id in self._model_slots:
+                    self._model_slots.move_to_end(model_id)
+                    if self._primary_model_id is None:
+                        self._primary_model_id = model_id
+                    self.is_initialized = True
+                    logger.info(f"Model {model_id} already in pool (LRU touch)")
+                    return True
+
+            victim_slot: Optional[_Slot] = None
+            evicted_id: Optional[str] = None
+            async with self._registry_lock:
+                if len(self._model_slots) >= MAX_LOADED_MODELS:
+                    evicted_id, victim_slot = self._model_slots.popitem(last=False)
+                    if self._primary_model_id == evicted_id:
+                        self._primary_model_id = next(iter(self._model_slots.keys()), None)
+
+        # Дальше — долгий I/O/CPU; без удержания _model_switch_lock, чтобы не блокировать
+        # /v1/health, чат с уже загруженной моделью и второй параллельный /load
+        
+        if victim_slot is not None:
+            logger.info(f"LRU evict from pool: {evicted_id} (max={MAX_LOADED_MODELS})")
+            await self._dispose_slot(victim_slot)
+
+        try:
+            new_llama = await self._instantiate_llama(model_path)
+        except Exception as e:
+            logger.error(f"Failed to load model {model_id}: {e}")
+            async with self._model_switch_lock:
+                await self._restore_default_after_failed_load(model_id)
+            return False
+
+        dispose_after: List[_Slot] = []
+        async with self._model_switch_lock:
+            async with self._registry_lock:
+                if model_id in self._model_slots:
+                    dispose_after.append(_Slot(new_llama, model_path))
+                    self._model_slots.move_to_end(model_id)
+                    if self._primary_model_id is None:
+                        self._primary_model_id = model_id
+                    self.is_initialized = True
+                    logger.info(f"Model {model_id} уже в пуле (параллельная загрузка), отбрасываем дубликат")
+                else:
+                    while len(self._model_slots) >= MAX_LOADED_MODELS:
+                        ev2, vic2 = self._model_slots.popitem(last=False)
+                        dispose_after.append(vic2)
+                        if self._primary_model_id == ev2:
+                            self._primary_model_id = next(iter(self._model_slots.keys()), None)
+                    self._model_slots[model_id] = _Slot(new_llama, model_path)
+                    self._model_slots.move_to_end(model_id)
+                    if self._primary_model_id is None:
+                        self._primary_model_id = model_id
+                    self.is_initialized = True
+                    logger.info(f"Pool load OK: {model_id} (total loaded: {len(self._model_slots)})")
+
+        for s in dispose_after:
+            await self._dispose_slot(s)
+        return True
+
+    async def trim_pool_to_config_default(self) -> bool:
+        """
+        Оставить в RAM только модель из config 
+        Остальные GGUF выгружаются после выхода из multi-LLM на бэкенде
+        """
+        dname = self.normalize_model_id(settings.model.name)
+        dpath = settings.model.path
+        async with self._model_switch_lock:
+            to_dispose: List[_Slot] = []
+            async with self._registry_lock:
+                keys_to_remove = [k for k in self._model_slots.keys() if k != dname]
+                for k in keys_to_remove:
+                    to_dispose.append(self._model_slots.pop(k))
+            for slot in to_dispose:
+                await self._dispose_slot(slot)
+
+            async with self._registry_lock:
+                have_default = dname in self._model_slots
+
+            if not have_default and os.path.isfile(dpath):
                 try:
-                    self.model_path = settings.model.path
-                    self.model_name = settings.model.name
-                    await self.initialize()
-                    logger.info(f"Restored default model: {self.model_name}")
-                except Exception as restore_e:
-                    logger.error(f"Failed to restore default model: {restore_e}")
-                return False
+                    new_llama = await self._instantiate_llama(dpath)
+                    async with self._registry_lock:
+                        self._model_slots[dname] = _Slot(new_llama, dpath)
+                        self._primary_model_id = dname
+                        self._model_slots.move_to_end(dname)
+                        self.is_initialized = True
+                    logger.info(f"trim_pool: загружена модель из конфига {dname}")
+                except Exception as e:
+                    logger.error(f"trim_pool: не удалось загрузить дефолт {dname}: {e}")
+                    async with self._registry_lock:
+                        self._primary_model_id = next(iter(self._model_slots.keys()), None)
+                        self.is_initialized = bool(self._model_slots)
+                    return False
+            else:
+                async with self._registry_lock:
+                    if dname in self._model_slots:
+                        self._primary_model_id = dname
+                        self._model_slots.move_to_end(dname)
+                    else:
+                        self._primary_model_id = next(iter(self._model_slots.keys()), None)
+                    self.is_initialized = bool(self._model_slots)
+
+        return True

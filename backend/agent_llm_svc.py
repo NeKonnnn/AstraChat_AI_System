@@ -31,12 +31,12 @@ try:
     from backend.config import get_path
     MODEL_PATH = get_path("model_path")
     from backend.context_prompts import context_prompt_manager
-    from backend.llm_client import ask_agent_llm_svc, get_llm_service
+    from backend.llm_client import ask_agent_llm_svc, get_llm_service, resolve_llm_svc_model_id_for_request
 except ImportError:
     from config import get_path
     MODEL_PATH = get_path("model_path")
     from context_prompts import context_prompt_manager
-    from llm_client import ask_agent_llm_svc, get_llm_service
+    from llm_client import ask_agent_llm_svc, get_llm_service, resolve_llm_svc_model_id_for_request
 
 # Настройка логирования с поддержкой UTF-8
 logger = logging.getLogger(__name__)
@@ -214,7 +214,7 @@ def reload_model_by_path(model_path):
             try:
                 async def _load_on_llm_svc():
                     service = await get_llm_service()
-                    ok = await service.client.load_model(model_name)
+                    ok = await service.client.load_model_if_needed(model_name)
                     if ok:
                         service.model_name = model_name
                         logger.info(f"[llm-svc] Обновлён model_name в бэкенде: {model_name}")
@@ -239,10 +239,39 @@ def reload_model_by_path(model_path):
         if os.path.exists(model_path) and model_path.endswith('.gguf'):
             logger.warning(f"Передан путь к локальному файлу модели {model_path}, но используется llm-svc. Модель должна быть доступна через llm-svc.")
             return True
-        
+
+        # models/<id> (multi-llm и т.п.) — реально переключаем веса в llm-svc
+        resolved_id = resolve_llm_svc_model_id_for_request(model_path, "")
+        if resolved_id:
+            try:
+                async def _load_resolved():
+                    service = await get_llm_service()
+                    ok = await service.client.load_model_if_needed(resolved_id)
+                    if ok:
+                        service.model_name = resolved_id
+                        global _selected_model_name
+                        _selected_model_name = resolved_id
+                        logger.info(
+                            f"[llm-svc] Multi-LLM: модель готова к вызову {resolved_id!r} (путь {model_path!r})"
+                        )
+                    return ok
+
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                if loop.is_running():
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(asyncio.run, _load_resolved())
+                        return future.result()
+                return loop.run_until_complete(_load_resolved())
+            except Exception as e:
+                logger.exception(f"Ошибка load_model для {resolved_id!r}: {e}")
+                return False
+
         logger.info(f"Перезагрузка модели через llm-svc: {model_path}")
-        # В llm-svc перезагрузка модели происходит через конфигурацию
-        # Здесь мы можем обновить настройки или перезапустить сервис
         logger.info("Для смены модели в llm-svc обновите конфигурацию и перезапустите сервис")
         return True
     else:

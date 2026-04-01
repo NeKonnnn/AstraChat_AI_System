@@ -19,6 +19,10 @@ class BaseLLMHandler(ABC):
     def is_loaded(self) -> bool:
         """Проверка, загружена ли модель."""
         pass
+
+    def is_model_id_loaded(self, model_id: Optional[str]) -> bool:
+        """Для llama.cpp-пула: проверка конкретного id; vLLM — достаточно is_loaded()."""
+        return self.is_loaded()
     
     @abstractmethod
     async def generate_response(
@@ -26,7 +30,8 @@ class BaseLLMHandler(ABC):
         messages: List[Message],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
-        stream: bool = False
+        stream: bool = False,
+        chat_model_id: Optional[str] = None,
     ) -> Union[ChatResponse, AsyncGenerator[str, None]]:
         """Универсальный метод для генерации ответа."""
         pass
