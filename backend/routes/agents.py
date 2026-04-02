@@ -69,8 +69,8 @@ async def set_multi_llm_models(request: MultiLLMModelsRequest):
         o = _get_orchestrator_or_503()
         o.set_multi_llm_models(request.models)
         # Без фонового POST /v1/models/load: он гонялся параллельно с первым multi-LLM чатом и
-        # давал двойную загрузку одной GGUF в llm-svc → обрыв соединения / падение процесса.
-        # Догрузка второй модели — только в realtime.handlers._gen_one (asyncio.to_thread).
+        # давал двойную загрузку одной GGUF в llm-svc - обрыв соединения / падение процесса
+        # Догрузка второй модели - только в realtime.handlers._gen_one (asyncio.to_thread)
         return {"message": f"Модели установлены: {', '.join(request.models)}", "success": True,
                 "models": request.models, "timestamp": datetime.now().isoformat()}
     except HTTPException:

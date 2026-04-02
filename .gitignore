@@ -150,6 +150,9 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
+# Локальные бэкапы requirements
+requirements-backup-*/
+
 # Бэкапы и временные копии
 *.bak
 *.backup

@@ -18,7 +18,6 @@ aiohttp>=3.9.0
 # HTTP клиент
 httpx>=0.27.0
 requests>=2.31.0
-pytube==15.0.0
 pytubefix==9.4.1
 
 # Конфигурация
@@ -35,19 +34,12 @@ openpyxl>=3.1.0
 pdfplumber>=0.10.0
 Pillow>=10.0.0
 
-# LangChain + RAG
-langchain>=0.3.0
-langchain-community>=0.3.0
+# Агенты (оркестратор); RAG по HTTP в SVC-RAG — без faiss/sentence-transformers в образе backend
 langchain-core>=0.3.0
-langchain-huggingface>=0.1.0
-langchain-text-splitters>=0.3.0
 langgraph>=0.2.0
-faiss-cpu>=1.8.0
-sentence-transformers>=3.0.0
-rank-bm25>=0.2.2
 
-# LLM интеграция (в Docker — только через llm-svc, llama-cpp-python не нужен)
-# llama-cpp-python==0.3.16
+# Локальный WhisperX (USE_LLM_SVC=false): whisperx + torch ставятся отдельно / в полной локальной среде;
+# при USE_LLM_SVC=true torch в backend не импортируется на старте (см. whisperx_transcriber.py).
 
 # Аудио (только для локального запуска, не нужны в Docker-контейнере бэкенда)
 # sounddevice>=0.4.6
@@ -58,10 +50,9 @@ rank-bm25>=0.2.2
 motor>=3.3.0
 pymongo>=4.6.0,<5.0
 
-# PostgreSQL
+# PostgreSQL (только asyncpg + psycopg2; SQLAlchemy в коде не используется)
 asyncpg>=0.29.0
 psycopg2-binary>=2.9.9
-SQLAlchemy>=2.0.0
 
 # MinIO (S3-совместимое хранилище)
 minio>=7.2.0

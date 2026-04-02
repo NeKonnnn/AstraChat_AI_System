@@ -1,4 +1,4 @@
-# ── Web framework 
+# -- Web framework 
 fastapi==0.116.0
 starlette==0.46.2
 httpx==0.28.1
@@ -10,31 +10,21 @@ requests==2.32.4
 tqdm==4.67.1
 pyyaml==6.0.2
 anyio==4.10.0
-python-multipart==0.0.6
+python-multipart>=0.0.18
 
-# ── Auth ─
+# -- Auth
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 python-ldap==3.4.4
 
-# ── Audio / STT 
-numpy>=1.24.3,<2.0.0
-scipy>=1.10.0
-pydub>=0.25.1
-ffmpeg-python>=0.2.0
-vosk==0.3.45
-whisperx>=3.1.1
-pyannote.audio>=3.1.1
-
 # LLM зависимости
 llama-cpp-python>=0.3.16
-vllm>=0.6.0  
 
-# ── Tests 
-pytest==8.4.1
-pytest-asyncio==1.1.0
+# vllm не в этом файле: только Dockerfile.cuda (иначе тяжёлая CPU-сборка и конфликты torch).
+
+# Тесты: корневый requirements-dev.txt (pytest, pytest-asyncio)
 
 # Ставятся отдельно в Dockerfile:
-# torch, torchaudio  — через pytorch.org index
-# llama-cpp-python   — через abetlen.github.io index
-# vllm               — только в Dockerfile.cuda, требует CUDA
+# torch, torchaudio - через pytorch.org index
+# llama-cpp-python - через abetlen.github.io index
+# vllm - только в Dockerfile.cuda, требует CUDA
