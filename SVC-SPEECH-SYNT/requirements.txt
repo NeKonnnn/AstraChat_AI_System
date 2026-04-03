@@ -17,7 +17,6 @@ requests>=2.31.0
 pyyaml>=6.0.2
 
 # PyTorch (Silero использует torch.package)
-# Silero работает на CPU, CUDA не требуется
 torch>=2.0.0
 
 # Научные библиотеки

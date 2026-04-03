@@ -1,0 +1,4 @@
+# Тесты и локальная разработка (не используется в Docker-образах сервисов)
+# Установка: pip install -r requirements-dev.txt
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
