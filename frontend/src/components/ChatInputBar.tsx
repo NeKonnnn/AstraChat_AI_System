@@ -77,7 +77,7 @@ export interface ChatInputBarProps {
    *  'classic' — прямоугольник с тулбаром кнопок снизу */
   styleVariant?: 'compact' | 'classic';
 
-  /** Как на стандартном фоне рабочей зоны (#2b2b2b / #fafafa), чтобы не терялось на чёрном «звёздном» фоне */
+  /** Как на стандартном фоне рабочей зоны (тёмный / #fafafa), чтобы не терялось на чёрном «звёздном» фоне */
   solidWorkZoneBackground?: boolean;
 }
 

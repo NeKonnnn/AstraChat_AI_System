@@ -1,5 +1,5 @@
 /** Сплошной фон основной рабочей зоны (чат, проект). Боковые панели не затрагиваются. */
-export const WORK_ZONE_BACKGROUND_DARK = '#2b2b2b';
+export const WORK_ZONE_BACKGROUND_DARK = '#232326';
 export const WORK_ZONE_BACKGROUND_LIGHT = '#fafafa';
 
 /**
