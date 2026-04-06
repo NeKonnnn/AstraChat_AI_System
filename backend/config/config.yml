@@ -29,10 +29,19 @@ cors:
 # ========================================================
 microservices:
   # 1. Сервис генерации текста (LLM)
+  # Несколько инстансов llm-svc: раскомментируйте hosts и задайте id + base_url для каждого.
+  # В UI пути моделей: llm-svc://<id>/<model_id> (при одном хосте по-прежнему llm-svc://<model_id>).
   llm:
     enabled: true
     url: "http://llm-service:8000"
     timeout: 300
+    # Роберт, вот тут нужно будет задать URL чтобы проверить подключение к нескольким хостам
+    # default_host_id: "local"
+    # hosts:
+    #   - id: local
+    #     base_url: "http://llm-service:8000"
+    #   - id: remote
+    #     base_url: "http://192.168.0.10:8001"
     models:
       default: "qvikhr-2.5b"
       fallback: "qwen-coder-30b"

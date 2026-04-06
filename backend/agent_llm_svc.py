@@ -31,12 +31,22 @@ try:
     from backend.config import get_path
     MODEL_PATH = get_path("model_path")
     from backend.context_prompts import context_prompt_manager
-    from backend.llm_client import ask_agent_llm_svc, get_llm_service, resolve_llm_svc_model_id_for_request
+    from backend.llm_client import (
+        ask_agent_llm_svc,
+        get_llm_service,
+        resolve_llm_svc_model_id_for_request,
+        resolve_llm_host_and_model_for_svc,
+    )
 except ImportError:
     from config import get_path
     MODEL_PATH = get_path("model_path")
     from context_prompts import context_prompt_manager
-    from llm_client import ask_agent_llm_svc, get_llm_service, resolve_llm_svc_model_id_for_request
+    from llm_client import (
+        ask_agent_llm_svc,
+        get_llm_service,
+        resolve_llm_svc_model_id_for_request,
+        resolve_llm_host_and_model_for_svc,
+    )
 
 # Настройка логирования с поддержкой UTF-8
 logger = logging.getLogger(__name__)
@@ -204,7 +214,7 @@ def reload_model_by_path(model_path):
         
         # Проверяем, является ли путь llm-svc путем
         if model_path.startswith("llm-svc://"):
-            # Извлекаем имя модели из пути
+            # Извлекаем host/model из пути (многосерверный режим: llm-svc://host_id/model_id)
             model_name = model_path.replace("llm-svc://", "").strip()
             if not model_name:
                 logger.warning("llm-svc: пустое имя модели в пути")
@@ -214,10 +224,19 @@ def reload_model_by_path(model_path):
             try:
                 async def _load_on_llm_svc():
                     service = await get_llm_service()
-                    ok = await service.client.load_model_if_needed(model_name)
+                    hid, mid = resolve_llm_host_and_model_for_svc(
+                        model_path,
+                        service.model_name,
+                        service.client.llm_hosts,
+                        service.client.default_llm_host,
+                    )
+                    if not mid:
+                        logger.warning("llm-svc: не удалось определить id модели из пути")
+                        return False
+                    ok = await service.client.load_model_if_needed(mid, host_id=hid)
                     if ok:
-                        service.model_name = model_name
-                        logger.info(f"[llm-svc] Обновлён model_name в бэкенде: {model_name}")
+                        service.model_name = mid
+                        logger.info(f"[llm-svc] Обновлён model_name в бэкенде: {mid!r} (host={hid!r})")
                     return ok
                 try:
                     loop = asyncio.get_event_loop()
@@ -246,11 +265,18 @@ def reload_model_by_path(model_path):
             try:
                 async def _load_resolved():
                     service = await get_llm_service()
-                    ok = await service.client.load_model_if_needed(resolved_id)
+                    hid, mid = resolve_llm_host_and_model_for_svc(
+                        model_path,
+                        service.model_name,
+                        service.client.llm_hosts,
+                        service.client.default_llm_host,
+                    )
+                    use_id = mid or resolved_id
+                    ok = await service.client.load_model_if_needed(use_id, host_id=hid)
                     if ok:
-                        service.model_name = resolved_id
+                        service.model_name = use_id
                         global _selected_model_name
-                        _selected_model_name = resolved_id
+                        _selected_model_name = use_id
                         logger.info(
                             f"[llm-svc] Multi-LLM: модель готова к вызову {resolved_id!r} (путь {model_path!r})"
                         )
@@ -290,7 +316,14 @@ def get_model_info():
             async def _get_model_info_async():
                 """Вспомогательная асинхронная функция для получения информации о модели"""
                 service = await get_llm_service()
-                health = await service.client.health_check()
+                ref = f"llm-svc://{_selected_model_name.strip()}" if _selected_model_name else None
+                hid, _ = resolve_llm_host_and_model_for_svc(
+                    ref,
+                    service.model_name,
+                    service.client.llm_hosts,
+                    service.client.default_llm_host,
+                )
+                health = await service.client.health_check(host_id=hid)
                 return service, health
             
             # Получаем event loop

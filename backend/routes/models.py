@@ -61,11 +61,31 @@ async def get_available_models():
             try:
                 from backend.llm_client import get_llm_service
                 service = await get_llm_service()
-                data = await service.client.get_models()
-                models = [{"name": m.get("id"), "path": f"llm-svc://{m.get('id','unknown')}",
-                           "size": m.get("size", 0), "size_mb": m.get("size_mb", 0),
-                           "object": m.get("object", "model"), "owned_by": m.get("owned_by", "llm-svc")} for m in data]
-                return {"models": models}
+                multi = len(service.client.llm_hosts) > 1
+                models = []
+                host_warnings = []
+                for hid in service.client.llm_hosts:
+                    try:
+                        data = await service.client.get_models(host_id=hid)
+                        for m in data:
+                            mid = m.get("id", "unknown")
+                            path = f"llm-svc://{hid}/{mid}" if multi else f"llm-svc://{mid}"
+                            models.append({
+                                "name": mid,
+                                "path": path,
+                                "size": m.get("size", 0),
+                                "size_mb": m.get("size_mb", 0),
+                                "object": m.get("object", "model"),
+                                "owned_by": m.get("owned_by", hid),
+                                "llm_host_id": hid,
+                            })
+                    except Exception as he:
+                        logger.warning("llm-svc models host %s: %s", hid, he)
+                        host_warnings.append(f"{hid}: {he}")
+                result = {"models": models}
+                if host_warnings:
+                    result["warning"] = "; ".join(host_warnings)
+                return result
             except Exception as e:
                 logger.error(f"llm-svc models error: {e}")
                 return {"models": [], "error": str(e), "warning": "llm-svc недоступен"}

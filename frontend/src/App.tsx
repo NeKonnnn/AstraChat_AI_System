@@ -23,6 +23,7 @@ import LoginPage from './pages/LoginPage';
 import ProfilePage from './pages/ProfilePage';
 import ShareViewPage from './pages/ShareViewPage';
 import { initSettings } from './settings';
+import LlmStatusBanner from './components/LlmStatusBanner';
 import './App.css';
 import { MENU_ITEM_HOVER_DARK, MENU_ITEM_HOVER_LIGHT, MENU_BORDER_RADIUS_PX, MENU_ITEM_HOVER_RADIUS_PX, MENU_ITEM_HOVER_MARGIN_PX, MENU_MIN_WIDTH_PX, MENU_ICON_MIN_WIDTH, MENU_ICON_TO_TEXT_GAP_PX, MENU_ICON_FONT_SIZE_PX } from './constants/menuStyles';
 
@@ -199,6 +200,7 @@ function App() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
+      <LlmStatusBanner />
       <AuthProvider>
         <AppProvider>
           <SocketProvider>

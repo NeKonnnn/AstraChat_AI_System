@@ -40,6 +40,7 @@ from .connections import (
     PostgreSQLConnectionConfig,
     MinIOConnectionConfig,
     LLMServiceConnectionConfig,
+    LLMHostEntry,
 )
 
 
@@ -295,6 +296,16 @@ class Settings(BaseModel):
                             settings_data["llm_service"]["default_model"] = models_block["default"]
                         if models_block.get("fallback") is not None and "fallback_model" not in settings_data["llm_service"]:
                             settings_data["llm_service"]["fallback_model"] = models_block["fallback"]
+                    hosts_raw = llm_ms.get("hosts")
+                    if isinstance(hosts_raw, list) and hosts_raw and "hosts" not in settings_data["llm_service"]:
+                        parsed = []
+                        for h in hosts_raw:
+                            if isinstance(h, dict) and h.get("id") and h.get("base_url"):
+                                parsed.append(LLMHostEntry(id=str(h["id"]), base_url=str(h["base_url"]).rstrip("/")))
+                        if parsed:
+                            settings_data["llm_service"]["hosts"] = [e.model_dump() for e in parsed]
+                    if llm_ms.get("default_host_id") and "default_host_id" not in settings_data["llm_service"]:
+                        settings_data["llm_service"]["default_host_id"] = str(llm_ms["default_host_id"])
             
             # Создаем экземпляр Settings
             settings = cls(**settings_data)

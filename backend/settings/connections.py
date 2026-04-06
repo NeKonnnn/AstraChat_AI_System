@@ -4,8 +4,8 @@
 """
 
 import os
-from typing import Optional
-from pydantic import BaseModel, model_validator
+from typing import List, Optional
+from pydantic import BaseModel, Field, model_validator
 
 class MongoDBConnectionConfig(BaseModel):
     host: str = "localhost"
@@ -124,12 +124,21 @@ class ServiceConnectionConfig(BaseModel):
     def load_from_env(cls, data: dict) -> dict:
         return data
 
+class LLMHostEntry(BaseModel):
+    """Один инстанс llm-svc (или совместимого OpenAI API) с собственным base_url."""
+    id: str = Field(..., description="Короткий идентификатор для путей llm-svc://id/model")
+    base_url: str
+
+
 class LLMServiceConnectionConfig(ServiceConnectionConfig):
     default_model: str = "qwen-coder-30b"
     fallback_model: Optional[str] = None
     auto_select: bool = False
     base_url: str = "http://llm-service:8000"
     external_url: str = "http://localhost:8002"
+    # Несколько хостов: если задано, маршрутизация llm-svc://host_id/model; иначе один base_url как host "default"
+    hosts: Optional[List[LLMHostEntry]] = None
+    default_host_id: Optional[str] = None
 
 class STTConnectionConfig(ServiceConnectionConfig):
     pass

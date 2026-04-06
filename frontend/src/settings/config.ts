@@ -21,13 +21,9 @@ export interface UrlsConfig {
   backend_port_2: string;
   backend_port_2_ipv4: string;
   
-  // LLM Service адреса
-  llm_service_port: string;
-  
-  // Docker внутренние адреса
+  // Docker внутренние адреса (подключение к LLM настраивается только на бэкенде)
   frontend_docker: string;
   backend_docker: string;
-  llm_service_docker: string;
 }
 
 export interface AppConfig {
@@ -110,10 +106,8 @@ const loadConfig = async (): Promise<SettingsConfig> => {
         backend_port_1_ipv4: getUrlValue('backend_port_1_ipv4', 'REACT_APP_BACKEND_PORT_1_IPV4'),
         backend_port_2: getUrlValue('backend_port_2', 'REACT_APP_BACKEND_PORT_2'),
         backend_port_2_ipv4: getUrlValue('backend_port_2_ipv4', 'REACT_APP_BACKEND_PORT_2_IPV4'),
-        llm_service_port: getUrlValue('llm_service_port', 'REACT_APP_LLM_SERVICE_PORT'),
         frontend_docker: getUrlValue('frontend_docker', 'REACT_APP_FRONTEND_DOCKER'),
         backend_docker: getUrlValue('backend_docker', 'REACT_APP_BACKEND_DOCKER'),
-        llm_service_docker: getUrlValue('llm_service_docker', 'REACT_APP_LLM_SERVICE_DOCKER'),
       };
 
       // Определяем базовый URL для API (приоритет: env > config.yml)
