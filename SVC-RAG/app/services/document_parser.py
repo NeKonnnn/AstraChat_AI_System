@@ -79,7 +79,7 @@ def _create_confidence_info_for_text(text: str, confidence_per_word: float, file
 
 
 async def _call_ocr_service(image_bytes: bytes, filename: str, languages: str = "ru,en") -> Dict[str, Any]:
-    """Вызов ocr-service (Surya) по URL из настроек (SVC_OCR_URL / http://ocr-service:8000)."""
+    """Вызов OCR (Surya) по URL из config.yml """
     settings = get_settings()
     ocr_url = settings.ocr.url.rstrip("/")
     timeout = settings.ocr.timeout

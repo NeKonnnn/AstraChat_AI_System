@@ -94,11 +94,20 @@ async def get_available_models():
             if not os.path.exists(models_dir):
                 return {"models": []}
             models = []
-            for f in os.listdir(models_dir):
-                if f.endswith(".gguf"):
-                    fp = os.path.join(models_dir, f)
+            for root, _dirs, files in os.walk(models_dir):
+                for f in files:
+                    if not f.lower().endswith(".gguf"):
+                        continue
+                    fp = os.path.join(root, f)
+                    rel_under = os.path.relpath(fp, models_dir).replace("\\", "/")
+                    path_posix = f"models/{rel_under}"
                     sz = os.path.getsize(fp)
-                    models.append({"name": f, "path": fp, "size": sz, "size_mb": round(sz / 1024 / 1024, 2)})
+                    models.append({
+                        "name": rel_under,
+                        "path": path_posix,
+                        "size": sz,
+                        "size_mb": round(sz / 1024 / 1024, 2),
+                    })
             return {"models": models}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

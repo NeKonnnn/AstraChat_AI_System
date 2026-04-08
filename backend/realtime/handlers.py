@@ -234,6 +234,7 @@ def register_handlers(sio):
                     sio, sid, data, user_message, streaming, conversation_id,
                     history, use_kb_rag, use_memory_library_rag, orchestrator,
                     use_agent_scoped_kb, agent_kb_doc_ids,
+                    agent_profile=agent_profile,
                     project_id=project_id,
                     project_instructions=project_instructions,
                     rag_strategy=effective_rag_strategy,
@@ -557,12 +558,16 @@ async def _handle_agent_mode(
     history, use_kb_rag, use_memory_library_rag, orchestrator,
     use_agent_scoped_kb=False,
     agent_kb_doc_ids=None,
+    agent_profile=None,
     project_id=None,
     project_instructions=None,
     rag_strategy="auto",
 ):
     await sio.emit("chat_thinking", {"status": "processing", "message": "Обрабатываю запрос через агентную архитектуру..."}, room=sid)
     agentic_rag_enabled = bool(getattr(state, "agentic_rag_enabled", True))
+
+    ap = agent_profile or {}
+    eff_model_path = ap.get("model_path") or get_current_model_path()
 
     async def agent_stream_cb(chunk, acc):
         if stop_generation_flags.get(sid, False):
@@ -577,7 +582,7 @@ async def _handle_agent_mode(
 
     context = {
         "history": history, "user_message": user_message,
-        "selected_model": None, "socket_id": sid, "streaming": streaming,
+        "selected_model": eff_model_path, "socket_id": sid, "streaming": streaming,
         "sio": sio, "stream_callback": agent_stream_cb if streaming else None,
         "_main_event_loop": asyncio.get_running_loop(),
         "project_instructions": project_instructions or "",
@@ -652,6 +657,7 @@ async def _handle_agent_mode(
     _terminal_chat_inference_banner(
         sid=sid, conversation_id=conversation_id, user_preview=user_message,
         mode_label="Оркестратор агентов (agent architecture)",
+        model_path_for_call=eff_model_path,
         extra_line="Базовая модель на сервере - та, что ниже; оркестратор может дергать LLM несколько раз.",
     )
 

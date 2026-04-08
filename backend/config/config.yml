@@ -1,5 +1,8 @@
 # Конфигурация astrachat Backend
 # Теперь каждая модель вынесена в отдельный изолированный микросервис
+#
+# Сетевые URL задаются только в секции urls: ниже. Поля microservices.*.url не используются
+# (удалены); таймауты и прочие параметры — в microservices.
 
 # Основные настройки приложения
 app:
@@ -15,11 +18,9 @@ server:
   log_level: "INFO"
   workers: 1
 
-# Настройки CORS
+# CORS: пустой список — origins берутся из urls (frontend_*, backend_*)
 cors:
-  allowed_origins: 
-    - "http://localhost:3000"
-    - "http://127.0.0.1:3000"
+  allowed_origins: []
   allow_credentials: true
   allow_methods: ["*"]
   allow_headers: ["*"]
@@ -28,49 +29,35 @@ cors:
 # НАСТРОЙКИ МИКРОСЕРВИСОВ (ML Services)
 # ========================================================
 microservices:
-  # 1. Сервис генерации текста (LLM)
-  # Несколько инстансов llm-svc: раскомментируйте hosts и задайте id + base_url для каждого.
-  # В UI пути моделей: llm-svc://<id>/<model_id> (при одном хосте по-прежнему llm-svc://<model_id>).
   llm:
     enabled: true
-    url: "http://llm-service:8000"
     timeout: 300
-    # Роберт, вот тут нужно будет задать URL чтобы проверить подключение к нескольким хостам
-    # default_host_id: "local"
-    # hosts:
-    #   - id: local
-    #     base_url: "http://llm-service:8000"
-    #   - id: remote
-    #     base_url: "http://192.168.0.10:8001"
+    default_host_id: "local"
+    hosts:
+      - id: local
+        # base_url подставляется из urls.llm_service_docker / llm_service_port при загрузке, если пусто
+        base_url: ""
     models:
-      default: "qvikhr-2.5b"
+      default: "qwen2.5-7b-instruct-q3_k_m"
       fallback: "qwen-coder-30b"
 
-  # 2. Сервис распознавания речи (STT)
   stt:
     enabled: true
-    url: "http://stt-service:8000"
     timeout: 900
     whisperx:
       enabled: true
       compute_type: "int8"
 
-  # 3. Сервис синтеза речи (TTS)
   tts:
     enabled: true
-    url: "http://tts-service:8000"
     timeout: 300
 
-  # 4. Сервис диаризации (Diarization)
   diarization:
     enabled: true
-    url: "http://diarization-service:8000"
     timeout: 3600
 
-  # 5. Сервис распознавания текста (OCR)
   ocr:
     enabled: true
-    url: "http://ocr-service:8000"
     timeout: 300
 
 # ========================================================
@@ -108,8 +95,6 @@ minio:
 # ПУТИ И СИСТЕМНЫЕ НАСТРОЙКИ
 # ========================================================
 paths:
-  # В режиме микросервисов эти пути на бэкенде могут быть пустыми, 
-  # так как модели лежат в своих контейнерах.
   whisperx_models_dir: "whisperx_models"
   diarize_models_dir: "diarize_models"
   model_path: "models"
@@ -123,17 +108,42 @@ logging:
   backup_count: 5
 
 # ========================================================
-# СЕТЕВЫЕ АДРЕСА (Service Discovery)
+# СЕТЕВЫЕ АДРЕСА — единственный источник URL для сервисов
+# (переменные окружения с теми же смыслами перекрывают значения из YAML)
 # ========================================================
 urls:
-  # Docker внутренние адреса (используются для общения между контейнерами)
-  llm_service_docker: "http://llm-service:8000"
-  stt_service_docker: "http://stt-service:8000"
-  tts_service_docker: "http://tts-service:8000"
-  ocr_service_docker: "http://ocr-service:8000"
-  diarization_docker: "http://diarization-service:8000"
-  
-  # Внешние адреса для отладки
-  backend_port_1: "http://localhost:8000"
   frontend_port_1: "http://localhost:3000"
   frontend_port_1_ipv4: "http://127.0.0.1:3000"
+  frontend_port_2: "http://localhost:3001"
+  frontend_port_2_ipv4: "http://127.0.0.1:3001"
+  frontend_port_3: "http://localhost:5173"
+  frontend_port_3_ipv4: "http://127.0.0.1:5173"
+
+  backend_port_1: "http://localhost:8000"
+  backend_port_1_ipv4: "http://127.0.0.1:8000"
+  backend_port_2: "http://localhost:8080"
+  backend_port_2_ipv4: "http://127.0.0.1:8080"
+
+  frontend_docker: "http://astrachat-frontend:3000"
+  backend_docker: "http://astrachat-backend:8000"
+
+  llm_service_port: "http://localhost:8002"
+  llm_service_docker: "http://llm-service:8000"
+
+  stt_service_port: "http://localhost:8001"
+  stt_service_docker: "http://stt-service:8000"
+
+  tts_service_port: "http://localhost:8005"
+  tts_service_docker: "http://tts-service:8000"
+
+  ocr_service_port: "http://localhost:8004"
+  ocr_service_docker: "http://ocr-service:8000"
+
+  diarization_service_port: "http://localhost:8003"
+  diarization_service_docker: "http://diarization-service:8000"
+
+  rag_service_port: "http://localhost:8011"
+  rag_service_docker: "http://svc-rag:8000"
+
+  rag_models_service_port: "http://localhost:8010"
+  rag_models_service_docker: "http://rag-models:8000"

@@ -12,6 +12,7 @@ from app.api.dependencies import get_llm_handler_without_loaded_gate
 from app.services.base_llm_handler import BaseLLMHandler
 from app.services.llama_handler import LlamaHandler
 from app.core.config import settings
+from app.utils.gguf_paths import list_gguf_models
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -22,27 +23,12 @@ async def list_models(
 ):
     """Список доступных моделей. Не требует загруженной модели."""
     logger.info("Models list requested")
-    models_dir = "/app/models/llm"
     models_list = []
-    if os.path.exists(models_dir):
-        try:
-            for file in os.listdir(models_dir):
-                if file.endswith('.gguf'):
-                    file_path = os.path.join(models_dir, file)
-                    file_size = os.path.getsize(file_path)
-                    model_name = os.path.splitext(file)[0]
-                    models_list.append({
-                        "id": model_name,
-                        "object": "model",
-                        "owned_by": "local",
-                        "permissions": [],
-                        "path": file_path,
-                        "size": file_size,
-                        "size_mb": round(file_size / (1024 * 1024), 2)
-                    })
-            logger.info(f"Found {len(models_list)} models in {models_dir}")
-        except Exception as e:
-            logger.error(f"Error scanning models directory: {e}")
+    try:
+        models_list = list_gguf_models()
+        logger.info(f"Found {len(models_list)} GGUF models under models root")
+    except Exception as e:
+        logger.error(f"Error scanning models tree: {e}")
     if not models_list and llama_service.is_loaded() and llama_service.model_name:
         models_list.append({
             "id": llama_service.model_name,

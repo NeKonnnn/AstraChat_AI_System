@@ -8,10 +8,30 @@ server:
   redoc_url: "/redoc"
 
 cors:
-  allowed_origins: ["*"]
+  allowed_origins: []
   allow_credentials: true
   allow_methods: ["*"]
   allow_headers: ["*"]
+
+urls:
+  frontend_port_1: "http://localhost:3000"
+  frontend_port_1_ipv4: "http://127.0.0.1:3000"
+  frontend_port_2: "http://localhost:3001"
+  frontend_port_2_ipv4: "http://127.0.0.1:3001"
+  frontend_port_3: "http://localhost:5173"
+  frontend_port_3_ipv4: "http://127.0.0.1:5173"
+  backend_port_1: "http://localhost:8000"
+  backend_port_1_ipv4: "http://127.0.0.1:8000"
+  backend_port_2: "http://localhost:8080"
+  backend_port_2_ipv4: "http://127.0.0.1:8080"
+  frontend_docker: "http://astrachat-frontend:3000"
+  backend_docker: "http://astrachat-backend:8000"
+  llm_service_port: "http://localhost:8002"
+  llm_service_docker: "http://llm-service:8000"
+  ocr_service_port: "http://localhost:8004"
+  ocr_service_docker: "http://ocr-service:8000"
+  rag_models_service_port: "http://localhost:8010"
+  rag_models_service_docker: "http://rag-models:8000"
 
 app:
   title: "astrachat RAG Service"
@@ -22,9 +42,8 @@ logging:
   level: "INFO"
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
-# URL сервиса с моделями (эмбеддинг + реранкер)
+# base_url берётся из urls.rag_models_service_* (см. выше)
 rag_models_client:
-  base_url: "http://rag-models:8000"
   timeout: 60.0
 
 # PostgreSQL с pgvector

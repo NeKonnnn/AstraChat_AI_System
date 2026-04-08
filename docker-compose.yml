@@ -14,7 +14,8 @@ services:
               count: all
               capabilities: [gpu]
     volumes:
-      - ./models:/app/models:ro          # GGUF модели для LLM (исправлен путь монтирования)
+      # Только основной набор весов (на хосте: ./models/llm/… → в контейнере /app/models/llm/…)
+      - ./models/llm:/app/models/llm:ro
       - ./llm-svc/config:/app/config:ro
     restart: unless-stopped
     networks:
@@ -188,6 +189,12 @@ services:
       - ./SVC-RAG-MODELS/config:/app/config:ro
     environment:
       - CONFIG_PATH=/app/config/config.yml
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/v1/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 600s
     restart: unless-stopped
     networks:
       - astrachat-network
@@ -218,7 +225,7 @@ services:
       - SVC_LLM_URL=http://llm-service:8000
     depends_on:
       rag-models:
-        condition: service_started
+        condition: service_healthy
       postgresql:
         condition: service_healthy
       ocr-service:

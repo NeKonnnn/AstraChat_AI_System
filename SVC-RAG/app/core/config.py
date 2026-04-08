@@ -2,10 +2,76 @@
 import os
 import yaml
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from pydantic import BaseModel
 
 _settings = None
+
+
+def _docker_runtime() -> bool:
+    de = os.environ.get("DOCKER_ENV")
+    if de is not None:
+        return str(de).lower() == "true"
+    return os.path.exists("/.dockerenv")
+
+
+def _pick_service_url(urls: dict, docker_key: str, port_key: str) -> str:
+    if not isinstance(urls, dict):
+        return ""
+    if _docker_runtime():
+        return (urls.get(docker_key) or "").strip().rstrip("/")
+    return ((urls.get(port_key) or urls.get(docker_key)) or "").strip().rstrip("/")
+
+
+_URLS_CORS_KEYS: Tuple[str, ...] = (
+    "frontend_port_1",
+    "frontend_port_1_ipv4",
+    "frontend_port_2",
+    "frontend_port_2_ipv4",
+    "frontend_port_3",
+    "frontend_port_3_ipv4",
+    "backend_port_1",
+    "backend_port_1_ipv4",
+    "backend_port_2",
+    "backend_port_2_ipv4",
+)
+
+
+def _apply_urls_section(data: dict) -> dict:
+    urls = data.get("urls")
+    if not isinstance(urls, dict):
+        return data
+    out = dict(data)
+    rmc = dict(out.get("rag_models_client") or {})
+    if not str(rmc.get("base_url") or "").strip():
+        bu = _pick_service_url(urls, "rag_models_service_docker", "rag_models_service_port")
+        if bu:
+            rmc["base_url"] = bu
+    out["rag_models_client"] = rmc
+
+    oc = dict(out.get("ocr") or {})
+    if not str(oc.get("url") or "").strip():
+        u = _pick_service_url(urls, "ocr_service_docker", "ocr_service_port")
+        if u:
+            oc["url"] = u
+    out["ocr"] = oc
+
+    llm = dict(out.get("llm_service") or {})
+    if not str(llm.get("base_url") or "").strip():
+        bu = _pick_service_url(urls, "llm_service_docker", "llm_service_port")
+        if bu:
+            llm["base_url"] = bu
+    out["llm_service"] = llm
+
+    cors = dict(out.get("cors") or {})
+    ao = cors.get("allowed_origins")
+    if not ao or ao == ["*"]:
+        merged = [str(urls[k]).strip() for k in _URLS_CORS_KEYS if urls.get(k) and str(urls[k]).strip()]
+        if merged:
+            cors["allowed_origins"] = merged
+    out["cors"] = cors
+    out.pop("urls", None)
+    return out
 
 
 class ServerConfig(BaseModel):
@@ -17,7 +83,7 @@ class ServerConfig(BaseModel):
 
 
 class CorsConfig(BaseModel):
-    allowed_origins: List[str] = ["*"]
+    allowed_origins: List[str] = []
     allow_credentials: bool = True
     allow_methods: List[str] = ["*"]
     allow_headers: List[str] = ["*"]
@@ -35,8 +101,7 @@ class LoggingConfig(BaseModel):
 
 
 class RagModelsClientConfig(BaseModel):
-    # URL сервиса SVC-RAG-MODELS (эмбеддинги и реранкер)
-    base_url: str = os.environ.get("RAG_MODELS_URL", "http://rag-models:8000")
+    base_url: str = ""
     timeout: float = 60.0
 
 
@@ -50,9 +115,8 @@ class PostgreSQLConfig(BaseModel):
 
 
 class OcrConfig(BaseModel):
-    # URL сервиса OCR (Surya) SVC_OCR_URL / http://ocr-service:8000
-    url: str = os.environ.get("SVC_OCR_URL", "http://ocr-service:8000")
-    timeout: float = float(os.environ.get("RAG_OCR_TIMEOUT", "300.0"))
+    url: str = ""
+    timeout: float = 300.0
 
 
 class RagServiceConfig(BaseModel):
@@ -86,9 +150,9 @@ class RagServiceConfig(BaseModel):
 
 
 class LLMServiceConfig(BaseModel):
-    base_url: str = os.environ.get("SVC_LLM_URL", "http://llm-service:8000")
-    timeout: float = float(os.environ.get("RAG_LLM_TIMEOUT", "120.0"))
-    default_model: str = os.environ.get("RAG_LLM_MODEL", "default")
+    base_url: str = ""
+    timeout: float = 120.0
+    default_model: str = "default"
 
 
 class Settings(BaseModel):
@@ -119,6 +183,7 @@ class Settings(BaseModel):
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
+            data = _apply_urls_section(data)
             return cls(**data)
         except Exception as e:
             raise ValueError(f"Ошибка загрузки конфига {config_path}: {e}")

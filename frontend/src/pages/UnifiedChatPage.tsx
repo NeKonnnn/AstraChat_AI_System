@@ -111,6 +111,11 @@ interface ModelWindow {
   error?: boolean;
 }
 
+/** Значение для Select / POST multi-llm: для llm-svc нужен полный path, иначе бэкенд не маршрутизирует хост. */
+function availableModelSelectValue(m: { name: string; path: string }): string {
+  return m.path?.startsWith('llm-svc://') ? m.path : m.path || m.name;
+}
+
 interface AgentStatus {
   is_initialized: boolean;
   mode: string;
@@ -688,7 +693,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   
   // Состояние для режима multi-llm
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
-  const [availableModels, setAvailableModels] = useState<Array<{name: string; path: string; size_mb?: number}>>([]);
+  const [availableModels, setAvailableModels] = useState<Array<{ name: string; path: string; size_mb?: number }>>([]);
   const [modelWindows, setModelWindows] = useState<ModelWindow[]>([
     { id: '1', selectedModel: '', response: '', isStreaming: false }
   ]);
@@ -2302,6 +2307,11 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                       label="Модель"
                       onChange={(e) => handleModelSelect(window.id, e.target.value)}
                       disabled={availableModels.length === 0}
+                      renderValue={(val) => {
+                        if (!val) return <em>Не выбрано</em>;
+                        const row = availableModels.find((x) => availableModelSelectValue(x) === val);
+                        return row?.name ?? val;
+                      }}
                     >
                       <MenuItem value="">
                         <em>Не выбрано</em>
@@ -2312,14 +2322,15 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                         </MenuItem>
                       ) : (
                         availableModels
-                          .filter(m => {
-                            const isSelectedElsewhere = modelWindows.some(w => 
-                              w.id !== window.id && w.selectedModel === m.name
+                          .filter((m) => {
+                            const k = availableModelSelectValue(m);
+                            const isSelectedElsewhere = modelWindows.some(
+                              (w) => w.id !== window.id && w.selectedModel === k
                             );
-                            return !isSelectedElsewhere || window.selectedModel === m.name;
+                            return !isSelectedElsewhere || window.selectedModel === k;
                           })
                           .map((model) => (
-                            <MenuItem key={model.name} value={model.name}>
+                            <MenuItem key={availableModelSelectValue(model)} value={availableModelSelectValue(model)}>
                               {model.name}
                             </MenuItem>
                           ))

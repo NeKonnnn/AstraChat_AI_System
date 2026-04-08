@@ -226,8 +226,8 @@ async def get_ocr_info():
 async def ocr_quality_check(run_sample: bool = False):
     """
     Проверка качества работы OCR.
-    - Без параметров: возвращает инструкцию, как проверить OCR вручную.
-    - С run_sample=1: генерирует тестовое изображение с текстом, прогоняет OCR и возвращает метрики (text, confidence, words_count).
+    - Без параметров: статус сервиса и подсказка по ?run_sample=1.
+    - С run_sample=1: тест на сгенерированном изображении (метрики text, confidence, words_count).
     """
     try:
         if not settings.surya.enabled:
@@ -235,7 +235,6 @@ async def ocr_quality_check(run_sample: bool = False):
                 "service": "surya-ocr",
                 "enabled": False,
                 "message": "OCR отключен в конфигурации",
-                "how_to_test": "Включите surya в config и перезапустите сервис."
             })
 
         surya = await get_surya_handler()
@@ -244,23 +243,13 @@ async def ocr_quality_check(run_sample: bool = False):
                 "service": "surya-ocr",
                 "model_loaded": False,
                 "message": "Модель не загружена. Проверьте логи при старте.",
-                "how_to_test": "GET /v1/ocr/health для диагностики."
             })
-
-        # Инструкция для ручной проверки
-        how_to = {
-            "step1": "Проверка доступности: GET /v1/ocr/health",
-            "step2": "Тест на своём изображении: POST /v1/ocr с телом multipart/form-data (file=изображение, languages=ru,en)",
-            "step3": "В ответе смотреть: success, text (распознанный текст), confidence (0-100), words_count",
-            "example_curl": "curl -X POST http://localhost:8004/v1/ocr -F 'file=@test.png' -F 'languages=ru,en'",
-        }
 
         if not run_sample:
             return JSONResponse(content={
                 "service": "surya-ocr",
                 "enabled": True,
                 "model_loaded": True,
-                "how_to_test": how_to,
                 "quality_check_with_sample": "Добавьте ?run_sample=1 к URL для автоматического теста на сгенерированном изображении."
             })
 
@@ -323,7 +312,6 @@ async def ocr_quality_check(run_sample: bool = False):
                 "confidence": round(avg_conf, 2),
                 "words_count": word_count,
                 "quality_ok": word_count > 0 and avg_conf >= 50.0,
-                "how_to_test": how_to
             })
         except Exception as sample_err:
             logger.exception("OCR quality-check sample failed")
@@ -332,7 +320,6 @@ async def ocr_quality_check(run_sample: bool = False):
                 "sample_test": True,
                 "error": str(sample_err),
                 "quality_ok": False,
-                "how_to_test": how_to
             })
     except Exception as e:
         logger.exception("OCR quality-check failed")

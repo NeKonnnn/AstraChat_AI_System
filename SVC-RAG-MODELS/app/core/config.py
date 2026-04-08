@@ -1,10 +1,39 @@
 import yaml
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import os
 from pathlib import Path
 
 _settings = None
+
+_URLS_CORS_KEYS: Tuple[str, ...] = (
+    "frontend_port_1",
+    "frontend_port_1_ipv4",
+    "frontend_port_2",
+    "frontend_port_2_ipv4",
+    "frontend_port_3",
+    "frontend_port_3_ipv4",
+    "backend_port_1",
+    "backend_port_1_ipv4",
+    "backend_port_2",
+    "backend_port_2_ipv4",
+)
+
+
+def _apply_urls_cors(config_data: dict) -> dict:
+    urls = config_data.get("urls")
+    if not isinstance(urls, dict):
+        return config_data
+    out = dict(config_data)
+    cors = dict(out.get("cors") or {})
+    ao = cors.get("allowed_origins")
+    if not ao or ao == ["*"]:
+        merged = [str(urls[k]).strip() for k in _URLS_CORS_KEYS if urls.get(k) and str(urls[k]).strip()]
+        if merged:
+            cors["allowed_origins"] = merged
+    out["cors"] = cors
+    out.pop("urls", None)
+    return out
 
 
 class ServerConfig(BaseModel):
@@ -16,7 +45,7 @@ class ServerConfig(BaseModel):
 
 
 class CorsConfig(BaseModel):
-    allowed_origins: List[str] = ["*"]
+    allowed_origins: List[str] = []
     allow_credentials: bool = True
     allow_methods: List[str] = ["*"]
     allow_headers: List[str] = ["*"]
@@ -77,7 +106,7 @@ class Settings(BaseModel):
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
-            return cls(**data)
+            return cls(**_apply_urls_cors(data))
         except Exception as e:
             raise ValueError(f"Error loading config from {config_path}: {e}")
 

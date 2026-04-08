@@ -1,6 +1,6 @@
 """
-Основной модуль конфигурации для astrachat Backend
-Загружает настройки из YAML и переменных окружения
+Основной модуль конфигурации для astrachat Backend.
+Сетевые URL микросервисов задаются в backend/config/config.yml (секция urls).
 """
 
 import yaml
@@ -117,63 +117,84 @@ class FilesConfig(BaseModel):
     temp_dir: str = "/tmp/astrachat"
 
 
+def _docker_runtime() -> bool:
+    de = os.getenv("DOCKER_ENV")
+    if de is not None:
+        return str(de).lower() == "true"
+    return os.path.exists("/.dockerenv")
+
+
+def _preprocess_urls_and_microservices(config_data: Dict[str, Any]) -> None:
+    """Легаси-ключ diarization_docker; base_url для llm host local из urls; убрать дублирующие microservices.url."""
+    urls = config_data.get("urls")
+    if isinstance(urls, dict):
+        if urls.get("diarization_docker") and not urls.get("diarization_service_docker"):
+            urls["diarization_service_docker"] = urls["diarization_docker"]
+    ms = config_data.get("microservices")
+    if not isinstance(ms, dict):
+        return
+    if not isinstance(urls, dict):
+        urls = {}
+    docker = _docker_runtime()
+    llm_u = (
+        (urls.get("llm_service_docker") or "").strip()
+        if docker
+        else (urls.get("llm_service_port") or urls.get("llm_service_docker") or "").strip()
+    ).rstrip("/")
+    llm = ms.get("llm")
+    if isinstance(llm, dict):
+        llm.pop("url", None)
+        for h in llm.get("hosts") or []:
+            if isinstance(h, dict) and not (str(h.get("base_url") or "").strip()) and llm_u:
+                h["base_url"] = llm_u
+    for key in ("stt", "tts", "ocr", "diarization"):
+        svc = ms.get(key)
+        if isinstance(svc, dict):
+            svc.pop("url", None)
+
+
 class UrlsConfig(BaseModel):
-    """Конфигурация URL адресов
-    Все значения должны быть заданы в YAML или ENV
-    """
-    # Frontend адреса
-    frontend_port_1: Optional[str] = "http://localhost:3000"
-    frontend_port_1_ipv4: Optional[str] = "http://127.0.0.1:3000"
+    """URL из backend/config/config.yml (секция urls)."""
+
+    frontend_port_1: Optional[str] = None
+    frontend_port_1_ipv4: Optional[str] = None
     frontend_port_2: Optional[str] = None
     frontend_port_2_ipv4: Optional[str] = None
     frontend_port_3: Optional[str] = None
     frontend_port_3_ipv4: Optional[str] = None
-    
-    # Backend адреса
-    backend_port_1: Optional[str] = "http://localhost:8000"
-    backend_port_1_ipv4: Optional[str] = "http://127.0.0.1:8000"
+
+    backend_port_1: Optional[str] = None
+    backend_port_1_ipv4: Optional[str] = None
     backend_port_2: Optional[str] = None
     backend_port_2_ipv4: Optional[str] = None
-    
-    # LLM Service адреса
-    llm_service_port: Optional[str] = "http://localhost:8002"
-    
-    # Docker внутренние адреса
-    frontend_docker: Optional[str] = "http://astrachat-frontend:3000"
-    backend_docker: Optional[str] = "http://astrachat-backend:8000"
-    llm_service_docker: Optional[str] = "http://llm-service:8000"
-    stt_service_docker: Optional[str] = "http://stt-service:8000"
-    tts_service_docker: Optional[str] = "http://tts-service:8000"
-    ocr_service_docker: Optional[str] = "http://ocr-service:8000"
-    diarization_service_docker: Optional[str] = "http://diarization-service:8000"
-    
-    @model_validator(mode='before')
+
+    llm_service_port: Optional[str] = None
+
+    frontend_docker: Optional[str] = None
+    backend_docker: Optional[str] = None
+    llm_service_docker: Optional[str] = None
+    stt_service_docker: Optional[str] = None
+    stt_service_port: Optional[str] = None
+    tts_service_docker: Optional[str] = None
+    tts_service_port: Optional[str] = None
+    ocr_service_docker: Optional[str] = None
+    ocr_service_port: Optional[str] = None
+    diarization_service_docker: Optional[str] = None
+    diarization_service_port: Optional[str] = None
+    rag_service_docker: Optional[str] = None
+    rag_service_port: Optional[str] = None
+    rag_models_service_docker: Optional[str] = None
+    rag_models_service_port: Optional[str] = None
+
+    @model_validator(mode="before")
     @classmethod
-    def load_from_yaml_or_env(cls, data: dict) -> dict:
-        """Загружает значения из YAML или ENV (приоритет: YAML > ENV)"""
+    def normalize_urls_yaml(cls, data: Any) -> Any:
         if not isinstance(data, dict):
             data = {}
-        
-        result = {}
-        required_keys = [
-            # "frontend_port_1", "frontend_port_1_ipv4",
-            # "backend_port_1", "backend_port_1_ipv4",
-            # "llm_service_port",
-            # "frontend_docker", "backend_docker", "llm_service_docker",
-        ]
-        
-        for key in required_keys:
-            if key in data:
-                result[key] = data[key]
-            else:
-                # Пробуем получить из ENV (например, FRONTEND_PORT_1, BACKEND_PORT_1 и т.д.)
-                env_key = key.upper()
-                env_value = os.getenv(env_key)
-                if env_value is None:
-                    raise ValueError(f"{key} не задан в YAML (urls.{key}) или ENV ({env_key})")
-                result[key] = env_value
-        
-        return result
+        out = {**data}
+        if out.get("diarization_docker") and not out.get("diarization_service_docker"):
+            out["diarization_service_docker"] = out["diarization_docker"]
+        return out
 
 
 class Settings(BaseModel):
@@ -198,6 +219,19 @@ class Settings(BaseModel):
     class Config:
         """Настройки Pydantic"""
         extra = "allow"  # Разрешаем дополнительные поля из YAML
+
+    def microservice_http_base(self, docker_field: str, port_field: str) -> str:
+        """Базовый URL микросервиса: в Docker — *_docker, с хоста — *_port (или fallback *_docker)."""
+        u = self.urls
+        if _docker_runtime():
+            v = getattr(u, docker_field, None)
+        else:
+            v = getattr(u, port_field, None) or getattr(u, docker_field, None)
+        if not v or not str(v).strip():
+            raise ValueError(
+                f"Задайте urls.{docker_field} и urls.{port_field} в backend/config/config.yml"
+            )
+        return str(v).strip().rstrip("/")
     
     @classmethod
     def from_yaml(cls, config_path: Optional[str] = None) -> 'Settings':
@@ -247,7 +281,9 @@ class Settings(BaseModel):
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
                 config_data = yaml.safe_load(f) or {}
-            
+
+            _preprocess_urls_and_microservices(config_data)
+
             # Подготавливаем данные для создания Settings
             # Классы подключений сами загрузят значения из env через model_validator,
             # если они не заданы в YAML
@@ -286,8 +322,6 @@ class Settings(BaseModel):
             if "microservices" in config_data and "llm" in config_data.get("microservices", {}):
                 llm_ms = config_data["microservices"]["llm"]
                 if isinstance(llm_ms, dict):
-                    if llm_ms.get("url") and "base_url" not in settings_data["llm_service"]:
-                        settings_data["llm_service"]["base_url"] = llm_ms["url"]
                     if "timeout" in llm_ms and "timeout" not in settings_data["llm_service"]:
                         settings_data["llm_service"]["timeout"] = llm_ms["timeout"]
                     models_block = llm_ms.get("models")
@@ -309,30 +343,18 @@ class Settings(BaseModel):
             
             # Создаем экземпляр Settings
             settings = cls(**settings_data)
-            
-            # Обновляем URL для LLM Service из секции urls
+
             if config_data.get("urls"):
-                urls = config_data["urls"]
-                # Определяем окружение: если есть переменная DOCKER_ENV в ENV, используем её
-                # Иначе определяем автоматически по наличию docker адресов
-                docker_env = os.getenv("DOCKER_ENV")
-                if docker_env is None:
-                    # Автоматическое определение: если мы в Docker, то используем docker адреса
-                    # Проверяем, запущен ли код в контейнере (обычно есть файл /.dockerenv)
-                    docker_env = str(os.path.exists("/.dockerenv")).lower()
-                
-                docker_env = docker_env.lower() == "true"
-                
-                if docker_env:
-                    llm_url = urls.get("llm_service_docker", "")
-                else:
-                    llm_url = urls.get("llm_service_port", "")
-                
-                if llm_url:
-                    settings.llm_service.base_url = llm_url.rstrip('/')
-                    settings.llm_service.external_url = urls.get("llm_service_port", "").rstrip('/')
-            
-            # Обновляем CORS allowed_origins из urls
+                try:
+                    bu = settings.microservice_http_base("llm_service_docker", "llm_service_port")
+                    settings.llm_service.base_url = bu
+                    ep = (settings.urls.llm_service_port or "").strip().rstrip("/")
+                    if ep:
+                        settings.llm_service.external_url = ep
+                except ValueError:
+                    pass
+
+            # CORS из urls, если в YAML не задан список origins
             if config_data.get("urls") and not config_data.get("cors", {}).get("allowed_origins"):
                 urls = config_data["urls"]
                 cors_origins = [
@@ -342,37 +364,21 @@ class Settings(BaseModel):
                     urls.get("frontend_port_2_ipv4", ""),
                     urls.get("frontend_port_3", ""),
                     urls.get("frontend_port_3_ipv4", ""),
+                    urls.get("backend_port_1", ""),
+                    urls.get("backend_port_1_ipv4", ""),
                 ]
-                # Фильтруем пустые значения
                 cors_origins = [origin for origin in cors_origins if origin]
                 if cors_origins:
                     settings.cors.allowed_origins = cors_origins
-            
+
             return settings
             
         except Exception as e:
             raise ValueError(f"Ошибка загрузки конфигурации из {config_path}: {str(e)}")
     
     def get_llm_service_url(self) -> str:
-        """
-        Получает URL для LLM Service в зависимости от окружения
-        
-        Returns:
-            URL для подключения к LLM Service
-        """
-        # Определяем окружение: если есть переменная DOCKER_ENV в ENV, используем её
-        # Иначе определяем автоматически по наличию docker адресов
-        docker_env = os.getenv("DOCKER_ENV")
-        if docker_env is None:
-            # Автоматическое определение: если мы в Docker, то используем docker адреса
-            # Проверяем, запущен ли код в контейнере (обычно есть файл /.dockerenv)
-            docker_env = str(os.path.exists("/.dockerenv")).lower()
-        
-        docker_env = docker_env.lower() == "true"
-        
-        if docker_env:
-            return self.urls.llm_service_docker
-        return self.urls.llm_service_port
+        """URL LLM для текущего окружения (см. urls.llm_service_* в config.yml)."""
+        return self.microservice_http_base("llm_service_docker", "llm_service_port")
 
 
 def get_settings() -> Settings:

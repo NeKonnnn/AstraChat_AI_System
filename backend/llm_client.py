@@ -8,7 +8,7 @@ import asyncio
 import logging
 import re
 import html as html_module
-from typing import List, Dict, Any, Optional, Callable, AsyncGenerator
+from typing import List, Dict, Any, Optional, Callable, AsyncGenerator, Tuple
 from datetime import datetime
 import io
 import os
@@ -82,6 +82,76 @@ def pool_contains_model(health: Optional[Dict[str, Any]], model_id: Optional[str
     return False
 
 
+def infer_llm_host_for_openai_model_id(
+    model_id: str,
+    llm_hosts: Dict[str, str],
+    default_host_id: str,
+) -> Tuple[str, str]:
+    """
+    Выбор инстанса llm-svc по id модели, когда нет полного пути llm-svc://<host_id>/...
+    (полный путь разбирается в resolve_llm_host_and_model_for_svc)
+    """
+    mid = (model_id or "").strip()
+    if not mid:
+        return default_host_id, mid
+    return default_host_id, mid
+
+
+def resolve_llm_host_and_model_for_svc(
+    model_ref: Optional[str],
+    fallback_model: str,
+    llm_hosts: Dict[str, str],
+    default_host_id: Optional[str],
+) -> Tuple[str, str]:
+    """
+    Маршрутизация на инстанс llm-svc (или совместимый OpenAI API)
+
+    Returns:
+        (host_id, model_id) — model_id только для поля JSON ``model`` (без ``host/``)
+
+    Пути:
+        - ``llm-svc://<host_id>/<model_id>`` при известном host_id в llm_hosts
+        - ``llm-svc://<model_id>`` — хост по умолчанию
+        - иначе — как ``resolve_llm_svc_model_id_for_request``, хост по умолчанию
+    """
+    if not llm_hosts:
+        fb = (fallback_model or "").strip() or "qwen-coder-30b"
+        mid = resolve_llm_svc_model_id_for_request(model_ref, fb)
+        return "default", mid
+
+    keys = list(llm_hosts.keys())
+    default_h = default_host_id if default_host_id in llm_hosts else keys[0]
+    fb = (fallback_model or "").strip() or "qwen-coder-30b"
+
+    if not model_ref or not str(model_ref).strip():
+        return infer_llm_host_for_openai_model_id(fb, llm_hosts, default_h)
+
+    s = re.sub(r"\s+", "", str(model_ref).strip())
+    low = s.lower()
+    if low.startswith("1lm-svc://"):
+        s = "llm-svc://" + s[10:]
+        low = s.lower()
+    if low.startswith("llm-svc://"):
+        rest = s[10:].strip()
+        if not rest:
+            return infer_llm_host_for_openai_model_id(fb, llm_hosts, default_h)
+        if "/" in rest:
+            hid, tail = rest.split("/", 1)
+            tail = (tail or "").strip()
+            if hid in llm_hosts and tail:
+                return hid, tail
+            # rest целиком — model_id со слэшем, первый сегмент не id хоста в llm_hosts
+            return infer_llm_host_for_openai_model_id(rest, llm_hosts, default_h)
+        return infer_llm_host_for_openai_model_id(rest, llm_hosts, default_h)
+
+    # Легаси: в настройках иногда лежит только «llm-svc» без // — опираемся на fallback id
+    if low in ("llm-svc", "llm-svc://"):
+        return infer_llm_host_for_openai_model_id(fb, llm_hosts, default_h)
+
+    mid = resolve_llm_svc_model_id_for_request(model_ref, fb)
+    return infer_llm_host_for_openai_model_id(mid, llm_hosts, default_h)
+
+
 def _clean_llm_response(text: str) -> str:
     """Очистка ответа LLM от артефактов chat template (im_start/im_end теги, HTML entities)."""
     if not text:
@@ -143,19 +213,46 @@ class LLMClient:
         else:
             self.llm_url = settings.get_llm_service_url().rstrip('/')
 
-        # Остальные сервисы берем из настроек
-        self.stt_url = (settings.urls.stt_service_docker or "http://stt-service:8000").rstrip('/')
-        self.tts_url = (settings.urls.tts_service_docker or "http://tts-service:8000").rstrip('/')
-        self.ocr_url = (settings.urls.ocr_service_docker or "http://ocr-service:8000").rstrip('/')
-        self.diarization_url = (settings.urls.diarization_service_docker or "http://diarization-service:8000").rstrip('/')
+        self.stt_url = settings.microservice_http_base("stt_service_docker", "stt_service_port")
+        self.tts_url = settings.microservice_http_base("tts_service_docker", "tts_service_port")
+        self.ocr_url = settings.microservice_http_base("ocr_service_docker", "ocr_service_port")
+        self.diarization_url = settings.microservice_http_base(
+            "diarization_service_docker", "diarization_service_port"
+        )
         
         # Проверка на опечатки в LLM URL
         if "1lm-svc" in self.llm_url or "11m-svc" in self.llm_url:
             logger.error(f"ОБНАРУЖЕНА ОПЕЧАТКА В URL: {self.llm_url}. Исправляем.")
             self.llm_url = self.llm_url.replace("1lm-svc", "llm-svc").replace("11m-svc", "llm-svc")
+
+        # Несколько инстансов LLM: id -> base_url (из settings.llm_service.hosts)
+        self.llm_hosts: Dict[str, str] = {}
+        try:
+            cfg_hosts = getattr(settings.llm_service, "hosts", None) or []
+            for entry in cfg_hosts:
+                if entry is None:
+                    continue
+                if hasattr(entry, "id") and hasattr(entry, "base_url"):
+                    hid, bu = entry.id, entry.base_url
+                elif isinstance(entry, dict):
+                    hid, bu = entry.get("id"), entry.get("base_url")
+                else:
+                    continue
+                if hid and bu:
+                    self.llm_hosts[str(hid)] = str(bu).rstrip("/")
+        except Exception as e:
+            logger.warning(f"LLM hosts из конфига не разобраны: {e}")
+        if not self.llm_hosts:
+            self.llm_hosts = {"default": self.llm_url}
+        dh = getattr(settings.llm_service, "default_host_id", None)
+        self.default_llm_host: str = dh if dh and dh in self.llm_hosts else next(iter(self.llm_hosts))
+        self.llm_url = self.llm_hosts[self.default_llm_host]
         
         logger.info(f"LLMClient инициализирован. Маршруты:")
-        logger.info(f"  LLM: {self.llm_url} | STT: {self.stt_url} | TTS: {self.tts_url}")
+        logger.info(
+            f"  LLM: {self.llm_url} (hosts={list(self.llm_hosts.keys())}, default_host={self.default_llm_host}) | "
+            f"STT: {self.stt_url} | TTS: {self.tts_url}"
+        )
             
         self.api_key = api_key
         # Берем таймаут из конфига LLM сервиса для совместимости
@@ -170,88 +267,100 @@ class LLMClient:
         if self.api_key:
             headers["X-API-Key"] = self.api_key
         return headers
-    
-    # --- МЕТОДЫ LLM (ИСПОЛЬЗУЮТ self.llm_url) ---
 
-    async def health_check(self) -> Dict[str, Any]:
-        """Проверка состояния LLM """
+    def _url_for_llm_host(self, host_id: Optional[str] = None) -> str:
+        hid = host_id if host_id and host_id in self.llm_hosts else self.default_llm_host
+        return self.llm_hosts.get(hid) or self.llm_url
+    
+    # --- МЕТОДЫ LLM (маршрут по host_id или default) ---
+
+    async def health_check(self, host_id: Optional[str] = None) -> Dict[str, Any]:
+        """Проверка состояния LLM на указанном хосте (или default_llm_host)."""
+        base = self._url_for_llm_host(host_id)
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(f"{self.llm_url}/v1/health", headers=self._get_headers())
+                response = await client.get(f"{base}/v1/health", headers=self._get_headers())
                 response.raise_for_status()
                 return response.json()
         except Exception as e:
-            logger.error(f"Ошибка здоровья LLM: {e}")
+            logger.error(f"Ошибка здоровья LLM ({base}): {e}")
             return {"status": "unhealthy", "error": str(e)}
     
-    async def get_models(self) -> List[Dict[str, Any]]:
-        """Получение списка моделей """
+    async def get_models(self, host_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Получение списка моделей с инстанса host_id."""
+        base = self._url_for_llm_host(host_id)
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(f"{self.llm_url}/v1/models", headers=self._get_headers())
+                response = await client.get(f"{base}/v1/models", headers=self._get_headers())
                 response.raise_for_status()
                 data = response.json()
                 return data.get("data", [])
         except Exception as e:
-            logger.error(f"Ошибка получения моделей: {e}")
+            logger.error(f"Ошибка получения моделей ({base}): {e}")
             return []
 
-    async def load_model(self, model_name: str) -> bool:
+    async def load_model(self, model_name: str, host_id: Optional[str] = None) -> bool:
         """Запросить LLM-сервис загрузить/переключить модель по имени (для llama.cpp backend)."""
         if not model_name or not model_name.strip():
             logger.warning("load_model: пустое имя модели")
             return False
         model_name = model_name.strip()
-        # Большие модели на CPU могут грузиться до 20 минут
+        base = self._url_for_llm_host(host_id)
         load_timeout = httpx.Timeout(1200.0, connect=10.0, read=1200.0, write=30.0)
         try:
             async with httpx.AsyncClient(timeout=load_timeout) as client:
                 response = await client.post(
-                    f"{self.llm_url}/v1/models/load",
+                    f"{base}/v1/models/load",
                     headers=self._get_headers(),
                     json={"model": model_name}
                 )
                 if not response.is_success:
-                    logger.error(f"llm-svc load_model failed: {response.status_code} {response.text}")
+                    logger.error(f"llm-svc load_model failed ({base}): {response.status_code} {response.text}")
                     return False
                 data = response.json()
                 if data.get("success"):
-                    logger.info(f"llm-svc переключился на модель: {model_name}")
+                    logger.info(f"llm-svc ({base}) переключился на модель: {model_name}")
                     return True
                 logger.warning(f"llm-svc load_model returned success=False: {data}")
                 return False
         except Exception as e:
-            logger.error(f"Ошибка вызова llm-svc load_model: {e}")
+            logger.error(f"Ошибка вызова llm-svc load_model ({base}): {e}")
             return False
 
-    async def load_model_if_needed(self, model_name: str) -> bool:
-        """POST /v1/models/load только если модели ещё нет в пуле"""
+    async def load_model_if_needed(self, model_name: str, host_id: Optional[str] = None) -> bool:
+        """POST /v1/models/load только если модели ещё нет в пуле на этом хосте."""
         if not model_name or not model_name.strip():
             return False
         model_name = model_name.strip()
-        health = await self.health_check()
+        health = await self.health_check(host_id=host_id)
         if pool_contains_model(health, model_name):
-            logger.info(f"llm-svc: модель {model_name!r} уже в пуле, пропуск load_model")
+            logger.info(f"llm-svc: модель {model_name!r} уже в пуле ({host_id or self.default_llm_host}), пропуск load_model")
             return True
-        return await self.load_model(model_name)
+        return await self.load_model(model_name, host_id=host_id)
 
-    async def unload_excess_llm_models(self) -> bool:
-        """Оставить в llm-svc только модель из конфига сервиса"""
+    async def unload_excess_llm_models(self, host_id: Optional[str] = None) -> bool:
+        """Оставить в llm-svc только модель из конфига сервиса. host_id=None — все хосты."""
         t = httpx.Timeout(1200.0, connect=10.0, read=1200.0, write=60.0)
-        try:
-            async with httpx.AsyncClient(timeout=t) as client:
-                response = await client.post(
-                    f"{self.llm_url}/v1/models/unload-excess",
-                    headers=self._get_headers(),
-                )
-                if not response.is_success:
-                    logger.error(f"llm-svc unload-excess failed: {response.status_code} {response.text}")
-                    return False
-                data = response.json()
-                return bool(data.get("success", True))
-        except Exception as e:
-            logger.error(f"Ошибка вызова llm-svc unload-excess: {e}")
-            return False
+        targets = [host_id] if host_id else list(self.llm_hosts.keys())
+        ok_all = True
+        for hid in targets:
+            base = self._url_for_llm_host(hid)
+            try:
+                async with httpx.AsyncClient(timeout=t) as client:
+                    response = await client.post(
+                        f"{base}/v1/models/unload-excess",
+                        headers=self._get_headers(),
+                    )
+                    if not response.is_success:
+                        logger.error(f"llm-svc unload-excess failed ({base}): {response.status_code} {response.text}")
+                        ok_all = False
+                        continue
+                    data = response.json()
+                    ok_all = ok_all and bool(data.get("success", True))
+            except Exception as e:
+                logger.error(f"Ошибка вызова llm-svc unload-excess ({base}): {e}")
+                ok_all = False
+        return ok_all
 
     async def chat_completion(
         self,
@@ -259,17 +368,18 @@ class LLMClient:
         model: str = "qwen-coder-30b",
         temperature: float = 0.7,
         max_tokens: int = 1024,
-        stream: bool = False
+        stream: bool = False,
+        host_id: Optional[str] = None,
     ) -> Any:
         """Генерация ответа LLM """
         payload = {"model": model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens, "stream": stream}
-        
-        logger.info(f"[LLMClient] Запрос к {self.llm_url}/v1/chat/completions")
+        base = self._url_for_llm_host(host_id)
+        logger.info(f"[LLMClient] Запрос к {base}/v1/chat/completions model={model!r}")
         
         try:
             request_timeout = httpx.Timeout(self.timeout, connect=10.0, read=self.timeout, write=10.0)
             async with httpx.AsyncClient(timeout=request_timeout) as client:
-                response = await client.post(f"{self.llm_url}/v1/chat/completions", headers=self._get_headers(), json=payload)
+                response = await client.post(f"{base}/v1/chat/completions", headers=self._get_headers(), json=payload)
                 response.raise_for_status()
                 return response.json()
         except Exception as e:
@@ -665,36 +775,36 @@ class LLMService:
             self.auto_select = False
         
     async def initialize(self) -> bool:
-        """Инициализация связи с сервисом LLM."""
+        """Инициализация связи с сервисом LLM (первый доступный хост из конфига)."""
         try:
-            health = await self.client.health_check()
-            if health.get("status") == "healthy":
-                logger.info("Связь с микросервисом LLM установлена")
-                # Используем фактически загруженную модель из llm-svc (health)
+            for hid in self.client.llm_hosts:
+                health = await self.client.health_check(host_id=hid)
+                if health.get("status") != "healthy":
+                    continue
+                logger.info(f"Связь с микросервисом LLM установлена (host={hid!r})")
                 if health.get("model_loaded") and health.get("model_name"):
                     self.model_name = health["model_name"]
                     logger.info(f"Текущая загруженная модель в llm-svc: {self.model_name}")
                 else:
-                    # Модель ещё не загружена — опционально можно взять из конфига или не менять
-                    models = await self.client.get_models()
+                    models = await self.client.get_models(host_id=hid)
                     if models:
                         self.model_name = models[0]["id"]
-                        logger.info(f"Модель не загружена в llm-svc, используем первую из списка: {self.model_name}")
+                        logger.info(f"Модель не загружена в llm-svc, первая из списка: {self.model_name}")
                 return True
-            else:
-                logger.error(f"Микросервис LLM недоступен: {health}")
-                return False
+            logger.error("Микросервис LLM недоступен ни на одном из настроенных хостов")
+            return False
         except Exception as e:
             logger.error(f"Ошибка инициализации LLMService: {e}")
             return False
 
-    async def _sync_loaded_model_name_from_health(self):
+    async def _sync_loaded_model_name_from_health(self, host_id: Optional[str] = None):
         """
-        Подтягивает self.model_name из GET /v1/health llm-svc
+        Подтягивает self.model_name из GET /v1/health выбранного хоста (по умолчанию default_llm_host).
         Возвращает (model_loaded_ok, health_json) для проверки пула loaded_models
         """
         try:
-            health = await self.client.health_check()
+            hid = host_id or self.client.default_llm_host
+            health = await self.client.health_check(host_id=hid)
             if health.get("status") != "healthy":
                 return False, health
             if health.get("model_loaded") and health.get("model_name"):
@@ -814,14 +924,18 @@ class LLMService:
                                 })
                             break
             
-            llm_ready, health = await self._sync_loaded_model_name_from_health()
+            if not str(model_path or "").strip():
+                await self._sync_loaded_model_name_from_health()
 
-            # Определение модели (явный id из агента / запроса; иначе глобальная из конфига/кэша)
-            model_to_use = resolve_llm_svc_model_id_for_request(model_path, self.model_name)
+            hid, model_to_use = resolve_llm_host_and_model_for_svc(
+                model_path, self.model_name, self.client.llm_hosts, self.client.default_llm_host
+            )
+            health = await self.client.health_check(host_id=hid)
+            llm_ready = health.get("status") == "healthy"
             if str(model_path or "").strip():
                 logger.info(
-                    f"[generate_response] model_path={model_path!r} → запрошена model={model_to_use!r} "
-                    f"(llm-svc RAM: {llm_ready}, кэш имени: {self.model_name!r})"
+                    f"[generate_response] model_path={model_path!r} → host={hid!r} model={model_to_use!r} "
+                    f"(llm-svc RAM ok: {llm_ready}, кэш имени: {self.model_name!r})"
                 )
 
             in_pool = pool_contains_model(health, model_to_use)
@@ -829,15 +943,16 @@ class LLMService:
                 self.model_name = model_to_use
             elif model_to_use and (not llm_ready or not same_llm_svc_model_id(self.model_name, model_to_use)):
                 async with self._model_switch_lock:
-                    llm_ready2, health2 = await self._sync_loaded_model_name_from_health()
+                    health2 = await self.client.health_check(host_id=hid)
+                    llm_ready2 = health2.get("status") == "healthy"
                     if pool_contains_model(health2, model_to_use):
                         self.model_name = model_to_use
                     elif not llm_ready2 or not same_llm_svc_model_id(self.model_name, model_to_use):
                         logger.info(
-                            f"[generate_response] Загрузка/переключение llm-svc на модель: {model_to_use!r} "
+                            f"[generate_response] Загрузка/переключение llm-svc на модель: {model_to_use!r} host={hid!r} "
                             f"(было в RAM: {llm_ready2})"
                         )
-                        ok = await self.client.load_model_if_needed(model_to_use)
+                        ok = await self.client.load_model_if_needed(model_to_use, host_id=hid)
                         if ok:
                             self.model_name = model_to_use
                             logger.info(f"[generate_response] llm-svc модель активна: {self.model_name!r}")
@@ -850,16 +965,17 @@ class LLMService:
             
             if streaming and stream_callback:
                 return await self._stream_generation(
-                    messages, temperature, max_tokens, stream_callback, model_to_use
+                    messages, temperature, max_tokens, stream_callback, model_to_use, host_id=hid
                 )
             else:
-                logger.info(f"[generate_response] Запрос к LLM микросервису...")
+                logger.info(f"[generate_response] Запрос к LLM микросервису (host={hid!r})...")
                 response = await self.client.chat_completion(
                     messages=messages,
                     model=model_to_use,
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    stream=False
+                    stream=False,
+                    host_id=hid,
                 )
                 
                 if "choices" in response and len(response["choices"]) > 0:
@@ -881,12 +997,14 @@ class LLMService:
         temperature: float,
         max_tokens: int,
         stream_callback: Callable[[str, str], bool],
-        model_name: Optional[str] = None
+        model_name: Optional[str] = None,
+        host_id: Optional[str] = None,
     ) -> str:
         """Потоковая генерация с парсингом SSE (ИСПРАВЛЕНО: контекст-менеджер не закрывается)"""
         accumulated_text = ""
         try:
-            logger.info(f"[_stream_generation] Старт потока...")
+            base = self.client._url_for_llm_host(host_id)
+            logger.info(f"[_stream_generation] Старт потока... host={host_id or self.client.default_llm_host!r}")
             payload = {
                 "model": model_name or self.model_name,
                 "messages": messages,
@@ -901,7 +1019,7 @@ class LLMService:
             
             # Все чтение происходит ВНУТРИ context manager, чтобы соединение не закрылось
             async with httpx.AsyncClient(timeout=request_timeout) as client:
-                async with client.stream("POST", f"{self.client.llm_url}/v1/chat/completions",
+                async with client.stream("POST", f"{base}/v1/chat/completions",
                                         headers=headers, json=payload) as response:
                     response.raise_for_status()
                     async for line in response.aiter_lines():

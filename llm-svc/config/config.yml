@@ -9,16 +9,28 @@ server:
   docs_url: "/docs"
   redoc_url: "/redoc"
 
-# Настройки CORS для интеграции с astrachat
+# CORS: при пустом allowed_origins список строится из urls (как на backend)
 cors:
-  allowed_origins:
-    - "http://localhost:3000"    # React dev server
-    - "http://localhost:8000"    # astrachat backend
-    - "http://127.0.0.1:3000"
-    - "http://127.0.0.1:8000"
+  allowed_origins: []
   allow_credentials: true
   allow_methods: ["*"]
   allow_headers: ["*"]
+
+urls:
+  frontend_port_1: "http://localhost:3000"
+  frontend_port_1_ipv4: "http://127.0.0.1:3000"
+  frontend_port_2: "http://localhost:3001"
+  frontend_port_2_ipv4: "http://127.0.0.1:3001"
+  frontend_port_3: "http://localhost:5173"
+  frontend_port_3_ipv4: "http://127.0.0.1:5173"
+  backend_port_1: "http://localhost:8000"
+  backend_port_1_ipv4: "http://127.0.0.1:8000"
+  backend_port_2: "http://localhost:8080"
+  backend_port_2_ipv4: "http://127.0.0.1:8080"
+  frontend_docker: "http://astrachat-frontend:3000"
+  backend_docker: "http://astrachat-backend:8000"
+  llm_service_port: "http://localhost:8002"
+  llm_service_docker: "http://llm-service:8000"
 
 # Настройки модели LLM
 # ВАЖНО: Обновите путь к вашей модели!
@@ -39,7 +51,8 @@ model:
   # path: "https://your-server.com/models/Qwen3-Coder-30B-A3B-Instruct-Q8_0.gguf"
   
   # name: "qwen-coder-30b"
-  name: "Qwen3.5-9B"
+  # Совпадает со stem файла path (иначе старт ищет несуществующий Qwen3.5-9B.gguf)
+  name: "qwen2.5-7b-instruct-q3_k_m"
   ctx_size: 8192
   # gpu_layers: 0 = только CPU. Для моделей 30B+ на CPU нужно ~32 ГБ RAM, иначе загрузка может зависнуть.
   # Если есть NVIDIA GPU — укажите gpu_layers: -1 (все слои на GPU) для быстрой загрузки и работы.

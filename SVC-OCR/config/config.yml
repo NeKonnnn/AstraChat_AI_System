@@ -6,13 +6,23 @@ server:
   docs_url: "/docs"
   redoc_url: "/redoc"
 
-# Настройки CORS
 cors:
-  allowed_origins:
-    - "*"
+  allowed_origins: []
   allow_credentials: true
   allow_methods: ["*"]
   allow_headers: ["*"]
+
+urls:
+  frontend_port_1: "http://localhost:3000"
+  frontend_port_1_ipv4: "http://127.0.0.1:3000"
+  frontend_port_2: "http://localhost:3001"
+  frontend_port_2_ipv4: "http://127.0.0.1:3001"
+  frontend_port_3: "http://localhost:5173"
+  frontend_port_3_ipv4: "http://127.0.0.1:5173"
+  backend_port_1: "http://localhost:8000"
+  backend_port_1_ipv4: "http://127.0.0.1:8000"
+  backend_port_2: "http://localhost:8080"
+  backend_port_2_ipv4: "http://127.0.0.1:8080"
 
 # Настройки приложения
 app:

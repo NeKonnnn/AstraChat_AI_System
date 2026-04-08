@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import axios from 'axios';
-import { getSettings, initSettings } from '../settings';
+import { initSettings } from '../settings';
+import { getApiUrl } from '../config/api';
 
 interface User {
   username: string;
@@ -23,25 +24,15 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
-// Получаем базовый URL из конфига
-const getApiBaseUrl = () => {
-  // Сначала пробуем из env переменных (самый быстрый способ)
+/** URL API для auth: после initSettings() — из public/config/config.yml (или REACT_APP_API_URL при сборке). */
+const authApiUrl = (path: string): string => {
   if (process.env.REACT_APP_API_URL) {
-    return process.env.REACT_APP_API_URL;
+    const base = process.env.REACT_APP_API_URL.replace(/\/$/, '');
+    const p = path.startsWith('/') ? path : `/${path}`;
+    return `${base}${p}`;
   }
-  
-  // Затем пробуем из настроек (может быть еще не загружены)
-  try {
-    const settings = getSettings();
-    return settings.api.baseUrl;
-  } catch (error) {
-    // Если настройки еще не загружены, используем дефолтное значение
-    // Это значение должно совпадать с тем, что в config.yml
-    console.warn('Настройки еще не загружены, используем дефолтный URL:', error);
-    return 'http://localhost:8000';
-  }
+  return getApiUrl(path);
 };
-// Используем getApiBaseUrl() напрямую в функциях
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -100,7 +91,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Проверка валидности токена
   const verifyToken = async (token: string) => {
     try {
-      const response = await axios.get(`${getApiBaseUrl()}/api/auth/verify`, {
+      const response = await axios.get(authApiUrl('/api/auth/verify'), {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -129,7 +120,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (username: string, password: string) => {
     try {
-      const response = await axios.post(`${getApiBaseUrl()}/api/auth/login`, {
+      const response = await axios.post(authApiUrl('/api/auth/login'), {
         username,
         password,
       });
@@ -156,7 +147,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = async () => {
     try {
       if (token) {
-        await axios.post(`${getApiBaseUrl()}/api/auth/logout`, {}, {
+        await axios.post(authApiUrl('/api/auth/logout'), {}, {
           headers: {
             Authorization: `Bearer ${token}`,
           },

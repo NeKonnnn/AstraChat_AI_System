@@ -3,7 +3,7 @@ import yaml
 import os
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple, Type
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator, ConfigDict
 from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings, SettingsConfigDict, PydanticBaseSettingsSource
 logger = logging.getLogger(__name__)
@@ -14,8 +14,28 @@ class ServerConfig(BaseModel):
     log_level: str = "INFO"
     docs_url: str = "/docs"
     redoc_url: str = "/redoc"
+class UrlsConfig(BaseModel):
+    """Публичные URL (как у backend/frontend); CORS собирается из непустых полей."""
+    model_config = ConfigDict(extra="ignore")
+
+    frontend_port_1: Optional[str] = None
+    frontend_port_1_ipv4: Optional[str] = None
+    frontend_port_2: Optional[str] = None
+    frontend_port_2_ipv4: Optional[str] = None
+    frontend_port_3: Optional[str] = None
+    frontend_port_3_ipv4: Optional[str] = None
+    backend_port_1: Optional[str] = None
+    backend_port_1_ipv4: Optional[str] = None
+    backend_port_2: Optional[str] = None
+    backend_port_2_ipv4: Optional[str] = None
+    frontend_docker: Optional[str] = None
+    backend_docker: Optional[str] = None
+    llm_service_port: Optional[str] = None
+    llm_service_docker: Optional[str] = None
+
+
 class CorsConfig(BaseModel):
-    allowed_origins: List[str] = ["http://localhost:3080", "http://localhost:8000"]
+    allowed_origins: List[str] = []
     allow_credentials: bool = True
     allow_methods: List[str] = ["*"]
     allow_headers: List[str] = ["*"]
@@ -108,9 +128,25 @@ class YamlConfigSettingsSource(PydanticBaseSettingsSource):
         return value, "yaml", True
     def prepare_field_value(self, field_name: str, field: "FieldInfo", value: Any, value_is_complex: bool) -> Any:
         return value
+def _cors_keys_from_urls() -> Tuple[str, ...]:
+    return (
+        "frontend_port_1",
+        "frontend_port_1_ipv4",
+        "frontend_port_2",
+        "frontend_port_2_ipv4",
+        "frontend_port_3",
+        "frontend_port_3_ipv4",
+        "backend_port_1",
+        "backend_port_1_ipv4",
+        "backend_port_2",
+        "backend_port_2_ipv4",
+    )
+
+
 class Settings(BaseSettings):
     server: ServerConfig = ServerConfig()
     cors: CorsConfig = CorsConfig()
+    urls: Optional[UrlsConfig] = None
     model: ModelConfig = ModelConfig()
     generation: GenerationConfig = GenerationConfig()
     app: AppConfig = AppConfig()
@@ -125,6 +161,20 @@ class Settings(BaseSettings):
         extra="ignore",
         env_file=None
     )
+
+    @model_validator(mode="after")
+    def _cors_from_urls(self) -> "Settings":
+        if self.urls is None or self.cors.allowed_origins:
+            return self
+        origins: List[str] = []
+        for k in _cors_keys_from_urls():
+            v = getattr(self.urls, k, None)
+            if v and str(v).strip():
+                origins.append(str(v).strip())
+        if origins:
+            self.cors.allowed_origins = origins
+        return self
+
     @classmethod
     def settings_customise_sources(
             cls,

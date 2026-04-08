@@ -8,9 +8,10 @@ import time
 import logging
 
 from app.models.schemas import ChatResponse, ChatChoice, Message, AssistantMessage, UsageInfo
-from app.utils import convert_to_dict_messages
+from app.utils import convert_to_dict_messages, format_messages_for_llama, estimate_tokens
 from app.core.config import settings
 from app.services.base_llm_handler import BaseLLMHandler
+from app.utils.gguf_paths import resolve_gguf_path
 
 logger = logging.getLogger(__name__)
 
@@ -76,10 +77,15 @@ class LlamaHandler(BaseLLMHandler):
 
     @staticmethod
     def normalize_model_id(model_name: str) -> str:
-        model_name = os.path.basename(str(model_name).strip())
-        if model_name.lower().endswith(".gguf"):
-            model_name = model_name[:-5]
-        return model_name
+        s = str(model_name).strip().replace("\\", "/")
+        if not s:
+            return ""
+        if s.lower().endswith(".gguf"):
+            s = s[:-5]
+        # Абсолютный путь — только имя файла (legacy)
+        if s.startswith("/") or (len(s) > 2 and s[1] == ":"):
+            s = os.path.basename(s)
+        return s
 
     def get_loaded_model_ids(self) -> List[str]:
         return list(self._model_slots.keys())
@@ -139,6 +145,50 @@ class LlamaHandler(BaseLLMHandler):
         load_task = loop.run_in_executor(None, lambda: self._build_llama_sync(model_path))
         return await asyncio.wait_for(load_task, timeout=MODEL_LOAD_TIMEOUT)
 
+    def _get_llama_n_ctx(self, llama: Llama) -> int:
+        n = getattr(llama, "n_ctx", None)
+        if callable(n):
+            try:
+                n = n()
+            except Exception:
+                n = None
+        if isinstance(n, int) and n > 0:
+            return n
+        return int(self.n_ctx)
+
+    def _clamp_max_tokens_for_request(
+        self,
+        llama: Llama,
+        messages: List[Message],
+        max_tokens: int,
+        slot_id: str,
+    ) -> int:
+        """
+        llama.cpp падает, если prompt_tokens + max_tokens > n_ctx
+        """
+        n_ctx = self._get_llama_n_ctx(llama)
+        formatted = format_messages_for_llama(convert_to_dict_messages(messages))
+        try:
+            prompt_tokens = len(llama.tokenize(formatted.encode("utf-8"), add_bos=True))
+        except Exception as e:
+            logger.debug("tokenize for max_tokens clamp failed, using estimate: %s", e)
+            prompt_tokens = max(estimate_tokens(formatted), 1)
+        reserved = 32
+        room = n_ctx - prompt_tokens - reserved
+        if room >= max_tokens:
+            return max_tokens
+        clamped = max(1, room)
+        if clamped < max_tokens:
+            logger.warning(
+                "Clamping max_tokens %s -> %s (slot=%s n_ctx=%s ~prompt_tokens=%s)",
+                max_tokens,
+                clamped,
+                slot_id,
+                n_ctx,
+                prompt_tokens,
+            )
+        return clamped
+
     async def initialize(self):
         if self._model_slots:
             self.is_initialized = True
@@ -197,6 +247,9 @@ class LlamaHandler(BaseLLMHandler):
         slot = self._model_slots[slot_id]
         temperature = temperature or settings.generation.default_temperature
         max_tokens = max_tokens or settings.generation.default_max_tokens
+        max_tokens = self._clamp_max_tokens_for_request(
+            slot.llama, messages, max_tokens, slot_id
+        )
         start_time = time.time()
 
         async with slot.gen_lock:
@@ -287,10 +340,9 @@ class LlamaHandler(BaseLLMHandler):
         if not model_id:
             logger.error("load_model_by_name: пустое имя модели")
             return False
-        models_dir = "/app/models/llm"
-        model_path = os.path.join(models_dir, f"{model_id}.gguf")
-        if not os.path.exists(model_path):
-            logger.error(f"Model file not found: {model_path}")
+        model_path = resolve_gguf_path(model_id)
+        if not model_path or not os.path.isfile(model_path):
+            logger.error(f"Model file not found for id {model_id!r} (resolved={model_path!r})")
             return False
 
         async with self._model_switch_lock:

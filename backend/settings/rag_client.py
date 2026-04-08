@@ -12,6 +12,14 @@ from .config import get_settings
 logger = logging.getLogger(__name__)
 
 
+def _normalize_rag_service_base(url: str) -> str:
+    """Убирает хвост /v1, если URL в yml указан с префиксом API."""
+    u = (url or "").strip().rstrip("/")
+    if u.endswith("/v1"):
+        return u[:-3].rstrip("/")
+    return u
+
+
 def _svc_rag_document_index_timeout() -> httpx.Timeout:
     """Ожидание ответа POST /…/documents: парсинг + чанки + серия embed к rag-models."""
     try:
@@ -73,23 +81,12 @@ class RagClient:
 
     def __init__(self, base_url: Optional[str] = None, timeout: float = 60.0):
         settings = get_settings()
-
-        # URL можно задать через ENV (SVC_RAG_URL) или через конфиг (urls.rag_service_* при наличии)
-        env_url = os.getenv("SVC_RAG_URL") or os.getenv("RAG_SERVICE_URL")
         if base_url:
-            self.base_url = base_url.rstrip("/")
-        elif env_url:
-            self.base_url = env_url.rstrip("/")
+            self.base_url = _normalize_rag_service_base(base_url)
         else:
-            # Пытаемся взять из settings.urls, если там есть rag_service_docker / rag_service_port
-            urls = getattr(settings, "urls", None)
-            candidate = None
-            if urls:
-                if getattr(urls, "rag_service_docker", None):
-                    candidate = urls.rag_service_docker
-                elif getattr(urls, "rag_service_port", None):
-                    candidate = urls.rag_service_port
-            self.base_url = (candidate or "http://svc-rag:8000").rstrip("/")
+            self.base_url = _normalize_rag_service_base(
+                settings.microservice_http_base("rag_service_docker", "rag_service_port")
+            )
 
         self.timeout = timeout
 

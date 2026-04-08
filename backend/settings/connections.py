@@ -116,7 +116,7 @@ class MinIOConnectionConfig(BaseModel):
         return data
 
 class ServiceConnectionConfig(BaseModel):
-    url: str = "http://localhost:8000"
+    url: str = ""
     timeout: float = 120.0
     
     @model_validator(mode='before')
@@ -134,8 +134,8 @@ class LLMServiceConnectionConfig(ServiceConnectionConfig):
     default_model: str = "qwen-coder-30b"
     fallback_model: Optional[str] = None
     auto_select: bool = False
-    base_url: str = "http://llm-service:8000"
-    external_url: str = "http://localhost:8002"
+    base_url: str = ""
+    external_url: str = ""
     # Несколько хостов: если задано, маршрутизация llm-svc://host_id/model; иначе один base_url как host "default"
     hosts: Optional[List[LLMHostEntry]] = None
     default_host_id: Optional[str] = None
@@ -151,36 +151,6 @@ class OCRConnectionConfig(ServiceConnectionConfig):
 
 class DiarizationConnectionConfig(ServiceConnectionConfig):
     pass
-
-class UrlsConfig(BaseModel):
-    """Конфигурация URL адресов (ОРИГИНАЛ + МИКРОСЕРВИСЫ)
-    Все значения должны быть заданы в YAML или ENV
-    """
-    # Frontend адреса
-    frontend_port_1: Optional[str] = "http://localhost:3000"
-    frontend_port_1_ipv4: Optional[str] = "http://127.0.0.1:3000"
-    frontend_port_2: Optional[str] = None
-    frontend_port_2_ipv4: Optional[str] = None
-    frontend_port_3: Optional[str] = None
-    frontend_port_3_ipv4: Optional[str] = None
-    
-    # Backend адреса
-    backend_port_1: Optional[str] = "http://localhost:8000"
-    backend_port_1_ipv4: Optional[str] = "http://127.0.0.1:8000"
-    backend_port_2: Optional[str] = None
-    backend_port_2_ipv4: Optional[str] = None
-    
-    # LLM Service адреса (ОРИГИНАЛ)
-    llm_service_port: Optional[str] = "http://localhost:8002"
-    
-    # Docker внутренние адреса (РАСШИРЕНО ПОД 5 СЕРВИСОВ)
-    frontend_docker: Optional[str] = "http://astrachat-frontend:3000"
-    backend_docker: Optional[str] = "http://astrachat-backend:8000"
-    llm_service_docker: Optional[str] = "http://llm-service:8000"
-    stt_service_docker: Optional[str] = "http://stt-service:8000"
-    tts_service_docker: Optional[str] = "http://tts-service:8000"
-    ocr_service_docker: Optional[str] = "http://ocr-service:8000"
-    diarization_service_docker: Optional[str] = "http://diarization-service:8000"
 
 # Алиасы для совместимости с кодом, который импортирует LLMConnectionConfig
 LLMConnectionConfig = LLMServiceConnectionConfig
