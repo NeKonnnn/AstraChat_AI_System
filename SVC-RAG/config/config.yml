@@ -24,8 +24,6 @@ urls:
   backend_port_1_ipv4: "http://127.0.0.1:8000"
   backend_port_2: "http://localhost:8080"
   backend_port_2_ipv4: "http://127.0.0.1:8080"
-  frontend_docker: "http://astrachat-frontend:3000"
-  backend_docker: "http://astrachat-backend:8000"
   llm_service_port: "http://localhost:8002"
   llm_service_docker: "http://llm-service:8000"
   ocr_service_port: "http://localhost:8004"

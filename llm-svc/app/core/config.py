@@ -28,10 +28,6 @@ class UrlsConfig(BaseModel):
     backend_port_1_ipv4: Optional[str] = None
     backend_port_2: Optional[str] = None
     backend_port_2_ipv4: Optional[str] = None
-    frontend_docker: Optional[str] = None
-    backend_docker: Optional[str] = None
-    llm_service_port: Optional[str] = None
-    llm_service_docker: Optional[str] = None
 
 
 class CorsConfig(BaseModel):

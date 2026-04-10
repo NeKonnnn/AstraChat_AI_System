@@ -13,11 +13,18 @@ logger = logging.getLogger(__name__)
 
 
 def _normalize_rag_service_base(url: str) -> str:
-    """Убирает хвост /v1, если URL в yml указан с префиксом API."""
+    """Базовый origin SVC-RAG без хвоста /v1 (префикс API добавляется в _rag_request_url)."""
     u = (url or "").strip().rstrip("/")
     if u.endswith("/v1"):
         return u[:-3].rstrip("/")
     return u
+
+
+def _rag_request_url(base_url: str, path: str) -> str:
+    """SVC-RAG монтирует app.api под prefix=/v1 (см. SVC-RAG/app/main.py)."""
+    b = (base_url or "").strip().rstrip("/")
+    p = path if path.startswith("/") else f"/{path}"
+    return f"{b}/v1{p}"
 
 
 def _svc_rag_document_index_timeout() -> httpx.Timeout:
@@ -100,7 +107,7 @@ class RagClient:
         params: Optional[Dict[str, Any]] = None,
         http_timeout: Optional[Union[float, httpx.Timeout]] = None,
     ) -> Any:
-        url = f"{self.base_url}{path}"
+        url = _rag_request_url(self.base_url, path)
         client_timeout = self.timeout if http_timeout is None else http_timeout
         try:
             async with httpx.AsyncClient(timeout=client_timeout) as client:

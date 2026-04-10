@@ -17,22 +17,6 @@ export interface UrlsConfig {
   backend_port_1_ipv4: string;
   backend_port_2: string;
   backend_port_2_ipv4: string;
-  frontend_docker: string;
-  backend_docker: string;
-  llm_service_port: string;
-  llm_service_docker: string;
-  stt_service_port: string;
-  stt_service_docker: string;
-  tts_service_port: string;
-  tts_service_docker: string;
-  ocr_service_port: string;
-  ocr_service_docker: string;
-  diarization_service_port: string;
-  diarization_service_docker: string;
-  rag_service_port: string;
-  rag_service_docker: string;
-  rag_models_service_port: string;
-  rag_models_service_docker: string;
 }
 
 export interface AppConfig {
@@ -104,11 +88,6 @@ const loadConfig = async (): Promise<SettingsConfig> => {
         );
       };
 
-      const optUrl = (key: string): string => {
-        const v = configData.urls?.[key];
-        return typeof v === 'string' && v.trim() ? v : '';
-      };
-
       const urlsConfig: UrlsConfig = {
         frontend_port_1: getUrlValue('frontend_port_1', 'REACT_APP_FRONTEND_PORT_1'),
         frontend_port_1_ipv4: getUrlValue('frontend_port_1_ipv4', 'REACT_APP_FRONTEND_PORT_1_IPV4'),
@@ -120,22 +99,6 @@ const loadConfig = async (): Promise<SettingsConfig> => {
         backend_port_1_ipv4: getUrlValue('backend_port_1_ipv4', 'REACT_APP_BACKEND_PORT_1_IPV4'),
         backend_port_2: getUrlValue('backend_port_2', 'REACT_APP_BACKEND_PORT_2'),
         backend_port_2_ipv4: getUrlValue('backend_port_2_ipv4', 'REACT_APP_BACKEND_PORT_2_IPV4'),
-        frontend_docker: getUrlValue('frontend_docker', 'REACT_APP_FRONTEND_DOCKER'),
-        backend_docker: getUrlValue('backend_docker', 'REACT_APP_BACKEND_DOCKER'),
-        llm_service_port: optUrl('llm_service_port'),
-        llm_service_docker: optUrl('llm_service_docker'),
-        stt_service_port: optUrl('stt_service_port'),
-        stt_service_docker: optUrl('stt_service_docker'),
-        tts_service_port: optUrl('tts_service_port'),
-        tts_service_docker: optUrl('tts_service_docker'),
-        ocr_service_port: optUrl('ocr_service_port'),
-        ocr_service_docker: optUrl('ocr_service_docker'),
-        diarization_service_port: optUrl('diarization_service_port'),
-        diarization_service_docker: optUrl('diarization_service_docker'),
-        rag_service_port: optUrl('rag_service_port'),
-        rag_service_docker: optUrl('rag_service_docker'),
-        rag_models_service_port: optUrl('rag_models_service_port'),
-        rag_models_service_docker: optUrl('rag_models_service_docker'),
       };
 
       // Определяем базовый URL для API (приоритет: env > config.yml)
