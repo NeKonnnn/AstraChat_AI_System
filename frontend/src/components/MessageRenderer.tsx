@@ -29,6 +29,56 @@ const getFontSizeValue = (size: FontSize): string => {
   }
 };
 
+/**
+ * LLM часто рвёт пары <em></em> между строками списка: на одной строке parseInlineMarkdown не видит
+ * закрытие и показывает теги текстом. Снимаем только непарные открыва/закрытия (по стеку на этой строке);
+ * корректные пары на той же строке оставляем для курсива. Фрагменты <code> не трогаем.
+ */
+function stripOrphanEmIiTagsOnLine(str: string): string {
+  if (!str.includes('<')) return str;
+  const codeBlocks: string[] = [];
+  let s = str.replace(/<code\b[^>]*>[\s\S]*?<\/code>/gi, (full) => {
+    const token = `__ASTRA_CODE_${codeBlocks.length}__`;
+    codeBlocks.push(full);
+    return token;
+  });
+
+  type Tag = { index: number; len: number; close: boolean };
+  const tags: Tag[] = [];
+  const openRe = /<\s*(em|i)\b[^>]*>/gi;
+  const closeRe = /<\s*\/\s*(em|i)\s*>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = openRe.exec(s)) !== null) {
+    tags.push({ index: m.index, len: m[0].length, close: false });
+  }
+  while ((m = closeRe.exec(s)) !== null) {
+    tags.push({ index: m.index, len: m[0].length, close: true });
+  }
+  tags.sort((a, b) => a.index - b.index);
+
+  const stack: number[] = [];
+  const removeIdx = new Set<number>();
+  tags.forEach((t, idx) => {
+    if (!t.close) stack.push(idx);
+    else if (stack.length > 0) stack.pop();
+    else removeIdx.add(idx);
+  });
+  stack.forEach((idx) => removeIdx.add(idx));
+
+  let out = s;
+  Array.from(removeIdx)
+    .sort((a, b) => tags[b].index - tags[a].index)
+    .forEach((idx) => {
+      const t = tags[idx];
+      out = out.slice(0, t.index) + out.slice(t.index + t.len);
+    });
+
+  codeBlocks.forEach((block, i) => {
+    out = out.split(`__ASTRA_CODE_${i}__`).join(block);
+  });
+  return out;
+}
+
 const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isStreaming = false, onSendMessage }) => {
 
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
@@ -1310,7 +1360,8 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
   // Парсинг инлайн Markdown с поддержкой вложенных тегов
   const parseInlineMarkdown = (text: string): React.ReactNode => {
     if (!text) return null;
-    
+    text = stripOrphanEmIiTagsOnLine(text);
+
     // Рекурсивная функция для обработки вложенных тегов
     const parseWithNestedTags = (str: string): React.ReactNode[] => {
       const parts: React.ReactNode[] = [];
