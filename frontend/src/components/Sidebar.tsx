@@ -91,6 +91,7 @@ import {
   SIDEBAR_CONTROL_PX,
   SIDEBAR_ICON_LEADING_PL,
   SIDEBAR_LIST_LEADING_ICON_SX,
+  SIDEBAR_HIDE_SCROLLBAR_SX,
   SIDEBAR_CHAT_ROW_LIST_ITEM_BUTTON_SX,
   SIDEBAR_LIST_ICON_SX,
   getSidebarRailCollapsedListItemButtonSx,
@@ -1442,28 +1443,13 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
 
       {/* Список чатов */}
       {open && (
-      <Box sx={{ 
-        flexGrow: 1, 
-        overflow: 'auto',
-        // Кастомные стили для скроллбара под фиолетовый градиент сайдбара
-        '&::-webkit-scrollbar': {
-          width: '8px',
-        },
-        '&::-webkit-scrollbar-track': {
-          background: 'rgba(102, 126, 234, 0.3)', // Полупрозрачный фиолетовый из градиента
-          borderRadius: '4px',
-        },
-        '&::-webkit-scrollbar-thumb': {
-          background: 'rgba(118, 75, 162, 0.6)', // Полупрозрачный фиолетовый из градиента
-          borderRadius: '4px',
-          '&:hover': {
-            background: 'rgba(118, 75, 162, 0.8)',
-          },
-        },
-        // Для Firefox
-        scrollbarWidth: 'thin',
-        scrollbarColor: 'rgba(118, 75, 162, 0.6) rgba(102, 126, 234, 0.3)',
-      }}>
+      <Box
+        sx={{
+          flexGrow: 1,
+          overflow: 'auto',
+          ...SIDEBAR_HIDE_SCROLLBAR_SX,
+        }}
+      >
         <Box sx={{ p: 1 }}>
           {/* Отображение папок - только если включен режим папок */}
           {useFoldersMode && (

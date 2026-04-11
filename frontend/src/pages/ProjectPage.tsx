@@ -90,6 +90,7 @@ import {
   SIDEBAR_CHAT_ROW_LIST_ITEM_BUTTON_SX,
   SIDEBAR_LIST_ICON_SX,
   SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX,
+  SIDEBAR_HIDE_SCROLLBAR_SX,
   getSidebarRailCollapsedListItemButtonSx,
 } from '../constants/menuStyles';
 import SidebarRailMenuGlyph from '../components/SidebarRailMenuGlyph';
@@ -973,8 +974,10 @@ export default function ProjectPage() {
               borderLeft: '1px solid rgba(255,255,255,0.08)',
               transition: 'width 0.3s ease',
               overflowX: 'hidden',
+              overflowY: 'auto',
               display: 'flex',
               flexDirection: 'column',
+              ...SIDEBAR_HIDE_SCROLLBAR_SX,
             },
           }}
         >

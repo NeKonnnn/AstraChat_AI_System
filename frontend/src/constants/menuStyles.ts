@@ -64,6 +64,15 @@ export const SIDEBAR_LIST_LEADING_ICON_SX = {
   justifyContent: 'flex-start',
 } as const;
 
+/** Скрыть полосу прокрутки, оставить прокрутку колесом/тачпадом (сайдбары, конструктор агента). */
+export const SIDEBAR_HIDE_SCROLLBAR_SX = {
+  scrollbarWidth: 'none',
+  msOverflowStyle: 'none',
+  '&::-webkit-scrollbar': {
+    display: 'none',
+  },
+} as const;
+
 /** Стиль ListItemButton как у строк чата — для левой и правой боковых панелей. */
 export const SIDEBAR_CHAT_ROW_LIST_ITEM_BUTTON_SX = {
   borderRadius: 2,

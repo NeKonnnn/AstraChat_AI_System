@@ -65,6 +65,7 @@ import {
   getFormFieldInputSx,
   FORM_FIELD_TRIGGER_SX,
   FORM_FIELD_TRIGGER_VALUE_TYPOGRAPHY_SX,
+  SIDEBAR_HIDE_SCROLLBAR_SX,
 } from '../constants/menuStyles';
 import ModelParametersModal, { type ModelParamsState } from './ModelParametersModal';
 import { MODEL_SETTINGS_DEFAULT, type ModelSettingsState } from '../constants/modelSettingsStyles';
@@ -627,8 +628,7 @@ export default function AgentConstructorPanel({ isDarkMode, isOpen }: AgentConst
               maxHeight: 220,
               overflowY: 'auto',
               py: 0.5,
-              '&::-webkit-scrollbar': { width: 3 },
-              '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(255,255,255,0.12)', borderRadius: 2 },
+              ...SIDEBAR_HIDE_SCROLLBAR_SX,
             }}
           >
             {/* «+ Новый агент» */}
@@ -673,10 +673,18 @@ export default function AgentConstructorPanel({ isDarkMode, isOpen }: AgentConst
       </Box>
 
       {/* ── Scrollable form ─────────────────────────────────────────────────── */}
-      <Box sx={{ flex: 1, overflowY: 'auto', px: 2, py: 1.5, display: 'flex', flexDirection: 'column', gap: 1.5,
-        '&::-webkit-scrollbar': { width: 4 },
-        '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(255,255,255,0.15)', borderRadius: 2 },
-      }}>
+      <Box
+        sx={{
+          flex: 1,
+          overflowY: 'auto',
+          px: 2,
+          py: 1.5,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 1.5,
+          ...SIDEBAR_HIDE_SCROLLBAR_SX,
+        }}
+      >
 
         {/* Кнопка добавления аватара — по центру, как на скриншоте */}
         <Box sx={{ display: 'flex', justifyContent: 'center', width: '100%', mb: 1.5 }}>

@@ -62,6 +62,7 @@ import {
 import { getApiUrl, API_ENDPOINTS } from '../config/api';
 import { useAuth } from '../contexts/AuthContext';
 import { getSidebarPanelBackground } from '../constants/sidebarPanelColor';
+import { SIDEBAR_HIDE_SCROLLBAR_SX } from '../constants/menuStyles';
 import SidebarRailMenuGlyph from '../components/SidebarRailMenuGlyph';
 import { useTheme } from '@mui/material/styles';
 import { useNavigate } from 'react-router-dom';
@@ -1229,8 +1230,10 @@ export default function PromptGalleryPage() {
             borderColor: 'divider',
             transition: 'width 0.3s ease, background 0.3s ease, color 0.3s ease',
             overflowX: 'hidden',
+            overflowY: 'auto',
             display: 'flex',
             flexDirection: 'column',
+            ...SIDEBAR_HIDE_SCROLLBAR_SX,
           },
         }}
       >
