@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo, useEffect } from 'react';
+import React, { useState, useRef, useMemo, useEffect, useLayoutEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -20,6 +20,7 @@ import {
   CircularProgress,
   Drawer,
   Popover,
+  type PopoverActions,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -68,16 +69,20 @@ import {
   ArchiveOutlined as ArchiveIcon,
   PushPinOutlined as PushPinIcon,
   Close as CloseIcon,
-  Settings as SettingsIcon,
   Refresh as RefreshIcon,
   Clear as ClearIcon,
   AutoStories as KbIcon,
   ChevronRight as ChevronRightIcon,
+  Check as CheckIcon,
+  SmartToyOutlined as GearMenuAgentsIcon,
 } from '@mui/icons-material';
 import { useAppContext, useAppActions, chatIsListedInAllChatsSection } from '../contexts/AppContext';
 import { useSocket } from '../contexts/SocketContext';
 import VoiceChatDialog from '../components/VoiceChatDialog';
 import ChatInputBar from '../components/ChatInputBar';
+import ChatInputStatusCluster from '../components/ChatInputStatusCluster';
+import ChatGearAgentsPanel from '../components/ChatGearAgentsPanel';
+import { getApiUrl } from '../config/api';
 import { useTheme } from '@mui/material/styles';
 import AgentConstructorPanel from '../components/AgentConstructorPanel';
 import {
@@ -86,6 +91,19 @@ import {
   MENU_ACTION_TEXT_SIZE,
   MENU_COMPACT_PANEL_WIDTH_PX,
   CHAT_GEAR_MENU_PANEL_WIDTH_PX,
+  CHAT_GEAR_MENU_LEFT_RAIL_WIDTH_PX,
+  CHAT_GEAR_MENU_EXPANDED_WIDTH_PX,
+  CHAT_GEAR_MENU_AGENTS_RIGHT_MIN_PX,
+  CHAT_GEAR_MENU_PANELS_GAP_PX,
+  CHAT_GEAR_MENU_ANCHOR_VERTICAL_OFFSET,
+  CHAT_GEAR_MENU_PAPER_MAX_HEIGHT,
+  CHAT_GEAR_MENU_PAPER_MAX_HEIGHT_PX,
+  getChatGearMenuPaperHeightPx,
+  CHAT_GEAR_MENU_MARGIN_THRESHOLD_PX,
+  CHAT_GEAR_SCROLL_AREA_NO_VISIBLE_SCROLLBAR_SX,
+  DROPDOWN_ITEM_HOVER_BG_DARK,
+  DROPDOWN_ITEM_HOVER_BG_LIGHT,
+  DROPDOWN_CHEVRON_SX,
   getDropdownPanelSx,
   SIDEBAR_CHAT_ROW_LIST_ITEM_BUTTON_SX,
   SIDEBAR_LIST_ICON_SX,
@@ -102,6 +120,7 @@ import {
 import { getSidebarPanelBackground } from '../constants/sidebarPanelColor';
 import { getWorkZoneBackgroundColor, isWorkZoneAnimatedMode } from '../constants/workZoneBackground';
 import { useWorkZoneBgMode } from '../hooks/useWorkZoneBgMode';
+import { useMyAgentSelection, useOrchestratorAgentsAnyActive } from '../hooks/useChatInputAgentIndicators';
 import WorkZoneStarrySky from '../components/WorkZoneStarrySky';
 import WorkZoneSnowfall from '../components/WorkZoneSnowfall';
 import {
@@ -114,6 +133,13 @@ import {
   ASTRA_OPEN_AGENT_CONSTRUCTOR,
   ASTRA_OPEN_TRANSCRIPTION_SIDEBAR,
 } from '../constants/hotkeys';
+
+interface ProjectPageAgentStatus {
+  is_initialized: boolean;
+  mode: string;
+  available_agents: number;
+  orchestrator_active: boolean;
+}
 
 const projectIconMap: Record<string, React.ComponentType<any>> = {
   folder: FolderIcon,
@@ -197,6 +223,16 @@ export default function ProjectPage() {
   const [uploadedFiles, setUploadedFiles] = useState<Array<{ name: string; type: string }>>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
+  /** Раскрытый подпункт меню «Инструменты» (панель агентов). */
+  const [gearToolsPanel, setGearToolsPanel] = useState<'main' | 'agents'>('main');
+  const gearToolsPopoverActionRef = useRef<PopoverActions | null>(null);
+  /** Якорь меню «Инструменты» — вся оболочка поля ввода (верх), а не кнопка виджетов */
+  const chatInputToolsAnchorRef = useRef<HTMLDivElement>(null);
+  /** Ширина меню «Инструменты» = ширина пилюли ввода. */
+  const [gearToolsMenuWidthPx, setGearToolsMenuWidthPx] = useState<number | null>(null);
+  const [gearToolsPaperHeightPx, setGearToolsPaperHeightPx] = useState<number | null>(null);
+  const [agentStatus, setAgentStatus] = useState<ProjectPageAgentStatus | null>(null);
+  const orchestratorAgentsAnyActive = useOrchestratorAgentsAnyActive(Boolean(agentStatus?.is_initialized));
   const [transcriptionModalOpen, setTranscriptionModalOpen] = useState(false);
   const [chatInputStyle, setChatInputStyle] = useState<'compact' | 'classic'>(() =>
     (localStorage.getItem('chat_input_style') as 'compact' | 'classic') || 'compact'
@@ -204,11 +240,15 @@ export default function ProjectPage() {
   const [useKbRag, setUseKbRag] = useState(() => isKnowledgeRagEnabled());
 
 
-  const toggleKbRag = () => {
-    const next = !useKbRag;
-    setKnowledgeRagEnabled(next);
-    setUseKbRag(next);
-  };
+  const toggleKbRag = useCallback(() => {
+    setUseKbRag((prev) => {
+      const next = !prev;
+      setKnowledgeRagEnabled(next);
+      return next;
+    });
+  }, []);
+
+  const myAgentSelection = useMyAgentSelection();
 
   useEffect(() => {
     const onRag = () => setUseKbRag(isKnowledgeRagEnabled());
@@ -216,6 +256,61 @@ export default function ProjectPage() {
     return () => window.removeEventListener(KNOWLEDGE_RAG_STORAGE_EVENT, onRag);
   }, []);
 
+  const loadAgentStatus = useCallback(async () => {
+    try {
+      const response = await fetch(getApiUrl('/api/agent/status'));
+      if (response.ok) {
+        const data = await response.json();
+        setAgentStatus((prev) => {
+          if (JSON.stringify(prev) !== JSON.stringify(data)) return data;
+          return prev;
+        });
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadAgentStatus();
+    const onAgentChange = () => void loadAgentStatus();
+    window.addEventListener('astrachatAgentStatusChanged', onAgentChange);
+    const onVis = () => {
+      if (document.visibilityState === 'visible') void loadAgentStatus();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    const interval = setInterval(() => void loadAgentStatus(), 10000);
+    return () => {
+      window.removeEventListener('astrachatAgentStatusChanged', onAgentChange);
+      document.removeEventListener('visibilitychange', onVis);
+      clearInterval(interval);
+    };
+  }, [loadAgentStatus]);
+
+  useLayoutEffect(() => {
+    if (!anchorEl) return;
+    const shell = chatInputToolsAnchorRef.current;
+    if (shell) {
+      const rect = shell.getBoundingClientRect();
+      setGearToolsMenuWidthPx(Math.round(rect.width));
+      setGearToolsPaperHeightPx(getChatGearMenuPaperHeightPx(rect.top));
+    }
+    gearToolsPopoverActionRef.current?.updatePosition();
+  }, [anchorEl, gearToolsPanel]);
+
+  useEffect(() => {
+    if (!anchorEl) return;
+    const shell = chatInputToolsAnchorRef.current;
+    if (!shell || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      const rect = shell.getBoundingClientRect();
+      setGearToolsMenuWidthPx(Math.round(rect.width));
+      setGearToolsPaperHeightPx(getChatGearMenuPaperHeightPx(rect.top));
+      queueMicrotask(() => gearToolsPopoverActionRef.current?.updatePosition());
+    });
+    ro.observe(shell);
+    return () => ro.disconnect();
+  }, [anchorEl]);
 
   // Слушаем изменение стиля поля ввода через настройки
   React.useEffect(() => {
@@ -228,6 +323,18 @@ export default function ProjectPage() {
 
   const project = projectId ? getProjectById(projectId) : null;
   const isDarkMode = theme.palette.mode === 'dark';
+  const libraryInputBadge = useMemo(
+    () => (
+      <ChatInputStatusCluster
+        isDarkMode={isDarkMode}
+        libraryActive={useKbRag}
+        onLibraryToggle={toggleKbRag}
+        standardAgentsActive={orchestratorAgentsAnyActive}
+        myAgentName={myAgentSelection?.name ?? null}
+      />
+    ),
+    [isDarkMode, useKbRag, toggleKbRag, orchestratorAgentsAnyActive, myAgentSelection?.name],
+  );
   const dropdownPanelSx = getDropdownPanelSx(isDarkMode);
   const dropdownItemSx = useMemo(() => getDropdownItemSx(isDarkMode), [isDarkMode]);
 
@@ -406,11 +513,24 @@ export default function ProjectPage() {
   };
 
   const handleMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
-    setAnchorEl(event.currentTarget);
+    setGearToolsPanel('main');
+    setAnchorEl(chatInputToolsAnchorRef.current ?? event.currentTarget);
+    const shell = chatInputToolsAnchorRef.current;
+    if (shell) {
+      const rect = shell.getBoundingClientRect();
+      setGearToolsMenuWidthPx(Math.round(rect.width));
+      setGearToolsPaperHeightPx(getChatGearMenuPaperHeightPx(rect.top));
+    } else {
+      setGearToolsMenuWidthPx(null);
+      setGearToolsPaperHeightPx(null);
+    }
   };
 
   const handleMenuClose = () => {
+    setGearToolsPanel('main');
     setAnchorEl(null);
+    setGearToolsMenuWidthPx(null);
+    setGearToolsPaperHeightPx(null);
   };
 
   const handleChatMenuClick = (event: React.MouseEvent<HTMLElement>, chatId: string) => {
@@ -565,6 +685,7 @@ export default function ProjectPage() {
 
         {/* Объединенное поле ввода с кнопками */}
         <ChatInputBar
+          toolsMenuAnchorRef={chatInputToolsAnchorRef}
           value={inputMessage}
           onChange={setInputMessage}
           onKeyPress={handleKeyPress}
@@ -608,6 +729,7 @@ export default function ProjectPage() {
           onVoiceClick={() => setTranscriptionModalOpen(true)}
           voiceDisabled={isSending}
           voiceTooltip="Голосовой ввод"
+          libraryBadge={libraryInputBadge}
         />
 
         {/* Список чатов */}
@@ -839,29 +961,110 @@ export default function ProjectPage() {
           </Box>
         )}
 
-        {/* Доп. действия (шестерёнка) — тот же стиль, что у меню чата в списке проекта */}
+        {/* Инструменты — как на странице чата: Агенты + БЗ + очистка поля */}
         <Popover
           open={Boolean(anchorEl)}
           anchorEl={anchorEl}
+          action={gearToolsPopoverActionRef}
           onClose={handleMenuClose}
-          anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
+          anchorOrigin={{ vertical: CHAT_GEAR_MENU_ANCHOR_VERTICAL_OFFSET, horizontal: 'left' }}
           transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+          marginThreshold={CHAT_GEAR_MENU_MARGIN_THRESHOLD_PX}
           slotProps={{
             paper: {
               sx: {
-                mt: 0.5,
+                mt: 0,
+                mb: 0,
                 p: 0,
-                overflow: 'visible',
+                overflowX: 'hidden',
                 background: 'transparent !important',
                 backgroundColor: 'transparent !important',
                 boxShadow: 'none !important',
                 border: 'none',
+                ...(gearToolsPaperHeightPx != null
+                  ? {
+                      minHeight: `${gearToolsPaperHeightPx}px`,
+                      maxHeight: `${gearToolsPaperHeightPx}px`,
+                      height: `${gearToolsPaperHeightPx}px`,
+                      overflowY:
+                        gearToolsPaperHeightPx < CHAT_GEAR_MENU_PAPER_MAX_HEIGHT_PX ? 'auto' : 'hidden',
+                    }
+                  : { maxHeight: CHAT_GEAR_MENU_PAPER_MAX_HEIGHT, overflowY: 'auto' }),
+                ...(gearToolsPanel === 'agents' ? CHAT_GEAR_SCROLL_AREA_NO_VISIBLE_SCROLLBAR_SX : {}),
               },
             },
           }}
         >
-          <Box sx={{ ...dropdownPanelSx, width: CHAT_GEAR_MENU_PANEL_WIDTH_PX, display: 'flex', flexDirection: 'column' }}>
-            <Box sx={{ py: 0.5, px: 0.5 }}>
+          <Box
+            sx={{
+              display: 'flex',
+              flexDirection: 'row',
+              alignItems: 'stretch',
+              gap: gearToolsPanel === 'agents' ? `${CHAT_GEAR_MENU_PANELS_GAP_PX}px` : 0,
+              width:
+                gearToolsPanel === 'agents' && gearToolsMenuWidthPx != null
+                  ? `${gearToolsMenuWidthPx}px`
+                  : gearToolsPanel === 'agents'
+                    ? CHAT_GEAR_MENU_EXPANDED_WIDTH_PX
+                    : CHAT_GEAR_MENU_PANEL_WIDTH_PX,
+              maxWidth:
+                gearToolsPanel === 'agents' && gearToolsMenuWidthPx != null
+                  ? `${gearToolsMenuWidthPx}px`
+                  : 'min(96vw, 580px)',
+              minHeight: gearToolsPaperHeightPx != null ? `${gearToolsPaperHeightPx}px` : undefined,
+              height: gearToolsPaperHeightPx != null ? `${gearToolsPaperHeightPx}px` : undefined,
+              maxHeight: gearToolsPaperHeightPx != null ? `${gearToolsPaperHeightPx}px` : 'inherit',
+              boxSizing: 'border-box',
+              overflow: 'hidden',
+            }}
+          >
+            <Box
+              sx={{
+                ...dropdownPanelSx,
+                width:
+                  gearToolsPanel === 'agents' ? CHAT_GEAR_MENU_LEFT_RAIL_WIDTH_PX : '100%',
+                flexShrink: 0,
+                boxSizing: 'border-box',
+                py: 0.5,
+                px: 0.5,
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'flex-start',
+                alignSelf: 'stretch',
+                minHeight: 0,
+                height: '100%',
+              }}
+            >
+              <Box
+                onClick={() => setGearToolsPanel((p) => (p === 'agents' ? 'main' : 'agents'))}
+                sx={{
+                  ...dropdownItemSx,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1,
+                  color: isDarkMode ? 'white' : '#333',
+                  bgcolor:
+                    gearToolsPanel === 'agents'
+                      ? isDarkMode
+                        ? DROPDOWN_ITEM_HOVER_BG_DARK
+                        : DROPDOWN_ITEM_HOVER_BG_LIGHT
+                      : 'transparent',
+                }}
+              >
+                <GearMenuAgentsIcon
+                  sx={{ fontSize: 18, color: isDarkMode ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.6)', flexShrink: 0 }}
+                />
+                <Typography sx={{ flex: 1, minWidth: 0, fontSize: MENU_ACTION_TEXT_SIZE, whiteSpace: 'nowrap' }}>
+                  Агенты
+                </Typography>
+                <ChevronRightIcon
+                  sx={{
+                    ...DROPDOWN_CHEVRON_SX,
+                    flexShrink: 0,
+                    transform: gearToolsPanel === 'agents' ? 'rotate(90deg)' : 'none',
+                  }}
+                />
+              </Box>
               <Box
                 onClick={() => {
                   toggleKbRag();
@@ -872,13 +1075,16 @@ export default function ProjectPage() {
                   display: 'flex',
                   alignItems: 'center',
                   gap: 1,
-                  color: theme.palette.mode === 'dark' ? 'white' : '#333',
+                  color: isDarkMode ? 'white' : '#333',
                 }}
               >
-                <KbIcon sx={{ fontSize: 18, color: theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.6)', flexShrink: 0 }} />
+                <KbIcon sx={{ fontSize: 18, color: isDarkMode ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.6)', flexShrink: 0 }} />
                 <Typography sx={{ flex: 1, minWidth: 0, fontSize: MENU_ACTION_TEXT_SIZE, whiteSpace: 'nowrap' }}>
-                  {useKbRag ? 'Отключить Базу Знаний' : 'Подключить Базу Знаний'}
+                  {useKbRag ? 'Отключить библиотеку' : 'Библиотека'}
                 </Typography>
+                {useKbRag ? (
+                  <CheckIcon sx={{ fontSize: 16, color: 'primary.main', flexShrink: 0 }} />
+                ) : null}
               </Box>
               <Box
                 onClick={() => {
@@ -890,13 +1096,34 @@ export default function ProjectPage() {
                   display: 'flex',
                   alignItems: 'center',
                   gap: 1,
-                  color: theme.palette.mode === 'dark' ? 'white' : '#333',
+                  color: isDarkMode ? 'white' : '#333',
                 }}
               >
-                <ClearIcon sx={{ fontSize: 18, color: theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.6)', flexShrink: 0 }} />
-                <Typography sx={{ flex: 1, minWidth: 0, fontSize: MENU_ACTION_TEXT_SIZE, whiteSpace: 'nowrap' }}>Очистить поле ввода</Typography>
+                <ClearIcon sx={{ fontSize: 18, color: isDarkMode ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.6)', flexShrink: 0 }} />
+                <Typography sx={{ flex: 1, minWidth: 0, fontSize: MENU_ACTION_TEXT_SIZE, whiteSpace: 'nowrap' }}>
+                  Очистить поле ввода
+                </Typography>
               </Box>
             </Box>
+            {gearToolsPanel === 'agents' ? (
+              <Box
+                sx={{
+                  ...dropdownPanelSx,
+                  flex: 1,
+                  minWidth: `${CHAT_GEAR_MENU_AGENTS_RIGHT_MIN_PX}px`,
+                  minHeight: 0,
+                  height: '100%',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  overflow: 'hidden',
+                }}
+              >
+                <ChatGearAgentsPanel
+                  isDarkMode={isDarkMode}
+                  canUseAgents={Boolean(agentStatus?.is_initialized)}
+                />
+              </Box>
+            ) : null}
           </Box>
         </Popover>
 

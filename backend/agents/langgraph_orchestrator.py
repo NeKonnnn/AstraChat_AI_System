@@ -86,8 +86,8 @@ class LangGraphOrchestrator:
         # Создаем словарь инструментов по именам для быстрого доступа
         self.tools_by_name = {tool.name: tool for tool in self.tools}
         
-        # Статус активности инструментов (для управления через UI)
-        self.tool_status = {tool.name: True for tool in self.tools}
+        # Статус активности инструментов: по умолчанию всё выкл — включает пользователь в UI
+        self.tool_status = {tool.name: False for tool in self.tools}
         
         # Статус активности оркестратора (по умолчанию включен)
         self.orchestrator_active = True
@@ -139,7 +139,7 @@ class LangGraphOrchestrator:
         active_tools = []
         
         for tool in self.tools:
-            if self.tool_status.get(tool.name, True):
+            if self.tool_status.get(tool.name, False):
                 active_tools.append(f"- {tool.name}: {tool.description}")
         
         return "\n".join(active_tools)
@@ -1018,6 +1018,58 @@ class LangGraphOrchestrator:
     # ========================================================================
     # Методы управления инструментами (для UI)
     # ========================================================================
+
+    KNOWN_AGENT_IDS = frozenset({
+        "document_agent",
+        "prompt_enhancement_agent",
+        "system_agent",
+        "summarization_agent",
+        "general_agent",
+    })
+
+    @classmethod
+    def _normalize_known_agent_id_param(cls, raw: str) -> str:
+        """Имя/id агента из URL или UI → канонический agent_id (GeneralAgent → general_agent)."""
+        s = (raw or "").strip()
+        compact = "".join(s.split()).lower().replace("-", "")
+        aliases = {
+            "generalagent": "general_agent",
+            "general": "general_agent",
+            "documentagent": "document_agent",
+            "promptagent": "prompt_enhancement_agent",
+            "promptenhancementagent": "prompt_enhancement_agent",
+            "systemagent": "system_agent",
+            "summarizationagent": "summarization_agent",
+        }
+        return aliases.get(compact, s)
+
+    @staticmethod
+    def _agent_id_for_tool_name(tool_name: str) -> str:
+        """Та же логика группировки, что в get_available_tools (для set_tool_status по agent_id)."""
+        if "search_documents" in tool_name or "document" in tool_name.lower():
+            return "document_agent"
+        if (
+            ("prompt" in tool_name.lower() and "file" not in tool_name.lower() and "system" not in tool_name.lower())
+            or "enhance_prompt" in tool_name
+            or "improve_existing_prompt" in tool_name
+            or "analyze_prompt" in tool_name
+            or "save_prompt" in tool_name
+        ):
+            return "prompt_enhancement_agent"
+        if "system" in tool_name.lower() or "execute" in tool_name.lower():
+            return "system_agent"
+        if (
+            "summarize" in tool_name.lower()
+            or "summary" in tool_name.lower()
+            or "extract_key" in tool_name.lower()
+            or "bullet" in tool_name.lower()
+            or "conversation" in tool_name.lower()
+        ):
+            return "summarization_agent"
+        return "general_agent"
+
+    def _tool_names_for_agent_id(self, agent_id: str) -> List[str]:
+        return [t.name for t in self.tools if self._agent_id_for_tool_name(t.name) == agent_id]
     
     def get_available_tools(self) -> List[Dict[str, Any]]:
         """
@@ -1030,10 +1082,9 @@ class LangGraphOrchestrator:
         # Проходим по всем загруженным инструментам и группируем их
         for tool in self.tools:
             tool_name = tool.name
-            
-            # Определяем категорию агента на основе имени инструмента
-            if "search_documents" in tool_name or "document" in tool_name.lower():
-                agent_id = "document_agent"
+            agent_id = self._agent_id_for_tool_name(tool_name)
+
+            if agent_id == "document_agent":
                 agent_name = "DocumentAgent"
                 description = "Поиск и анализ информации в загруженных документах"
                 capabilities = ["search_documents"]
@@ -1042,12 +1093,7 @@ class LangGraphOrchestrator:
                     "Поищи данные о машинном обучении",
                     "Найди все упоминания алгоритмов"
                 ]
-            elif ("prompt" in tool_name.lower() and "file" not in tool_name.lower() and "system" not in tool_name.lower()) or \
-                 "enhance_prompt" in tool_name or \
-                 "improve_existing_prompt" in tool_name or \
-                 "analyze_prompt" in tool_name or \
-                 "save_prompt" in tool_name:
-                agent_id = "prompt_enhancement_agent"
+            elif agent_id == "prompt_enhancement_agent":
                 agent_name = "PromptAgent"
                 description = "Создание, улучшение и анализ промптов для LLM"
                 capabilities = ["prompt_creation", "prompt_enhancement", "prompt_analysis", "prompt_optimization"]
@@ -1057,8 +1103,7 @@ class LangGraphOrchestrator:
                     "Проанализируй качество моего промпта",
                     "Помоги написать промпт для [задача]"
                 ]
-            elif "system" in tool_name.lower() or "execute" in tool_name.lower():
-                agent_id = "system_agent"
+            elif agent_id == "system_agent":
                 agent_name = "SystemAgent"
                 description = "Работа с системой и выполнение команд"
                 capabilities = ["system_commands"]
@@ -1067,12 +1112,7 @@ class LangGraphOrchestrator:
                     "Покажи информацию о системе",
                     "Проверь статус процессов"
                 ]
-            elif ("summarize" in tool_name.lower() or 
-                  "summary" in tool_name.lower() or 
-                  "extract_key" in tool_name.lower() or
-                  "bullet" in tool_name.lower() or
-                  "conversation" in tool_name.lower()):
-                agent_id = "summarization_agent"
+            elif agent_id == "summarization_agent":
                 agent_name = "SummarizationAgent"
                 description = "Суммаризация текстов, документов и извлечение ключевой информации"
                 capabilities = ["text_summarization", "document_summarization", "key_extraction", "conversation_summary"]
@@ -1084,7 +1124,6 @@ class LangGraphOrchestrator:
                     "Создай список основных пунктов"
                 ]
             else:
-                # Для неизвестных инструментов создаем общий агент
                 agent_id = "general_agent"
                 agent_name = "GeneralAgent"
                 description = "Общие инструменты и функции"
@@ -1110,7 +1149,7 @@ class LangGraphOrchestrator:
             agents_map[agent_id]["tools"].append({
                 "name": tool.name,
                 "description": tool.description,
-                "is_active": self.tool_status.get(tool.name, True),
+                "is_active": self.tool_status.get(tool.name, False),
                 "instruction": f"Используй этот инструмент: {tool.description}"
             })
         
@@ -1160,26 +1199,22 @@ class LangGraphOrchestrator:
     def set_tool_status(self, tool_name: str, is_active: bool):
         """
         Установка статуса активности инструмента или агента
-        Если передан agent_id, активирует/деактивирует все инструменты агента
+        Если передан agent_id (…_agent), активирует/деактивирует все инструменты этой группы
         """
-        # Маппинг agent_id -> список инструментов
-        agent_tools_map = {
-            "document_agent": ["search_documents"],
-            "prompt_enhancement_agent": ["enhance_prompt", "improve_existing_prompt", "analyze_prompt_quality", "save_prompt_to_gallery"],
-            "summarization_agent": ["summarize_text", "extract_key_points", "create_bullet_summary", "summarize_conversation"]
-        }
-        
-        # Проверяем, это agent_id или tool_name
-        if tool_name in agent_tools_map:
-            # Это agent_id, активируем/деактивируем все его инструменты
-            tools_to_update = agent_tools_map[tool_name]
-            logger.info(f"Обновление статуса агента '{tool_name}': {is_active}")
-            for tool in tools_to_update:
-                if tool in self.tool_status:
-                    self.tool_status[tool] = is_active
-                    logger.info(f"  - Инструмент '{tool}' {'активирован' if is_active else 'деактивирован'}")
-        elif tool_name in self.tool_status:
-            # Это конкретный инструмент
+        normalized = self._normalize_known_agent_id_param(tool_name)
+        if normalized in self.KNOWN_AGENT_IDS:
+            tool_name = normalized
+        if tool_name in self.KNOWN_AGENT_IDS:
+            tool_names = self._tool_names_for_agent_id(tool_name)
+            logger.info(f"Обновление статуса агента '{tool_name}': {is_active} ({len(tool_names)} инструментов)")
+            # Всегда выставляем всем инструментам группы (в т.ч. general_agent), иначе часть ключей
+            # могла отсутствовать в словаре — тумблер «Универсальные инструменты» визуально не выключается.
+            for tn in tool_names:
+                self.tool_status[tn] = is_active
+                logger.info(f"  - Инструмент '{tn}' {'активирован' if is_active else 'деактивирован'}")
+            return
+
+        if tool_name in self.tool_status:
             self.tool_status[tool_name] = is_active
             logger.info(f"Инструмент '{tool_name}' {'активирован' if is_active else 'деактивирован'}")
         else:

@@ -240,62 +240,73 @@ export default function AgentsSettings() {
     }
   };
 
-  const toggleAgentStatus = async (agentId: string, currentStatus: boolean) => {
+  /** Синхронизация с оркестратором: вкл/выкл агента = все его инструменты; как в ChatGearAgentsPanel */
+  const maybeSwitchToDirectIfNoAgentsActive = async () => {
     try {
-      // Пока эндпоинт /api/agent/toggle не реализован, обновляем только локальное состояние
-      setAvailableAgents(prev => 
-        prev.map(agent => 
-          agent.agent_id === agentId 
-            ? { ...agent, is_active: !currentStatus }
-            : agent
-        )
-      );
-      setSuccess(`Агент ${currentStatus ? 'отключен' : 'включен'}`);
-      
-      // В будущем можно будет добавить реальный API вызов:
-      // const response = await fetch(`${API_BASE_URL}/api/agent/toggle`, {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({ agent_id: agentId, enable: !currentStatus }),
-      // });
-      // if (response.ok) { ... } else { throw new Error('Не удалось изменить статус агента'); }
-    } catch (err) {
-      setError(`Ошибка изменения статуса агента: ${err}`);
+      const response = await fetch(getApiUrl('/api/agent/agents'));
+      if (!response.ok) return;
+      const data = await response.json();
+      const agents = (data.agents || []) as Agent[];
+      if (!agents.some((a) => a.is_active)) {
+        await fetch(getApiUrl('/api/agent/mode'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'direct' }),
+        });
+        await loadAgentStatus();
+      }
+    } catch {
+      /* ignore */
     }
   };
 
-  const toggleToolStatus = async (agentId: string, toolName: string, currentStatus: boolean) => {
+  const applyAgentStatus = async (agentId: string, next: boolean) => {
     try {
-      // Пока эндпоинт /api/agent/tool/toggle не реализован, обновляем только локальное состояние
-      setAvailableAgents(prev => 
-        prev.map(agent => 
-          agent.agent_id === agentId 
-            ? {
-                ...agent,
-                tools: agent.tools ? agent.tools.map(tool => 
-                  tool.name === toolName 
-                    ? { ...tool, is_active: !currentStatus }
-                    : tool
-                ) : []
-              }
-            : agent
-        )
+      if (next) {
+        const mr = await fetch(getApiUrl('/api/agent/mode'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'agent' }),
+        });
+        if (!mr.ok) throw new Error((await mr.text()) || 'Не удалось включить агентный режим');
+      }
+      const ar = await fetch(getApiUrl(`/api/agent/agents/${encodeURIComponent(agentId)}/status`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: next }),
+      });
+      if (!ar.ok) throw new Error((await ar.text()) || 'Не удалось изменить статус агента');
+      if (!next) {
+        await maybeSwitchToDirectIfNoAgentsActive();
+      }
+      await loadAgents();
+      await loadAgentStatus();
+      window.dispatchEvent(new CustomEvent('astrachatAgentStatusChanged'));
+      setSuccess(
+        next
+          ? 'Агент включён; активны все инструменты этой группы'
+          : 'Агент отключён; все его инструменты выключены',
       );
-      setSuccess(`Инструмент ${currentStatus ? 'отключен' : 'включен'}`);
-      
-      // В будущем можно будет добавить реальный API вызов:
-      // const response = await fetch(`${API_BASE_URL}/api/agent/tool/toggle`, {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({ 
-      //     agent_id: agentId, 
-      //     tool_name: toolName, 
-      //     enable: !currentStatus 
-      //   }),
-      // });
-      // if (response.ok) { ... } else { throw new Error('Не удалось изменить статус инструмента'); }
     } catch (err) {
-      setError(`Ошибка изменения статуса инструмента: ${err}`);
+      setError(err instanceof Error ? err.message : `Ошибка изменения статуса агента: ${err}`);
+      await loadAgents();
+    }
+  };
+
+  const applyToolStatus = async (_agentId: string, toolName: string, next: boolean) => {
+    try {
+      const tr = await fetch(getApiUrl(`/api/agent/tool/${encodeURIComponent(toolName)}/status`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: next }),
+      });
+      if (!tr.ok) throw new Error((await tr.text()) || 'Не удалось изменить статус инструмента');
+      await loadAgents();
+      window.dispatchEvent(new CustomEvent('astrachatAgentStatusChanged'));
+      setSuccess(next ? 'Инструмент включён' : 'Инструмент отключён');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `Ошибка изменения статуса инструмента: ${err}`);
+      await loadAgents();
     }
   };
 
@@ -730,7 +741,7 @@ export default function AgentsSettings() {
                               control={
                                 <Switch
                                   checked={agent.is_active}
-                                  onChange={() => toggleAgentStatus(agent.agent_id || agent.name, agent.is_active)}
+                                  onChange={(_e, checked) => void applyAgentStatus(agent.agent_id || agent.name, checked)}
                                   color="primary"
                                   size="small"
                                 />
@@ -794,7 +805,10 @@ export default function AgentsSettings() {
                                       <Box key={toolIndex} sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5, py: 0.5 }}>
                                         <Switch
                                           checked={tool.is_active}
-                                          onChange={() => toggleToolStatus(agent.agent_id || agent.name, tool.name, tool.is_active)}
+                                          disabled={!agent.is_active}
+                                          onChange={(_e, checked) =>
+                                            void applyToolStatus(agent.agent_id || agent.name, tool.name, checked)
+                                          }
                                           size="small"
                                         />
                                         <Box sx={{ flex: 1 }}>

@@ -8,12 +8,18 @@ from datetime import datetime
 from typing import Dict, List
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
 from backend.app_state import get_agent_orchestrator
 from backend.schemas import AgentModeRequest, AgentStatusResponse, MultiLLMModelsRequest
 
 router = APIRouter(prefix="/api/agent", tags=["agents"])
 logger = logging.getLogger(__name__)
+
+
+class ToolToggleBody(BaseModel):
+    """Тело POST …/status: строгий bool (не str)."""
+    is_active: bool = Field(default=False, description="Включить или выключить")
 
 
 def _get_orchestrator_or_503():
@@ -69,8 +75,8 @@ async def set_multi_llm_models(request: MultiLLMModelsRequest):
         o = _get_orchestrator_or_503()
         o.set_multi_llm_models(request.models)
         # Без фонового POST /v1/models/load: он гонялся параллельно с первым multi-LLM чатом и
-        # давал двойную загрузку одной GGUF в llm-svc - обрыв соединения / падение процесса
-        # Догрузка второй модели - только в realtime.handlers._gen_one (asyncio.to_thread)
+        # давал двойную загрузку одной GGUF в llm-svc → обрыв соединения / падение процесса.
+        # Догрузка второй модели — только в realtime.handlers._gen_one (asyncio.to_thread).
         return {"message": f"Модели установлены: {', '.join(request.models)}", "success": True,
                 "models": request.models, "timestamp": datetime.now().isoformat()}
     except HTTPException:
@@ -115,13 +121,29 @@ async def get_mcp_status():
 
 
 @router.post("/agents/{agent_id}/status")
-async def set_agent_status(agent_id: str, status: Dict[str, bool]):
+async def set_agent_status(agent_id: str, body: ToolToggleBody):
     try:
         o = _get_orchestrator_or_503()
-        is_active = status.get("is_active", True)
-        o.set_agent_status(agent_id, is_active)
+        is_active = body.is_active
+        o.set_agent_status(agent_id.strip(), is_active)
         return {"agent_id": agent_id, "is_active": is_active, "success": True,
                 "message": f"Агент '{agent_id}' {'активирован' if is_active else 'деактивирован'}",
+                "timestamp": datetime.now().isoformat()}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/tool/{tool_name}/status")
+async def set_single_tool_status(tool_name: str, body: ToolToggleBody):
+    """Вкл/выкл одного инструмента по имени (как в LangGraph tool_status)."""
+    try:
+        o = _get_orchestrator_or_503()
+        is_active = body.is_active
+        o.set_tool_status(tool_name, is_active)
+        return {"tool_name": tool_name, "is_active": is_active, "success": True,
+                "message": f"Инструмент '{tool_name}' {'включён' if is_active else 'выключен'}",
                 "timestamp": datetime.now().isoformat()}
     except HTTPException:
         raise

@@ -16,7 +16,7 @@ import {
 import {
   Add as AddIcon,
   Send as SendIcon,
-  Settings as SettingsIcon,
+  Widgets as WidgetsIcon,
   Mic as MicIcon,
   Close as CloseIcon,
   Assessment as AssessmentIcon,
@@ -73,12 +73,18 @@ export interface ChatInputBarProps {
 
   extraActions?: React.ReactNode;
 
+  /** Между «вложения» и «инструменты»: например индикатор «Библиотека» при включённом RAG */
+  libraryBadge?: React.ReactNode;
+
   /** 'compact' — текущий пилюльный стиль (по умолчанию);
    *  'classic' — прямоугольник с тулбаром кнопок снизу */
   styleVariant?: 'compact' | 'classic';
 
   /** Как на стандартном фоне рабочей зоны (тёмный / #fafafa), чтобы не терялось на чёрном «звёздном» фоне */
   solidWorkZoneBackground?: boolean;
+
+  /** Верхняя граница всей «пилюли» ввода — для Popover «Инструменты» над полем, а не по кнопке (она съезжает при многострочном вводе) */
+  toolsMenuAnchorRef?: RefObject<HTMLDivElement | null>;
 }
 
 const iconButtonSx = (isDark: boolean, isClassic: boolean) => ({
@@ -123,8 +129,10 @@ export default function ChatInputBar({
   voiceDisabled = false,
   voiceTooltip = 'Голосовой ввод',
   extraActions,
+  libraryBadge,
   styleVariant = 'compact',
   solidWorkZoneBackground = false,
+  toolsMenuAnchorRef,
 }: ChatInputBarProps) {
   const getFileIcon = (file: UploadedFile) => {
     if (file.type?.includes('pdf')) return <PdfIcon fontSize="small" />;
@@ -219,7 +227,7 @@ export default function ChatInputBar({
   ) : null;
 
   const settingsBtn = onSettingsClick ? (
-    <Tooltip title="Дополнительные действия">
+    <Tooltip title="Инструменты">
       <span>
         <IconButton
           size="small"
@@ -242,7 +250,7 @@ export default function ChatInputBar({
             ...iconButtonSx(isDarkMode, isClassic),
           }}
         >
-          <SettingsIcon sx={{ fontSize: '1.25rem' }} />
+          <WidgetsIcon sx={{ fontSize: '1.25rem' }} />
         </IconButton>
       </span>
     </Tooltip>
@@ -415,6 +423,7 @@ export default function ChatInputBar({
   if (isClassic) {
     return (
       <Box
+        ref={toolsMenuAnchorRef}
         sx={{
           width: '100%',
           maxWidth,
@@ -475,6 +484,7 @@ export default function ChatInputBar({
           {/* Левая группа: вложения, настройки, доп. действия */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
             {attachBtn}
+            {libraryBadge}
             {settingsBtn}
             {extraActions}
           </Box>
@@ -511,6 +521,7 @@ export default function ChatInputBar({
 
   return (
     <Box
+      ref={toolsMenuAnchorRef}
       sx={{
         width: '100%',
         maxWidth,
@@ -558,6 +569,7 @@ export default function ChatInputBar({
           <Box sx={{ order: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'nowrap' }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
               {attachBtn}
+              {libraryBadge}
               {settingsBtn}
               {extraActions}
             </Box>
@@ -571,6 +583,7 @@ export default function ChatInputBar({
           <>
             <Box sx={{ order: 0, display: 'flex', alignItems: 'center', gap: 0.25 }}>
               {attachBtn}
+              {libraryBadge}
               {settingsBtn}
               {extraActions}
             </Box>

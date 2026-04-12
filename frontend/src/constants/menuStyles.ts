@@ -33,10 +33,85 @@ export const MENU_ACTION_TEXT_SIZE = '0.82rem';
 export const MENU_COMPACT_PANEL_WIDTH_PX = 206;
 
 /**
- * Панель «Дополнительные действия» (шестерёнка) у поля ввода чата/проекта —
- * шире компактного меню, чтобы «Подключить/Отключить Базу Знаний» умещались в одну строку.
+ * Панель «Инструменты» у поля ввода чата — узкий режим (только левая колонка).
+ * Шире компактного меню, чтобы «Подключить/Отключить Базу Знаний» умещались в одну строку.
  */
 export const CHAT_GEAR_MENU_PANEL_WIDTH_PX = 272;
+
+/** Левая колонка (Агенты, БЗ, …) при раскрытии раздела «Агенты». */
+export const CHAT_GEAR_MENU_LEFT_RAIL_WIDTH_PX = 196;
+/** Минимальная ширина правой панели агентов (при ширине = пилюля ввода остальное за счёт flex). */
+export const CHAT_GEAR_MENU_AGENTS_RIGHT_MIN_PX = 200;
+/** Зазор между левой и правой «карточкой», как у всплывающего окна «Агенты / Модели» (AgentSelector). */
+export const CHAT_GEAR_MENU_PANELS_GAP_PX = 6;
+/** Полная ширина меню «Инструменты» с открытыми агентами (две панели + зазор). */
+export const CHAT_GEAR_MENU_EXPANDED_WIDTH_PX =
+  CHAT_GEAR_MENU_LEFT_RAIL_WIDTH_PX +
+  CHAT_GEAR_MENU_PANELS_GAP_PX +
+  CHAT_GEAR_MENU_AGENTS_RIGHT_MIN_PX;
+
+/**
+ * Popover «Инструменты»: transformOrigin bottom — низ меню к точке на верхней грани пилюли.
+ * anchorOrigin.vertical отрицательный — зазор над полем; положительный — заезд на поле.
+ */
+export const CHAT_GEAR_MENU_ANCHOR_VERTICAL_OFFSET = -6;
+
+/** Минимальный отступ верхнего края меню от верха вьюпорта при расчёте высоты. */
+export const CHAT_GEAR_MENU_VIEWPORT_TOP_SAFE_PX = 12;
+
+/** Минимальная высота бумаги Popover при сильно сжатом экране. */
+export const CHAT_GEAR_MENU_PAPER_MIN_HEIGHT_PX = 96;
+
+/** Сколько карточек агента видно без скролла (остальные — прокрутка списка). */
+export const CHAT_GEAR_MENU_VISIBLE_AGENT_ROWS = 3;
+
+/** Поиск + вкладки «Стандартные / Мои» + строка «Оркестратор» + разделители, px. */
+export const CHAT_GEAR_MENU_SEARCH_HEADER_RESERVE_PX = 118;
+
+/** Прокрутка без видимого скроллбара (Firefox / WebKit / IE legacy). */
+export const CHAT_GEAR_SCROLL_AREA_NO_VISIBLE_SCROLLBAR_SX = {
+  scrollbarWidth: 'none',
+  msOverflowStyle: 'none',
+  '&::-webkit-scrollbar': { display: 'none' },
+} as const;
+
+/** Одна свёрнутая карточка агента (строка + padding), px. */
+export const CHAT_GEAR_MENU_AGENT_CARD_APPROX_PX = 54;
+
+/** Расстояние между карточками в списке (gap), px. */
+export const CHAT_GEAR_MENU_AGENT_STACK_GAP_PX = 8;
+
+/** Вертикальные отступы зоны списка (py), px. */
+export const CHAT_GEAR_MENU_LIST_VERTICAL_PADDING_PX = 16;
+
+/** Макс. высота только списка карточек (ровно N рядов + gap между ними). */
+export const CHAT_GEAR_MENU_AGENT_LIST_MAX_HEIGHT_PX =
+  CHAT_GEAR_MENU_VISIBLE_AGENT_ROWS * CHAT_GEAR_MENU_AGENT_CARD_APPROX_PX +
+  (CHAT_GEAR_MENU_VISIBLE_AGENT_ROWS - 1) * CHAT_GEAR_MENU_AGENT_STACK_GAP_PX;
+
+/** Макс. «идеальная» высота Popover: поиск + список на 3 агента + отступы списка. */
+export const CHAT_GEAR_MENU_PAPER_MAX_HEIGHT_PX =
+  CHAT_GEAR_MENU_SEARCH_HEADER_RESERVE_PX +
+  CHAT_GEAR_MENU_AGENT_LIST_MAX_HEIGHT_PX +
+  CHAT_GEAR_MENU_LIST_VERTICAL_PADDING_PX;
+
+export const CHAT_GEAR_MENU_PAPER_MAX_HEIGHT = `min(${CHAT_GEAR_MENU_PAPER_MAX_HEIGHT_PX}px, calc(100vh - 220px))`;
+
+/**
+ * Высота бумаги Popover: не выше идеала и не вылезает выше вьюпорта
+ * (низ меню крепится к точке shellTop + CHAT_GEAR_MENU_ANCHOR_VERTICAL_OFFSET).
+ */
+export function getChatGearMenuPaperHeightPx(shellTopCssPx: number): number {
+  const bottomAttach = shellTopCssPx + CHAT_GEAR_MENU_ANCHOR_VERTICAL_OFFSET;
+  const roomAbove = bottomAttach - CHAT_GEAR_MENU_VIEWPORT_TOP_SAFE_PX;
+  return Math.min(
+    CHAT_GEAR_MENU_PAPER_MAX_HEIGHT_PX,
+    Math.max(CHAT_GEAR_MENU_PAPER_MIN_HEIGHT_PX, Math.floor(roomAbove)),
+  );
+}
+
+/** Зазор от краёв окна при пересчёте позиции Popover (панель задач и верх). */
+export const CHAT_GEAR_MENU_MARGIN_THRESHOLD_PX = 72;
 
 /** Зазор между иконкой и текстом в списке сайдбара (проекты, чаты), px. */
 export const SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX = 4;

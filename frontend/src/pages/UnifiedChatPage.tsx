@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
 import {
   Box,
   TextField,
@@ -23,6 +23,7 @@ import {
   Slider,
   CircularProgress,
   Popover,
+  type PopoverActions,
   Collapse,
   Drawer,
   Divider,
@@ -48,17 +49,19 @@ import {
   VolumeUp as VolumeUpIcon,
   Close as CloseIcon,
   Upload as UploadIcon,
-  Settings as SettingsIcon,
   Square as SquareIcon,
+  SmartToyOutlined as GearMenuAgentsIcon,
   ChevronLeft as ChevronLeftIcon,
   ChevronRight as ChevronRightIcon,
   Add as AddIcon,
   Share as ShareIcon,
   AutoStories as KbIcon,
+  Check as CheckIcon,
   YouTube as YouTubeIcon,
   ExpandMore as ExpandMoreIcon,
 } from '@mui/icons-material';
 import type { SxProps, Theme } from '@mui/material/styles';
+import { useTheme, alpha } from '@mui/material/styles';
 import { useAppContext, useAppActions, Message, MultiLLMResponseSlot } from '../contexts/AppContext';
 import { useSocket } from '../contexts/SocketContext';
 import { getApiUrl, getWsUrl, API_ENDPOINTS } from '../config/api';
@@ -70,9 +73,12 @@ import ModelSelector from '../components/ModelSelector';
 import MessageNavigationBar from '../components/MessageNavigationBar';
 import ShareConfirmDialog from '../components/ShareConfirmDialog';
 import ChatInputBar from '../components/ChatInputBar';
+import ChatGearAgentsPanel from '../components/ChatGearAgentsPanel';
 import VoiceChatDialog from '../components/VoiceChatDialog';
 import AgentConstructorPanel from '../components/AgentConstructorPanel';
 import AgentSelector from '../components/AgentSelector';
+import ChatInputStatusCluster from '../components/ChatInputStatusCluster';
+import { useMyAgentSelection, useOrchestratorAgentsAnyActive } from '../hooks/useChatInputAgentIndicators';
 import { getSidebarPanelBackground } from '../constants/sidebarPanelColor';
 import { getWorkZoneBackgroundColor, isWorkZoneAnimatedMode } from '../constants/workZoneBackground';
 import { useWorkZoneBgMode } from '../hooks/useWorkZoneBgMode';
@@ -100,6 +106,16 @@ import {
   DROPDOWN_ITEM_HOVER_BG_LIGHT,
   MENU_ACTION_TEXT_SIZE,
   CHAT_GEAR_MENU_PANEL_WIDTH_PX,
+  CHAT_GEAR_MENU_LEFT_RAIL_WIDTH_PX,
+  CHAT_GEAR_MENU_EXPANDED_WIDTH_PX,
+  CHAT_GEAR_MENU_AGENTS_RIGHT_MIN_PX,
+  CHAT_GEAR_MENU_PANELS_GAP_PX,
+  CHAT_GEAR_MENU_ANCHOR_VERTICAL_OFFSET,
+  CHAT_GEAR_MENU_PAPER_MAX_HEIGHT,
+  CHAT_GEAR_MENU_PAPER_MAX_HEIGHT_PX,
+  getChatGearMenuPaperHeightPx,
+  CHAT_GEAR_MENU_MARGIN_THRESHOLD_PX,
+  CHAT_GEAR_SCROLL_AREA_NO_VISIBLE_SCROLLBAR_SX,
   SIDEBAR_CHAT_ROW_LIST_ITEM_BUTTON_SX,
   SIDEBAR_LIST_ICON_SX,
   SIDEBAR_LIST_ICON_TO_TEXT_GAP_PX,
@@ -745,7 +761,8 @@ const MessageCard = React.memo(MessageCardComponent, (prev, next) =>
 
 export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: UnifiedChatPageProps) {
   const navigate = useNavigate();
-  
+  const theme = useTheme();
+
   // Состояние для правой панели
   const [rightSidebarOpen, setRightSidebarOpen] = useState(() => {
     const saved = localStorage.getItem('rightSidebarOpen');
@@ -843,7 +860,42 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   }>>([]);
   const [showDocumentDialog, setShowDocumentDialog] = useState(false);
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
-  
+  /** Раскрытый подпункт меню «Инструменты» (колонка справа, как в LeChat). */
+  const [gearToolsPanel, setGearToolsPanel] = useState<'main' | 'agents'>('main');
+  const gearToolsPopoverActionRef = useRef<PopoverActions | null>(null);
+  /** Якорь меню «Инструменты» — верх всей пилюли ввода (кнопка виджетов съезжает при многострочном тексте). */
+  const chatInputToolsAnchorRef = useRef<HTMLDivElement>(null);
+  /** Ширина меню «Инструменты» = ширина пилюли ввода (две колонки на всю длину поля). */
+  const [gearToolsMenuWidthPx, setGearToolsMenuWidthPx] = useState<number | null>(null);
+  /** Фиксированная высота бумаги Popover: левая колонка сразу «как с агентами», без роста вниз при раскрытии. */
+  const [gearToolsPaperHeightPx, setGearToolsPaperHeightPx] = useState<number | null>(null);
+
+  /** Геометрия меню от пилюли ввода + пересчёт позиции Popover. */
+  useLayoutEffect(() => {
+    if (!anchorEl) return;
+    const shell = chatInputToolsAnchorRef.current;
+    if (shell) {
+      const rect = shell.getBoundingClientRect();
+      setGearToolsMenuWidthPx(Math.round(rect.width));
+      setGearToolsPaperHeightPx(getChatGearMenuPaperHeightPx(rect.top));
+    }
+    gearToolsPopoverActionRef.current?.updatePosition();
+  }, [anchorEl, gearToolsPanel]);
+
+  useEffect(() => {
+    if (!anchorEl) return;
+    const shell = chatInputToolsAnchorRef.current;
+    if (!shell || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      const rect = shell.getBoundingClientRect();
+      setGearToolsMenuWidthPx(Math.round(rect.width));
+      setGearToolsPaperHeightPx(getChatGearMenuPaperHeightPx(rect.top));
+      queueMicrotask(() => gearToolsPopoverActionRef.current?.updatePosition());
+    });
+    ro.observe(shell);
+    return () => ro.disconnect();
+  }, [anchorEl]);
+
   // База знаний в ответах LLM (страница KB + библиотека из настроек)
   const [useKbRag, setUseKbRag] = useState(() => isKnowledgeRagEnabled());
 
@@ -853,11 +905,15 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     return () => window.removeEventListener(KNOWLEDGE_RAG_STORAGE_EVENT, onRag);
   }, []);
 
-  const toggleKbRag = () => {
-    const next = !useKbRag;
-    setKnowledgeRagEnabled(next);
-    setUseKbRag(next);
-  };
+  const toggleKbRag = useCallback(() => {
+    setUseKbRag((prev) => {
+      const next = !prev;
+      setKnowledgeRagEnabled(next);
+      return next;
+    });
+  }, []);
+
+  const myAgentSelection = useMyAgentSelection();
 
   // Состояние для режима "Поделиться"
   const [shareMode, setShareMode] = useState(false);
@@ -1014,6 +1070,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   
   // Состояние для режима multi-llm
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
+  const orchestratorAgentsAnyActive = useOrchestratorAgentsAnyActive(Boolean(agentStatus?.is_initialized));
   const [availableModels, setAvailableModels] = useState<Array<{ name: string; path: string; size_mb?: number }>>([]);
   const [modelWindows, setModelWindows] = useState<ModelWindow[]>([{ id: '1', selectedModel: '' }]);
   const [multiLlmModelMenu, setMultiLlmModelMenu] = useState<{ windowId: string; anchorEl: HTMLElement } | null>(null);
@@ -1046,6 +1103,19 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       /* ignore */
     }
   }, []);
+
+  const libraryInputBadge = useMemo(
+    () => (
+      <ChatInputStatusCluster
+        isDarkMode={isDarkMode}
+        libraryActive={useKbRag}
+        onLibraryToggle={toggleKbRag}
+        standardAgentsActive={orchestratorAgentsAnyActive}
+        myAgentName={myAgentSelection?.name ?? null}
+      />
+    ),
+    [isDarkMode, useKbRag, toggleKbRag, orchestratorAgentsAnyActive, myAgentSelection?.name],
+  );
 
   const handleToggleMultiLlmMode = useCallback(async () => {
     if (!agentStatus?.is_initialized) {
@@ -2196,11 +2266,24 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   };
 
   const handleMenuOpen = (event: React.MouseEvent<HTMLElement>): void => {
-    setAnchorEl(event.currentTarget);
+    setGearToolsPanel('main');
+    setAnchorEl(chatInputToolsAnchorRef.current ?? event.currentTarget);
+    const shell = chatInputToolsAnchorRef.current;
+    if (shell) {
+      const rect = shell.getBoundingClientRect();
+      setGearToolsMenuWidthPx(Math.round(rect.width));
+      setGearToolsPaperHeightPx(getChatGearMenuPaperHeightPx(rect.top));
+    } else {
+      setGearToolsMenuWidthPx(null);
+      setGearToolsPaperHeightPx(null);
+    }
   };
 
   const handleMenuClose = (): void => {
+    setGearToolsPanel('main');
     setAnchorEl(null);
+    setGearToolsMenuWidthPx(null);
+    setGearToolsPaperHeightPx(null);
   };
 
   const handleTranscriptionFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -3223,6 +3306,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                          </Box>
                          {renderMultiLlmModelToolbar()}
                          <ChatInputBar
+                           toolsMenuAnchorRef={chatInputToolsAnchorRef}
                            value={inputMessage}
                            onChange={setInputMessage}
                            onKeyPress={handleKeyPress}
@@ -3275,6 +3359,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                            onVoiceClick={() => setShowVoiceDialog(true)}
                            voiceDisabled={multiLlmInputBlocked || chatAwaitingTokens}
                            voiceTooltip="Голосовой ввод"
+                           libraryBadge={libraryInputBadge}
                            extraActions={multiLlmSettingsExtraAction}
                          />
                        </Box>
@@ -3285,6 +3370,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
            <>
              {renderMultiLlmModelToolbar()}
              <ChatInputBar
+               toolsMenuAnchorRef={chatInputToolsAnchorRef}
                value={inputMessage}
                onChange={setInputMessage}
                onKeyPress={handleKeyPress}
@@ -3337,6 +3423,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                onVoiceClick={() => setShowVoiceDialog(true)}
                voiceDisabled={multiLlmInputBlocked || chatAwaitingTokens}
                voiceTooltip="Голосовой ввод"
+               libraryBadge={libraryInputBadge}
                extraActions={multiLlmSettingsExtraAction}
              />
            </>
@@ -3349,29 +3436,110 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
        />
        <DocumentDialog />
 
-       {/* Доп. действия (шестерёнка) — тот же стиль панели, что у селектора агента/модели и меню чата в проекте */}
+       {/* Инструменты: колонка как в LeChat — «Агенты» + правая панель с вкладками; БЗ и очистка в левой колонке */}
        <Popover
          open={Boolean(anchorEl)}
          anchorEl={anchorEl}
+         action={gearToolsPopoverActionRef}
          onClose={handleMenuClose}
-         anchorOrigin={{ vertical: 'top', horizontal: 'left' }}
+         anchorOrigin={{ vertical: CHAT_GEAR_MENU_ANCHOR_VERTICAL_OFFSET, horizontal: 'left' }}
          transformOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+         marginThreshold={CHAT_GEAR_MENU_MARGIN_THRESHOLD_PX}
          slotProps={{
            paper: {
              sx: {
-               mt: 0.5,
+               mt: 0,
+               mb: 0,
                p: 0,
-               overflow: 'visible',
+               overflowX: 'hidden',
                background: 'transparent !important',
                backgroundColor: 'transparent !important',
                boxShadow: 'none !important',
                border: 'none',
+               ...(gearToolsPaperHeightPx != null
+                 ? {
+                     minHeight: `${gearToolsPaperHeightPx}px`,
+                     maxHeight: `${gearToolsPaperHeightPx}px`,
+                     height: `${gearToolsPaperHeightPx}px`,
+                     overflowY:
+                       gearToolsPaperHeightPx < CHAT_GEAR_MENU_PAPER_MAX_HEIGHT_PX ? 'auto' : 'hidden',
+                   }
+                 : { maxHeight: CHAT_GEAR_MENU_PAPER_MAX_HEIGHT, overflowY: 'auto' }),
+               ...(gearToolsPanel === 'agents' ? CHAT_GEAR_SCROLL_AREA_NO_VISIBLE_SCROLLBAR_SX : {}),
              },
            },
          }}
        >
-         <Box sx={{ ...dropdownPanelSx, width: CHAT_GEAR_MENU_PANEL_WIDTH_PX, display: 'flex', flexDirection: 'column' }}>
-           <Box sx={{ py: 0.5, px: 0.5 }}>
+         <Box
+           sx={{
+             display: 'flex',
+             flexDirection: 'row',
+             alignItems: 'stretch',
+             gap: gearToolsPanel === 'agents' ? `${CHAT_GEAR_MENU_PANELS_GAP_PX}px` : 0,
+             width:
+               gearToolsPanel === 'agents' && gearToolsMenuWidthPx != null
+                 ? `${gearToolsMenuWidthPx}px`
+                 : gearToolsPanel === 'agents'
+                   ? CHAT_GEAR_MENU_EXPANDED_WIDTH_PX
+                   : CHAT_GEAR_MENU_PANEL_WIDTH_PX,
+             maxWidth:
+               gearToolsPanel === 'agents' && gearToolsMenuWidthPx != null
+                 ? `${gearToolsMenuWidthPx}px`
+                 : 'min(96vw, 580px)',
+             minHeight: gearToolsPaperHeightPx != null ? `${gearToolsPaperHeightPx}px` : undefined,
+             height: gearToolsPaperHeightPx != null ? `${gearToolsPaperHeightPx}px` : undefined,
+             maxHeight: gearToolsPaperHeightPx != null ? `${gearToolsPaperHeightPx}px` : 'inherit',
+             boxSizing: 'border-box',
+             overflow: 'hidden',
+           }}
+         >
+           <Box
+             sx={{
+               ...dropdownPanelSx,
+               width:
+                 gearToolsPanel === 'agents' ? CHAT_GEAR_MENU_LEFT_RAIL_WIDTH_PX : '100%',
+               flexShrink: 0,
+               boxSizing: 'border-box',
+               py: 0.5,
+               px: 0.5,
+               display: 'flex',
+               flexDirection: 'column',
+               justifyContent: 'flex-start',
+               alignSelf: 'stretch',
+               minHeight: 0,
+               height: '100%',
+             }}
+           >
+             <Box
+               onClick={() => setGearToolsPanel((p) => (p === 'agents' ? 'main' : 'agents'))}
+               sx={{
+                 ...dropdownItemSx,
+                 display: 'flex',
+                 alignItems: 'center',
+                 gap: 1,
+                 color: isDarkMode ? 'white' : '#333',
+                 bgcolor:
+                   gearToolsPanel === 'agents'
+                     ? isDarkMode
+                       ? DROPDOWN_ITEM_HOVER_BG_DARK
+                       : DROPDOWN_ITEM_HOVER_BG_LIGHT
+                     : 'transparent',
+               }}
+             >
+               <GearMenuAgentsIcon
+                 sx={{ fontSize: 18, color: isDarkMode ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.6)', flexShrink: 0 }}
+               />
+               <Typography sx={{ flex: 1, minWidth: 0, fontSize: MENU_ACTION_TEXT_SIZE, whiteSpace: 'nowrap' }}>
+                 Агенты
+               </Typography>
+               <ChevronRightIcon
+                 sx={{
+                   ...DROPDOWN_CHEVRON_SX,
+                   flexShrink: 0,
+                   transform: gearToolsPanel === 'agents' ? 'rotate(90deg)' : 'none',
+                 }}
+               />
+             </Box>
              <Box
                onClick={() => {
                  toggleKbRag();
@@ -3387,8 +3555,11 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
              >
                <KbIcon sx={{ fontSize: 18, color: isDarkMode ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.6)', flexShrink: 0 }} />
                <Typography sx={{ flex: 1, minWidth: 0, fontSize: MENU_ACTION_TEXT_SIZE, whiteSpace: 'nowrap' }}>
-                 {useKbRag ? 'Отключить Базу Знаний' : 'Подключить Базу Знаний'}
+                 {useKbRag ? 'Отключить библиотеку' : 'Библиотека'}
                </Typography>
+               {useKbRag ? (
+                 <CheckIcon sx={{ fontSize: 16, color: 'primary.main', flexShrink: 0 }} />
+               ) : null}
              </Box>
              <Box
                onClick={handleClearChat}
@@ -3401,9 +3572,30 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                }}
              >
                <ClearIcon sx={{ fontSize: 18, color: isDarkMode ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.6)', flexShrink: 0 }} />
-               <Typography sx={{ flex: 1, minWidth: 0, fontSize: MENU_ACTION_TEXT_SIZE, whiteSpace: 'nowrap' }}>Очистить чат</Typography>
+               <Typography sx={{ flex: 1, minWidth: 0, fontSize: MENU_ACTION_TEXT_SIZE, whiteSpace: 'nowrap' }}>
+                 Очистить чат
+               </Typography>
              </Box>
            </Box>
+           {gearToolsPanel === 'agents' ? (
+             <Box
+               sx={{
+                 ...dropdownPanelSx,
+                 flex: 1,
+                 minWidth: `${CHAT_GEAR_MENU_AGENTS_RIGHT_MIN_PX}px`,
+                 minHeight: 0,
+                 height: '100%',
+                 display: 'flex',
+                 flexDirection: 'column',
+                 overflow: 'hidden',
+               }}
+             >
+               <ChatGearAgentsPanel
+                 isDarkMode={isDarkMode}
+                 canUseAgents={Boolean(agentStatus?.is_initialized)}
+               />
+             </Box>
+           ) : null}
          </Box>
        </Popover>
 
