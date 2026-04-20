@@ -790,7 +790,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     const saved = localStorage.getItem('model_selector_mode');
     if (saved === 'settings' || saved === 'workspace' || saved === 'workspace_agent') return saved;
     const oldBool = localStorage.getItem('show_model_selector_in_settings');
-    return oldBool === 'true' ? 'settings' : 'workspace';
+    return oldBool === 'true' ? 'settings' : 'workspace_agent';
   };
   const [modelSelectorMode, setModelSelectorMode] = useState<ModelSelectorMode>(readModelSelectorMode);
 

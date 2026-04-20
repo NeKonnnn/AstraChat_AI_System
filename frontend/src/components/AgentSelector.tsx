@@ -3,8 +3,9 @@ import { Box, Typography, Popover, Tooltip, CircularProgress } from '@mui/materi
 import {
   Search as SearchIcon,
   ExpandMore as ExpandMoreIcon,
-  SmartToy as AgentIcon,
+  ChevronRight as ChevronRightIcon,
   Computer as ComputerIcon,
+  SmartToy as AgentIcon,
   Check as CheckIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
@@ -17,6 +18,7 @@ import {
   getMenuColors,
   MENU_ACTION_TEXT_SIZE,
 } from '../constants/menuStyles';
+
 export interface Agent {
   id: number;
   name: string;
@@ -32,6 +34,7 @@ interface ModelItem {
   path: string;
   size?: number;
   size_mb?: number;
+  llm_host_id?: string;
 }
 
 const STORAGE_AGENT_ID = 'active_agent_id';
@@ -52,25 +55,40 @@ export function getActiveAgentFromStorage(): { id: number; name: string; system_
 interface AgentSelectorProps {
   isDarkMode?: boolean;
   maxWidth?: string | number;
-  /** Ограничить ширину кнопки-триггера (для размещения в шапке) */
   triggerMaxWidth?: number;
   onAgentChange?: (agent: Agent | null) => void;
   onModelSelect?: (modelPath: string) => void;
 }
 
-export default function AgentSelector({ isDarkMode = true, maxWidth, triggerMaxWidth, onAgentChange, onModelSelect }: AgentSelectorProps) {
+const LEFT_PANEL_W = 185;
+const RIGHT_PANEL_W = 260;
+
+export default function AgentSelector({
+  isDarkMode = true,
+  maxWidth,
+  triggerMaxWidth,
+  onAgentChange,
+  onModelSelect,
+}: AgentSelectorProps) {
   const { token } = useAuth();
   const { showNotification } = useAppActions();
+
   const [models, setModels] = useState<ModelItem[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
   const [isLoadingModel, setIsLoadingModel] = useState(false);
   const [loadingModelPath, setLoadingModelPath] = useState<string | null>(null);
+  const [selectedModelPath, setSelectedModelPath] = useState('');
+  const [activeAgent, setActiveAgent] = useState<{ id: number; name: string; system_prompt: string } | null>(
+    () => getActiveAgentFromStorage(),
+  );
+
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
-  /** Ширина выпадающего окна = ширина кнопки-триггера */
-  const [popoverPanelWidth, setPopoverPanelWidth] = useState<number | null>(null);
   const [modelSearch, setModelSearch] = useState('');
-  const [activeAgent, setActiveAgent] = useState<{ id: number; name: string; system_prompt: string } | null>(() => getActiveAgentFromStorage());
-  const [selectedModelPath, setSelectedModelPath] = useState<string>('');
+  /** Правая панель со списком моделей — только при наведении на строку подключения. */
+  const [modelsSubmenuOpen, setModelsSubmenuOpen] = useState(false);
+  /** Какое подключение сейчас активно (наведено) в левой панели. */
+  const [activeConnectionLabel, setActiveConnectionLabel] = useState<string | null>(null);
+
   const { menuItemColor, menuItemHover, menuDividerBorder } = getMenuColors(isDarkMode);
   const windowSx = { ...getDropdownPanelSx(isDarkMode) } as Record<string, unknown>;
   const dropdownItemSx = useMemo(() => getDropdownItemSx(isDarkMode), [isDarkMode]);
@@ -78,6 +96,33 @@ export default function AgentSelector({ isDarkMode = true, maxWidth, triggerMaxW
   const mutedTextColor = isDarkMode ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.85)';
   const placeholderColor = isDarkMode ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.35)';
   const subtleColor = isDarkMode ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.5)';
+
+  // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+  const getConnectionLabel = useCallback((model: ModelItem): string => {
+    if (model.llm_host_id) return `llm-svc://${model.llm_host_id}`;
+    const path = model.path || '';
+    if (!path) return 'local';
+    if (!path.includes('://')) return 'local';
+    const [scheme, rest = ''] = path.split('://');
+    if (scheme === 'llm-svc') {
+      const host = rest.includes('/') ? rest.split('/')[0] : rest;
+      return host ? `llm-svc://${host}` : 'llm-svc';
+    }
+    return scheme || 'local';
+  }, []);
+
+  const getModelDisplayName = useCallback(
+    (path: string) => {
+      if (!path) return '';
+      const fromList = models.find((m) => m.path === path);
+      if (fromList?.name) return fromList.name.replace(/\.gguf$/i, '');
+      return path.split(/[/\\]/).pop()?.replace(/\.gguf$/i, '') ?? path;
+    },
+    [models],
+  );
+
+  // ─── Data loading ─────────────────────────────────────────────────────────────
 
   const loadModels = useCallback(async () => {
     setLoadingModels(true);
@@ -92,11 +137,10 @@ export default function AgentSelector({ isDarkMode = true, maxWidth, triggerMaxW
       }
       if (currentResp.ok) {
         const current = await currentResp.json();
-        const path = current?.path || '';
-        setSelectedModelPath(path);
+        setSelectedModelPath(current?.path || '');
       }
     } catch {
-      // silent
+      /* silent */
     } finally {
       setLoadingModels(false);
     }
@@ -104,7 +148,7 @@ export default function AgentSelector({ isDarkMode = true, maxWidth, triggerMaxW
 
   useEffect(() => {
     if (anchorEl) {
-      loadModels();
+      void loadModels();
     }
   }, [anchorEl, loadModels]);
 
@@ -112,9 +156,7 @@ export default function AgentSelector({ isDarkMode = true, maxWidth, triggerMaxW
     let cancelled = false;
     fetch(getApiUrl('/api/models/current'))
       .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (!cancelled && data?.path) setSelectedModelPath(data.path);
-      })
+      .then((data) => { if (!cancelled && data?.path) setSelectedModelPath(data.path); })
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
@@ -125,23 +167,26 @@ export default function AgentSelector({ isDarkMode = true, maxWidth, triggerMaxW
     return () => window.removeEventListener('agentSelected', onAgentSelected);
   }, []);
 
+  // ─── Open / close ─────────────────────────────────────────────────────────────
+
   const handleOpen = (e: React.MouseEvent<HTMLElement>) => {
-    const el = e.currentTarget;
-    setPopoverPanelWidth(Math.round(el.getBoundingClientRect().width));
-    setAnchorEl(el);
+    setAnchorEl(e.currentTarget);
     setModelSearch('');
+    setModelsSubmenuOpen(false);
+    setActiveConnectionLabel(null);
   };
 
   const handleClose = () => {
     setAnchorEl(null);
     setModelSearch('');
+    setModelsSubmenuOpen(false);
+    setActiveConnectionLabel(null);
   };
 
+  // ─── Model select ─────────────────────────────────────────────────────────────
+
   const handleSelectModel = async (modelPath: string) => {
-    if (modelPath === selectedModelPath) {
-      handleClose();
-      return;
-    }
+    if (modelPath === selectedModelPath) { handleClose(); return; }
     try {
       setIsLoadingModel(true);
       setLoadingModelPath(modelPath);
@@ -168,46 +213,30 @@ export default function AgentSelector({ isDarkMode = true, maxWidth, triggerMaxW
     }
   };
 
-  const filteredModels = models.filter(
-    (m) =>
-      !modelSearch.trim() ||
-      m.name.toLowerCase().includes(modelSearch.toLowerCase()) ||
-      (m.path && m.path.toLowerCase().includes(modelSearch.toLowerCase())),
-  );
+  // ─── Derived ─────────────────────────────────────────────────────────────────
 
-  const paperSx = useMemo(
-    () => ({
-      mt: 0.75,
-      p: 0,
-      overflow: 'hidden',
-      background: 'transparent !important',
-      backgroundColor: 'transparent !important',
-      boxShadow: 'none !important',
-      backdropFilter: 'none',
-      border: 'none',
-      display: 'flex',
-      flexDirection: 'column' as const,
-      alignItems: 'stretch',
-      maxWidth: '90vw',
-      boxSizing: 'border-box' as const,
-      ...(popoverPanelWidth != null
-        ? {
-            width: `${popoverPanelWidth}px`,
-            minWidth: `${popoverPanelWidth}px`,
-            maxWidth: `min(90vw, ${popoverPanelWidth}px)`,
-          }
-        : {}),
-    }),
-    [popoverPanelWidth],
-  );
+  /** Список подключений (уникальные метки) с их моделями. */
+  const connections = useMemo(() => {
+    const map = new Map<string, ModelItem[]>();
+    for (const m of models) {
+      const label = getConnectionLabel(m);
+      const bucket = map.get(label);
+      if (bucket) bucket.push(m);
+      else map.set(label, [m]);
+    }
+    return Array.from(map.entries()).map(([label, items]) => ({ label, items }));
+  }, [models, getConnectionLabel]);
 
-  const getModelDisplayName = (path: string) => {
-    if (!path) return '';
-    const fromList = models.find((m) => m.path === path);
-    if (fromList?.name) return fromList.name.replace(/\.gguf$/i, '');
-    const fromPath = path.split(/[/\\]/).pop()?.replace(/\.gguf$/i, '') ?? path;
-    return fromPath;
-  };
+  /** Модели активного подключения, отфильтрованные по поиску. */
+  const filteredModels = useMemo(() => {
+    const base = connections.find((c) => c.label === activeConnectionLabel)?.items ?? [];
+    if (!modelSearch.trim()) return base;
+    const q = modelSearch.toLowerCase();
+    return base.filter(
+      (m) => m.name.toLowerCase().includes(q) || m.path.toLowerCase().includes(q),
+    );
+  }, [connections, activeConnectionLabel, modelSearch]);
+
   const triggerLabel = activeAgent
     ? activeAgent.name
     : loadingModelPath
@@ -215,6 +244,19 @@ export default function AgentSelector({ isDarkMode = true, maxWidth, triggerMaxW
       : selectedModelPath
         ? getModelDisplayName(selectedModelPath)
         : 'Агенты / Модели';
+
+  // ─── Styles ──────────────────────────────────────────────────────────────────
+
+  /** Стиль строки левой панели. */
+  const leftEntrySx = (active: boolean) => ({
+    ...dropdownItemSx,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 1,
+    color: active ? menuItemColor : mutedTextColor,
+    fontWeight: active ? 600 : 400,
+    bgcolor: active ? menuItemHover : 'transparent',
+  });
 
   const triggerSx = {
     display: 'flex',
@@ -238,18 +280,36 @@ export default function AgentSelector({ isDarkMode = true, maxWidth, triggerMaxW
     },
   };
 
+  // Paper Popover: прозрачный враппер, без тени — каждая карточка стилизуется сама
+  const paperSx = {
+    mt: 0.75,
+    p: 0,
+    overflow: 'visible',
+    background: 'transparent !important',
+    backgroundColor: 'transparent !important',
+    boxShadow: 'none !important',
+    backdropFilter: 'none',
+    border: 'none',
+    maxWidth: '96vw',
+  };
+
+  // ─── Render ──────────────────────────────────────────────────────────────────
+
   return (
     <Box sx={{ maxWidth: maxWidth ?? '100%', width: '100%', mx: 'auto' }}>
       <Tooltip
         title={
           activeAgent
-            ? `Агент: ${activeAgent.name}. Смена агента — Инструменты → Агенты`
+            ? `Агент: ${activeAgent.name}. Модели — наведите «Модели» в меню. Смена агента: Инструменты → Агенты`
             : loadingModelPath || selectedModelPath
-              ? `Модель: ${getModelDisplayName(loadingModelPath || selectedModelPath || '')}`
-              : 'Список моделей. Агенты — в меню Инструменты'
+              ? `Модель: ${getModelDisplayName(loadingModelPath || selectedModelPath || '')}. Список моделей — наведите «Модели»`
+              : 'Модели — наведите на пункт «Модели». Агенты — в меню Инструменты'
         }
       >
-        <Box onClick={isLoadingModel ? undefined : handleOpen} sx={{ ...triggerSx, cursor: isLoadingModel ? 'default' : 'pointer', opacity: isLoadingModel ? 0.9 : 1 }}>
+        <Box
+          onClick={isLoadingModel ? undefined : handleOpen}
+          sx={{ ...triggerSx, cursor: isLoadingModel ? 'default' : 'pointer', opacity: isLoadingModel ? 0.9 : 1 }}
+        >
           {activeAgent ? (
             <AgentIcon sx={{ fontSize: '1.1rem', color: mutedTextColor, flexShrink: 0 }} />
           ) : loadingModelPath || selectedModelPath ? (
@@ -257,13 +317,25 @@ export default function AgentSelector({ isDarkMode = true, maxWidth, triggerMaxW
           ) : (
             <AgentIcon sx={{ fontSize: '1.1rem', color: mutedTextColor, flexShrink: 0 }} />
           )}
-          <Typography sx={{ fontSize: MENU_ACTION_TEXT_SIZE, fontWeight: 500, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <Typography
+            sx={{
+              fontSize: MENU_ACTION_TEXT_SIZE,
+              fontWeight: 500,
+              flex: 1,
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
             {triggerLabel}
           </Typography>
           {isLoadingModel ? (
             <CircularProgress size={16} sx={{ color: mutedTextColor, flexShrink: 0 }} />
           ) : (
-            <ExpandMoreIcon sx={{ ...DROPDOWN_CHEVRON_SX, transform: anchorEl ? 'rotate(180deg)' : 'none', flexShrink: 0 }} />
+            <ExpandMoreIcon
+              sx={{ ...DROPDOWN_CHEVRON_SX, transform: anchorEl ? 'rotate(180deg)' : 'none', flexShrink: 0 }}
+            />
           )}
         </Box>
       </Tooltip>
@@ -276,58 +348,133 @@ export default function AgentSelector({ isDarkMode = true, maxWidth, triggerMaxW
         transformOrigin={{ vertical: 'top', horizontal: 'left' }}
         slotProps={{
           paper: { sx: paperSx },
-          transition: {
-            onExited: () => setPopoverPanelWidth(null),
-          },
         }}
       >
+        {/* Уход мыши с области обеих карточек — скрывает правую панель */}
         <Box
-          sx={{
-            ...windowSx,
-            width: popoverPanelWidth != null ? `${popoverPanelWidth}px` : '100%',
-            minWidth: popoverPanelWidth != null ? `${popoverPanelWidth}px` : undefined,
-            maxWidth: popoverPanelWidth != null ? `${popoverPanelWidth}px` : undefined,
-            display: 'flex',
-            flexDirection: 'column',
-            boxSizing: 'border-box',
-          }}
+          onMouseLeave={() => setModelsSubmenuOpen(false)}
+          sx={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start', gap: '6px' }}
         >
-          <Box sx={{ display: 'flex', alignItems: 'center', px: 1.5, py: 0.9, gap: 1, borderBottom: `1px solid ${menuDividerBorder}` }}>
-            <SearchIcon sx={{ color: subtleColor, fontSize: 16, flexShrink: 0 }} />
-            <Box
-              component="input"
-              placeholder="Поиск моделей..."
-              value={modelSearch}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setModelSearch(e.target.value)}
-              disabled={isLoadingModel}
-              sx={{
-                flex: 1,
-                minWidth: 0,
-                bgcolor: 'transparent',
-                border: 'none',
-                outline: 'none',
-                color: menuItemColor,
-                fontSize: MENU_ACTION_TEXT_SIZE,
-                '&::placeholder': { color: placeholderColor },
-              }}
-            />
-          </Box>
+          {/* ── Левая карточка: список подключений ─────────────── */}
           <Box
             sx={{
-              maxHeight: 208,
+              ...windowSx,
+              width: LEFT_PANEL_W,
+              flexShrink: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              maxHeight: 300,
               overflowY: 'auto',
-              py: 0.5,
-              '&::-webkit-scrollbar': { width: 3 },
-              '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(255,255,255,0.12)', borderRadius: 2 },
-              pointerEvents: isLoadingModel ? 'none' : 'auto',
+              scrollbarWidth: 'none',
+              msOverflowStyle: 'none',
+              '&::-webkit-scrollbar': { display: 'none' },
             }}
           >
-            {loadingModels ? (
-              <Box sx={{ py: 2, display: 'flex', justifyContent: 'center' }}>
-                <CircularProgress size={20} sx={{ color: subtleColor }} />
+            <Box sx={{ py: 0.5, px: 0.5 }}>
+              {connections.length === 0 ? (
+                <Box sx={{ px: 1.5, py: 2, fontSize: MENU_ACTION_TEXT_SIZE, color: subtleColor, textAlign: 'center' }}>
+                  {loadingModels ? '' : 'Нет подключений'}
+                </Box>
+              ) : (
+                connections.map((conn) => {
+                  const isActive = modelsSubmenuOpen && conn.label === activeConnectionLabel;
+                  const hasSelectedModel = conn.items.some((m) => m.path === selectedModelPath);
+                  return (
+                    <Box
+                      key={conn.label}
+                      onMouseEnter={() => {
+                        setActiveConnectionLabel(conn.label);
+                        setModelsSubmenuOpen(true);
+                        setModelSearch('');
+                      }}
+                      sx={leftEntrySx(isActive || hasSelectedModel)}
+                    >
+                      <ComputerIcon sx={{ fontSize: 18, color: iconColor, flexShrink: 0 }} />
+                      <Typography
+                        sx={{
+                          flex: 1,
+                          minWidth: 0,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          fontSize: MENU_ACTION_TEXT_SIZE,
+                        }}
+                      >
+                        {conn.label}
+                      </Typography>
+                      <ChevronRightIcon
+                        sx={{
+                          fontSize: 18,
+                          color: subtleColor,
+                          flexShrink: 0,
+                          transform: isActive ? 'rotate(90deg)' : 'none',
+                          transition: 'transform 0.15s',
+                        }}
+                      />
+                    </Box>
+                  );
+                })
+              )}
+              {loadingModels && (
+                <Box sx={{ py: 1.5, display: 'flex', justifyContent: 'center' }}>
+                  <CircularProgress size={18} sx={{ color: subtleColor }} />
+                </Box>
+              )}
+            </Box>
+          </Box>
+
+          {/* ── Правая карточка: список моделей подключения ─────── */}
+          {modelsSubmenuOpen ? (
+            <Box
+              sx={{
+                ...windowSx,
+                width: RIGHT_PANEL_W,
+                display: 'flex',
+                flexDirection: 'column',
+              }}
+            >
+              {/* Поиск */}
+              <Box
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  px: 1.5,
+                  py: 0.9,
+                  gap: 1,
+                  borderBottom: `1px solid ${menuDividerBorder}`,
+                }}
+              >
+                <SearchIcon sx={{ color: subtleColor, fontSize: 16, flexShrink: 0 }} />
+                <Box
+                  component="input"
+                  placeholder="Поиск моделей..."
+                  value={modelSearch}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setModelSearch(e.target.value)}
+                  disabled={isLoadingModel}
+                  sx={{
+                    flex: 1,
+                    bgcolor: 'transparent',
+                    border: 'none',
+                    outline: 'none',
+                    color: menuItemColor,
+                    fontSize: MENU_ACTION_TEXT_SIZE,
+                    '&::placeholder': { color: placeholderColor },
+                  }}
+                />
               </Box>
-            ) : (
-              <>
+
+              {/* Список */}
+              <Box
+                sx={{
+                  maxHeight: 260,
+                  overflowY: 'auto',
+                  py: 0.5,
+                  pointerEvents: isLoadingModel ? 'none' : 'auto',
+                  scrollbarWidth: 'none',
+                  msOverflowStyle: 'none',
+                  '&::-webkit-scrollbar': { display: 'none' },
+                }}
+              >
                 {filteredModels.map((model) => {
                   const isSelected = selectedModelPath === model.path && !loadingModelPath;
                   const isLoading = loadingModelPath === model.path;
@@ -371,9 +518,9 @@ export default function AgentSelector({ isDarkMode = true, maxWidth, triggerMaxW
                     {modelSearch.trim() ? 'Ничего не найдено' : 'Нет доступных моделей'}
                   </Box>
                 )}
-              </>
-            )}
-          </Box>
+              </Box>
+            </Box>
+          ) : null}
         </Box>
       </Popover>
     </Box>

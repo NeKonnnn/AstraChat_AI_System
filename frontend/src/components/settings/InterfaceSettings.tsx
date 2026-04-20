@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { useTheme } from '@mui/material/styles';
 import {
   Box,
+  Button,
   Typography,
   Card,
   CardContent,
@@ -63,7 +64,19 @@ const SIDEBAR_PALETTE = [
   { name: 'Красно-фиолетовый', value: '#7b1fa2' },
   { name: 'Оранжевый', value: '#ff9800' },
   { name: 'Тёмно-оранжевый', value: '#e65100' },
+  { name: 'Глубокий чёрный', value: '#1D1D1F' },
+  { name: 'Насыщенный тёмно-синий', value: '#05386B' },
+  { name: 'Мягкий светло-зелёный', value: '#EDF5E1' },
 ];
+
+const HEX_COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
+
+const normalizeHexInput = (rawValue: string): string => {
+  const trimmed = rawValue.trim().replace(/[^0-9a-fA-F#]/g, '');
+  if (!trimmed) return '';
+  const withPrefix = trimmed.startsWith('#') ? trimmed : `#${trimmed}`;
+  return withPrefix.slice(0, 7);
+};
 
 export default function InterfaceSettings() {
   const theme = useTheme();
@@ -104,6 +117,10 @@ export default function InterfaceSettings() {
   const [colorPopoverAnchor, setColorPopoverAnchor] = useState<HTMLElement | null>(null);
   const [workZoneBgPopoverAnchor, setWorkZoneBgPopoverAnchor] = useState<HTMLElement | null>(null);
   const [modelModePopoverAnchor, setModelModePopoverAnchor] = useState<HTMLElement | null>(null);
+  const [customSidebarHex, setCustomSidebarHex] = useState<string>(() => {
+    const savedColor = localStorage.getItem(SIDEBAR_PANEL_COLOR_KEY) || '';
+    return HEX_COLOR_RE.test(savedColor) ? savedColor.toUpperCase() : '#667EEA';
+  });
 
   const [workZoneBgMode, setWorkZoneBgMode] = useState<WorkZoneBgMode>(() => getWorkZoneBgMode());
 
@@ -120,13 +137,13 @@ export default function InterfaceSettings() {
     if (saved === 'settings' || saved === 'workspace' || saved === 'workspace_agent') return saved;
     // Миграция со старого булевого ключа
     const oldBool = localStorage.getItem('show_model_selector_in_settings');
-    return oldBool === 'true' ? 'settings' : 'workspace';
+    return oldBool === 'true' ? 'settings' : 'workspace_agent';
   });
 
   const MODEL_SELECTOR_OPTIONS: { value: ModelSelectorMode; label: string }[] = [
     { value: 'settings', label: 'Выбор модели в настройках' },
-    { value: 'workspace', label: 'Выбор модели в рабочей зоне' },
-    { value: 'workspace_agent', label: 'Выбор модели/агента в рабочей зоне' },
+    { value: 'workspace', label: 'Стиль выбора модели: классический' },
+    { value: 'workspace_agent', label: 'Стиль выбора модели: AtraChat' },
   ];
 
   const handleModelSelectorModeChange = (mode: ModelSelectorMode) => {
@@ -161,6 +178,16 @@ export default function InterfaceSettings() {
     setColorPickerOpen(false);
     showNotification('success', 'Цвет панелей применён');
   };
+
+  const handleApplyCustomSidebarColor = () => {
+    if (!HEX_COLOR_RE.test(customSidebarHex)) {
+      showNotification('warning', 'Введите HEX-цвет в формате #RRGGBB');
+      return;
+    }
+    handlePaletteColorPick(customSidebarHex.toUpperCase());
+  };
+
+  const selectedSidebarPreset = SIDEBAR_PALETTE.find((item) => item.value === interfaceSettings.sidebarPanelColor);
 
   const handleChatInputStyleChange = (value: 'compact' | 'classic') => {
     const newSettings = { ...interfaceSettings, chatInputStyle: value };
@@ -515,8 +542,8 @@ export default function InterfaceSettings() {
                   modelSelectorMode === 'settings'
                     ? 'Выбор модели доступен в разделе Настройки → Модели'
                     : modelSelectorMode === 'workspace'
-                    ? 'Кнопка выбора модели отображается в левом углу рабочей зоны'
-                    : 'Кнопка «Агент / Модель» отображается в левом углу рабочей зоны'
+                    ? 'В рабочей зоне показывается классический селектор моделей'
+                    : 'В рабочей зоне показывается селектор AstraChat (агент/модель)'
                 }
                 secondaryTypographyProps={{ variant: 'body2', sx: { mt: 0.5 } }}
               />
@@ -776,6 +803,8 @@ export default function InterfaceSettings() {
                   <Typography sx={{ color: 'white', fontWeight: 500, fontSize: '0.875rem' }}>
                     {!interfaceSettings.sidebarPanelColor
                       ? 'По умолчанию'
+                      : selectedSidebarPreset
+                        ? selectedSidebarPreset.name
                       : interfaceSettings.sidebarPanelColor.startsWith('#')
                         ? `Пользовательский (${interfaceSettings.sidebarPanelColor})`
                         : 'Пользовательский'}
@@ -853,6 +882,54 @@ export default function InterfaceSettings() {
                 title={item.name}
               />
             ))}
+          </Box>
+          <Divider sx={{ my: 2 }} />
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            Свой цвет (HEX)
+          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            <Box
+              component="input"
+              type="color"
+              value={HEX_COLOR_RE.test(customSidebarHex) ? customSidebarHex : '#667EEA'}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCustomSidebarHex(e.target.value.toUpperCase())}
+              sx={{
+                width: 52,
+                height: 40,
+                p: 0,
+                border: '1px solid',
+                borderColor: 'divider',
+                borderRadius: 1,
+                backgroundColor: 'transparent',
+                cursor: 'pointer',
+              }}
+            />
+            <Box
+              component="input"
+              type="text"
+              value={customSidebarHex}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                setCustomSidebarHex(normalizeHexInput(e.target.value).toUpperCase());
+              }}
+              placeholder="#RRGGBB"
+              sx={{
+                height: 40,
+                minWidth: 120,
+                px: 1.5,
+                borderRadius: 1,
+                border: '1px solid',
+                borderColor: 'divider',
+                outline: 'none',
+                color: 'text.primary',
+                backgroundColor: 'background.paper',
+                '&:focus': {
+                  borderColor: 'primary.main',
+                },
+              }}
+            />
+            <Button variant="contained" size="small" onClick={handleApplyCustomSidebarColor}>
+              Применить
+            </Button>
           </Box>
         </DialogContent>
       </Dialog>
