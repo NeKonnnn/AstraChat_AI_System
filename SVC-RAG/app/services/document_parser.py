@@ -1,4 +1,5 @@
 import logging
+import re
 from io import BytesIO
 from typing import Any, Dict, List, Optional
 
@@ -121,6 +122,44 @@ def _pdf_magic_bytes(data: bytes) -> bool:
     return bool(data and len(data) >= 5 and data[:5] == b"%PDF-")
 
 
+def _normalize_extracted_text(text: str) -> str:
+    """Нормализация извлечённого текста перед чанкингом/эмбеддингом."""
+    t = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    # Мягкие переносы и разрывы слов на стыках строк из PDF
+    t = t.replace("\u00ad", "")
+    t = re.sub(r"(?<=\w)-\n(?=\w)", "", t)
+    # Убираем «рваные» пробелы, но сохраняем абзацы
+    t = re.sub(r"[ \t]+", " ", t)
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    return t.strip()
+
+
+def _looks_like_low_quality_pdf_text(text: str, n_pages: int) -> bool:
+    """Эвристика плохого текстового слоя PDF (часто сканы/битые шрифты)."""
+    t = (text or "").strip()
+    if not t:
+        return True
+    pages = max(int(n_pages or 1), 1)
+    min_chars_expected = max(120, pages * 80)
+    if len(t) < min_chars_expected:
+        return True
+    letters = sum(1 for ch in t if ch.isalpha())
+    digits = sum(1 for ch in t if ch.isdigit())
+    spaces = sum(1 for ch in t if ch.isspace())
+    total = max(len(t), 1)
+    alpha_ratio = letters / total
+    # Очень мало букв при длинном тексте → вероятный "мусорный" слой
+    if alpha_ratio < 0.35 and (digits + spaces) / total > 0.45:
+        return True
+    # Слишком много одиночных токенов/обрывков
+    toks = re.findall(r"\w+", t, re.UNICODE)
+    if toks:
+        short_ratio = sum(1 for w in toks if len(w) <= 2) / len(toks)
+        if short_ratio > 0.72:
+            return True
+    return False
+
+
 async def extract_text_from_pdf_bytes(file_data: bytes) -> Dict[str, Any]:
     """
     PyMuPDF + pdfplumber + PyPDF2 — выбирается самый длинный извлечённый текст;
@@ -143,20 +182,22 @@ async def extract_text_from_pdf_bytes(file_data: bytes) -> Dict[str, Any]:
             for i in range(n_pages):
                 parts.append(doc.load_page(i).get_text() or "")
             doc.close()
-            t = "\n".join(parts)
+            t = _normalize_extracted_text("\n".join(parts))
             if t.strip():
                 candidates.append(("pymupdf", t))
                 logger.info("PDF: PyMuPDF извлёк %s символов, страниц=%s", len(t), n_pages)
         except Exception as e:
             logger.warning("PDF: PyMuPDF ошибка: %s", e)
 
-    text_pb = ""
+    text_pb_parts: List[str] = []
     if PDFPLUMBER_AVAILABLE:
         try:
             with pdfplumber.open(BytesIO(file_data)) as pdf:
                 n_pages = max(n_pages, len(pdf.pages))
                 for page in pdf.pages:
-                    text_pb += page.extract_text() or ""
+                    page_text = page.extract_text() or ""
+                    text_pb_parts.append(page_text)
+            text_pb = _normalize_extracted_text("\n".join(text_pb_parts))
             if text_pb.strip():
                 candidates.append(("pdfplumber", text_pb))
                 logger.info("PDF: pdfplumber извлёк %s символов", len(text_pb))
@@ -167,9 +208,10 @@ async def extract_text_from_pdf_bytes(file_data: bytes) -> Dict[str, Any]:
         try:
             reader = PyPDF2.PdfReader(BytesIO(file_data))
             n_pages = max(n_pages, len(reader.pages))
-            text_p2 = ""
+            text_p2_parts: List[str] = []
             for page in reader.pages:
-                text_p2 += page.extract_text() or ""
+                text_p2_parts.append(page.extract_text() or "")
+            text_p2 = _normalize_extracted_text("\n".join(text_p2_parts))
             if text_p2.strip():
                 candidates.append(("pypdf2", text_p2))
                 logger.info("PDF: PyPDF2 извлёк %s символов", len(text_p2))
@@ -182,18 +224,15 @@ async def extract_text_from_pdf_bytes(file_data: bytes) -> Dict[str, Any]:
         label, text = max(candidates, key=lambda x: len(x[1].strip()))
         logger.info("PDF: для индекса выбран движок «%s» (%s символов)", label, len(text.strip()))
 
-    pages_eff = max(n_pages, 1)
-    min_chars_expected = max(50, pages_eff * 30)
-    weak_layer = bool(text.strip()) and len(text.strip()) < min_chars_expected
+    weak_layer = _looks_like_low_quality_pdf_text(text, n_pages)
 
     need_ocr = (not text.strip() or weak_layer) and PDF2IMAGE_AVAILABLE and PIL_AVAILABLE
     if need_ocr:
         if weak_layer:
             logger.info(
-                "PDF: текстовый слой короткий (%s симв., ожидание ~≥%s для %s стр.) — пробуем OCR",
+                "PDF: текстовый слой низкого качества (%s симв., страниц=%s) — пробуем OCR",
                 len(text.strip()),
-                min_chars_expected,
-                pages_eff,
+                max(n_pages, 1),
             )
         else:
             logger.info("PDF: текстовый слой пуст — rasterize+OCR (poppler + ocr-service)")
@@ -221,6 +260,7 @@ async def extract_text_from_pdf_bytes(file_data: bytes) -> Dict[str, Any]:
                     logger.warning("PDF OCR: страница %s: %s", i + 1, result.get("error", "Unknown"))
                     ocr_confidence_scores.append(50.0)
 
+            ocr_text = _normalize_extracted_text(ocr_text)
             if ocr_text.strip():
                 if len(ocr_text.strip()) >= len(text.strip()):
                     text = ocr_text
@@ -242,6 +282,7 @@ async def extract_text_from_pdf_bytes(file_data: bytes) -> Dict[str, Any]:
 
     avg_confidence = sum(confidence_scores) / len(confidence_scores) if confidence_scores else 0.0
     confidence_per_word = 100.0 if avg_confidence > 90.0 else avg_confidence
+    text = _normalize_extracted_text(text)
     confidence_info = _create_confidence_info_for_text(text or "", confidence_per_word, "pdf")
     confidence_info["pages_processed"] = len(confidence_scores) if confidence_scores else (n_pages or 0)
 

@@ -1,6 +1,6 @@
 # API эндпоинты для RAG-файлов проектов
 import logging
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -39,6 +39,7 @@ class ProjectRagSearchRequest(RagSearchEvalBody):
     strategy: Optional[str] = None
     vector_query: Optional[str] = None
     filters: Optional[RagSearchFiltersBody] = None
+    debug_trace: bool = False
 
 
 class ProjectRagSearchHit(BaseModel):
@@ -50,6 +51,7 @@ class ProjectRagSearchHit(BaseModel):
 
 class ProjectRagSearchResponse(BaseModel):
     hits: List[ProjectRagSearchHit]
+    trace: Optional[Dict[str, Any]] = None
 
 
 @router.post("/projects/{project_id}/documents", response_model=ProjectRagIndexResponse)
@@ -135,7 +137,7 @@ async def project_rag_search(
     svc: ProjectRagService = Depends(get_project_rag_service),
 ):
     """Семантический поиск по RAG-документам проекта."""
-    results = await svc.search(
+    payload = await svc.search(
         query=body.query,
         project_id=project_id,
         k=body.k,
@@ -144,11 +146,14 @@ async def project_rag_search(
         strategy=body.strategy,
         vector_query=body.vector_query,
         filters=filters_body_to_domain(body.filters),
+        return_trace=True,
         **eval_search_kwargs_from_body(body),
     )
+    results, trace = payload
     return ProjectRagSearchResponse(
         hits=[
             ProjectRagSearchHit(content=c, score=s, document_id=doc_id, chunk_index=chunk_idx)
             for c, s, doc_id, chunk_idx in results
-        ]
+        ],
+        trace=trace.to_dict() if body.debug_trace else None,
     )

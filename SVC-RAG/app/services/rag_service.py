@@ -17,14 +17,20 @@ from app.services.retrieval_eval import log_retrieval_with_eval
 from app.services.rag_search_helpers import (
     diversify_hits_by_document,
     effective_use_reranking,
+    filter_low_signal_chunks,
     filter_by_min_vector_similarity,
+    keyword_boost_hits,
+    merge_vector_and_keyword_hits,
     resolve_auto_pipeline_strategy,
+    should_diversify_hits,
     vector_fetch_limit,
 )
+from app.database.fts import crude_russian_stem, extract_filenames, extract_proper_nouns
 from app.database.graph_repository import GraphRepository
-from app.services.chunker import split_into_chunks
+from app.services.chunker import split_into_chunks, split_into_chunks_with_meta
 from app.services.document_parser import parse_document
 from app.services.hierarchical import DocumentSummarizer, OptimizedDocumentIndex
+from app.services.retrieval_pipeline import _is_enumeration_query
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +98,24 @@ class RagService:
                 intermediate_summary_chunks=cfg.intermediate_summary_chunks,
             )
             self._optimized_index = OptimizedDocumentIndex(self.rag_client, self.vector_repo)
+
+    async def warm_up(self) -> None:
+        """Прогрев сервиса на старте SVC-RAG.
+
+        Сейчас собирает BM25-индекс один раз, чтобы первый гибридный/auto-запрос
+        не висел 1-5 секунд на горячем построении индекса (особенно после рестарта).
+        Безопасно вызывать многократно: перестроит при ``_bm25_needs_rebuild=True``.
+        """
+        if not self.use_hybrid_search:
+            return
+        try:
+            await self._build_bm25_index()
+            self._bm25_needs_rebuild = False
+            logger.info(
+                "[SVC-RAG] warm_up: BM25-индекс готов (chunks=%d)", len(self.bm25_texts)
+            )
+        except Exception as e:
+            logger.warning("[SVC-RAG] warm_up: BM25 не построен: %s", e)
 
     async def _finalize_hit_rows(
         self,
@@ -190,9 +214,10 @@ class RagService:
                 "chunks_count": hierarchical_doc["metadata"]["total_chunks"],
             }
 
-        chunks = split_into_chunks(text)
-        if not chunks:
+        chunks_with_meta = split_into_chunks_with_meta(text)
+        if not chunks_with_meta:
             return {"ok": False, "error": "После разбиения чанков не осталось", "document_id": None}
+        chunks = [c for c, _m in chunks_with_meta]
 
         metadata: Dict[str, Any] = {"chunks_count": len(chunks), "source": "svc-rag"}
         if confidence_info:
@@ -226,7 +251,13 @@ class RagService:
             return {"ok": False, "error": "Число эмбеддингов не совпадает с числом чанков", "document_id": None}
 
         vectors = [
-            DocumentVector(document_id=doc_id, chunk_index=i, embedding=emb, content=chunks[i], metadata={})
+            DocumentVector(
+                document_id=doc_id,
+                chunk_index=i,
+                embedding=emb,
+                content=chunks_with_meta[i][0],
+                metadata=dict(chunks_with_meta[i][1]),
+            )
             for i, emb in enumerate(embeddings)
         ]
         created = await self.vector_repo.create_vectors_batch(vectors)
@@ -274,7 +305,8 @@ class RagService:
         - "reranking" - векторный/гибридный/иерархический поиск + rerank.
         - "hierarchical" - умный поиск по иерархии (OptimizedDocumentIndex).
         - "hybrid" - гибрид (BM25 + векторный); cross-encoder rerank — если RAG_USE_RERANKING=true в SVC-RAG.
-        - "standard" - только векторный поиск (pgvector), без BM25 и rerank.
+        - "standard" - векторный поиск с постобработкой качества (без BM25/rerank).
+        - "raw_cosine" - сырой векторный поиск (pgvector cosine) без постобработки.
         - "graph" - seed retrieval + расширение по графу связей чанков.
         Также поддерживается "flat" как синоним "standard".
 
@@ -359,12 +391,17 @@ class RagService:
             )
 
         cfg_rerank_enabled = self._cfg.use_reranking
-        use_rerank = effective_use_reranking(use_reranking, cfg_rerank_enabled, rerank_key)
+        use_rerank = effective_use_reranking(
+            use_reranking, cfg_rerank_enabled, rerank_key, query_text=q_text
+        )
 
         # Как в KB/project/memory: широкий пул из pgvector + диверсификация по document_id.
         # Иначе при rerank_top_k=20 весь пул забивают чанки 1–2 больших DOCX, а PDF (напр. CV) не попадает в реранк.
+        # Для перечислительных запросов расширяем k×3, чтобы успеть собрать
+        # кандидатов от всех документов, где есть entity.
+        _fetch_k_seed = k * 3 if _is_enumeration_query(q_text) else k
         fetch_lim = vector_fetch_limit(
-            k,
+            _fetch_k_seed,
             graph=False,
             document_id=document_id,
             use_rerank=use_rerank,
@@ -412,11 +449,191 @@ class RagService:
             )
             return []
 
-        # Фильтрация явно нерелевантных чанков до реранка/гибрида
-        min_sim = float(getattr(self._cfg, "min_vector_similarity", 0.0) or 0.0)
-        pairs = filter_by_min_vector_similarity(pairs, min_sim, k)
+        raw_mode = user_strategy == "raw_cosine"
+        if raw_mode:
+            out_raw = [(v.content, score, v.document_id, v.chunk_index) for v, score in pairs[:k]]
+            await log_retrieval_with_eval(
+                store="global (глобальные документы)",
+                strategy_resolved="raw_cosine",
+                pipeline="pgvector_cosine_similarity (raw, no_postprocess)",
+                extra_lines=[f"k={k}", f"лимит_pgvector={fetch_lim}", f"document_id={document_id}"],
+                final_hits=out_raw,
+                k_requested=k,
+                query_for_eval=q_text,
+                search_started_perf=t_search_start,
+                gold_document_ids=eval_gold_document_ids,
+                gold_chunks=eval_gold_chunks,
+                llm_judge=eval_llm_judge,
+            )
+            return out_raw
 
-        # Гибридный поиск (BM25 + векторный) 
+        # --- Keyword FTS (OR) + Entity lane ---
+        # Те же принципы, что и в retrieval_pipeline.py для нон-global хранилищ:
+        #  1. OR-семантика FTS уже внутри VectorRepository.keyword_search (fts.py).
+        #  2. Entity lane — targeted FTS только по собственным именам/кодам,
+        #     найденные чанки переживают фильтры (pinned).
+        #  3. Enumeration-запросы получают более высокий keyword_weight и не диверсифицируются.
+        # Filename anchor: запросы вида «саммари по X.docx» семантически не
+        # совпадают с содержанием файла — резолвим имя в document_id и принудительно
+        # поднимаем весь документ (см. _fetch_all_chunks ниже).
+        filename_mentions: List[str] = extract_filenames(q_text) if q_text else []
+        filename_doc_ids: List[int] = []
+        if filename_mentions and hasattr(self.doc_repo, "find_document_ids_by_filename"):
+            for fn in filename_mentions:
+                try:
+                    ids = await self.doc_repo.find_document_ids_by_filename(fn)
+                except Exception as e:
+                    logger.warning("[global] find_docs_by_filename(%r) failed: %s", fn, e)
+                    continue
+                if ids:
+                    filename_doc_ids.extend(ids)
+                else:
+                    stem = fn.rsplit(".", 1)[0]
+                    if stem and stem != fn:
+                        try:
+                            ids2 = await self.doc_repo.find_document_ids_by_filename(stem)
+                            if ids2:
+                                filename_doc_ids.extend(ids2)
+                        except Exception:
+                            pass
+            seen_fid: set = set()
+            filename_doc_ids = [d for d in filename_doc_ids if not (d in seen_fid or seen_fid.add(d))]
+            if filename_doc_ids:
+                logger.info(
+                    "[global] filename_anchor: %s → document_ids=%s",
+                    filename_mentions, filename_doc_ids,
+                )
+
+        # Имена файлов в запросе → включаем режим enumeration (широкий пул, без диверсификации).
+        enumeration = _is_enumeration_query(q_text) or bool(filename_doc_ids)
+        entity_tokens: List[str] = extract_proper_nouns(q_text) if q_text else []
+
+        keyword_hits: List[Tuple[DocumentVector, float]] = []
+        if q_text:
+            try:
+                keyword_hits = await self.vector_repo.keyword_search(
+                    q_text,
+                    limit=max(k * 6, 48),
+                    document_id=document_id,
+                    filters=filters,
+                )
+            except Exception as e:
+                # Warning, чтобы тихие провалы keyword-поиска были видны в логах.
+                logger.warning("keyword_search(global) failed: %s", e)
+
+        entity_hits: List[Tuple[DocumentVector, float]] = []
+        entity_keys: set = set()
+        if entity_tokens and q_text:
+            # (1) FTS по именам.
+            try:
+                fts_hits = await self.vector_repo.keyword_search(
+                    " ".join(entity_tokens),
+                    limit=max(k * 8, 64),
+                    document_id=document_id,
+                    filters=filters,
+                )
+                entity_hits.extend(fts_hits)
+            except Exception as e:
+                logger.warning("entity_lane(global) FTS failed: %s", e)
+
+            # (2) ILIKE со stemmer'ом — ВСЕГДА, не только при FTS=0. Лечит
+            # падежи: «Константина» → %Константи%, найдёт «Константин Олегович».
+            stemmed_tokens = [crude_russian_stem(t) for t in entity_tokens]
+            lookup_tokens = list(dict.fromkeys([t for t in stemmed_tokens if t]))
+            if lookup_tokens:
+                try:
+                    ilike_hits = await self.vector_repo.substring_search(
+                        lookup_tokens, limit=max(k * 8, 64), document_id=document_id
+                    )
+                    existing = {(dv.document_id, dv.chunk_index) for dv, _ in entity_hits}
+                    for dv, sc in ilike_hits:
+                        if (dv.document_id, dv.chunk_index) not in existing:
+                            entity_hits.append((dv, sc))
+                            existing.add((dv.document_id, dv.chunk_index))
+                    if ilike_hits:
+                        logger.info(
+                            "[global] entity_lane ILIKE-stemmed: %s → %s → %d чанков",
+                            entity_tokens, lookup_tokens, len(ilike_hits),
+                        )
+                except Exception as e:
+                    logger.warning("entity_ilike_stemmed(global) failed: %s", e)
+
+            # (3) Entity-in-filename: имена героев часто зашиты в имя файла
+            # («..._Некрасов_СК0050629.pdf»). Если у документа имя совпадает
+            # с extracted entity — тянем первые 4 чанка как entity-хиты.
+            if (
+                hasattr(self.doc_repo, "find_document_ids_by_filename")
+                and hasattr(self.vector_repo, "get_vectors_by_document")
+            ):
+                filename_probe = [t for t in stemmed_tokens if len(t) >= 4 and not t.isdigit()]
+                matched_docs: set = set()
+                for tok in filename_probe:
+                    try:
+                        ids = await self.doc_repo.find_document_ids_by_filename(tok)
+                        if ids:
+                            matched_docs.update(ids)
+                    except Exception as e:
+                        logger.warning("entity_find_docs_by_filename(%r, global) failed: %s", tok, e)
+                matched_docs_list = sorted(matched_docs)[:8]
+                if matched_docs_list:
+                    existing = {(dv.document_id, dv.chunk_index) for dv, _ in entity_hits}
+                    added = 0
+                    for doc_id in matched_docs_list:
+                        try:
+                            chunks = await self.vector_repo.get_vectors_by_document(doc_id)
+                        except Exception as e:
+                            logger.warning("get_vectors_by_document(%d, global) failed: %s", doc_id, e)
+                            continue
+                        if not chunks:
+                            continue
+                        chunks_sorted = sorted(
+                            chunks, key=lambda d: int(getattr(d, "chunk_index", 0) or 0)
+                        )
+                        for dv in chunks_sorted[:4]:
+                            key = (dv.document_id, dv.chunk_index)
+                            if key in existing:
+                                continue
+                            entity_hits.append((dv, 0.5))
+                            existing.add(key)
+                            added += 1
+                    if added:
+                        logger.info(
+                            "[global] entity_lane filename-match: %s → docs %s → +%d chunks",
+                            entity_tokens, matched_docs_list, added,
+                        )
+
+            entity_keys = {(dv.document_id, dv.chunk_index) for dv, _ in entity_hits}
+
+        if keyword_hits or entity_hits:
+            combined_kw = list(keyword_hits) + list(entity_hits)
+            kw_weight = 0.65 if (user_strategy == "standard" and not use_rerank) else 0.35
+            if enumeration:
+                kw_weight = max(kw_weight, 0.7)
+            pairs = merge_vector_and_keyword_hits(pairs, combined_kw, keyword_weight=kw_weight)
+
+        # Фильтрация явно нерелевантных чанков до реранка/гибрида.
+        # Entity-хиты обходят min_sim / low_signal — без этого именно «Константина»
+        # в глобальном хранилище тоже теряется.
+        min_sim = float(getattr(self._cfg, "min_vector_similarity", 0.0) or 0.0)
+        if entity_keys:
+            pinned = [h for h in pairs if (h[0].document_id, h[0].chunk_index) in entity_keys]
+            rest = [h for h in pairs if (h[0].document_id, h[0].chunk_index) not in entity_keys]
+            rest = filter_by_min_vector_similarity(rest, min_sim, k)
+            rest = filter_low_signal_chunks(
+                rest,
+                min_len=int(getattr(self._cfg, "min_chunk_length", 40)),
+                rescue_keep=max(k * 3, 12),
+            )
+            pairs = pinned + rest
+        else:
+            pairs = filter_by_min_vector_similarity(pairs, min_sim, k)
+            pairs = filter_low_signal_chunks(
+                pairs,
+                min_len=int(getattr(self._cfg, "min_chunk_length", 40)),
+                rescue_keep=max(k * 3, 12),
+            )
+        pairs = keyword_boost_hits(pairs, q_text)
+
         use_hybrid = self.use_hybrid_search and not document_id
         if user_strategy == "standard":
             use_hybrid = False
@@ -429,7 +646,12 @@ class RagService:
             pairs = [(v, score) for v, score in hybrid_results]
             hybrid_applied = True
 
-        if document_id is None and pairs:
+        if (
+            document_id is None
+            and pairs
+            and not enumeration
+            and should_diversify_hits(pairs)
+        ):
             pool_div = max(int(self._cfg.rerank_top_k or 20), k * 6, 56)
             pairs = diversify_hits_by_document(pairs, min(pool_div, len(pairs)))
 
@@ -458,6 +680,131 @@ class RagService:
             f"реранк_cross_encoder={'да' if use_rerank else 'нет'}",
         ]
 
+        final_limit = k * 2 if enumeration else k
+
+        # Parent-document expansion — см. подробный комментарий в retrieval_pipeline.py.
+        # Короткая версия:
+        #   * filename-anchor (пользователь назвал файл) — override: 20 чанков документа целиком, пиним.
+        #   * entity-anchor (имя встретилось в документе) — мягкий сигнал: 2 соседних
+        #     с entity чанка, НЕ пиним весь документ (иначе «magnet»-эффект: CV
+        #     сосёт все запросы, где упомянут Константин, даже если вопрос про другой файл).
+        #   * enumeration без entity — top-3 документа, по 4 чанка, без пининга всего.
+        pin_whole_doc_ids: set = set(filename_doc_ids or [])
+        entity_anchor_doc_ids: set = set()
+        enum_anchor_doc_ids: set = set()
+        sibling_rows_by_key: Dict[Tuple[Any, Any], Tuple[str, float, Optional[int], Optional[int]]] = {}
+        if entity_keys:
+            for v, _ in pairs:
+                if (v.document_id, v.chunk_index) in entity_keys:
+                    entity_anchor_doc_ids.add(v.document_id)
+        if enumeration and pairs and not entity_anchor_doc_ids:
+            seen_doc_best: Dict[Any, float] = {}
+            for v, sc in pairs:
+                if v.document_id not in seen_doc_best or float(sc) > seen_doc_best[v.document_id]:
+                    seen_doc_best[v.document_id] = float(sc)
+            for doc_id, _ in sorted(seen_doc_best.items(), key=lambda x: x[1], reverse=True)[:3]:
+                enum_anchor_doc_ids.add(doc_id)
+        all_anchor_doc_ids: set = pin_whole_doc_ids | entity_anchor_doc_ids | enum_anchor_doc_ids
+
+        if all_anchor_doc_ids:
+            existing = {(v.document_id, v.chunk_index) for v, _ in pairs}
+            base_sib_score = min((float(sc) for _, sc in pairs), default=0.01) * 0.5
+            if base_sib_score <= 0:
+                base_sib_score = 0.01
+            # Entity-сиблинги ещё ниже, чтобы не выжимать чанки других доков с тем же именем.
+            entity_sib_score = base_sib_score * 0.5
+
+            def _cap_global(doc_id: Any) -> int:
+                if doc_id in pin_whole_doc_ids:
+                    return 20
+                if doc_id in entity_anchor_doc_ids:
+                    return 2
+                if doc_id in enum_anchor_doc_ids:
+                    return 4
+                return 0
+
+            for doc_id in all_anchor_doc_ids:
+                cap = _cap_global(doc_id)
+                if cap <= 0:
+                    continue
+                try:
+                    doc_chunks = await self.vector_repo.get_vectors_by_document(doc_id)
+                except Exception as e:
+                    logger.warning("[global] parent_expansion get_vectors_by_document(%s): %s", doc_id, e)
+                    continue
+                if not doc_chunks:
+                    continue
+                doc_chunks.sort(key=lambda d: int(getattr(d, "chunk_index", 0) or 0))
+                entity_chunk_indices = {
+                    v.chunk_index for v in doc_chunks
+                    if (v.document_id, v.chunk_index) in entity_keys
+                }
+                if doc_id in entity_anchor_doc_ids and entity_chunk_indices:
+                    def _prox(ci: int, anchors: set = entity_chunk_indices) -> int:
+                        return min(abs(ci - a) for a in anchors)
+                    doc_chunks.sort(
+                        key=lambda d: (
+                            _prox(int(getattr(d, "chunk_index", 0) or 0)),
+                            int(getattr(d, "chunk_index", 0) or 0),
+                        )
+                    )
+                taken = 0
+                sib_score = entity_sib_score if doc_id in entity_anchor_doc_ids else base_sib_score
+                for dv in doc_chunks:
+                    if taken >= cap:
+                        break
+                    key = (dv.document_id, dv.chunk_index)
+                    if key in existing:
+                        continue
+                    if doc_id in entity_anchor_doc_ids and entity_chunk_indices:
+                        ci = int(getattr(dv, "chunk_index", 0) or 0)
+                        if min(abs(ci - a) for a in entity_chunk_indices) > 2:
+                            break
+                    sibling_rows_by_key[key] = (dv.content, sib_score, dv.document_id, dv.chunk_index)
+                    pairs.append((dv, sib_score))
+                    existing.add(key)
+                    taken += 1
+            if sibling_rows_by_key:
+                logger.info(
+                    "[global] parent-expansion: +%s sibling-чанков "
+                    "(pin_whole=%s, entity_anchor=%s, enum_anchor=%s)",
+                    len(sibling_rows_by_key),
+                    sorted(list(pin_whole_doc_ids)),
+                    sorted(list(entity_anchor_doc_ids)),
+                    sorted(list(enum_anchor_doc_ids)),
+                )
+
+        def _cut_with_entity_pin(rows: List[Tuple[str, float, Optional[int], Optional[int]]]) -> List[Tuple[str, float, Optional[int], Optional[int]]]:
+            """Срезает до ``final_limit`` и пиннит ТОЛЬКО:
+              * сами entity-чанки (точечное попадание — без них перечисление сломается);
+              * чанки filename-anchor документов (пользователь явно назвал файл).
+
+            Entity-anchor siblings и enum siblings в пининг НЕ попадают — они просто
+            лежат в общей куче с пониженным score и пробиваются по общему ранжированию.
+            Это лекарство от «magnet»-эффекта: CV не будет цеплять все запросы с
+            упоминанием имени, если оно есть и в других документах.
+            """
+            if not rows:
+                return []
+            if not entity_keys and not pin_whole_doc_ids:
+                return rows[:final_limit]
+            anchor_rows: List[Tuple[str, float, Optional[int], Optional[int]]] = []
+            seen: set = set()
+            for row in rows:
+                _, _, doc_id, chunk_idx = row
+                key = (doc_id, chunk_idx)
+                if key in seen:
+                    continue
+                is_entity = key in entity_keys
+                is_whole_doc_pin = doc_id in pin_whole_doc_ids
+                if is_entity or is_whole_doc_pin:
+                    anchor_rows.append(row)
+                    seen.add(key)
+            anchor_rows.sort(key=lambda r: (int(r[2] or 0), int(r[3] or 0)))
+            others = [r for r in rows if (r[2], r[3]) not in seen]
+            merged = anchor_rows + others
+            return merged[: max(final_limit, len(anchor_rows))]
+
         if use_rerank and len(pairs) > 1:
             passages = [v.content for v, _ in pairs]
             try:
@@ -472,7 +819,7 @@ class RagService:
                         final_score = 0.7 * rerank_score + 0.3 * original_score
                         out.append((v.content, final_score, v.document_id, v.chunk_index))
                 logger.info("[SVC-RAG] search store=global rerank=ok hits=%s", len(out))
-                final_out = await self._finalize_hit_rows(out[:k], used_rerank=True)
+                final_out = await self._finalize_hit_rows(_cut_with_entity_pin(out), used_rerank=True)
                 await log_retrieval_with_eval(
                     store="global (глобальные документы)",
                     strategy_resolved=user_strategy,
@@ -490,7 +837,8 @@ class RagService:
             except Exception as e:
                 logger.warning("Rerank failed, using vector order: %s", e)
 
-        out_pairs = [(v.content, score, v.document_id, v.chunk_index) for v, score in pairs[:k]]
+        out_pairs_all = [(v.content, score, v.document_id, v.chunk_index) for v, score in pairs]
+        out_pairs = _cut_with_entity_pin(out_pairs_all)
         logger.info("[SVC-RAG] search store=global done hits=%s (final order без rerank или после сбоя rerank)", len(out_pairs))
         final_pairs = await self._finalize_hit_rows(out_pairs, used_rerank=False)
         await log_retrieval_with_eval(

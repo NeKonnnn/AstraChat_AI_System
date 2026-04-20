@@ -1,6 +1,6 @@
 # API эндпоинты для постоянной Базы Знаний (Knowledge Base)
 import logging
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -37,6 +37,7 @@ class KbSearchRequest(RagSearchEvalBody):
     strategy: Optional[str] = None
     vector_query: Optional[str] = None
     filters: Optional[RagSearchFiltersBody] = None
+    debug_trace: bool = False  # отладочные метрики по шагам пайплайна
 
 
 class KbSearchHit(BaseModel):
@@ -48,6 +49,7 @@ class KbSearchHit(BaseModel):
 
 class KbSearchResponse(BaseModel):
     hits: List[KbSearchHit]
+    trace: Optional[Dict[str, Any]] = None
 
 
 @router.post("/documents", response_model=KbIndexResponse)
@@ -107,7 +109,7 @@ async def kb_search(
     kb: KbService = Depends(get_kb_service),
 ):
     """Поиск по Базе Знаний."""
-    results = await kb.search(
+    payload = await kb.search(
         query=body.query,
         k=body.k,
         document_id=body.document_id,
@@ -115,11 +117,14 @@ async def kb_search(
         strategy=body.strategy,
         vector_query=body.vector_query,
         filters=filters_body_to_domain(body.filters),
+        return_trace=True,
         **eval_search_kwargs_from_body(body),
     )
+    results, trace = payload
     return KbSearchResponse(
         hits=[
             KbSearchHit(content=c, score=s, document_id=doc_id, chunk_index=chunk_idx)
             for c, s, doc_id, chunk_idx in results
-        ]
+        ],
+        trace=trace.to_dict() if body.debug_trace else None,
     )

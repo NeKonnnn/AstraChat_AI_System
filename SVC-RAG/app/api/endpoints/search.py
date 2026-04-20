@@ -16,7 +16,7 @@ class SearchRequest(RagSearchEvalBody):
     k: int = 10
     document_id: Optional[int] = None
     use_reranking: Optional[bool] = None
-    strategy: Optional[str] = None  # "auto" | "reranking" | "hierarchical" | "hybrid" | "standard" | "graph" | "flat"
+    strategy: Optional[str] = None  # "auto" | "reranking" | "hierarchical" | "hybrid" | "standard" | "raw_cosine" | "graph" | "flat"
     vector_query: Optional[str] = None
     filters: Optional[RagSearchFiltersBody] = None
 

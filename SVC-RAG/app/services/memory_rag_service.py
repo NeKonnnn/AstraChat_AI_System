@@ -1,28 +1,17 @@
 # RAG по документам из настроек «библиотека памяти»: MinIO (оригинал) + memory_rag_* в Postgres
 import logging
-import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from app.clients.rag_models_client import RagModelsClient
 from app.core.config import get_settings
 from app.database.search_filters import DocumentVectorSearchFilters
-from app.services.hit_postprocess import apply_rerank_min_and_window
-from app.services.rag_search_helpers import (
-    diversify_hits_by_document,
-    effective_use_reranking,
-    filter_by_min_vector_similarity,
-    keyword_boost_hits,
-    resolve_auto_pipeline_strategy,
-    vector_fetch_limit,
-)
-from app.services.retrieval_eval import log_retrieval_with_eval
-from app.services.rerank_helpers import rerank_vector_hits
 from app.database.memory_rag_repository import MemoryRagDocumentRepository, MemoryRagVectorRepository
 from app.database.models import Document, DocumentVector
 from app.database.graph_repository import GraphRepository
-from app.services.chunker import split_into_chunks
+from app.services.chunker import split_into_chunks_with_meta
 from app.services.document_parser import parse_document
+from app.services.retrieval_pipeline import RetrievalTrace, run_retrieval_pipeline
 from app.text_sanitize import strip_null_bytes
 
 logger = logging.getLogger(__name__)
@@ -83,10 +72,11 @@ class MemoryRagService:
         if doc_id is None:
             return {"ok": False, "error": "Ошибка сохранения документа в БД", "document_id": None}
 
-        chunks = split_into_chunks(text)
-        if not chunks:
+        chunks_with_meta = split_into_chunks_with_meta(text)
+        if not chunks_with_meta:
             await self.doc_repo.delete_document(doc_id)
             return {"ok": False, "error": "Не удалось нарезать чанки", "document_id": None}
+        chunks = [c for c, _m in chunks_with_meta]
 
         try:
             embeddings = await self.rag_client.embed(chunks)
@@ -96,17 +86,16 @@ class MemoryRagService:
             return {"ok": False, "error": f"Ошибка эмбеддингов: {e}", "document_id": None}
 
         vectors = []
-        for idx, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+        for idx, ((chunk, cmeta), embedding) in enumerate(zip(chunks_with_meta, embeddings)):
+            meta = {"chunk_index": idx, "document_filename": filename}
+            meta.update(cmeta)
             vectors.append(
                 DocumentVector(
                     document_id=doc_id,
                     chunk_index=idx,
                     embedding=embedding,
                     content=chunk,
-                    metadata={
-                        "chunk_index": idx,
-                        "document_filename": filename,
-                    },
+                    metadata=meta,
                 )
             )
 
@@ -142,166 +131,64 @@ class MemoryRagService:
         eval_gold_document_ids: Optional[List[int]] = None,
         eval_gold_chunks: Optional[List[Tuple[int, int]]] = None,
         eval_llm_judge: bool = False,
-    ) -> List[Tuple[str, float, Optional[int], Optional[int]]]:
+        return_trace: bool = False,
+    ) -> Union[
+        List[Tuple[str, float, Optional[int], Optional[int]]],
+        Tuple[List[Tuple[str, float, Optional[int], Optional[int]]], RetrievalTrace],
+    ]:
         cfg = get_settings().rag
-        q_text = (query or "").strip()
-        vq = (vector_query or "").strip()
-        if not q_text and not vq:
-            return []
-        emb_src = vq or q_text
-        t0 = time.perf_counter()
-        user_strategy = (strategy or "auto").lower()
-        original_strategy = user_strategy
-        if user_strategy == "auto":
-            graph_ok = bool(self.graph_repo) and bool(getattr(cfg, "enable_graph_rag", True))
-            user_strategy = resolve_auto_pipeline_strategy(
-                q_text,
-                store="memory",
+
+        async def _vectors(emb, lim):
+            return await self.vector_repo.similarity_search(
+                query_embedding=emb,
+                limit=lim,
                 document_id=document_id,
-                hierarchical_available=False,
-                graph_available=graph_ok,
-                hybrid_available=bool(cfg.use_reranking),
+                filters=filters,
             )
-            logger.info("[SVC-RAG] memory_rag strategy=auto → %s", user_strategy)
-        rerank_key = "auto" if original_strategy == "auto" else user_strategy
-        eff_rr = effective_use_reranking(use_reranking, cfg.use_reranking, rerank_key)
-        fetch_lim = vector_fetch_limit(
-            k,
-            graph=(user_strategy == "graph"),
-            document_id=document_id,
-            use_rerank=eff_rr,
-            rerank_top_k=int(cfg.rerank_top_k or 20),
-        )
-        pipeline = ["embed_query", f"pgvector_cosine(limit={fetch_lim})"]
-        if user_strategy == "graph":
-            pipeline.append("graph_expand_neighbors")
-        if eff_rr:
-            pipeline.append("cross_encoder_rerank")
-        if document_id is None:
-            pipeline.append("diversify_by_document")
-        pipeline_str = " -> ".join(pipeline)
-        report_extras = [
-            f"k={k}",
-            f"document_id={'все' if document_id is None else document_id}",
-            f"кандидатов_из_pgvector={fetch_lim}",
-            f"реранк_cross_encoder={'да' if eff_rr else 'нет'}",
-        ]
-        try:
-            query_emb = await self.rag_client.embed([emb_src])
-        except Exception as e:
-            logger.error("Ошибка эмбеддинга запроса memory_rag: %s", e)
-            await log_retrieval_with_eval(
-                store="memory (библиотека памяти)",
-                strategy_resolved=user_strategy,
-                pipeline=f"{pipeline_str} (ошибка embed)",
-                extra_lines=report_extras,
-                final_hits=[],
-                k_requested=k,
-                query_for_eval=q_text,
-                search_started_perf=t0,
-                gold_document_ids=eval_gold_document_ids,
-                gold_chunks=eval_gold_chunks,
-                llm_judge=eval_llm_judge,
-            )
-            return []
-        if not query_emb:
-            await log_retrieval_with_eval(
-                store="memory (библиотека памяти)",
-                strategy_resolved=user_strategy,
-                pipeline=f"{pipeline_str} (пустой embed)",
-                extra_lines=report_extras,
-                final_hits=[],
-                k_requested=k,
-                query_for_eval=q_text,
-                search_started_perf=t0,
-                gold_document_ids=eval_gold_document_ids,
-                gold_chunks=eval_gold_chunks,
-                llm_judge=eval_llm_judge,
-            )
-            return []
 
-        hits = await self.vector_repo.similarity_search(
-            query_embedding=query_emb[0],
-            limit=fetch_lim,
+        async def _keywords(text, lim):
+            return await self.vector_repo.keyword_search(
+                text,
+                limit=lim,
+                document_id=document_id,
+                filters=filters,
+            )
+
+        async def _substring(tokens, lim):
+            return await self.vector_repo.substring_search(
+                tokens, limit=lim, document_id=document_id
+            )
+
+        async def _fetch_doc(doc_id: int):
+            return await self.vector_repo.get_vectors_by_document(doc_id)
+
+        async def _find_docs_by_filename(name: str):
+            return await self.doc_repo.find_document_ids_by_filename(name)
+
+        hits, trace = await run_retrieval_pipeline(
+            store="memory",
+            query=query,
+            vector_query=vector_query,
+            k=k,
             document_id=document_id,
+            use_reranking=use_reranking,
+            strategy=strategy,
             filters=filters,
+            rag_client=self.rag_client,
+            graph_repo=self.graph_repo,
+            cfg=cfg,
+            search_vectors=_vectors,
+            search_keywords=_keywords,
+            substring_search=_substring,
+            fetch_document_chunks=_fetch_doc,
+            find_docs_by_filename=_find_docs_by_filename,
+            vector_repo_for_window=self.vector_repo,
+            eval_gold_document_ids=eval_gold_document_ids,
+            eval_gold_chunks=eval_gold_chunks,
+            eval_llm_judge=eval_llm_judge,
+            log_store_label="memory (библиотека памяти)",
         )
-
-        # Фильтрация нерелевантных чанков по косинусному порогу
-        min_sim = float(getattr(cfg, "min_vector_similarity", 0.0) or 0.0)
-        hits = filter_by_min_vector_similarity(hits, min_sim, k)
-
-        # Keyword-boost: повышаем скор чанков с точными словами запроса
-        # (имена, аббревиатуры, цифры — embedding часто недооценивает их)
-        hits = keyword_boost_hits(hits, q_text)
-
-        if document_id is None and hits and user_strategy != "graph":
-            pool = max(int(cfg.rerank_top_k or 20), k * 6, 56)
-            hits = diversify_hits_by_document(hits, min(pool, len(hits)))
-
-        if user_strategy == "graph" and hits:
-            seed_pairs = [
-                (dv.document_id, dv.chunk_index)
-                for dv, _ in hits[: min(12, len(hits))]
-                if dv.document_id is not None
-            ]
-            seed_chunk_indexes = [p[1] for p in seed_pairs]
-            graph_scores: Dict[Tuple[int, int], float] = {}
-            if self.graph_repo:
-                try:
-                    graph_scores = await self.graph_repo.expand_neighbors(
-                        store_type="memory",
-                        document_id=document_id,
-                        seed_chunk_indexes=seed_chunk_indexes,
-                        max_hops=2,
-                        max_nodes=max(k * 4, 40),
-                        seed_doc_chunk_pairs=seed_pairs if document_id is None else None,
-                    )
-                except Exception as e:
-                    logger.warning("memory graph expand failed: %s", e)
-            boosted = []
-            for dv, base_score in hits:
-                gscore = graph_scores.get((dv.document_id, dv.chunk_index), 0.0)
-                boosted.append((dv, 0.7 * float(base_score) + 0.3 * float(gscore)))
-            boosted.sort(key=lambda x: x[1], reverse=True)
-            hits = boosted
-
-        used_rr = False
-        if eff_rr and hits:
-            try:
-                hits = await rerank_vector_hits(
-                    q_text,
-                    hits,
-                    self.rag_client,
-                    top_k=max(len(hits), k * 4, int(cfg.rerank_top_k or 20)),
-                    vector_weight=0.3,
-                )
-                used_rr = True
-            except Exception as e:
-                logger.warning("Реранкинг memory_rag не удался: %s", e)
-
-        rows = [(dv.content, float(score), dv.document_id, dv.chunk_index) for dv, score in hits[:k]]
-        final = await apply_rerank_min_and_window(
-            self.vector_repo,
-            rows,
-            rerank_min_score=float(cfg.rerank_min_score or 0),
-            sentence_window=int(cfg.sentence_window or 0),
-            used_rerank=used_rr,
-        )
-        await log_retrieval_with_eval(
-            store="memory (библиотека памяти)",
-            strategy_resolved=user_strategy,
-            pipeline=pipeline_str,
-            extra_lines=report_extras + [f"реранк_применён={'да' if used_rr else 'нет'}"],
-            final_hits=final,
-            k_requested=k,
-            query_for_eval=q_text,
-            search_started_perf=t0,
-            gold_document_ids=eval_gold_document_ids,
-            gold_chunks=eval_gold_chunks,
-            llm_judge=eval_llm_judge,
-        )
-        return final
+        return (hits, trace) if return_trace else hits
 
     async def list_documents(self) -> List[Dict[str, Any]]:
         docs = await self.doc_repo.get_all_documents()

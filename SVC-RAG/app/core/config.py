@@ -134,8 +134,12 @@ class RagServiceConfig(BaseModel):
     chunk_size: int = 1000
     chunk_overlap: int = 200
     # Минимальный косинусный скор чанка после pgvector — отсекает явно нерелевантные результаты до реранка.
-    # 0 = не фильтровать; рекомендуемое значение 0.10–0.20.
-    min_vector_similarity: float = float(os.environ.get("RAG_MIN_VECTOR_SIMILARITY", "0.10"))
+    # 0 = не фильтровать; типичные мультиязычные эмбеддинги дают релевантные чанки на 0.12–0.25,
+    # поэтому порог выше 0.10 массово «съедает» правильные ответы. При всех чанках ниже порога
+    # включится rescue top-N (см. filter_by_min_vector_similarity).
+    min_vector_similarity: float = float(os.environ.get("RAG_MIN_VECTOR_SIMILARITY", "0.05"))
+    # Минимальная длина чанка для low_signal-фильтра; 0 = не фильтровать.
+    min_chunk_length: int = int(os.environ.get("RAG_MIN_CHUNK_LENGTH", "40"))
 
     # Иерархическое индексирование 
     use_hierarchical_indexing: bool = os.environ.get("RAG_USE_HIERARCHICAL", "true").lower() == "true"

@@ -4,6 +4,13 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.database.connection import PostgreSQLConnection
+from app.database.fts import (
+    build_fts_or_query,
+    ensure_fts_columns,
+    fts_where_and_rank,
+    query_has_searchable_content,
+    substring_where_and_rank,
+)
 from app.database.models import Document, DocumentVector
 from app.text_sanitize import strip_null_bytes
 from app.database.search_filters import DocumentVectorSearchFilters
@@ -99,6 +106,20 @@ class MemoryRagDocumentRepository:
             await conn.execute("DELETE FROM memory_rag_documents WHERE id = $1", document_id)
         return True
 
+    async def find_document_ids_by_filename(self, name_or_stem: str, limit: int = 10) -> List[int]:
+        """ILIKE-поиск document_id по имени файла. См. project_rag_repository."""
+        needle = (name_or_stem or "").strip()
+        if not needle:
+            return []
+        async with await self.db.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id FROM memory_rag_documents WHERE filename ILIKE $1 "
+                "ORDER BY updated_at DESC LIMIT $2",
+                f"%{needle}%",
+                limit,
+            )
+        return [int(r["id"]) for r in rows]
+
 
 class MemoryRagVectorRepository:
     def __init__(self, db: PostgreSQLConnection, embedding_dim: int = 384):
@@ -127,6 +148,7 @@ class MemoryRagVectorRepository:
             await conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_memory_rag_vectors_document_id ON memory_rag_vectors(document_id)"
             )
+            await ensure_fts_columns(conn, "memory_rag_vectors")
         logger.info("Таблица memory_rag_vectors готова (dim=%s)", self.embedding_dim)
 
     async def create_vectors_batch(self, vectors: List[DocumentVector]) -> int:
@@ -218,6 +240,133 @@ class MemoryRagVectorRepository:
             )
         return result
 
+    async def keyword_search(
+        self,
+        query_text: str,
+        limit: int = 20,
+        document_id: Optional[int] = None,
+        filters: Optional[DocumentVectorSearchFilters] = None,
+    ) -> List[Tuple[DocumentVector, float]]:
+        """FTS-поиск через OR-``to_tsquery`` (russian + simple). См. ``app.database.fts``."""
+        q_text = (query_text or "").strip()
+        if not query_has_searchable_content(q_text):
+            return []
+        q_or = build_fts_or_query(q_text)
+        if q_or is None:
+            return []
+
+        where_fts, rank_fts, _used = fts_where_and_rank(vectors_alias="v", first_placeholder_idx=1)
+        params: List[Any] = [q_or, q_or]
+        pi = 3
+
+        use_join = filters is not None and filters.active()
+        join_sql = "JOIN memory_rag_documents d ON d.id = v.document_id" if use_join else ""
+        clauses: List[str] = [where_fts]
+        if document_id is not None:
+            clauses.append(f"v.document_id = ${pi}")
+            params.append(document_id)
+            pi += 1
+        if use_join and filters is not None:
+            if filters.date_from is not None:
+                clauses.append(f"d.created_at >= ${pi}")
+                params.append(filters.date_from)
+                pi += 1
+            if filters.date_to is not None:
+                clauses.append(f"d.created_at <= ${pi}")
+                params.append(filters.date_to)
+                pi += 1
+            fn = (filters.filename_contains or "").strip()
+            if fn:
+                clauses.append(f"d.filename ILIKE ${pi}")
+                params.append(f"%{fn}%")
+                pi += 1
+        where_sql = " AND ".join(clauses)
+        from_sql = f"memory_rag_vectors v {join_sql}".strip()
+        params.append(limit)
+        q = f"""
+            SELECT v.id, v.document_id, v.chunk_index, v.embedding::text, v.content, v.metadata,
+                   {rank_fts} AS lexical_score
+            FROM {from_sql}
+            WHERE {where_sql}
+            ORDER BY lexical_score DESC, v.chunk_index ASC
+            LIMIT ${pi}
+        """
+        async with await self.db.acquire() as conn:
+            rows = await conn.fetch(q, *params)
+        out: List[Tuple[DocumentVector, float]] = []
+        for row in rows:
+            emb = [float(x.strip()) for x in row["embedding"].strip("[]").split(",")]
+            meta = row["metadata"]
+            if isinstance(meta, str):
+                meta = json.loads(meta) if meta else {}
+            out.append(
+                (
+                    DocumentVector(
+                        id=row["id"],
+                        document_id=row["document_id"],
+                        chunk_index=row["chunk_index"],
+                        embedding=emb,
+                        content=row["content"],
+                        metadata=meta or {},
+                    ),
+                    float(row["lexical_score"] or 0.0),
+                )
+            )
+        return out
+
+    async def substring_search(
+        self,
+        tokens: List[str],
+        limit: int = 32,
+        document_id: Optional[int] = None,
+    ) -> List[Tuple[DocumentVector, float]]:
+        """ILIKE-fallback на случай, когда FTS не сработал. См. project_rag_repository."""
+        tokens = [t for t in (tokens or []) if t and isinstance(t, str)]
+        if not tokens:
+            return []
+        where_sub, rank_sub, used, ilike_params = substring_where_and_rank(
+            vectors_alias="v", tokens=tokens, first_placeholder_idx=1
+        )
+        params: List[Any] = list(ilike_params)
+        pi = used + 1
+        clauses: List[str] = [where_sub]
+        if document_id is not None:
+            clauses.append(f"v.document_id = ${pi}")
+            params.append(document_id)
+            pi += 1
+        where_sql = " AND ".join(clauses)
+        params.append(limit)
+        q = f"""
+            SELECT v.id, v.document_id, v.chunk_index, v.embedding::text, v.content, v.metadata,
+                   {rank_sub} AS lexical_score
+            FROM memory_rag_vectors v
+            WHERE {where_sql}
+            ORDER BY lexical_score DESC, v.chunk_index ASC
+            LIMIT ${pi}
+        """
+        async with await self.db.acquire() as conn:
+            rows = await conn.fetch(q, *params)
+        out: List[Tuple[DocumentVector, float]] = []
+        for row in rows:
+            emb = [float(x.strip()) for x in row["embedding"].strip("[]").split(",")]
+            meta = row["metadata"]
+            if isinstance(meta, str):
+                meta = json.loads(meta) if meta else {}
+            out.append(
+                (
+                    DocumentVector(
+                        id=row["id"],
+                        document_id=row["document_id"],
+                        chunk_index=row["chunk_index"],
+                        embedding=emb,
+                        content=row["content"],
+                        metadata=meta or {},
+                    ),
+                    float(row["lexical_score"] or 0.0),
+                )
+            )
+        return out
+
     async def get_chunk_contents_by_indices(
         self, document_id: int, chunk_indices: List[int]
     ) -> Dict[int, str]:
@@ -236,6 +385,32 @@ class MemoryRagVectorRepository:
                 uniq,
             )
         return {int(r["chunk_index"]): r["content"] or "" for r in rows}
+
+    async def get_vectors_by_document(self, document_id: int) -> List[DocumentVector]:
+        """Все чанки документа по chunk_index. Нужен для parent-document expansion."""
+        async with await self.db.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id, document_id, chunk_index, embedding::text, content, metadata "
+                "FROM memory_rag_vectors WHERE document_id = $1 ORDER BY chunk_index",
+                document_id,
+            )
+        out: List[DocumentVector] = []
+        for row in rows:
+            emb = [float(x.strip()) for x in row["embedding"].strip("[]").split(",")]
+            meta = row["metadata"]
+            if isinstance(meta, str):
+                meta = json.loads(meta) if meta else {}
+            out.append(
+                DocumentVector(
+                    id=row["id"],
+                    document_id=row["document_id"],
+                    chunk_index=row["chunk_index"],
+                    embedding=emb,
+                    content=row["content"],
+                    metadata=meta or {},
+                )
+            )
+        return out
 
     async def delete_vectors_by_document(self, document_id: int) -> bool:
         async with await self.db.acquire() as conn:

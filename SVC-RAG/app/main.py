@@ -39,6 +39,14 @@ async def lifespan(app: FastAPI):
 
         await get_db()
         logger.info("SVC-RAG: БД подключена, таблицы готовы")
+
+        try:
+            from app.dependencies import get_rag_service
+
+            rag = await get_rag_service()
+            await rag.warm_up()
+        except Exception as e:
+            logger.warning("SVC-RAG: warm_up пропущен: %s", e)
     except Exception as e:
         logger.error("SVC-RAG: ошибка старта БД: %s", e, exc_info=True)
         raise

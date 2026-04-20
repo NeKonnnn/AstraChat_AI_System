@@ -25,24 +25,97 @@ logger = logging.getLogger(__name__)
 TVec = TypeVar("TVec", bound=DocumentVector)
 
 
+import os as _os
+import re as _re
+
+# Текущий reranker в SVC-RAG-MODELS (ms-marco-MiniLM-L-6-v2) тренирован на ЧИСТО английском
+# MS MARCO датасете и на кириллических запросах выдаёт случайные/шумовые скоры.
+# При формуле ``final = 0.7*rerank + 0.3*cosine`` этот шум АКТИВНО ПОДАВЛЯЕТ рабочий
+# векторный сигнал — классический случай, когда "включённый реранк делает хуже".
+#
+# Пока модель не заменена на мультиязычную (bge-reranker-v2-m3 / jina-reranker-v2 / BAAI),
+# авто-отключаем реранк, если запрос преимущественно кириллический.
+# Можно принудительно включить через ``RAG_FORCE_RERANK_CYRILLIC=1``.
+_CYRILLIC_RE = _re.compile(r"[\u0400-\u04FF]")
+_LATIN_RE = _re.compile(r"[A-Za-z]")
+
+
+def _is_primarily_cyrillic(text: str) -> bool:
+    if not text:
+        return False
+    cyr = len(_CYRILLIC_RE.findall(text))
+    lat = len(_LATIN_RE.findall(text))
+    if cyr == 0:
+        return False
+    # Более половины буквенных символов — кириллица.
+    return cyr >= max(3, lat)
+
+
+def reranker_is_english_only() -> bool:
+    """Эвристика: текущий reranker — англоязычный (ms-marco / MS MARCO).
+
+    По умолчанию ``RAG_RERANKER_ENGLISH_ONLY=1`` (совпадает с конфигом
+    ms-marco-MiniLM-L-6-v2). Если поставить модель с мультиязычной поддержкой
+    (bge-reranker-v2-m3 / jina-reranker-v2) — экспортируйте
+    ``RAG_RERANKER_ENGLISH_ONLY=0`` и reranking снова будет применяться ко всем запросам.
+    """
+    return _os.environ.get("RAG_RERANKER_ENGLISH_ONLY", "1").strip().lower() not in (
+        "0", "false", "no", "off", ""
+    )
+
+
+def should_disable_rerank_for_query(query: str) -> bool:
+    """True, если для данного запроса реранк лучше выключить.
+
+    Критерий: англоязычный reranker + запрос преимущественно на кириллице. В этом
+    случае cross-encoder не только бесполезен, но и ухудшает ранжирование.
+    Override через ``RAG_FORCE_RERANK_CYRILLIC=1`` — для экспериментов.
+    """
+    if not reranker_is_english_only():
+        return False
+    if _os.environ.get("RAG_FORCE_RERANK_CYRILLIC", "").strip().lower() in ("1", "true", "yes", "on"):
+        return False
+    return _is_primarily_cyrillic(query or "")
+
+
 def effective_use_reranking(
     requested: Optional[bool],
     cfg_rerank_enabled: bool,
     strategy: str,
+    *,
+    query_text: Optional[str] = None,
 ) -> bool:
     """standard — только вектор (без реранка).
     hybrid    — BM25+вектор (global) или вектор+реранк (non-global); включает реранк если он в конфиге.
     reranking — только реранк по конфигу.
     auto      — по конфигу и флагу запроса.
+
+    Дополнительно: для кириллических запросов с английским-only реранкером реранк
+    принудительно выключается (см. ``should_disable_rerank_for_query``). Это в несколько
+    раз повышает качество на русскоязычном корпусе без замены модели.
     """
     st = (strategy or "auto").lower()
-    if st == "standard":
+    if st in ("standard", "raw_cosine", "flat"):
         return False
+    base = False
     if st in ("hybrid", "reranking"):
         if not cfg_rerank_enabled:
-            return False
-        return True if requested is None else bool(requested)
-    return (requested if requested is not None else cfg_rerank_enabled) and cfg_rerank_enabled
+            base = False
+        else:
+            base = True if requested is None else bool(requested)
+    else:
+        base = (requested if requested is not None else cfg_rerank_enabled) and cfg_rerank_enabled
+
+    if base and query_text is not None and should_disable_rerank_for_query(query_text):
+        import logging as _logging
+        _logging.getLogger(__name__).info(
+            "[RAG] Реранк отключён для этого запроса: текущий reranker — английский "
+            "(ms-marco-MiniLM-L-6-v2), а запрос на кириллице. Задайте "
+            "RAG_RERANKER_ENGLISH_ONLY=0 после замены модели, либо "
+            "RAG_FORCE_RERANK_CYRILLIC=1 чтобы форсировать."
+        )
+        return False
+    return base
 
 
 def resolve_auto_pipeline_strategy(
@@ -194,12 +267,40 @@ def filter_by_min_vector_similarity(
                 len(hits) - len(filtered),
             )
         return filtered
+    # Не оставляем retrieval пустым из-за слишком жёсткого порога:
+    # спасаем ограниченный top-N, чтобы не ломать recall на "трудных" корпусах (PDF/OCR).
+    rescue_n = max(3, min(max(k, 1), 12))
+    rescued = sorted(hits, key=lambda x: float(x[1]), reverse=True)[:rescue_n]
     logger.info(
-        "[RAG] min_vector_similarity=%.3f: все %d чанков ниже порога → пустой контекст (LLM скажет «не найдено»)",
+        "[RAG] min_vector_similarity=%.3f: все %d чанков ниже порога → rescue top-%d (recall-first)",
         min_similarity,
         len(hits),
+        rescue_n,
     )
-    return []
+    return rescued
+
+
+def should_diversify_hits(
+    hits: List[Tuple[DocumentVector, float]],
+    *,
+    min_unique_docs: int = 3,
+    min_top_score_for_diversify: float = 0.24,
+    max_top_gap_for_diversify: float = 0.12,
+) -> bool:
+    """Решает, нужна ли диверсификация по документам.
+
+    Идея: если top-1 явно лучше top-2, диверсификация часто вносит шум.
+    """
+    if len(hits) < 3:
+        return False
+    uniq_docs = len({h[0].document_id for h in hits if h[0].document_id is not None})
+    if uniq_docs < min_unique_docs:
+        return False
+    s1 = float(hits[0][1])
+    s2 = float(hits[1][1])
+    if s1 < min_top_score_for_diversify:
+        return True
+    return (s1 - s2) <= max_top_gap_for_diversify
 
 
 _KEYWORD_STOPWORDS = {
@@ -214,6 +315,7 @@ def keyword_boost_hits(
     hits: List[Tuple[DocumentVector, float]],
     query: str,
     boost_factor: float = 0.30,
+    min_content_len: int = 120,
 ) -> List[Tuple[DocumentVector, float]]:
     """Повышает скор чанков с точными вхождениями слов запроса.
 
@@ -233,11 +335,104 @@ def keyword_boost_hits(
     boosted = []
     for dv, score in hits:
         content_lower = (dv.content or "").lower()
+        if len(content_lower.strip()) < max(20, min_content_len):
+            # Заголовки/оглавления не должны выигрывать за счёт точного слова.
+            boosted.append((dv, float(score)))
+            continue
         matched = sum(1 for w in query_words if w in content_lower)
         ratio = matched / len(query_words)
         new_score = float(score) * (1.0 + boost_factor * ratio)
         boosted.append((dv, new_score))
     return sorted(boosted, key=lambda x: x[1], reverse=True)
+
+
+def filter_low_signal_chunks(
+    hits: List[Tuple[DocumentVector, float]],
+    *,
+    min_len: int = 40,
+    rescue_keep: int = 12,
+) -> List[Tuple[DocumentVector, float]]:
+    """
+    Отбрасывает слишком короткие чанки (оглавления/заголовки), которые часто
+    искажают top-k. Если после фильтра мало кандидатов — возвращает часть исходных.
+
+    min_len=0 полностью отключает фильтр (ничего не режет).
+    По умолчанию 40, чтобы не выкидывать короткие, но осмысленные ответы:
+    Q/A, определения, заголовки с числами, ячейки таблиц и т.п.
+    """
+    if not hits:
+        return []
+    if min_len <= 0:
+        return list(hits)
+    keep = [h for h in hits if len((h[0].content or "").strip()) >= min_len]
+    if keep:
+        if len(keep) < len(hits):
+            logger.info(
+                "[RAG] low_signal_filter: оставлено %d/%d чанков (min_len=%d)",
+                len(keep),
+                len(hits),
+                min_len,
+            )
+        return keep
+    rescue_n = max(3, min(rescue_keep, len(hits)))
+    logger.info(
+        "[RAG] low_signal_filter: все чанки короткие (<%d), rescue top-%d",
+        min_len,
+        rescue_n,
+    )
+    return sorted(hits, key=lambda x: float(x[1]), reverse=True)[:rescue_n]
+
+
+def merge_vector_and_keyword_hits(
+    vector_hits: List[Tuple[DocumentVector, float]],
+    keyword_hits: List[Tuple[DocumentVector, float]],
+    *,
+    keyword_weight: float = 0.30,
+) -> List[Tuple[DocumentVector, float]]:
+    """
+    Сливает dense-кандидаты с keyword-кандидатами:
+    final = (1-keyword_weight)*norm_vector + keyword_weight*norm_keyword.
+    """
+    if not vector_hits and not keyword_hits:
+        return []
+    if not keyword_hits:
+        return sorted(vector_hits, key=lambda x: float(x[1]), reverse=True)
+    if not vector_hits:
+        # Нет dense-кандидатов — оставляем keyword-порядок как запасной режим.
+        max_kw = max(float(sc) for _, sc in keyword_hits) or 1.0
+        return sorted(
+            [(dv, float(sc) / max_kw) for dv, sc in keyword_hits],
+            key=lambda x: x[1],
+            reverse=True,
+        )
+
+    max_vec = max(float(sc) for _, sc in vector_hits) or 1.0
+    max_kw = max(float(sc) for _, sc in keyword_hits) or 1.0
+    merged: Dict[Tuple[Optional[int], Optional[int]], Dict[str, Any]] = {}
+
+    for dv, sc in vector_hits:
+        key = (dv.document_id, dv.chunk_index)
+        merged[key] = {
+            "dv": dv,
+            "vec": float(sc) / max_vec if max_vec > 0 else 0.0,
+            "kw": 0.0,
+        }
+
+    for dv, sc in keyword_hits:
+        key = (dv.document_id, dv.chunk_index)
+        nkw = float(sc) / max_kw if max_kw > 0 else 0.0
+        if key in merged:
+            merged[key]["kw"] = max(merged[key]["kw"], nkw)
+        else:
+            merged[key] = {"dv": dv, "vec": 0.0, "kw": nkw}
+
+    out: List[Tuple[DocumentVector, float]] = []
+    w = max(0.0, min(keyword_weight, 0.95))
+    for item in merged.values():
+        final = (1.0 - w) * float(item["vec"]) + w * float(item["kw"])
+        out.append((item["dv"], final))
+    out.sort(key=lambda x: x[1], reverse=True)
+    return out
 
 
 def diversify_result_rows(
