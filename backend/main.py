@@ -104,6 +104,7 @@ from backend.routes.system import router as system_router
 from backend.routes.chat import router as chat_router
 from backend.routes.models import router as models_router
 from backend.routes.llm import router as llm_router
+from backend.routes.llm_providers import router as llm_providers_router
 from backend.routes.memory import router as memory_router
 from backend.routes.voice import router as voice_router
 from backend.routes.documents import router as documents_router
@@ -114,8 +115,8 @@ from backend.routes.context_prompts import router as context_prompts_router
 from backend.routes.project_rag import router as project_rag_router
 
 for _r in (
-    system_router, chat_router, models_router, llm_router, memory_router,
-    voice_router, documents_router, transcription_router,
+    system_router, chat_router, models_router, llm_router, llm_providers_router,
+    memory_router, voice_router, documents_router, transcription_router,
     rag_router, agents_router, context_prompts_router,
     project_rag_router,
 ):

@@ -476,16 +476,31 @@ def diversify_result_rows(
 def diversify_hits_by_document(
     hits: List[Tuple[DocumentVector, float]],
     pool_limit: int,
+    keep_all_for_docs: Optional[set] = None,
 ) -> List[Tuple[DocumentVector, float]]:
-    """
-    Из расширенного пула берём до pool_limit чанков: сначала лучший чанк с каждого document_id,
-    затем добор по общему скору. Так PDF не вытесняется одними только топ-чанками больших DOCX.
+    """Диверсификация «1 лучший чанк с каждого document_id → добор по скору».
+
+    Параметр ``keep_all_for_docs`` — набор document_id, для которых диверсификация
+    НЕ применяется (ВСЕ чанки сохраняются). Это нужно для entity-anchor документов:
+    если в документе нашли имя — нельзя резать его до 1 чанка, иначе LLM получит
+    только один раздел (например, «Газпромбанк»), а «МФТИ» и «Тинькофф Банк»
+    из других чанков того же CV потеряются.
     """
     if not hits or pool_limit <= 0:
         return []
+    keep_all_for_docs = keep_all_for_docs or set()
     hits_sorted = sorted(hits, key=lambda x: x[1], reverse=True)
-    best_per_doc: Dict[int, Tuple[DocumentVector, float]] = {}
+
+    kept_entity: List[Tuple[DocumentVector, float]] = []
+    diversify_pool: List[Tuple[DocumentVector, float]] = []
     for dv, sc in hits_sorted:
+        if dv.document_id in keep_all_for_docs:
+            kept_entity.append((dv, sc))
+        else:
+            diversify_pool.append((dv, sc))
+
+    best_per_doc: Dict[int, Tuple[DocumentVector, float]] = {}
+    for dv, sc in diversify_pool:
         did = dv.document_id
         if did is None:
             continue
@@ -494,6 +509,13 @@ def diversify_hits_by_document(
 
     merged: List[Tuple[DocumentVector, float]] = []
     seen: set = set()
+    # 1. Entity-anchor документы — кладём ВСЕ их чанки вперёд.
+    for dv, sc in kept_entity:
+        key = (dv.document_id, dv.chunk_index)
+        if key not in seen:
+            merged.append((dv, sc))
+            seen.add(key)
+    # 2. Лучший чанк на каждый не-entity документ (классическая диверсификация).
     for item in sorted(best_per_doc.values(), key=lambda x: x[1], reverse=True):
         if len(merged) >= pool_limit:
             break
@@ -502,7 +524,7 @@ def diversify_hits_by_document(
         if key not in seen:
             merged.append((dv, sc))
             seen.add(key)
-
+    # 3. Добор по score до pool_limit.
     for dv, sc in hits_sorted:
         if len(merged) >= pool_limit:
             break

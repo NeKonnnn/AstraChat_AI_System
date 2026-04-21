@@ -16,11 +16,12 @@ import backend.app_state as state
 from backend.app_state import (
     ask_agent, save_dialog_entry, get_recent_dialog_history,
     rag_client, get_agent_orchestrator,
-    reload_model_by_path, model_load_lock,
+    reload_model_by_path,
     stop_generation_flags, stop_transcription_flags,
     get_current_model_path,
     get_rag_chat_top_k,
 )
+from backend.llm_providers import get_registry
 from backend.realtime.helpers import (
     _is_structure_query,
     _terminal_chat_inference_banner,
@@ -30,6 +31,7 @@ from backend.realtime.helpers import (
 from backend.realtime.rag_evidence import (
     build_rag_id_to_filename,
     filter_rag_hits_by_score,
+    format_rag_fragments,
     maybe_rag_no_evidence_message,
     rag_document_label,
     rag_guard_env,
@@ -39,14 +41,6 @@ from backend.rag_query.prompts import RAG_STRICT_NOT_FOUND_MESSAGE, merge_strict
 
 logger = logging.getLogger(__name__)
 _VALID_RAG_STRATEGIES = {"auto", "hierarchical", "hybrid", "standard", "graph"}
-
-
-def _multi_llm_llm_svc_pool_style_path(model_path: str) -> bool:
-    """Пути multi-LLM через llm-svc: не держим глобальный model_load_lock — пул и load на стороне llm-svc."""
-    if model_path.startswith("llm-svc://"):
-        return True
-    norm = model_path.replace("\\", "/").lower()
-    return norm.startswith("models/") or "/models/" in norm
 
 
 async def _get_conversation_project_id(conversation_id: str) -> "Optional[str]":
@@ -321,16 +315,12 @@ async def _handle_multi_llm(
             )
             proj_hits = filter_rag_hits_by_score(proj_hits, min_sim)
             if proj_hits:
-                parts, total = [], 0
-                for i, (content, score, doc_id, chunk_idx) in enumerate(proj_hits, 1):
-                    title = rag_document_label(doc_id, proj_id_name)
-                    frag = f"Фрагмент {i} (документ «{title}», чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
-                    if total + len(frag) > 12000:
-                        frag = frag[:max(0, 12000 - total - 80)] + "\n... [обрезано]\n"
-                        parts.append(frag)
-                        break
-                    parts.append(frag)
-                    total += len(frag)
+                parts, _ = format_rag_fragments(
+                    proj_hits,
+                    proj_id_name,
+                    max_chars=12000,
+                    store_label=f"project({project_id})/multi-llm",
+                )
                 final_user_message = (
                     f"Документы проекта (RAG):\n{chr(10).join(parts)}\n"
                     f"Вопрос: {user_message}"
@@ -349,16 +339,12 @@ async def _handle_multi_llm(
             hits = await rag_client.search(user_message, k=get_rag_chat_top_k(), strategy=rag_strategy)
             hits = filter_rag_hits_by_score(hits, min_sim)
             if hits:
-                parts, total = [], 0
-                for i, (content, score, doc_id, chunk_idx) in enumerate(hits, 1):
-                    title = rag_document_label(doc_id, glob_id_name)
-                    frag = f"Фрагмент {i} (документ «{title}», чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
-                    if total + len(frag) > 12000:
-                        frag = frag[:max(0, 12000 - total - 80)] + "\n... [обрезано]\n"
-                        parts.append(frag)
-                        break
-                    parts.append(frag)
-                    total += len(frag)
+                parts, _ = format_rag_fragments(
+                    hits,
+                    glob_id_name,
+                    max_chars=12000,
+                    store_label="global/multi-llm",
+                )
                 final_user_message = f"Контекст: {chr(10).join(parts)}\nВопрос: {user_message}"
                 context_added = True
         except Exception as e:
@@ -379,15 +365,14 @@ async def _handle_multi_llm(
                 hits = await rag_client.kb_search(user_message, k=get_rag_chat_top_k(), strategy=rag_strategy)
             hits = filter_rag_hits_by_score(list(hits or []), min_sim)
             if hits:
-                parts, total = [], 0
-                for i, (content, score, doc_id, chunk_idx) in enumerate(hits, 1):
-                    title = rag_document_label(doc_id, kb_id_name)
-                    frag = f"Фрагмент {i} (документ «{title}»): {content}\n"
-                    if total + len(frag) > 10000:
-                        parts.append(frag[:max(0, 10000 - total - 60)] + "\n...\n")
-                        break
-                    parts.append(frag)
-                    total += len(frag)
+                parts, _ = format_rag_fragments(
+                    hits,
+                    kb_id_name,
+                    max_chars=10000,
+                    store_label="kb/multi-llm",
+                    include_chunk_meta=False,
+                    truncate_marker="\n...\n",
+                )
                 final_user_message = f"{prefix}:\n{''.join(parts)}\n\n{final_user_message}"
                 context_added = True
         except Exception as e:
@@ -402,15 +387,14 @@ async def _handle_multi_llm(
             hits = filter_rag_hits_by_score(list(hits or []), min_sim)
             prefix = "Документы из настроек (библиотека памяти)"
             if hits:
-                parts, total = [], 0
-                for i, (content, score, doc_id, chunk_idx) in enumerate(hits, 1):
-                    title = rag_document_label(doc_id, mem_id_name)
-                    frag = f"Фрагмент {i} (документ «{title}»): {content}\n"
-                    if total + len(frag) > 10000:
-                        parts.append(frag[:max(0, 10000 - total - 60)] + "\n...\n")
-                        break
-                    parts.append(frag)
-                    total += len(frag)
+                parts, _ = format_rag_fragments(
+                    hits,
+                    mem_id_name,
+                    max_chars=10000,
+                    store_label="memory/multi-llm",
+                    include_chunk_meta=False,
+                    truncate_marker="\n...\n",
+                )
                 final_user_message = f"{prefix}:\n{''.join(parts)}\n\n{final_user_message}"
                 context_added = True
         except Exception as e:
@@ -489,55 +473,79 @@ async def _handle_multi_llm(
                 room=sid,
             )
 
-            if model_name.startswith("llm-svc://"):
-                model_path = model_name
-            else:
-                model_path = os.path.join("models", model_name) if not os.path.isabs(model_name) else model_name
+            # Разрешаем модель через ProviderRegistry. Путь может быть:
+            #   - новый формат: <provider_id>/<model_id>
+            #   - legacy: llm-svc://host/model, llm-svc://model, models/<name>
+            registry = await get_registry()
+            provider, model_id = registry.resolve(model_name)
+            if not model_id:
+                return await _emit_complete(
+                    {"model": model_name, "response": f"Некорректный путь модели: {model_name!r}", "error": True}
+                )
 
-            # reload_model_by_path синхронный (внутри — httpx/блокировки); на event loop вторая
-            # модель из gather не стартует, пока первая не вернётся — кажется «обе грузятся столько же».
-            if _multi_llm_llm_svc_pool_style_path(model_path):
+            # Гарантируем, что модель доступна. Для llm-svc это может вызвать
+            # POST /v1/models/load, сериализованный внутренним _switch_lock
+            # провайдера (параллельные gather-слоты не мешают друг другу).
+            # Для vLLM/Ollama/OpenAI это no-op проверка наличия модели.
+            ok = await provider.ensure_model_loaded(model_id)
+            if not ok:
+                return await _emit_complete(
+                    {
+                        "model": model_name,
+                        "response": (
+                            f"Модель {model_id!r} недоступна на провайдере "
+                            f"{provider.id!r} (kind={provider.kind}). "
+                            f"Проверьте, что модель запущена на стороне сервера."
+                        ),
+                        "error": True,
+                    }
+                )
 
-                def _reload_pool() -> bool:
-                    return reload_model_by_path(model_path) if reload_model_by_path else True
+            # Собираем сообщения через LLMService.prepare_messages (там учтены
+            # системный промпт и история; история здесь пустая — по дизайну
+            # multi-LLM без контекста предыдущих ответов).
+            from backend.llm_client import get_llm_service
+            service = await get_llm_service()
+            messages = service.prepare_messages(
+                prompt=final_user_message,
+                history=None,
+                system_prompt=eff_system_prompt,
+            )
 
-                if not await asyncio.to_thread(_reload_pool):
-                    return await _emit_complete(
-                        {"model": model_name, "response": f"Ошибка загрузки {model_name}", "error": True}
-                    )
-            else:
-
-                def _reload_with_lock() -> bool:
-                    with model_load_lock:
-                        if reload_model_by_path and not reload_model_by_path(model_path):
-                            return False
-                        import time
-                        time.sleep(0.5)
-                    return True
-
-                if not await asyncio.to_thread(_reload_with_lock):
-                    return await _emit_complete(
-                        {"model": model_name, "response": f"Ошибка загрузки {model_name}", "error": True}
-                    )
-
-            def _model_stream_cb(chunk, acc):
+            # stream-callback: emit в socket без блокировки текущей корутины
+            # (create_task ставит emit в очередь loop'а; loop обслуживает её
+            # между чанками stream_chat).
+            def _model_stream_cb(chunk: str, acc: str) -> bool:
                 if stop_generation_flags.get(sid, False):
                     return False
-                asyncio.run_coroutine_threadsafe(
-                    sio.emit("multi_llm_chunk", {"model": model_name, "chunk": chunk, "accumulated": acc}, room=sid),
-                    loop,
+                loop.call_soon_threadsafe(
+                    lambda: asyncio.ensure_future(
+                        sio.emit(
+                            "multi_llm_chunk",
+                            {"model": model_name, "chunk": chunk, "accumulated": acc},
+                            room=sid,
+                        ),
+                        loop=loop,
+                    )
                 )
                 return True
 
-            with concurrent.futures.ThreadPoolExecutor() as ex:
-                resp = await asyncio.get_event_loop().run_in_executor(
-                    ex,
-                    lambda: ask_agent(
-                        final_user_message, [], None, streaming,
-                        _model_stream_cb if streaming else None, model_path, None,
-                        system_prompt=eff_system_prompt,
-                    ),
+            if streaming:
+                resp = await provider.stream_chat(
+                    messages=messages,
+                    model=model_id,
+                    callback=_model_stream_cb,
+                    temperature=0.7,
+                    max_tokens=1024,
                 )
+            else:
+                resp = await provider.chat(
+                    messages=messages,
+                    model=model_id,
+                    temperature=0.7,
+                    max_tokens=1024,
+                )
+
             if context_added and isinstance(resp, str) and resp.strip():
                 resp = await maybe_replace_ungrounded(
                     final_user_message[:20000], resp, RAG_STRICT_NOT_FOUND_MESSAGE
@@ -550,11 +558,13 @@ async def _handle_multi_llm(
                 }
             )
         except Exception as e:
+            logger.exception("multi-llm: ошибка для модели %s", model_name)
             return await _emit_complete(
                 {"model": model_name, "response": f"Ошибка: {e}", "error": True}
             )
 
-    # llm-svc с пулом слотов: параллельные _gen_one без глобального model_load_lock.
+    # Параллельные запросы: провайдеры сами сериализуют load-операции внутри
+    # себя (LlmSvcProvider._switch_lock). Никаких глобальных локов.
     results: list = await asyncio.gather(*[_gen_one(m) for m in multi_llm_models], return_exceptions=True)
 
     # Успешные пути уже вызвали multi_llm_complete внутри _gen_one; здесь только сбой gather
@@ -758,15 +768,12 @@ async def _handle_direct(
                                     seen.add((did, idx))
                         except Exception:
                             pass
-                parts, total = [], 0
-                for i, (content, score, doc_id, chunk_idx) in enumerate(proj_hits, 1):
-                    title = rag_document_label(doc_id, proj_id_name)
-                    frag = f"Фрагмент {i} (документ «{title}», чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
-                    if total + len(frag) > 12000:
-                        parts.append(frag[:max(0, 12000 - total - 80)] + "\n... [обрезано]\n")
-                        break
-                    parts.append(frag)
-                    total += len(frag)
+                parts, _ = format_rag_fragments(
+                    proj_hits,
+                    proj_id_name,
+                    max_chars=12000,
+                    store_label=f"project({project_id})/direct",
+                )
                 proj_context = "\n".join(parts)
                 final_message = (
                     f"Документы проекта (RAG):\n{proj_context}\n"
@@ -802,15 +809,12 @@ async def _handle_direct(
                         except Exception:
                             pass
                 global_hits_for_trace = list(hits)
-                parts, total = [], 0
-                for i, (content, score, doc_id, chunk_idx) in enumerate(hits, 1):
-                    title = rag_document_label(doc_id, glob_id_name)
-                    frag = f"Фрагмент {i} (документ «{title}», чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
-                    if total + len(frag) > 12000:
-                        parts.append(frag[:max(0, 12000 - total - 80)] + "\n... [обрезано]\n")
-                        break
-                    parts.append(frag)
-                    total += len(frag)
+                parts, _ = format_rag_fragments(
+                    hits,
+                    glob_id_name,
+                    max_chars=12000,
+                    store_label="global/direct",
+                )
                 doc_context = "\n".join(parts)
                 final_message = (
                     f"Документы (RAG):\n{doc_context}\n"
@@ -976,20 +980,19 @@ async def _handle_direct(
                 "hits": hits_out,
             }
 
-    for hits_list, prefix, idnm in [
-        (kb_hits, "База Знаний (постоянные документы)", kb_id_name),
-        (mem_hits, "Документы из настроек (библиотека памяти)", mem_id_name),
+    for hits_list, prefix, idnm, label in [
+        (kb_hits, "База Знаний (постоянные документы)", kb_id_name, "kb/direct"),
+        (mem_hits, "Документы из настроек (библиотека памяти)", mem_id_name, "memory/direct"),
     ]:
         if hits_list:
-            parts, total = [], 0
-            for i, (content, score, doc_id, chunk_idx) in enumerate(hits_list, 1):
-                title = rag_document_label(doc_id, idnm)
-                frag = f"Фрагмент {i} (документ «{title}»): {content}\n"
-                if total + len(frag) > 10000:
-                    parts.append(frag[:max(0, 10000 - total - 60)] + "\n...\n")
-                    break
-                parts.append(frag)
-                total += len(frag)
+            parts, _ = format_rag_fragments(
+                hits_list,
+                idnm,
+                max_chars=10000,
+                store_label=label,
+                include_chunk_meta=False,
+                truncate_marker="\n...\n",
+            )
             final_message = f"{prefix}:\n{''.join(parts)}\n\n{final_message}"
             context_added = True
 

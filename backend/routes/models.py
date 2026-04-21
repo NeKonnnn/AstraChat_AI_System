@@ -55,61 +55,55 @@ async def list_models():
 
 @router.get("/available")
 async def get_available_models():
+    """
+    Список моделей, доступных пользователю, из ВСЕХ зарегистрированных
+    LLM-провайдеров. Формат path — новый: ``<provider_id>/<model_id>``.
+    Поле ``provider`` содержит описание провайдера (kind, capabilities).
+    """
     try:
-        use_llm_svc = os.getenv("USE_LLM_SVC", "false").lower() == "true"
-        if use_llm_svc:
+        from backend.llm_providers import get_registry
+
+        registry = await get_registry()
+        result_models = []
+        warnings = []
+        for provider in registry.all():
             try:
-                from backend.llm_client import get_llm_service
-                service = await get_llm_service()
-                multi = len(service.client.llm_hosts) > 1
-                models = []
-                host_warnings = []
-                for hid in service.client.llm_hosts:
-                    try:
-                        data = await service.client.get_models(host_id=hid)
-                        for m in data:
-                            mid = m.get("id", "unknown")
-                            path = f"llm-svc://{hid}/{mid}" if multi else f"llm-svc://{mid}"
-                            models.append({
-                                "name": mid,
-                                "path": path,
-                                "size": m.get("size", 0),
-                                "size_mb": m.get("size_mb", 0),
-                                "object": m.get("object", "model"),
-                                "owned_by": m.get("owned_by", hid),
-                                "llm_host_id": hid,
-                            })
-                    except Exception as he:
-                        logger.warning("llm-svc models host %s: %s", hid, he)
-                        host_warnings.append(f"{hid}: {he}")
-                result = {"models": models}
-                if host_warnings:
-                    result["warning"] = "; ".join(host_warnings)
-                return result
-            except Exception as e:
-                logger.error(f"llm-svc models error: {e}")
-                return {"models": [], "error": str(e), "warning": "llm-svc недоступен"}
-        else:
-            models_dir = "models"
-            if not os.path.exists(models_dir):
-                return {"models": []}
-            models = []
-            for root, _dirs, files in os.walk(models_dir):
-                for f in files:
-                    if not f.lower().endswith(".gguf"):
-                        continue
-                    fp = os.path.join(root, f)
-                    rel_under = os.path.relpath(fp, models_dir).replace("\\", "/")
-                    path_posix = f"models/{rel_under}"
-                    sz = os.path.getsize(fp)
-                    models.append({
-                        "name": rel_under,
-                        "path": path_posix,
-                        "size": sz,
-                        "size_mb": round(sz / 1024 / 1024, 2),
-                    })
-            return {"models": models}
+                models = await provider.list_models()
+            except Exception as he:
+                logger.warning("provider=%s list_models error: %s", provider.id, he)
+                warnings.append(f"{provider.id}: {he}")
+                continue
+            is_default = provider.id == registry.default_id
+            for m in models:
+                extra = dict(m.extra or {})
+                result_models.append({
+                    "name": m.model_id,
+                    "display_name": m.display_name or m.model_id,
+                    "path": m.path,  # "<provider_id>/<model_id>"
+                    "provider_id": provider.id,
+                    "provider_kind": provider.kind,
+                    "provider_default": is_default,
+                    "capabilities": {
+                        "hot_swap": provider.capabilities.hot_swap,
+                        "multi_loaded": provider.capabilities.multi_loaded,
+                        "streaming": provider.capabilities.streaming,
+                        "vision": provider.capabilities.vision,
+                    },
+                    "context_size": m.context_size,
+                    "size": extra.pop("size", 0),
+                    "size_mb": extra.pop("size_mb", 0),
+                    "object": extra.pop("object", "model"),
+                    "owned_by": extra.pop("owned_by", provider.id),
+                    # Legacy-alias для старых клиентов: llm_host_id == provider_id.
+                    "llm_host_id": provider.id,
+                    "extra": extra,
+                })
+        response = {"models": result_models}
+        if warnings:
+            response["warning"] = "; ".join(warnings)
+        return response
     except Exception as e:
+        logger.error(f"get_available_models error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -46,22 +46,30 @@ async def set_agent_mode(request: AgentModeRequest):
         o = _get_orchestrator_or_503()
         prev_mode = o.get_mode()
         o.set_mode(request.mode)
-        # Выход из multi-LLM: выгрузить лишние GGUF из пула llm-svc 
+        # При выходе из multi-LLM — очищаем пулы всех llm-svc провайдеров
+        # (у остальных провайдеров это no-op). Это освобождает RAM/GPU.
         if prev_mode == "multi-llm" and request.mode != "multi-llm":
             try:
+                from backend.llm_providers import get_registry
+                from backend.llm_providers.llm_svc import LlmSvcProvider
+
+                registry = await get_registry()
+                for provider in registry.all():
+                    if isinstance(provider, LlmSvcProvider):
+                        ok = await provider.unload_excess()
+                        logger.info(
+                            "Pool trim для провайдера %s (llm-svc) после выхода из multi-llm: success=%s",
+                            provider.id, ok,
+                        )
+                # Синхронизация кэша имени default-модели LLMService
                 try:
-                    from backend.agent_llm_svc import USE_LLM_SVC
                     from backend.llm_client import get_llm_service
-                except ModuleNotFoundError:
-                    from agent_llm_svc import USE_LLM_SVC
-                    from llm_client import get_llm_service
-                if USE_LLM_SVC:
                     svc = await get_llm_service()
-                    ok = await svc.client.unload_excess_llm_models()
                     await svc._sync_loaded_model_name_from_health()
-                    logger.info(f"llm-svc pool trim после выхода из multi-llm: success={ok}")
+                except Exception as e:
+                    logger.debug(f"LLMService name resync skipped: {e}")
             except Exception as e:
-                logger.warning(f"Не удалось очистить пул llm-svc после multi-llm: {e}")
+                logger.warning(f"Pool trim после multi-llm: {e}")
         return {"message": f"Режим изменён на: {request.mode}", "success": True, "timestamp": datetime.now().isoformat()}
     except HTTPException:
         raise

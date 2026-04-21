@@ -130,8 +130,9 @@ from backend.settings import get_settings
 
 settings = get_settings()
 
-# -- глобальный lock для загрузки моделей (multi-llm)
-model_load_lock = threading.Lock()
+# Глобальный lock model_load_lock удалён: после перевода multi-LLM на
+# ProviderRegistry свап модели в llm-svc сериализуется внутренним
+# LlmSvcProvider._switch_lock, не блокируя параллельные слоты.
 
 # -- флаги
 stop_generation_flags: dict = {}
@@ -162,18 +163,24 @@ rag_multi_query_enabled: bool = _env_rag_pipeline_bool("RAG_MULTI_QUERY_ENABLED"
 rag_hyde_enabled: bool = _env_rag_pipeline_bool("RAG_HYDE_ENABLED", False)
 
 try:
-    _rk = int(os.getenv("RAG_CHAT_TOP_K", "5"))
+    _rk = int(os.getenv("RAG_CHAT_TOP_K", "12"))
 except ValueError:
-    _rk = 5
+    _rk = 12
 rag_chat_top_k: int = max(1, min(_rk, 64))
 
 
 def get_rag_chat_top_k() -> int:
-    """Сколько чанков запрашивать у SVC-RAG (чат, агент, API с документами)."""
+    """Сколько чанков запрашивать у SVC-RAG (чат, агент, API с документами).
+
+    Дефолт 12 (а не 8): на слабых мультиязычных эмбеддингах (MiniLM-L12) top-8
+    слишком часто не захватывает нужный чанк, особенно на именах собственных и
+    коротких факт-запросах. 12–16 — sweet-spot; выше — начинает раздувать
+    контекст и разбавлять внимание LLM.
+    """
     try:
         v = int(rag_chat_top_k)
     except (TypeError, ValueError):
-        v = 5
+        v = 12
     return max(1, min(v, 64))
 
 # -- путь к файлу настроек

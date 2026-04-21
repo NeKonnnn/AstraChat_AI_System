@@ -1,5 +1,11 @@
 """
-LLM Client для взаимодействия с микросервисами AI (LLM, STT, TTS, OCR, Diarization)
+LLM Client для взаимодействия с микросервисами AI (LLM, STT, TTS, OCR, Diarization).
+
+Начиная с рефакторинга на ``backend/llm_providers`` все LLM-методы
+(``chat_completion``, ``stream_generation``, ``health_check``, ``get_models``,
+``load_model``, ``load_model_if_needed``, ``unload_excess_llm_models``) — это
+тонкие адаптеры над ``ProviderRegistry``. STT/TTS/OCR/Diarization остаются
+как были, они не относятся к LLM.
 """
 
 import httpx
@@ -13,73 +19,34 @@ from datetime import datetime
 import io
 import os
 
+from backend.llm_providers import (
+    LLMProvider,
+    ModelInfo,
+    ProviderHealth,
+    ProviderRegistry,
+    get_registry,
+    get_registry_sync_or_none,
+    split_model_path,
+)
+from backend.llm_providers.llm_svc import LlmSvcProvider, pool_contains_model, same_llm_svc_model_id
+from backend.llm_providers.openai_compat import clean_llm_response as _clean_llm_response_new
+
 
 def resolve_llm_svc_model_id_for_request(model_path: Optional[str], fallback_model_name: str) -> str:
     """
-    Получает <id> для JSON model в /v1/chat/completions и для POST /v1/models/load.
+    Legacy-API: получает model_id из произвольной ссылки на модель.
 
-    - llm-svc://<id> (и опечатка 1lm-svc://) → <id>
-    - models/<name> или путь к .gguf → имя файла без .gguf (как в GET /v1/models)
-    - иначе → fallback (имя загруженной в llm-svc модели из health)
+    Теперь это просто обёртка над ``split_model_path`` из ``llm_providers``:
+
+    - ``llm-svc://host/model`` / ``llm-svc://model`` / ``provider_id/model`` → model_id;
+    - плоский ``model`` → он же.
+
+    Возвращает ``fallback_model_name``, если path пуст.
     """
     if not model_path or not str(model_path).strip():
         return fallback_model_name
-    s = re.sub(r"\s+", "", str(model_path).strip())
-    low = s.lower()
-    if low.startswith("1lm-svc://"):
-        s = "llm-svc://" + s[10:]
-        low = s.lower()
-    if low.startswith("llm-svc://"):
-        return s[10:]
-    # Multi-LLM / выбор с диска: backend передаёт models/<id> без префикса llm-svc://
-    norm = s.replace("\\", "/")
-    base = os.path.basename(norm.rstrip("/"))
-    if base and base not in (".", ".."):
-        if base.lower().endswith(".gguf"):
-            base = base[:-5]
-        looks_like_filesystem_path = (
-            low.startswith("models/")
-            or "/models/" in low
-            or low.endswith(".gguf")
-            or ("/" in norm)
-        )
-        if looks_like_filesystem_path:
-            return base
-    return fallback_model_name
-
-
-def same_llm_svc_model_id(loaded: str, requested: str) -> bool:
-    """
-    Совпадение «та же модель» для llm-svc: в /v1/health часто короткое имя из конфига,
-    а в агенте - полное имя файла без .gguf
-    """
-    if not loaded or not requested:
-        return False
-    a, b = loaded.strip().lower(), requested.strip().lower()
-    if a == b:
-        return True
-    # Длинное имя начинается с короткого и дефиса: ...-instruct-...
-    if a.startswith(b + "-") or b.startswith(a + "-"):
-        return True
-    return False
-
-
-def pool_contains_model(health: Optional[Dict[str, Any]], model_id: Optional[str]) -> bool:
-    """
-    True, если model_id уже в RAMе llm-svc
-    """
-    if not health or not model_id or not str(model_id).strip():
-        return False
-    mid = str(model_id).strip()
-    loaded = health.get("loaded_models")
-    if isinstance(loaded, list) and len(loaded) > 0:
-        for lid in loaded:
-            if lid and same_llm_svc_model_id(str(lid), mid):
-                return True
-        return False
-    if health.get("model_loaded") and health.get("model_name"):
-        return same_llm_svc_model_id(str(health["model_name"]), mid)
-    return False
+    _, mid = split_model_path(str(model_path))
+    return mid or fallback_model_name
 
 
 def infer_llm_host_for_openai_model_id(
@@ -87,10 +54,7 @@ def infer_llm_host_for_openai_model_id(
     llm_hosts: Dict[str, str],
     default_host_id: str,
 ) -> Tuple[str, str]:
-    """
-    Выбор инстанса llm-svc по id модели, когда нет полного пути llm-svc://<host_id>/...
-    (полный путь разбирается в resolve_llm_host_and_model_for_svc)
-    """
+    """Legacy: возвращает (default_host_id, model_id). Новый код напрямую использует registry."""
     mid = (model_id or "").strip()
     if not mid:
         return default_host_id, mid
@@ -104,92 +68,32 @@ def resolve_llm_host_and_model_for_svc(
     default_host_id: Optional[str],
 ) -> Tuple[str, str]:
     """
-    Маршрутизация на инстанс llm-svc (или совместимый OpenAI API)
+    Legacy-API: разбирает ``<provider_id>/<model_id>`` или ``llm-svc://...`` и
+    возвращает ``(provider_id, model_id)``.
 
-    Returns:
-        (host_id, model_id) — model_id только для поля JSON ``model`` (без ``host/``)
-
-    Пути:
-        - ``llm-svc://<host_id>/<model_id>`` при известном host_id в llm_hosts
-        - ``llm-svc://<model_id>`` — хост по умолчанию
-        - иначе — как ``resolve_llm_svc_model_id_for_request``, хост по умолчанию
+    Новый код должен использовать ``registry.resolve(path)`` напрямую.
+    Эта функция оставлена для обратной совместимости ``agent_llm_svc``.
     """
-    if not llm_hosts:
-        fb = (fallback_model or "").strip() or "qwen-coder-30b"
-        mid = resolve_llm_svc_model_id_for_request(model_ref, fb)
-        return "default", mid
-
-    keys = list(llm_hosts.keys())
-    default_h = default_host_id if default_host_id in llm_hosts else keys[0]
     fb = (fallback_model or "").strip() or "qwen-coder-30b"
-
+    default_h = default_host_id if default_host_id and default_host_id in (llm_hosts or {}) else (
+        next(iter(llm_hosts)) if llm_hosts else "default"
+    )
     if not model_ref or not str(model_ref).strip():
-        return infer_llm_host_for_openai_model_id(fb, llm_hosts, default_h)
+        return default_h, fb
 
-    s = re.sub(r"\s+", "", str(model_ref).strip())
-    low = s.lower()
-    if low.startswith("1lm-svc://"):
-        s = "llm-svc://" + s[10:]
-        low = s.lower()
-    if low.startswith("llm-svc://"):
-        rest = s[10:].strip()
-        if not rest:
-            return infer_llm_host_for_openai_model_id(fb, llm_hosts, default_h)
-        if "/" in rest:
-            hid, tail = rest.split("/", 1)
-            tail = (tail or "").strip()
-            if hid in llm_hosts and tail:
-                return hid, tail
-            # rest целиком — model_id со слэшем, первый сегмент не id хоста в llm_hosts
-            return infer_llm_host_for_openai_model_id(rest, llm_hosts, default_h)
-        return infer_llm_host_for_openai_model_id(rest, llm_hosts, default_h)
-
-    # Легаси: в настройках иногда лежит только «llm-svc» без // — опираемся на fallback id
-    if low in ("llm-svc", "llm-svc://"):
-        return infer_llm_host_for_openai_model_id(fb, llm_hosts, default_h)
-
-    mid = resolve_llm_svc_model_id_for_request(model_ref, fb)
-    return infer_llm_host_for_openai_model_id(mid, llm_hosts, default_h)
+    head, tail = split_model_path(str(model_ref))
+    if head and (not llm_hosts or head in llm_hosts):
+        return head, (tail or fb)
+    if head and llm_hosts and head not in llm_hosts:
+        # Head существует, но не зарегистрирован в legacy-словаре → пусть регистратор
+        # (если есть) сам решает. Для legacy-вызывающих возвращаем default + склейку.
+        combined = f"{head}/{tail}" if tail else head
+        return default_h, combined
+    return default_h, (tail or fb)
 
 
-def _clean_llm_response(text: str) -> str:
-    """Очистка ответа LLM от артефактов chat template (im_start/im_end теги, HTML entities)."""
-    if not text:
-        return text
-    
-    # Убираем всё начиная с <|im_start|> (включая HTML-escaped варианты)
-    # Модель иногда генерирует продолжение чата внутри ответа
-    patterns = [
-        r'<\|im_start\|>.*',           # прямой
-        r'&lt;\|im_start\|&gt;.*',     # 1x escaped
-        r'&amp;lt;\|im_start\|&amp;gt;.*',  # 2x escaped
-        r'&amp;amp;lt;\|im_start\|&amp;amp;gt;.*',  # 3x escaped
-        r'&amp;amp;amp;lt;\|im_start\|&amp;amp;amp;gt;.*',  # 4x escaped
-    ]
-    for pattern in patterns:
-        text = re.sub(pattern, '', text, flags=re.DOTALL)
-    
-    # Аналогично для <|im_end|>
-    patterns_end = [
-        r'<\|im_end\|>.*',
-        r'&lt;\|im_end\|&gt;.*',
-        r'&amp;lt;\|im_end\|&amp;gt;.*',
-    ]
-    for pattern in patterns_end:
-        text = re.sub(pattern, '', text, flags=re.DOTALL)
-    
-    # Декодируем HTML entities (&#34; → ", &amp; → &, &lt; → <, и т.д.)
-    # Применяем несколько раз для вложенного escaping
-    for _ in range(3):
-        new_text = html_module.unescape(text)
-        if new_text == text:
-            break
-        text = new_text
-    
-    # Убираем trailing пробелы/переносы
-    text = text.rstrip()
-    
-    return text
+# Алиас на новую реализацию — чтобы legacy-импорт "_clean_llm_response" сохранил работу.
+_clean_llm_response = _clean_llm_response_new
 
 # Импортируем настройки 
 try:
@@ -269,97 +173,95 @@ class LLMClient:
         return headers
 
     def _url_for_llm_host(self, host_id: Optional[str] = None) -> str:
+        """Legacy: base_url по host_id. Если registry готов — берём оттуда."""
+        r = get_registry_sync_or_none()
+        if r is not None:
+            try:
+                return r.get(host_id).base_url
+            except Exception:
+                pass
         hid = host_id if host_id and host_id in self.llm_hosts else self.default_llm_host
         return self.llm_hosts.get(hid) or self.llm_url
-    
-    # --- МЕТОДЫ LLM (маршрут по host_id или default) ---
+
+    async def _get_provider(self, host_id: Optional[str] = None) -> LLMProvider:
+        """Единая точка получения провайдера с учётом legacy host_id."""
+        r = await get_registry()
+        return r.get(host_id)
+
+    # --- МЕТОДЫ LLM (делегируют в ProviderRegistry) ---
 
     async def health_check(self, host_id: Optional[str] = None) -> Dict[str, Any]:
-        """Проверка состояния LLM на указанном хосте (или default_llm_host)."""
-        base = self._url_for_llm_host(host_id)
+        """
+        Проверка состояния LLM-провайдера. Возвращает dict с ключами
+        ``status``, ``loaded_models``, ``model_loaded``, ``model_name`` —
+        совместимый с legacy-вызывающими.
+        """
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(f"{base}/v1/health", headers=self._get_headers())
-                response.raise_for_status()
-                return response.json()
+            provider = await self._get_provider(host_id)
         except Exception as e:
-            logger.error(f"Ошибка здоровья LLM ({base}): {e}")
             return {"status": "unhealthy", "error": str(e)}
-    
+        h: ProviderHealth = await provider.health()
+        result: Dict[str, Any] = {
+            "status": "healthy" if h.healthy else "unhealthy",
+            "loaded_models": list(h.loaded_models),
+            "model_loaded": bool(h.loaded_models),
+            "model_name": h.loaded_models[0] if h.loaded_models else None,
+        }
+        if h.error:
+            result["error"] = h.error
+        if h.raw:
+            result.setdefault("raw", h.raw)
+        return result
+
     async def get_models(self, host_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Получение списка моделей с инстанса host_id."""
-        base = self._url_for_llm_host(host_id)
+        """Список моделей одного провайдера (legacy: только один host)."""
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(f"{base}/v1/models", headers=self._get_headers())
-                response.raise_for_status()
-                data = response.json()
-                return data.get("data", [])
+            provider = await self._get_provider(host_id)
         except Exception as e:
-            logger.error(f"Ошибка получения моделей ({base}): {e}")
+            logger.error("get_models(%s) registry error: %s", host_id, e)
             return []
+        models: List[ModelInfo] = await provider.list_models()
+        # Формат, совместимый с legacy-вызывающими: список dict c "id" и "name".
+        return [
+            {
+                "id": m.model_id,
+                "name": m.display_name or m.model_id,
+                "provider_id": m.provider_id,
+                **(m.extra or {}),
+            }
+            for m in models
+        ]
 
     async def load_model(self, model_name: str, host_id: Optional[str] = None) -> bool:
-        """Запросить LLM-сервис загрузить/переключить модель по имени (для llama.cpp backend)."""
+        """Загрузить/переключить модель — делегирует в ``provider.ensure_model_loaded``."""
         if not model_name or not model_name.strip():
             logger.warning("load_model: пустое имя модели")
             return False
-        model_name = model_name.strip()
-        base = self._url_for_llm_host(host_id)
-        load_timeout = httpx.Timeout(1200.0, connect=10.0, read=1200.0, write=30.0)
-        try:
-            async with httpx.AsyncClient(timeout=load_timeout) as client:
-                response = await client.post(
-                    f"{base}/v1/models/load",
-                    headers=self._get_headers(),
-                    json={"model": model_name}
-                )
-                if not response.is_success:
-                    logger.error(f"llm-svc load_model failed ({base}): {response.status_code} {response.text}")
-                    return False
-                data = response.json()
-                if data.get("success"):
-                    logger.info(f"llm-svc ({base}) переключился на модель: {model_name}")
-                    return True
-                logger.warning(f"llm-svc load_model returned success=False: {data}")
-                return False
-        except Exception as e:
-            logger.error(f"Ошибка вызова llm-svc load_model ({base}): {e}")
-            return False
+        provider = await self._get_provider(host_id)
+        return await provider.ensure_model_loaded(model_name.strip())
 
     async def load_model_if_needed(self, model_name: str, host_id: Optional[str] = None) -> bool:
-        """POST /v1/models/load только если модели ещё нет в пуле на этом хосте."""
-        if not model_name or not model_name.strip():
-            return False
-        model_name = model_name.strip()
-        health = await self.health_check(host_id=host_id)
-        if pool_contains_model(health, model_name):
-            logger.info(f"llm-svc: модель {model_name!r} уже в пуле ({host_id or self.default_llm_host}), пропуск load_model")
-            return True
+        """Синоним ``load_model`` — ``ensure_model_loaded`` уже no-op если модель в пуле."""
         return await self.load_model(model_name, host_id=host_id)
 
     async def unload_excess_llm_models(self, host_id: Optional[str] = None) -> bool:
-        """Оставить в llm-svc только модель из конфига сервиса. host_id=None — все хосты."""
-        t = httpx.Timeout(1200.0, connect=10.0, read=1200.0, write=60.0)
-        targets = [host_id] if host_id else list(self.llm_hosts.keys())
+        """
+        Очистка пула llm-svc. Для провайдеров, где пула нет (vLLM/Ollama/OpenAI)
+        возвращает True (нечего выгружать).
+        """
+        try:
+            registry = await get_registry()
+        except Exception as e:
+            logger.error("unload_excess_llm_models: registry error: %s", e)
+            return False
+        targets: List[LLMProvider] = (
+            [registry.get(host_id)] if host_id else [p for p in registry.all() if isinstance(p, LlmSvcProvider)]
+        )
         ok_all = True
-        for hid in targets:
-            base = self._url_for_llm_host(hid)
-            try:
-                async with httpx.AsyncClient(timeout=t) as client:
-                    response = await client.post(
-                        f"{base}/v1/models/unload-excess",
-                        headers=self._get_headers(),
-                    )
-                    if not response.is_success:
-                        logger.error(f"llm-svc unload-excess failed ({base}): {response.status_code} {response.text}")
-                        ok_all = False
-                        continue
-                    data = response.json()
-                    ok_all = ok_all and bool(data.get("success", True))
-            except Exception as e:
-                logger.error(f"Ошибка вызова llm-svc unload-excess ({base}): {e}")
-                ok_all = False
+        for p in targets:
+            if isinstance(p, LlmSvcProvider):
+                if not await p.unload_excess():
+                    ok_all = False
         return ok_all
 
     async def chat_completion(
@@ -371,20 +273,18 @@ class LLMClient:
         stream: bool = False,
         host_id: Optional[str] = None,
     ) -> Any:
-        """Генерация ответа LLM """
-        payload = {"model": model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens, "stream": stream}
-        base = self._url_for_llm_host(host_id)
-        logger.info(f"[LLMClient] Запрос к {base}/v1/chat/completions model={model!r}")
-        
-        try:
-            request_timeout = httpx.Timeout(self.timeout, connect=10.0, read=self.timeout, write=10.0)
-            async with httpx.AsyncClient(timeout=request_timeout) as client:
-                response = await client.post(f"{base}/v1/chat/completions", headers=self._get_headers(), json=payload)
-                response.raise_for_status()
-                return response.json()
-        except Exception as e:
-            logger.error(f"Ошибка чата LLM: {e}")
-            raise
+        """
+        Non-streaming chat. Возвращает OpenAI-style dict ``{"choices": [...]}``
+        для совместимости с legacy-вызывающими.
+        """
+        provider = await self._get_provider(host_id)
+        content = await provider.chat(
+            messages=messages, model=model, temperature=temperature, max_tokens=max_tokens,
+        )
+        return {
+            "choices": [{"message": {"role": "assistant", "content": content}, "index": 0, "finish_reason": "stop"}],
+            "model": model,
+        }
     async def get_transcription_health(self) -> Dict[str, Any]:
         """Проверка состояния STT (WhisperX)"""
         try:
@@ -924,73 +824,66 @@ class LLMService:
                                 })
                             break
             
-            if not str(model_path or "").strip():
+            # Разрешаем путь модели через Registry (поддерживает новый формат
+            # <provider_id>/<model_id> и legacy llm-svc://host/model).
+            registry = await get_registry()
+            provider, resolved_model = registry.resolve(model_path)
+            # Если model_id в path не задан — используем закэшированный self.model_name
+            # (имя default-модели провайдера, подтягивается из health при initialize()).
+            model_to_use = resolved_model or self.model_name
+            if not model_to_use:
+                # Попытка: синхронизируем имя загруженной модели.
                 await self._sync_loaded_model_name_from_health()
+                model_to_use = self.model_name
 
-            hid, model_to_use = resolve_llm_host_and_model_for_svc(
-                model_path, self.model_name, self.client.llm_hosts, self.client.default_llm_host
-            )
-            health = await self.client.health_check(host_id=hid)
-            llm_ready = health.get("status") == "healthy"
             if str(model_path or "").strip():
                 logger.info(
-                    f"[generate_response] model_path={model_path!r} → host={hid!r} model={model_to_use!r} "
-                    f"(llm-svc RAM ok: {llm_ready}, кэш имени: {self.model_name!r})"
+                    "[generate_response] model_path=%r → provider=%r model=%r",
+                    model_path, provider.id, model_to_use,
                 )
 
-            in_pool = pool_contains_model(health, model_to_use)
-            if model_to_use and in_pool:
-                self.model_name = model_to_use
-            elif model_to_use and (not llm_ready or not same_llm_svc_model_id(self.model_name, model_to_use)):
-                async with self._model_switch_lock:
-                    health2 = await self.client.health_check(host_id=hid)
-                    llm_ready2 = health2.get("status") == "healthy"
-                    if pool_contains_model(health2, model_to_use):
-                        self.model_name = model_to_use
-                    elif not llm_ready2 or not same_llm_svc_model_id(self.model_name, model_to_use):
-                        logger.info(
-                            f"[generate_response] Загрузка/переключение llm-svc на модель: {model_to_use!r} host={hid!r} "
-                            f"(было в RAM: {llm_ready2})"
-                        )
-                        ok = await self.client.load_model_if_needed(model_to_use, host_id=hid)
-                        if ok:
-                            self.model_name = model_to_use
-                            logger.info(f"[generate_response] llm-svc модель активна: {self.model_name!r}")
-                        else:
-                            logger.warning(
-                                f"[generate_response] Не удалось загрузить llm-svc {model_to_use!r}; "
-                                f"кэш имени: {self.model_name!r}"
-                            )
-                            model_to_use = self.model_name
-            
+            # ensure_model_loaded сам делает всю работу:
+            # - llm-svc: POST /v1/models/load при необходимости (с внутренним _switch_lock);
+            # - vLLM/Ollama/OpenAI: проверка, что модель доступна (без сетевых побочных эффектов).
+            if model_to_use:
+                ok = await provider.ensure_model_loaded(model_to_use)
+                if ok:
+                    self.model_name = model_to_use
+                else:
+                    logger.warning(
+                        "[generate_response] provider=%s не готов выдать модель %r; "
+                        "используем текущее имя модели %r",
+                        provider.id, model_to_use, self.model_name,
+                    )
+                    model_to_use = self.model_name
+
             if streaming and stream_callback:
-                return await self._stream_generation(
-                    messages, temperature, max_tokens, stream_callback, model_to_use, host_id=hid
+                logger.info(
+                    "[generate_response] stream → provider=%s model=%r",
+                    provider.id, model_to_use,
+                )
+                return await provider.stream_chat(
+                    messages=messages,
+                    model=model_to_use,
+                    callback=stream_callback,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
                 )
             else:
-                logger.info(f"[generate_response] Запрос к LLM микросервису (host={hid!r})...")
-                response = await self.client.chat_completion(
+                logger.info(
+                    "[generate_response] chat → provider=%s model=%r",
+                    provider.id, model_to_use,
+                )
+                content = await provider.chat(
                     messages=messages,
                     model=model_to_use,
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    stream=False,
-                    host_id=hid,
                 )
-                
-                if "choices" in response and len(response["choices"]) > 0:
-                    content = response["choices"][0]["message"]["content"]
-                    content = _clean_llm_response(content)
-                    logger.info(f"[generate_response] Ответ получен ({len(content)} симв.)")
-                    return content
-                else:
-                    logger.error(f"[generate_response] Ошибка формата: {response}")
-                    return "Ошибка генерации ответа"
-                    
         except Exception as e:
             logger.error(f"Ошибка generate_response: {e}")
             return f"Извините, произошла ошибка: {str(e)}"
-    
+
     async def _stream_generation(
         self,
         messages: List[Dict[str, str]],
@@ -1000,50 +893,19 @@ class LLMService:
         model_name: Optional[str] = None,
         host_id: Optional[str] = None,
     ) -> str:
-        """Потоковая генерация с парсингом SSE (ИСПРАВЛЕНО: контекст-менеджер не закрывается)"""
-        accumulated_text = ""
+        """
+        Legacy-совместимая обёртка: делегирует в ``provider.stream_chat``.
+        Новый код должен использовать ``provider.stream_chat`` напрямую.
+        """
         try:
-            base = self.client._url_for_llm_host(host_id)
-            logger.info(f"[_stream_generation] Старт потока... host={host_id or self.client.default_llm_host!r}")
-            payload = {
-                "model": model_name or self.model_name,
-                "messages": messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-                "stream": True
-            }
-            headers = {**self.client._get_headers(), "Accept": "text/event-stream"}
-            # Для стрима нужен длинный read timeout: большая RAG-вставка даёт долгую генерацию первого токена
-            stream_read_timeout = 300.0  # 5 минут на чтение очередного чанка
-            request_timeout = httpx.Timeout(stream_read_timeout, connect=10.0, read=stream_read_timeout, write=10.0)
-            
-            # Все чтение происходит ВНУТРИ context manager, чтобы соединение не закрылось
-            async with httpx.AsyncClient(timeout=request_timeout) as client:
-                async with client.stream("POST", f"{base}/v1/chat/completions",
-                                        headers=headers, json=payload) as response:
-                    response.raise_for_status()
-                    async for line in response.aiter_lines():
-                        if line.startswith("data: "):
-                            data_str = line[6:]
-                            if data_str.strip() == "[DONE]":
-                                break
-                            try:
-                                data = json.loads(data_str)
-                                if "choices" in data and len(data["choices"]) > 0:
-                                    delta = data["choices"][0].get("delta", {})
-                                    if "content" in delta:
-                                        chunk = delta["content"]
-                                        accumulated_text += chunk
-                                        # Проверяем, не начала ли модель генерировать <|im_start|>
-                                        if "<|im_start|>" in accumulated_text or "<|im_end|>" in accumulated_text:
-                                            logger.info("[_stream_generation] Обнаружен im_start/im_end тег, обрезаем")
-                                            break
-                                        if stream_callback(chunk, accumulated_text) is False:
-                                            logger.info("[_stream_generation] Прервано колбэком")
-                                            return _clean_llm_response(accumulated_text) if accumulated_text else None
-                            except json.JSONDecodeError:
-                                continue
-            return _clean_llm_response(accumulated_text)
+            provider = await self.client._get_provider(host_id)
+            return await provider.stream_chat(
+                messages=messages,
+                model=model_name or self.model_name,
+                callback=stream_callback,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
         except Exception as e:
             logger.error(f"Ошибка _stream_generation: {e}")
             import traceback
@@ -1115,24 +977,25 @@ def ask_agent_llm_svc(prompt: str, history: Optional[List[Dict[str, str]]] = Non
             logger.error(f"[ask_agent_llm_svc] Error in _async_generate: {e}")
             raise
 
-    try:
-        loop = asyncio.get_running_loop()
-        # Уже внутри запущенного event loop (FastAPI/Socket.IO) - выполняем в потоке, чтобы не блокировать
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(lambda: asyncio.run(_async_generate()))
-            try:
-                return future.result(timeout=120)
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 503:
-                    return "Сервис модели занят или перезагружается. Повторите запрос через несколько секунд."
-                raise
-            except Exception as e:
-                logger.error(f"[ask_agent_llm_svc] Error in executor: {e}")
-                return "Ошибка при обращении к модели."
-    except RuntimeError:
-        # Нет running loop (вызов из потока) - запускаем свой цикл
+    def _run_async_generate_sync() -> str:
+        """Отдельный sync-вход для asyncio.run (в т.ч. из пула потоков)."""
         return asyncio.run(_async_generate())
+
+    # Не используем try/except вокруг get_running_loop так, чтобы вложенные ошибки не цеплялись к RuntimeError в логах.
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return _run_async_generate_sync()
+
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(_run_async_generate_sync)
+        try:
+            return future.result(timeout=120)
+        except Exception as e:
+            logger.error(f"[ask_agent_llm_svc] Error in executor: {e}")
+            return "Ошибка при обращении к модели."
 
 # --- Обертки для аудио и OCR ---
 

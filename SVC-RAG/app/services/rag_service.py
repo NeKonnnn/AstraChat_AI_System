@@ -25,7 +25,7 @@ from app.services.rag_search_helpers import (
     should_diversify_hits,
     vector_fetch_limit,
 )
-from app.database.fts import crude_russian_stem, extract_filenames, extract_proper_nouns
+from app.database.fts import extract_filenames, extract_proper_nouns
 from app.database.graph_repository import GraphRepository
 from app.services.chunker import split_into_chunks, split_into_chunks_with_meta
 from app.services.document_parser import parse_document
@@ -433,6 +433,22 @@ class RagService:
             document_id=document_id,
             filters=filters,
         )
+        # Честный cosine-скор ПО ДОКУМЕНТУ (до entity-lane / merge / boost).
+        # Используется ниже как первый ключ сортировки anchor_chunks, чтобы
+        # семантически близкие документы не вытеснялись «искусственно
+        # накрученными» entity-filename попаданиями (где скор 0.5 задан
+        # вручную). См. также retrieval_pipeline.py — аналогичная логика.
+        doc_vector_score: Dict[Any, float] = {}
+        for dv, sc in pairs:
+            try:
+                s = float(sc)
+            except (TypeError, ValueError):
+                continue
+            did = dv.document_id
+            if did is None:
+                continue
+            if s > doc_vector_score.get(did, float("-inf")):
+                doc_vector_score[did] = s
         if not pairs:
             await log_retrieval_with_eval(
                 store="global (глобальные документы)",
@@ -536,10 +552,11 @@ class RagService:
             except Exception as e:
                 logger.warning("entity_lane(global) FTS failed: %s", e)
 
-            # (2) ILIKE со stemmer'ом — ВСЕГДА, не только при FTS=0. Лечит
-            # падежи: «Константина» → %Константи%, найдёт «Константин Олегович».
-            stemmed_tokens = [crude_russian_stem(t) for t in entity_tokens]
-            lookup_tokens = list(dict.fromkeys([t for t in stemmed_tokens if t]))
+            # (2) ILIKE по сырым токенам — всегда, параллельно FTS. Подробный
+            # разбор см. в retrieval_pipeline.py; коротко: морфологию русских
+            # имён покрывает FTS (Postgres snowball), а ILIKE нужен только
+            # для того, что snowball не знает — коды/латиница/редкие токены.
+            lookup_tokens = list(dict.fromkeys([t for t in entity_tokens if t]))
             if lookup_tokens:
                 try:
                     ilike_hits = await self.vector_repo.substring_search(
@@ -552,11 +569,11 @@ class RagService:
                             existing.add((dv.document_id, dv.chunk_index))
                     if ilike_hits:
                         logger.info(
-                            "[global] entity_lane ILIKE-stemmed: %s → %s → %d чанков",
-                            entity_tokens, lookup_tokens, len(ilike_hits),
+                            "[global] entity_lane ILIKE(raw): %s → %d чанков",
+                            lookup_tokens, len(ilike_hits),
                         )
                 except Exception as e:
-                    logger.warning("entity_ilike_stemmed(global) failed: %s", e)
+                    logger.warning("entity_ilike_raw(global) failed: %s", e)
 
             # (3) Entity-in-filename: имена героев часто зашиты в имя файла
             # («..._Некрасов_СК0050629.pdf»). Если у документа имя совпадает
@@ -565,7 +582,7 @@ class RagService:
                 hasattr(self.doc_repo, "find_document_ids_by_filename")
                 and hasattr(self.vector_repo, "get_vectors_by_document")
             ):
-                filename_probe = [t for t in stemmed_tokens if len(t) >= 4 and not t.isdigit()]
+                filename_probe = [t for t in entity_tokens if len(t) >= 4 and not t.isdigit()]
                 matched_docs: set = set()
                 for tok in filename_probe:
                     try:
@@ -646,6 +663,13 @@ class RagService:
             pairs = [(v, score) for v, score in hybrid_results]
             hybrid_applied = True
 
+        # Entity-anchor документы исключаем из diversify, иначе при cap=1/doc
+        # у CV останется только чанк с «Газпромбанк», а «МФТИ» и «Тинькофф»
+        # из соседних чанков потеряются, даже если документ попал в entity-hits.
+        entity_anchor_docs_preview = {
+            v.document_id for v, _ in pairs
+            if (v.document_id, v.chunk_index) in entity_keys and v.document_id is not None
+        }
         if (
             document_id is None
             and pairs
@@ -653,7 +677,11 @@ class RagService:
             and should_diversify_hits(pairs)
         ):
             pool_div = max(int(self._cfg.rerank_top_k or 20), k * 6, 56)
-            pairs = diversify_hits_by_document(pairs, min(pool_div, len(pairs)))
+            pairs = diversify_hits_by_document(
+                pairs,
+                min(pool_div, len(pairs)),
+                keep_all_for_docs=entity_anchor_docs_preview | set(filename_doc_ids or []),
+            )
 
         pipeline_desc = "pgvector_cosine_similarity"
         if document_id is not None:
@@ -711,16 +739,48 @@ class RagService:
             base_sib_score = min((float(sc) for _, sc in pairs), default=0.01) * 0.5
             if base_sib_score <= 0:
                 base_sib_score = 0.01
-            # Entity-сиблинги ещё ниже, чтобы не выжимать чанки других доков с тем же именем.
-            entity_sib_score = base_sib_score * 0.5
+            # Средний score entity-чанков — используем как базу для siblings
+            # entity-anchor документов (чтобы сиблинги разделов типа «Тинькофф»
+            # не тонули в финальной сортировке).
+            entity_scores_global = [
+                float(sc) for v, sc in pairs
+                if (v.document_id, v.chunk_index) in entity_keys
+            ]
+            avg_entity_score_global = (
+                sum(entity_scores_global) / len(entity_scores_global)
+                if entity_scores_global else 0.1
+            )
+            entity_sib_score = max(avg_entity_score_global * 0.7, base_sib_score)
 
+            # Порог «документ реально семантически похож на запрос».
+            # Если документ попал в entity_anchor_doc_ids только через FTS/ILIKE
+            # совпадение имени в библиографии/сноске/мусорной строке, его
+            # реальный vector_score низкий. Расширять такой документ сиблингами
+            # — значит тянуть шум, который выдавит релевантные документы из
+            # LLM-бюджета. Подробный разбор см. retrieval_pipeline.py.
+            vector_support_threshold_g = max(
+                float(getattr(self._cfg, "min_vector_similarity", 0.0) or 0.0),
+                0.05,
+            )
+
+            def _has_vector_support_g(doc_id: Any) -> bool:
+                return doc_vector_score.get(doc_id, 0.0) >= vector_support_threshold_g
+
+            # Универсальные капы:
+            #   filename: до 20 чанков (пользователь явно назвал файл, vector
+            #     support не требуется).
+            #   entity-anchor С vector-supp: 6 чанков (chunk_0 + entity + ±4).
+            #   entity-anchor БЕЗ vector-supp: 0 сиблингов (шумовой документ —
+            #     имя встретилось в библиографии, а сам документ семантически
+            #     не про запрос).
+            #   enum-anchor: 6 чанков.
             def _cap_global(doc_id: Any) -> int:
                 if doc_id in pin_whole_doc_ids:
                     return 20
                 if doc_id in entity_anchor_doc_ids:
-                    return 2
+                    return 6 if _has_vector_support_g(doc_id) else 0
                 if doc_id in enum_anchor_doc_ids:
-                    return 4
+                    return 6
                 return 0
 
             for doc_id in all_anchor_doc_ids:
@@ -734,32 +794,42 @@ class RagService:
                     continue
                 if not doc_chunks:
                     continue
-                doc_chunks.sort(key=lambda d: int(getattr(d, "chunk_index", 0) or 0))
                 entity_chunk_indices = {
-                    v.chunk_index for v in doc_chunks
+                    int(getattr(v, "chunk_index", 0) or 0) for v in doc_chunks
                     if (v.document_id, v.chunk_index) in entity_keys
                 }
-                if doc_id in entity_anchor_doc_ids and entity_chunk_indices:
-                    def _prox(ci: int, anchors: set = entity_chunk_indices) -> int:
-                        return min(abs(ci - a) for a in anchors)
-                    doc_chunks.sort(
-                        key=lambda d: (
-                            _prox(int(getattr(d, "chunk_index", 0) or 0)),
-                            int(getattr(d, "chunk_index", 0) or 0),
-                        )
-                    )
+
+                # Универсальный приоритет чанков внутри документа:
+                #   (0) chunk_index == 0 — всегда первым (заголовочный якорь).
+                #   (1) близость к entity-чанкам (entity → proximity).
+                #   (2) тай-брейк по chunk_index.
+                def _priority(dv: Any) -> Tuple[int, int, int]:
+                    ci = int(getattr(dv, "chunk_index", 0) or 0)
+                    if ci == 0:
+                        return (0, 0, 0)
+                    if entity_chunk_indices:
+                        prox = min(abs(ci - e) for e in entity_chunk_indices)
+                    else:
+                        prox = ci
+                    return (1, prox, ci)
+
+                doc_chunks_prioritized = sorted(doc_chunks, key=_priority)
                 taken = 0
                 sib_score = entity_sib_score if doc_id in entity_anchor_doc_ids else base_sib_score
-                for dv in doc_chunks:
+                for dv in doc_chunks_prioritized:
                     if taken >= cap:
                         break
                     key = (dv.document_id, dv.chunk_index)
                     if key in existing:
                         continue
+                    # Для entity-anchor: обрыв за пределами proximity±4
+                    # (chunk_0 проходит мимо этой проверки — его prox=0).
                     if doc_id in entity_anchor_doc_ids and entity_chunk_indices:
                         ci = int(getattr(dv, "chunk_index", 0) or 0)
-                        if min(abs(ci - a) for a in entity_chunk_indices) > 2:
-                            break
+                        if ci != 0:
+                            prox = min(abs(ci - e) for e in entity_chunk_indices)
+                            if prox > 4:
+                                break
                     sibling_rows_by_key[key] = (dv.content, sib_score, dv.document_id, dv.chunk_index)
                     pairs.append((dv, sib_score))
                     existing.add(key)
@@ -774,33 +844,137 @@ class RagService:
                     sorted(list(enum_anchor_doc_ids)),
                 )
 
+        # Cap'ы на pinned anchors — защита от «magnet»-эффекта, когда один
+        # популярный документ (xlsx со ста упоминаниями имени) забивает промпт
+        # LLM десятками чанков и вытесняет другие файлы. Подробный разбор см.
+        # в retrieval_pipeline.py, секция «Финальный срез».
+        if enumeration:
+            entity_per_doc_cap = max(4, k // 2)
+            entity_doc_cap = max(15, int(k * 1.5))
+        else:
+            # 6 чанков/doc: для коротких entity-документов (CV, справка)
+            # это покрывает весь файл. Было 4 — отрезало заголовок
+            # «АО «Газпромбанк»» в CV, см. retrieval_pipeline.py.
+            entity_per_doc_cap = 6
+            entity_doc_cap = 8
+        entity_total_cap = entity_per_doc_cap * entity_doc_cap
+        filename_whole_cap = 20
+        sibling_keys_global = set(sibling_rows_by_key.keys())
+        entity_and_sibling_keys = entity_keys | sibling_keys_global
+
         def _cut_with_entity_pin(rows: List[Tuple[str, float, Optional[int], Optional[int]]]) -> List[Tuple[str, float, Optional[int], Optional[int]]]:
-            """Срезает до ``final_limit`` и пиннит ТОЛЬКО:
-              * сами entity-чанки (точечное попадание — без них перечисление сломается);
-              * чанки filename-anchor документов (пользователь явно назвал файл).
+            """Срезает до ``final_limit`` и пиннит anchor-чанки с учётом cap'ов:
+
+              * filename-anchor документ — до ``filename_whole_cap`` чанков целиком;
+              * entity-anchor — до ``entity_per_doc_cap`` чанков × ``entity_doc_cap``
+                документов (итого не более ``entity_total_cap`` pinned), выбор по
+                убыванию score — так в top уходят самые релевантные чанки, а не
+                «все подряд по порядку документов».
 
             Entity-anchor siblings и enum siblings в пининг НЕ попадают — они просто
             лежат в общей куче с пониженным score и пробиваются по общему ранжированию.
-            Это лекарство от «magnet»-эффекта: CV не будет цеплять все запросы с
-            упоминанием имени, если оно есть и в других документах.
             """
             if not rows:
                 return []
             if not entity_keys and not pin_whole_doc_ids:
                 return rows[:final_limit]
+
             anchor_rows: List[Tuple[str, float, Optional[int], Optional[int]]] = []
             seen: set = set()
+
+            # 1. filename-anchor: весь явно названный документ (до filename_whole_cap).
+            filename_pool: List[Tuple[str, float, Optional[int], Optional[int]]] = []
+            for row in rows:
+                _, _, doc_id, chunk_idx = row
+                if doc_id in pin_whole_doc_ids:
+                    key = (doc_id, chunk_idx)
+                    if key not in seen:
+                        filename_pool.append(row)
+                        seen.add(key)
+            filename_pool.sort(key=lambda r: (int(r[2] or 0), int(r[3] or 0)))
+            per_doc_cnt: Dict[Any, int] = {}
+            for row in filename_pool:
+                cnt = per_doc_cnt.get(row[2], 0)
+                if cnt < filename_whole_cap:
+                    anchor_rows.append(row)
+                    per_doc_cnt[row[2]] = cnt + 1
+
+            # 2. entity-anchor: отбор с приоритетом структурной значимости.
+            # Включаем entity-чанки И siblings (chunk_0 + соседи). Сортировка:
+            #   группа 0: chunk_0 entity/enum-anchor документов (заголовок);
+            #   группа 1: entity-чанки (прямые попадания имени);
+            #   группа 2: siblings (добор по proximity).
+            # Такая сортировка универсальна для любого документа — не нужны
+            # пороги по длине. См. retrieval_pipeline.py.
+            entity_cands: List[Tuple[str, float, Optional[int], Optional[int]]] = []
             for row in rows:
                 _, _, doc_id, chunk_idx = row
                 key = (doc_id, chunk_idx)
                 if key in seen:
                     continue
-                is_entity = key in entity_keys
-                is_whole_doc_pin = doc_id in pin_whole_doc_ids
-                if is_entity or is_whole_doc_pin:
-                    anchor_rows.append(row)
-                    seen.add(key)
-            anchor_rows.sort(key=lambda r: (int(r[2] or 0), int(r[3] or 0)))
+                if key in entity_and_sibling_keys:
+                    entity_cands.append(row)
+
+            def _ec_key(row: Tuple[str, float, Optional[int], Optional[int]]) -> Tuple[int, float, int, int]:
+                _, sc, d_id, c_idx = row
+                ci = int(c_idx or 0)
+                key = (d_id, c_idx)
+                is_head = (
+                    ci == 0
+                    and d_id is not None
+                    and d_id in (entity_anchor_doc_ids | enum_anchor_doc_ids)
+                )
+                if is_head:
+                    group = 0
+                elif key in entity_keys:
+                    group = 1
+                else:
+                    group = 2
+                return (group, -float(sc), int(d_id or 0), ci)
+
+            entity_cands.sort(key=_ec_key)
+
+            entity_per_doc: Dict[Any, int] = {}
+            entity_docs_used: set = set()
+            entity_added = 0
+            for row in entity_cands:
+                if entity_added >= entity_total_cap:
+                    break
+                doc_id = row[2]
+                cnt = entity_per_doc.get(doc_id, 0)
+                if cnt >= entity_per_doc_cap:
+                    continue
+                if doc_id not in entity_docs_used:
+                    if len(entity_docs_used) >= entity_doc_cap:
+                        continue
+                    entity_docs_used.add(doc_id)
+                anchor_rows.append(row)
+                seen.add((doc_id, row[3]))
+                entity_per_doc[doc_id] = cnt + 1
+                entity_added += 1
+
+            # Порядок anchor-чанков.
+            #
+            # ФИКС: первый ключ сортировки — doc_vector_score (чистый cosine
+            # документа из исходного pgvector-поиска, до entity/filename magic).
+            # Это единственный честный сигнал семантической близости документа
+            # к запросу. Документ с artificial entity-filename score=0.5
+            # больше не выдавливает вперёд реально релевантный документ с
+            # vector_score=0.13.
+            if anchor_rows:
+                doc_max: Dict[Any, float] = {}
+                for row in anchor_rows:
+                    doc_max[row[2]] = max(doc_max.get(row[2], float("-inf")), float(row[1]))
+                anchor_rows.sort(
+                    key=lambda r: (
+                        0 if r[2] in pin_whole_doc_ids else 1,
+                        -doc_vector_score.get(r[2], 0.0),
+                        -doc_max.get(r[2], 0.0),
+                        int(r[2] or 0),
+                        int(r[3] or 0),
+                    )
+                )
+
             others = [r for r in rows if (r[2], r[3]) not in seen]
             merged = anchor_rows + others
             return merged[: max(final_limit, len(anchor_rows))]

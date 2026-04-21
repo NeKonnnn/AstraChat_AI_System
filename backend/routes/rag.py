@@ -16,7 +16,7 @@ from backend.schemas import RAGSettings
 router = APIRouter(tags=["rag"])
 logger = logging.getLogger(__name__)
 
-_VALID_STRATEGIES = {"auto", "hierarchical", "hybrid", "standard", "graph"}
+_VALID_STRATEGIES = {"auto", "hierarchical", "hybrid", "standard", "raw_cosine", "graph"}
 
 
 def _is_upstream_httpx_timeout(exc: BaseException) -> bool:
@@ -39,7 +39,8 @@ def _rag_settings_response_dict() -> dict:
             "auto": "Автоматический выбор стратегии.",
             "hierarchical": "Иерархический поиск по суммаризациям.",
             "hybrid": "Гибридный поиск: вектор + BM25.",
-            "standard": "Стандартный векторный поиск.",
+            "standard": "Стандартный векторный поиск с фильтрацией шума.",
+            "raw_cosine": "Сырой cosine-поиск (без постобработки).",
             "graph": "Графовый RAG: расширение по связям между чанками.",
         }.get(state.current_rag_strategy, ""),
         "agentic_rag_enabled": bool(getattr(state, "agentic_rag_enabled", True)),
@@ -67,7 +68,7 @@ async def reset_rag_settings():
         state.rag_query_fix_typos = False
         state.rag_multi_query_enabled = False
         state.rag_hyde_enabled = False
-        state.rag_chat_top_k = 5
+        state.rag_chat_top_k = 8
         save_app_settings(
             {
                 "rag_strategy": "auto",
@@ -76,7 +77,7 @@ async def reset_rag_settings():
                 "rag_query_fix_typos": False,
                 "rag_multi_query_enabled": False,
                 "rag_hyde_enabled": False,
-                "rag_chat_top_k": 5,
+                "rag_chat_top_k": 8,
             }
         )
         bump_rag_semantic_cache()

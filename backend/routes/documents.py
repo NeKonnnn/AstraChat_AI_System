@@ -15,6 +15,7 @@ from backend.realtime.helpers import _is_structure_query
 from backend.realtime.rag_evidence import (
     build_rag_id_to_filename,
     filter_rag_hits_by_score,
+    format_rag_fragments,
     rag_document_label,
     rag_guard_env,
     RAG_NO_RELEVANT_CONTEXT_MESSAGE,
@@ -126,15 +127,12 @@ async def query_document(request: DocumentQueryRequest):
                     pass
 
         id_map = build_rag_id_to_filename(list(await rag_client.list_documents() or []))
-        parts, total = [], 0
-        for i, (content, score, doc_id, chunk_idx) in enumerate(hits, 1):
-            title = rag_document_label(doc_id, id_map)
-            frag = f"Фрагмент {i} (документ «{title}», чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
-            if total + len(frag) > 12000:
-                parts.append(frag[:max(0, 12000 - total - 80)] + "\n... [обрезано]\n")
-                break
-            parts.append(frag)
-            total += len(frag)
+        parts, _ = format_rag_fragments(
+            hits,
+            id_map,
+            max_chars=12000,
+            store_label="global/rest-documents-search",
+        )
 
         prompt = (
             f"CONTEXT:\n{chr(10).join(parts)}\n\nВопрос: {request.query}\n\nОтвет:"

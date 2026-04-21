@@ -195,6 +195,27 @@ class RagClient:
 
         from backend import app_state as _app_state
 
+        st = (strategy or "").strip().lower()
+        raw_mode = st == "raw_cosine"
+        if raw_mode:
+            body: Dict[str, Any] = {"query": query, "k": k, "strategy": "raw_cosine"}
+            if document_id is not None:
+                body["document_id"] = document_id
+            resp = await self._request("POST", path, json=body)
+            hits = self._parse_hits(resp)
+            _log_backend_rag_strategy_banner(
+                path=path,
+                strategy=body.get("strategy"),
+                k=k,
+                document_id=document_id,
+                use_reranking=False,
+                hits=len(hits),
+                query_preview=_rag_query_preview(query),
+                prep_suffix="препроцесс backend: OFF (raw_cosine)",
+                from_cache=False,
+            )
+            return hits
+
         _fix = bool(getattr(_app_state, "rag_query_fix_typos", False))
         _multi = bool(getattr(_app_state, "rag_multi_query_enabled", False))
         _hyde = bool(getattr(_app_state, "rag_hyde_enabled", False))

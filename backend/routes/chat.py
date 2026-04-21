@@ -18,14 +18,15 @@ from backend.app_state import (
     minio_client, speak_text, recognize_speech_from_file,
     get_current_model_path,
     get_rag_chat_top_k,
-    reload_model_by_path, model_load_lock,
+    reload_model_by_path,
 )
-from backend.realtime.handlers import _multi_llm_llm_svc_pool_style_path
+from backend.llm_providers import get_registry
 from backend.schemas import ChatMessage
 from backend.realtime.helpers import _is_structure_query, _terminal_chat_inference_banner
 from backend.realtime.rag_evidence import (
     build_rag_id_to_filename,
     filter_rag_hits_by_score,
+    format_rag_fragments,
     maybe_rag_no_evidence_message,
     rag_document_label,
     rag_guard_env,
@@ -109,15 +110,12 @@ async def chat_with_ai(message: ChatMessage):
                                 except Exception:
                                     pass
                         id_map = build_rag_id_to_filename(list(await rag_client.list_documents() or []))
-                        parts, total = [], 0
-                        for i, (content, score, doc_id, chunk_idx) in enumerate(hits, 1):
-                            title = rag_document_label(doc_id, id_map)
-                            frag = f"Фрагмент {i} (документ «{title}», чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
-                            if total + len(frag) > 12000:
-                                parts.append(frag[:max(0, 12000 - total - 80)] + "\n... [обрезано]\n")
-                                break
-                            parts.append(frag)
-                            total += len(frag)
+                        parts, _ = format_rag_fragments(
+                            hits,
+                            id_map,
+                            max_chars=12000,
+                            store_label="global/rest-api-chat",
+                        )
                         doc_context = "\n".join(parts)
                         prompt = f"""CONTEXT (фрагменты из документов):
 
@@ -227,16 +225,12 @@ async def websocket_chat(websocket: WebSocket):
                             hits = await rag_client.search(user_message, k=get_rag_chat_top_k(), strategy=state.current_rag_strategy)
                             if hits:
                                 id_map = build_rag_id_to_filename(list(await rag_client.list_documents() or []))
-                                parts, total = [], 0
-                                for i, (content, score, doc_id, chunk_idx) in enumerate(hits, 1):
-                                    title = rag_document_label(doc_id, id_map)
-                                    frag = f"Фрагмент {i} (документ «{title}», чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
-                                    if total + len(frag) > 12000:
-                                        frag = frag[:max(0, 12000 - total - 80)] + "\n... [обрезано]\n"
-                                        parts.append(frag)
-                                        break
-                                    parts.append(frag)
-                                    total += len(frag)
+                                parts, _ = format_rag_fragments(
+                                    hits,
+                                    id_map,
+                                    max_chars=12000,
+                                    store_label="global/ws-chat",
+                                )
                                 doc_context = "\n".join(parts)
                         except Exception as e:
                             logger.error(f"WebSocket: Ошибка при получении контекста документов через SVC-RAG: {e}")
@@ -249,59 +243,55 @@ async def websocket_chat(websocket: WebSocket):
                         Пожалуйста, ответьте на вопрос пользователя, используя информацию из предоставленных документов. Если в документах нет информации для ответа, честно скажите об этом."""
 
                     async def _gen_one(model_name):
-                        model_path = model_name if model_name.startswith("llm-svc://") else (
-                            os.path.join("models", model_name) if not os.path.isabs(model_name) else model_name
-                        )
+                        """Одна генерация multi-LLM через ProviderRegistry (без глобальных локов)."""
                         await websocket.send_text(json.dumps({
                             "type": "multi_llm_start", "model": model_name,
                             "total_models": len(models), "models": models,
                         }))
-                        if _multi_llm_llm_svc_pool_style_path(model_path):
-
-                            def _reload_pool() -> bool:
-                                return reload_model_by_path(model_path) if reload_model_by_path else True
-
-                            if not await asyncio.to_thread(_reload_pool):
+                        try:
+                            registry = await get_registry()
+                            provider, model_id = registry.resolve(model_name)
+                            if not model_id:
+                                return {"model": model_name, "response": f"Некорректный путь модели {model_name!r}", "error": True}
+                            if not await provider.ensure_model_loaded(model_id):
                                 return {
                                     "model": model_name,
-                                    "response": f"Ошибка загрузки {model_name}",
+                                    "response": (
+                                        f"Модель {model_id!r} недоступна на провайдере "
+                                        f"{provider.id!r}. Проверьте состояние сервера."
+                                    ),
                                     "error": True,
                                 }
-                        else:
 
-                            def _reload_with_lock() -> bool:
-                                with model_load_lock:
-                                    if reload_model_by_path and not reload_model_by_path(model_path):
-                                        return False
-                                    import time
-                                    time.sleep(0.5)
-                                return True
+                            from backend.llm_client import get_llm_service
+                            service = await get_llm_service()
+                            messages = service.prepare_messages(
+                                prompt=final_user_message, history=None, system_prompt=None,
+                            )
 
-                            if not await asyncio.to_thread(_reload_with_lock):
-                                return {
-                                    "model": model_name,
-                                    "response": f"Ошибка загрузки {model_name}",
-                                    "error": True,
-                                }
-                        if streaming:
-                            accumulated_text = ""
-                            def model_stream_cb(chunk, acc):
-                                nonlocal accumulated_text
-                                accumulated_text = acc
-                                try:
-                                    asyncio.create_task(websocket.send_text(json.dumps({
-                                        "type": "multi_llm_chunk", "model": model_name,
-                                        "chunk": chunk, "accumulated": acc,
-                                    })))
-                                except Exception as e:
-                                    logger.error(f"WebSocket: Ошибка отправки чанка от модели {model_name}: {e}")
-                                return True
-                            ask_agent(final_user_message, history=[], streaming=True,
-                                      stream_callback=model_stream_cb, model_path=model_path)
-                            return {"model": model_name, "response": accumulated_text}
-                        else:
-                            resp = ask_agent(final_user_message, history=[], streaming=False, model_path=model_path)
+                            if streaming:
+                                def _cb(chunk: str, acc: str) -> bool:
+                                    try:
+                                        asyncio.create_task(websocket.send_text(json.dumps({
+                                            "type": "multi_llm_chunk", "model": model_name,
+                                            "chunk": chunk, "accumulated": acc,
+                                        })))
+                                    except Exception as e:
+                                        logger.error(f"WebSocket: ошибка отправки чанка {model_name}: {e}")
+                                    return True
+                                resp = await provider.stream_chat(
+                                    messages=messages, model=model_id, callback=_cb,
+                                    temperature=0.7, max_tokens=1024,
+                                )
+                            else:
+                                resp = await provider.chat(
+                                    messages=messages, model=model_id,
+                                    temperature=0.7, max_tokens=1024,
+                                )
                             return {"model": model_name, "response": resp}
+                        except Exception as e:
+                            logger.exception("multi-llm /ws/chat: ошибка для модели %s", model_name)
+                            return {"model": model_name, "response": f"Ошибка: {e}", "error": True}
 
                     results = await asyncio.gather(*[_gen_one(m) for m in models], return_exceptions=True)
                     for r in results:

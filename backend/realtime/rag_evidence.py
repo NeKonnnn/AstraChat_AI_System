@@ -56,13 +56,17 @@ def rag_document_label(doc_id: Optional[Any], id_to_name: Dict[int, str]) -> str
 def rag_guard_env() -> Tuple[float, bool]:
     """(min_similarity, block_on_no_evidence).
 
-    Порог имеет смысл для шкалы **cosine** (~0…1), которую отдаёт pgvector до реранка.
-    После реранка в SVC-RAG скор = 0.7×логит_cross_encoder + 0.3×cosine (логиты MS MARCO часто < 0);
-    тогда см. ``filter_rag_hits_by_score`` — при отрицательной шкале порог не применяется, иначе контекст
-    обнулялся бы. Ужесточать: ``RAG_MIN_SIMILARITY`` (backend) и/или ``RAG_RERANK_MIN_SCORE`` (svc-rag).
+    ВАЖНО: по умолчанию backend НЕ отсекает по score (min_sim=0), потому что SVC-RAG уже
+    применил ``min_vector_similarity`` + rescue top-N, и результат может быть в разных
+    шкалах (чистый cosine / смесь cross-encoder+cosine / BM25 RRF). Любой дополнительный
+    порог здесь снова обнуляет recall. Включать RAG_MIN_SIMILARITY>0 имеет смысл только
+    когда вы умышленно отключили rescue и все шкалы приведены к [0, 1].
+
+    RAG_BLOCK_ON_NO_EVIDENCE=1 (по умолчанию) — если после всех фильтров контекст действительно
+    пуст, backend сам отвечает канонической фразой без вызова LLM. Чтобы ВСЕГДА звать LLM
+    (даже без опоры на документы), поставьте RAG_BLOCK_ON_NO_EVIDENCE=0.
     """
     try:
-        # 0 = не отсекать по скору на backend (рекомендуется при реранке и смешанных шкалах).
         min_sim = float(os.getenv("RAG_MIN_SIMILARITY", "0"))
     except ValueError:
         min_sim = 0.0
@@ -127,6 +131,189 @@ def filter_rag_hits_by_score(
             mx,
         )
     return out
+
+
+def _format_single_fragment(
+    row: Tuple[str, float, Optional[int], Optional[int]],
+    *,
+    number: int,
+    id_to_name: Dict[int, str],
+    include_chunk_meta: bool,
+) -> Optional[str]:
+    try:
+        content, score, doc_id, chunk_idx = row
+    except (TypeError, ValueError):
+        return None
+    title = rag_document_label(doc_id, id_to_name)
+    if include_chunk_meta:
+        try:
+            sc = float(score)
+        except (TypeError, ValueError):
+            sc = 0.0
+        return (
+            f"Фрагмент {number} (документ «{title}», чанк {chunk_idx}, "
+            f"релевантность: {sc:.2f}):\n{content}\n"
+        )
+    return f"Фрагмент {number} (документ «{title}»): {content}\n"
+
+
+def format_rag_fragments(
+    hits: Optional[List[Tuple[str, float, Optional[int], Optional[int]]]],
+    id_to_name: Dict[int, str],
+    *,
+    max_chars: int,
+    store_label: str,
+    include_chunk_meta: bool = True,
+    truncate_marker: str = "\n... [обрезано]\n",
+) -> Tuple[List[str], Dict[str, int]]:
+    """Единая формализация RAG-хитов в текстовые фрагменты с бюджетом длины.
+
+    Два фундаментальных свойства:
+
+    1. **Round-robin по документам**. Раньше обход был линейный: брали чанки
+       в порядке SVC-RAG, и как только бюджет кончался — break. Если первые
+       несколько документов были крупными (по 6 жирных чанков), остальные
+       документы ВООБЩЕ не попадали в промпт — даже если были семантически
+       самыми релевантными. Пользователь видел это как «SVC-RAG нашёл 3
+       документа, но LLM ответил будто видел только один».
+
+       Теперь: сначала по одному чанку от каждого document_id (в порядке
+       первого появления в hits) — это гарантирует coverage всех документов.
+       Затем второй проход берёт следующие чанки документов по порядку, пока
+       не кончится бюджет. Итоговая нумерация фрагментов сохраняет исходный
+       порядок hits (важно для подписей `Фрагмент N`).
+
+    2. **Явный лог согласования метрик** SVC-RAG ↔ LLM-промпт:
+
+           [RAG/fragments] store=memory: получено=17, попало_в_промпт_целиком=12,
+           документов_в_промпт=3/3, последний_обрезан=1, отброшено=4, длина=9873
+
+    Возвращает:
+      * parts — готовые строки для `"\\n".join(parts)`;
+      * metrics — dict для верхнего лога и, при желании, для ответа API.
+    """
+    hits = hits or []
+    metrics: Dict[str, int] = {
+        "received": len(hits),
+        "used_full": 0,
+        "truncated_last": 0,
+        "dropped": 0,
+        "total_chars": 0,
+        "documents_input": 0,
+        "documents_in_prompt": 0,
+    }
+    if not hits:
+        return [], metrics
+
+    # Стабильный порядок документов по первому появлению в hits.
+    # dict в Python 3.7+ сохраняет порядок вставки — используем это.
+    doc_order: List[Optional[int]] = []
+    doc_seen: set = set()
+    for row in hits:
+        try:
+            _, _, d_id, _ = row
+        except (TypeError, ValueError):
+            continue
+        if d_id not in doc_seen:
+            doc_seen.add(d_id)
+            doc_order.append(d_id)
+    metrics["documents_input"] = len(doc_order)
+
+    # Индексированный список: [(номер_1based, document_id, row_idx, row), ...].
+    # row_idx — стабильный индекс hit в исходном списке, используется как ключ
+    # «добавлен ли уже в выборку». Это безопаснее, чем id(row): хиты могут быть
+    # дубликатами-кортежами, у которых id() совпадает.
+    indexed: List[Tuple[int, Optional[int], Tuple[str, float, Optional[int], Optional[int]]]] = []
+    for i, row in enumerate(hits):
+        try:
+            _, _, d_id, _ = row
+        except (TypeError, ValueError):
+            continue
+        indexed.append((i + 1, d_id, row))
+
+    by_doc: Dict[Optional[int], List[int]] = {}
+    for num, d_id, _row in indexed:
+        by_doc.setdefault(d_id, []).append(num - 1)  # 0-based index
+
+    # selected_entries[idx] = готовая текстовая часть (или None, если не выбрана).
+    selected_entries: List[Optional[str]] = [None] * len(indexed)
+    selected_doc_ids: set = set()
+    total = 0
+    truncated_last = False
+    reserve_for_marker = len(truncate_marker)
+
+    def _try_add(idx: int) -> bool:
+        nonlocal total
+        if selected_entries[idx] is not None:
+            return True
+        num, d_id, row = indexed[idx]
+        frag = _format_single_fragment(
+            row, number=num, id_to_name=id_to_name,
+            include_chunk_meta=include_chunk_meta,
+        )
+        if frag is None:
+            return False
+        if total + len(frag) + reserve_for_marker > max_chars:
+            return False
+        selected_entries[idx] = frag
+        selected_doc_ids.add(d_id)
+        total += len(frag)
+        return True
+
+    # Проход 1: по одному чанку на каждый документ (coverage).
+    for d_id in doc_order:
+        idxs = by_doc.get(d_id) or []
+        for idx in idxs:
+            if _try_add(idx):
+                break  # один на документ в этом проходе
+            # Если первый чанк документа не влез — пробуем следующий того же
+            # документа (он может быть короче). Это полезно, когда у первого
+            # чанка огромный текст, а у второго — компактный заголовок.
+
+    # Проход 2: добираем остальное по исходному порядку hits.
+    for idx, (num, d_id, row) in enumerate(indexed):
+        if selected_entries[idx] is not None:
+            continue
+        if _try_add(idx):
+            continue
+        # Бюджет кончился на этом кандидате: обрежем и вставим маркер.
+        if total + reserve_for_marker < max_chars:
+            frag = _format_single_fragment(
+                row, number=num, id_to_name=id_to_name,
+                include_chunk_meta=include_chunk_meta,
+            )
+            if frag is not None:
+                tail = max(0, max_chars - total - reserve_for_marker)
+                selected_entries[idx] = frag[:tail] + truncate_marker
+                selected_doc_ids.add(d_id)
+                total += len(selected_entries[idx])
+                truncated_last = True
+        break
+
+    parts: List[str] = [p for p in selected_entries if p is not None]
+    used_count = len(parts)
+
+    metrics["used_full"] = used_count - (1 if truncated_last else 0)
+    metrics["truncated_last"] = 1 if truncated_last else 0
+    metrics["dropped"] = max(0, len(indexed) - used_count)
+    metrics["total_chars"] = total
+    metrics["documents_in_prompt"] = len(selected_doc_ids)
+
+    logger.info(
+        "[RAG/fragments] store=%s: получено=%d, попало_в_промпт_целиком=%d, "
+        "документов_в_промпт=%d/%d, последний_обрезан=%d, "
+        "отброшено_после_лимита=%d, длина=%d/%d",
+        store_label,
+        metrics["received"],
+        metrics["used_full"],
+        metrics["documents_in_prompt"],
+        metrics["documents_input"],
+        metrics["truncated_last"],
+        metrics["dropped"],
+        metrics["total_chars"],
+        max_chars,
+    )
+    return parts, metrics
 
 
 async def fetch_rag_store_counts(

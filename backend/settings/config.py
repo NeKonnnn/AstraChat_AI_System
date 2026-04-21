@@ -215,7 +215,12 @@ class Settings(BaseModel):
     postgresql: PostgreSQLConnectionConfig = Field(default_factory=PostgreSQLConnectionConfig)
     minio: MinIOConnectionConfig = Field(default_factory=MinIOConnectionConfig)
     llm_service: LLMServiceConnectionConfig = Field(default_factory=LLMServiceConnectionConfig)
-    
+
+    # Мультипровайдерная конфигурация LLM (llm-svc, vLLM, Ollama, OpenAI, ...).
+    # Если пуст — auto-migration из llm_service.hosts в registry.
+    llm_providers: List[Dict[str, Any]] = Field(default_factory=list)
+    default_llm_provider: Optional[str] = None
+
     class Config:
         """Настройки Pydantic"""
         extra = "allow"  # Разрешаем дополнительные поля из YAML
@@ -295,6 +300,14 @@ class Settings(BaseModel):
                     # Для секций подключений передаем данные как есть (может быть пустым dict)
                     # model_validator в классах подключений сам загрузит из env, если секция пустая
                     settings_data[key] = value if value is not None else {}
+                elif key == "llm_providers":
+                    # Список провайдеров — принимаем как список dict'ов
+                    if isinstance(value, list):
+                        settings_data[key] = value
+                    elif value is None:
+                        settings_data[key] = []
+                    else:
+                        settings_data[key] = value
                 else:
                     settings_data[key] = value
             
