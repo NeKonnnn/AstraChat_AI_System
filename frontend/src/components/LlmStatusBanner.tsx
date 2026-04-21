@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Box, Typography } from '@mui/material';
+import { Box, IconButton, Typography } from '@mui/material';
+import { Close as CloseIcon } from '@mui/icons-material';
 import { getApiUrl } from '../config/api';
 import { getSettings } from '../settings';
 
@@ -10,6 +11,7 @@ import { getSettings } from '../settings';
 export default function LlmStatusBanner() {
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState('');
+  const [dismissed, setDismissed] = useState(false);
 
   useEffect(() => {
     let interval: ReturnType<typeof setInterval> | undefined;
@@ -25,7 +27,7 @@ export default function LlmStatusBanner() {
         if (!res.ok) return;
         const data = await res.json();
         if (data.use_llm_svc === true && data.connected === false) {
-          setOpen(true);
+          setOpen(!dismissed);
           setMessage(
             typeof data.message === 'string' && data.message.trim()
               ? data.message
@@ -33,6 +35,7 @@ export default function LlmStatusBanner() {
           );
         } else {
           setOpen(false);
+          setDismissed(false);
           setMessage('');
         }
       } catch {
@@ -45,7 +48,7 @@ export default function LlmStatusBanner() {
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, []);
+  }, [dismissed]);
 
   if (!open) return null;
 
@@ -69,9 +72,27 @@ export default function LlmStatusBanner() {
         boxShadow: '0 4px 24px rgba(0,0,0,0.18)',
       }}
     >
-      <Typography variant="body2" color="error" sx={{ fontWeight: 600, textAlign: 'center' }}>
-        {message}
-      </Typography>
+      <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
+        <Typography variant="body2" color="error" sx={{ fontWeight: 600, textAlign: 'center', flex: 1 }}>
+          {message}
+        </Typography>
+        <IconButton
+          size="small"
+          aria-label="Закрыть уведомление о подключении к LLM"
+          onClick={() => {
+            setOpen(false);
+            setDismissed(true);
+          }}
+          sx={{
+            color: 'error.main',
+            mt: -0.5,
+            mr: -0.5,
+            '&:hover': { bgcolor: 'rgba(211, 47, 47, 0.12)' },
+          }}
+        >
+          <CloseIcon fontSize="small" />
+        </IconButton>
+      </Box>
     </Box>
   );
 }
