@@ -45,6 +45,7 @@ import {
   areNotificationsEnabled,
   setNotificationsEnabled,
 } from '../../utils/browserNotifications';
+import LlmProvidersSection from './LlmProvidersSection';
 
 const SIDEBAR_PALETTE = [
   { name: 'По умолчанию', value: '' },
@@ -854,6 +855,9 @@ export default function InterfaceSettings() {
           </List>
         </CardContent>
       </Card>
+
+      {/* LLM-провайдеры (read-only) */}
+      <LlmProvidersSection />
 
       {/* Модальное окно выбора цвета панелей */}
       <Dialog open={colorPickerOpen} onClose={() => setColorPickerOpen(false)} maxWidth="xs" fullWidth>

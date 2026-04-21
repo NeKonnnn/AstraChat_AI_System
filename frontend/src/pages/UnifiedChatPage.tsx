@@ -169,9 +169,12 @@ function MultiLlmModeToggleIcon({ isDarkMode }: { isDarkMode: boolean }): React.
   );
 }
 
-/** Значение для Select / POST multi-llm: для llm-svc нужен полный path, иначе бэкенд не маршрутизирует хост. */
+/**
+ * Значение для Select / POST multi-llm — всегда полный path ``<provider_id>/<model_id>``.
+ * Бэкенд (split_model_path) понимает как новый формат, так и legacy ``llm-svc://host/model``.
+ */
 function availableModelSelectValue(m: { name: string; path: string }): string {
-  return m.path?.startsWith('llm-svc://') ? m.path : m.path || m.name;
+  return m.path || m.name;
 }
 
 /** Текст одного столбца multi-LLM как на экране (варианты перегенерации). */
@@ -1071,7 +1074,17 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   // Состояние для режима multi-llm
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
   const orchestratorAgentsAnyActive = useOrchestratorAgentsAnyActive(Boolean(agentStatus?.is_initialized));
-  const [availableModels, setAvailableModels] = useState<Array<{ name: string; path: string; size_mb?: number }>>([]);
+  const [availableModels, setAvailableModels] = useState<
+    Array<{
+      name: string;
+      path: string;
+      display_name?: string;
+      size_mb?: number;
+      provider_id?: string;
+      provider_kind?: string;
+      provider_default?: boolean;
+    }>
+  >([]);
   const [modelWindows, setModelWindows] = useState<ModelWindow[]>([{ id: '1', selectedModel: '' }]);
   const [multiLlmModelMenu, setMultiLlmModelMenu] = useState<{ windowId: string; anchorEl: HTMLElement } | null>(null);
   const isMultiLlmMode = agentStatus?.mode === 'multi-llm';
@@ -2629,7 +2642,10 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     const displayModelLabel = (val: string): string => {
       if (!val) return '';
       const row = availableModels.find((x) => availableModelSelectValue(x) === val);
-      return row?.name ?? val.replace('llm-svc://', '').split('/').pop() ?? val;
+      if (row) return row.display_name || row.name;
+      // Fallback: отрезаем префикс провайдера / legacy llm-svc://host/.
+      const cleaned = val.startsWith('llm-svc://') ? val.slice('llm-svc://'.length) : val;
+      return cleaned.split('/').pop() ?? val;
     };
 
     const menuWindowId = multiLlmModelMenu?.windowId ?? null;
@@ -2782,6 +2798,9 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                   .map((model) => {
                     const k = availableModelSelectValue(model);
                     const sel = menuWin?.selectedModel === k;
+                    const hint = model.provider_id && !model.provider_default
+                      ? `${model.provider_id}${model.provider_kind ? ` · ${model.provider_kind}` : ''}`
+                      : '';
                     return (
                       <Box
                         key={k}
@@ -2793,12 +2812,27 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                         }}
                         sx={{
                           ...dropdownItemSx,
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'flex-start',
                           color: sel ? (isDarkMode ? '#fff' : 'rgba(0,0,0,0.95)') : menuItemMuted,
                           fontWeight: sel ? 600 : 400,
                           bgcolor: sel ? selectedRowBg : 'transparent',
                         }}
                       >
-                        {model.name}
+                        <Box sx={{ fontSize: MENU_ACTION_TEXT_SIZE, width: '100%' }}>
+                          {model.display_name || model.name}
+                        </Box>
+                        {hint ? (
+                          <Box
+                            sx={{
+                              fontSize: '0.72rem',
+                              color: isDarkMode ? 'rgba(255,255,255,0.45)' : 'rgba(0,0,0,0.5)',
+                            }}
+                          >
+                            {hint}
+                          </Box>
+                        ) : null}
                       </Box>
                     );
                   })}

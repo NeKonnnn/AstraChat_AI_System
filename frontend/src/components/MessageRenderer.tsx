@@ -1,9 +1,14 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Box, IconButton, Typography, Tooltip, Link, Paper, Table, TableBody, TableCell, TableContainer, TableHead, TableRow } from '@mui/material';
 import { ContentCopy as CopyIcon, Check as CheckIcon, Info as InfoIcon, Warning as WarningIcon, Error as ErrorIcon, CheckCircle as SuccessIcon, GetApp as DownloadIcon } from '@mui/icons-material';
-import Editor from '@monaco-editor/react';
+import Editor, { loader } from '@monaco-editor/react';
 import * as XLSX from 'xlsx';
 import CodeSelectionMenu from './CodeSelectionMenu';
+
+const monacoVsPath = `${process.env.PUBLIC_URL || ''}/monaco/vs`;
+loader.config({
+  paths: { vs: monacoVsPath },
+});
 
 interface MessageRendererProps {
   content: string;
@@ -909,7 +914,11 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
                 path={editorPath}
                 keepCurrentModel
                 theme="memo-monaco-dark"
-                loading={null}
+                loading={
+                  <Box sx={{ px: 2, py: 1.5, color: '#c8c8c8', fontFamily: 'monospace', fontSize: '0.85rem' }}>
+                    Загрузка редактора кода...
+                  </Box>
+                }
                 beforeMount={(monaco) => {
                   monaco.editor.defineTheme('memo-monaco-dark', {
                     base: 'vs-dark',

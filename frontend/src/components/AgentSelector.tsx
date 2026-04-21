@@ -30,10 +30,19 @@ export interface Agent {
 }
 
 interface ModelItem {
+  /** model_id со стороны провайдера. */
   name: string;
+  /** Полный путь ``<provider_id>/<model_id>`` (новый формат) или legacy ``llm-svc://...``. */
   path: string;
+  /** Человеко-читаемое имя (бэкенд возвращает для external-провайдеров). */
+  display_name?: string;
   size?: number;
   size_mb?: number;
+  /** id провайдера (llm-svc/vllm/ollama/openai/anthropic/...). */
+  provider_id?: string;
+  /** kind провайдера, определяет иконку/цвет. */
+  provider_kind?: string;
+  /** Legacy-алиас для старых бэкендов (== provider_id). */
   llm_host_id?: string;
 }
 
@@ -99,24 +108,33 @@ export default function AgentSelector({
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+  /**
+   * Метка «подключения» — это id провайдера в новой архитектуре (llm-svc,
+   * vllm, ollama, openai, anthropic и т.п.). Для legacy-путей ``llm-svc://host/``
+   * дополнительно парсим host из path.
+   */
   const getConnectionLabel = useCallback((model: ModelItem): string => {
-    if (model.llm_host_id) return `llm-svc://${model.llm_host_id}`;
+    const pid = (model.provider_id || model.llm_host_id || '').trim();
+    if (pid) return pid;
     const path = model.path || '';
     if (!path) return 'local';
-    if (!path.includes('://')) return 'local';
-    const [scheme, rest = ''] = path.split('://');
-    if (scheme === 'llm-svc') {
+    if (path.startsWith('llm-svc://')) {
+      const rest = path.slice('llm-svc://'.length);
       const host = rest.includes('/') ? rest.split('/')[0] : rest;
-      return host ? `llm-svc://${host}` : 'llm-svc';
+      return host || 'llm-svc';
     }
-    return scheme || 'local';
+    if (path.includes('/')) {
+      return path.split('/')[0] || 'local';
+    }
+    return 'local';
   }, []);
 
   const getModelDisplayName = useCallback(
     (path: string) => {
       if (!path) return '';
       const fromList = models.find((m) => m.path === path);
-      if (fromList?.name) return fromList.name.replace(/\.gguf$/i, '');
+      const raw = fromList?.display_name || fromList?.name;
+      if (raw) return raw.replace(/\.gguf$/i, '');
       return path.split(/[/\\]/).pop()?.replace(/\.gguf$/i, '') ?? path;
     },
     [models],
@@ -233,7 +251,10 @@ export default function AgentSelector({
     if (!modelSearch.trim()) return base;
     const q = modelSearch.toLowerCase();
     return base.filter(
-      (m) => m.name.toLowerCase().includes(q) || m.path.toLowerCase().includes(q),
+      (m) =>
+        m.name.toLowerCase().includes(q) ||
+        (m.display_name || '').toLowerCase().includes(q) ||
+        m.path.toLowerCase().includes(q),
     );
   }, [connections, activeConnectionLabel, modelSearch]);
 
@@ -503,7 +524,7 @@ export default function AgentSelector({
                           fontSize: MENU_ACTION_TEXT_SIZE,
                         }}
                       >
-                        {model.name.replace('.gguf', '')}
+                        {(model.display_name || model.name || '').replace(/\.gguf$/i, '')}
                       </Typography>
                       {isLoading ? (
                         <CircularProgress size={16} sx={{ color: mutedTextColor, flexShrink: 0 }} />
