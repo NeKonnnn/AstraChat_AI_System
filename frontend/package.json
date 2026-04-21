@@ -38,14 +38,10 @@
     "xlsx": "^0.18.5"
   },
   "scripts": {
-    "sync:monaco": "node scripts/copy-monaco-assets.js",
-    "prestart": "npm run sync:monaco",
     "start": "react-scripts start",
-    "prebuild": "npm run sync:monaco",
     "build": "react-scripts build",
     "test": "react-scripts test",
-    "eject": "react-scripts eject",
-    "postinstall": "npm run sync:monaco"
+    "eject": "react-scripts eject"
   },
   "eslintConfig": {
     "extends": [

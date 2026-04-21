@@ -2175,9 +2175,36 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           </IconButton>
         </DialogTitle>
         <DialogContent>
-          <Typography sx={{ color: isDarkMode ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.8)' }}>
-            Раздел помощи. Здесь можно разместить инструкции и ответы на частые вопросы.
-          </Typography>
+          <Box sx={{ mt: 1 }}>
+            <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 1 }}>
+              Обновления
+            </Typography>
+            <Typography sx={{ color: isDarkMode ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.8)' }}>
+              В текущем релизе Astra реализован RAG, что позволяет отвечать на запросы с учетом
+              релевантных данных из базы знаний.
+            </Typography>
+          </Box>
+          <Divider sx={{ my: 2 }} />
+          <Box>
+            <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 1 }}>
+              Помощь
+            </Typography>
+            <Typography sx={{ color: isDarkMode ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.8)' }}>
+              По возникающим вопросам обаращаться:
+            </Typography>
+            <Box
+              component="ul"
+              sx={{
+                m: 0,
+                mt: 1,
+                pl: 2.5,
+                color: isDarkMode ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.8)',
+              }}
+            >
+              <li>в jabber или onyx:</li>
+              <li>по почте:</li>
+            </Box>
+          </Box>
         </DialogContent>
       </Dialog>
 

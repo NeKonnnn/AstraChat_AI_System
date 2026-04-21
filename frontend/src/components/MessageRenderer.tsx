@@ -1,14 +1,19 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Box, IconButton, Typography, Tooltip, Link, Paper, Table, TableBody, TableCell, TableContainer, TableHead, TableRow } from '@mui/material';
 import { ContentCopy as CopyIcon, Check as CheckIcon, Info as InfoIcon, Warning as WarningIcon, Error as ErrorIcon, CheckCircle as SuccessIcon, GetApp as DownloadIcon } from '@mui/icons-material';
+import Editor from '@monaco-editor/react';
+/*
 import Editor, { loader } from '@monaco-editor/react';
+*/
 import * as XLSX from 'xlsx';
 import CodeSelectionMenu from './CodeSelectionMenu';
 
+/*
 const monacoVsPath = `${process.env.PUBLIC_URL || ''}/monaco/vs`;
 loader.config({
   paths: { vs: monacoVsPath },
 });
+*/
 
 interface MessageRendererProps {
   content: string;
