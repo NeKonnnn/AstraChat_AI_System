@@ -218,6 +218,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
   const [userMenuSubmenu, setUserMenuSubmenu] = React.useState<'help' | null>(null);
   const [userMenuSubmenuOffsetTop, setUserMenuSubmenuOffsetTop] = React.useState(0);
   const userSubmenuCloseTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [showUpdatesDialog, setShowUpdatesDialog] = React.useState(false);
   const [showHelpDialog, setShowHelpDialog] = React.useState(false);
   const [showShortcutsDialog, setShowShortcutsDialog] = React.useState(false);
   const [newChatShortcutHover, setNewChatShortcutHover] = React.useState(false);
@@ -2108,6 +2109,16 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                 <Box
                   onClick={() => {
                     handleMenuClose();
+                    setShowUpdatesDialog(true);
+                  }}
+                  sx={{ ...dropdownItemSx, display: 'flex', alignItems: 'center', gap: 1, color: menuItemColor }}
+                >
+                  <SparkleIcon sx={{ fontSize: 22, color: submenuIconColor, flexShrink: 0 }} />
+                  <Typography sx={{ flex: 1, fontSize: MENU_ACTION_TEXT_SIZE }}>Обновления</Typography>
+                </Box>
+                <Box
+                  onClick={() => {
+                    handleMenuClose();
                     setShowHelpDialog(true);
                   }}
                   sx={{ ...dropdownItemSx, display: 'flex', alignItems: 'center', gap: 1, color: menuItemColor }}
@@ -2130,6 +2141,57 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           )}
         </Box>
       </Popover>
+
+      {/* Диалог «Обновления» */}
+      <Dialog
+        open={showUpdatesDialog}
+        onClose={() => setShowUpdatesDialog(false)}
+        maxWidth="sm"
+        fullWidth
+        PaperProps={{
+          sx: {
+            backgroundColor: isDarkMode ? '#1e1e1e' : '#ffffff',
+            color: isDarkMode ? 'white' : '#333',
+            borderRadius: 2,
+          }
+        }}
+      >
+        <DialogTitle
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            p: 2,
+            borderBottom: `1px solid ${isDarkMode ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)'}`,
+            backgroundColor: isDarkMode ? '#2a2a2a' : '#f5f5f5',
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <SparkleIcon />
+            <Typography component="span" variant="h6" fontWeight="600">
+              Обновления
+            </Typography>
+          </Box>
+          <IconButton
+            onClick={() => setShowUpdatesDialog(false)}
+            size="small"
+            sx={{
+              color: isDarkMode ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.6)',
+              '&:hover': {
+                backgroundColor: isDarkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)',
+              },
+            }}
+          >
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent>
+          <Typography sx={{ mt: 1, color: isDarkMode ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.8)' }}>
+            В текущем релизе Astra реализован RAG, что позволяет отвечать на запросы с учетом
+            релевантных данных из базы знаний.
+          </Typography>
+        </DialogContent>
+      </Dialog>
 
       {/* Диалог «Помощь» */}
       <Dialog
@@ -2175,35 +2237,20 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           </IconButton>
         </DialogTitle>
         <DialogContent>
-          <Box sx={{ mt: 1 }}>
-            <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 1 }}>
-              Обновления
-            </Typography>
-            <Typography sx={{ color: isDarkMode ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.8)' }}>
-              В текущем релизе Astra реализован RAG, что позволяет отвечать на запросы с учетом
-              релевантных данных из базы знаний.
-            </Typography>
-          </Box>
-          <Divider sx={{ my: 2 }} />
-          <Box>
-            <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 1 }}>
-              Помощь
-            </Typography>
-            <Typography sx={{ color: isDarkMode ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.8)' }}>
-              По возникающим вопросам обаращаться:
-            </Typography>
-            <Box
-              component="ul"
-              sx={{
-                m: 0,
-                mt: 1,
-                pl: 2.5,
-                color: isDarkMode ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.8)',
-              }}
-            >
-              <li>в jabber или onyx:</li>
-              <li>по почте:</li>
-            </Box>
+          <Typography sx={{ mt: 1, color: isDarkMode ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.8)' }}>
+            По возникающим вопросам обаращаться:
+          </Typography>
+          <Box
+            component="ul"
+            sx={{
+              m: 0,
+              mt: 1,
+              pl: 2.5,
+              color: isDarkMode ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.8)',
+            }}
+          >
+            <li>в jabber или onyx:</li>
+            <li>по почте:</li>
           </Box>
         </DialogContent>
       </Dialog>
