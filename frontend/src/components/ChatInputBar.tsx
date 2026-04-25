@@ -1,4 +1,4 @@
-import React, { RefObject, useState, useEffect } from 'react';
+import React, { RefObject, useState, useEffect, useRef } from 'react';
 import {
   Box,
   TextField,
@@ -18,7 +18,9 @@ import {
   Send as SendIcon,
   Widgets as WidgetsIcon,
   Mic as MicIcon,
+  GraphicEq as DictationIcon,
   Close as CloseIcon,
+  Check as CheckIcon,
   Assessment as AssessmentIcon,
   Square as SquareIcon,
   Description as DocumentIcon,
@@ -141,6 +143,169 @@ export default function ChatInputBar({
   };
 
   const isClassic = styleVariant === 'classic';
+  const [isDictating, setIsDictating] = useState(false);
+  const [dictationPreview, setDictationPreview] = useState('');
+  const [waveLevels, setWaveLevels] = useState<number[]>(() => Array.from({ length: 72 }, () => 0.25));
+  const recognitionRef = useRef<any>(null);
+  const keepRunningRef = useRef(false);
+  const dictationBaseTextRef = useRef('');
+  const audioStreamRef = useRef<MediaStream | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const finalTranscriptRef = useRef('');
+  const interimTranscriptRef = useRef('');
+
+  const speechCtor =
+    typeof window !== 'undefined'
+      ? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+      : null;
+  const canUseDictation = Boolean(speechCtor) && typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices?.getUserMedia);
+
+  const concatText = (base: string, addition: string): string => {
+    const left = base.trim();
+    const right = addition.trim();
+    if (!left) return right;
+    if (!right) return left;
+    return `${left} ${right}`;
+  };
+
+  const stopWave = () => {
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    if (audioContextRef.current) {
+      void audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach((track) => track.stop());
+      audioStreamRef.current = null;
+    }
+    analyserRef.current = null;
+    setWaveLevels(Array.from({ length: 72 }, () => 0.25));
+  };
+
+  const stopDictation = (cancel: boolean) => {
+    keepRunningRef.current = false;
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.onresult = null;
+        recognitionRef.current.onerror = null;
+        recognitionRef.current.onend = null;
+        recognitionRef.current.stop();
+      } catch {
+        // noop
+      }
+      recognitionRef.current = null;
+    }
+    stopWave();
+    if (cancel) {
+      onChange(dictationBaseTextRef.current);
+    }
+    setDictationPreview('');
+    finalTranscriptRef.current = '';
+    interimTranscriptRef.current = '';
+    setIsDictating(false);
+  };
+
+  const startWave = async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioStreamRef.current = stream;
+    const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
+    const audioCtx = new Ctx();
+    audioContextRef.current = audioCtx;
+    const source = audioCtx.createMediaStreamSource(stream);
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.82;
+    source.connect(analyser);
+    analyserRef.current = analyser;
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    const bars = 72;
+
+    const tick = () => {
+      if (!analyserRef.current) return;
+      analyserRef.current.getByteFrequencyData(data);
+      const step = Math.max(1, Math.floor(data.length / bars));
+      const next = new Array<number>(bars).fill(0.25).map((_, index) => {
+        const start = index * step;
+        const end = Math.min(data.length, start + step);
+        let sum = 0;
+        for (let i = start; i < end; i += 1) sum += data[i];
+        const avg = sum / Math.max(1, end - start);
+        return Math.max(0.2, Math.min(1, avg / 170));
+      });
+      setWaveLevels(next);
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+  };
+
+  const startDictation = async () => {
+    if (!canUseDictation || isDictating || inputDisabled || voiceDisabled) return;
+    try {
+      await startWave();
+    } catch {
+      return;
+    }
+
+    const recognition = new speechCtor();
+    recognition.lang = 'ru-RU';
+    recognition.interimResults = true;
+    recognition.continuous = true;
+
+    dictationBaseTextRef.current = value;
+    finalTranscriptRef.current = '';
+    interimTranscriptRef.current = '';
+    setDictationPreview('');
+    keepRunningRef.current = true;
+    setIsDictating(true);
+
+    recognition.onresult = (event: any) => {
+      let interim = '';
+      let finalAppend = '';
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        const text = event.results[i]?.[0]?.transcript ?? '';
+        if (!text) continue;
+        if (event.results[i].isFinal) finalAppend += ` ${text}`;
+        else interim += ` ${text}`;
+      }
+
+      if (finalAppend.trim()) finalTranscriptRef.current = concatText(finalTranscriptRef.current, finalAppend);
+      interimTranscriptRef.current = interim.trim();
+      const merged = concatText(finalTranscriptRef.current, interimTranscriptRef.current);
+      setDictationPreview(merged);
+      onChange(concatText(dictationBaseTextRef.current, merged));
+    };
+
+    recognition.onerror = () => {
+      stopDictation(false);
+    };
+
+    recognition.onend = () => {
+      if (!keepRunningRef.current) return;
+      try {
+        recognition.start();
+      } catch {
+        stopDictation(false);
+      }
+    };
+
+    recognitionRef.current = recognition;
+    try {
+      recognition.start();
+    } catch {
+      stopDictation(false);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      stopDictation(false);
+    };
+  }, []);
 
   const shellBg = solidWorkZoneBackground
     ? isDarkMode
@@ -361,6 +526,90 @@ export default function ChatInputBar({
     </Tooltip>
   ) : null;
 
+  const dictationBtn = canUseDictation ? (
+    <Tooltip title={isDictating ? 'Остановить диктовку' : 'Диктовка в поле ввода'}>
+      <IconButton
+        size="small"
+        onClick={() => {
+          if (isDictating) stopDictation(false);
+          else void startDictation();
+        }}
+        disabled={voiceDisabled || inputDisabled}
+        sx={{
+          color: isDictating ? 'white' : isDarkMode ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.7)',
+          bgcolor: isDictating ? 'primary.main' : 'transparent',
+          border: `1px solid ${isDictating ? 'rgba(91, 105, 255, 0.65)' : 'transparent'}`,
+          ...iconButtonSx(isDarkMode, isClassic),
+          '&:hover:not(:disabled)': {
+            bgcolor: isDictating ? 'primary.dark' : isDarkMode ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.1)',
+            border: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.18)' : 'rgba(0, 0, 0, 0.15)'}`,
+            borderRadius: isClassic ? '8px' : '50%',
+            color: isDictating ? 'white' : 'primary.main',
+            '& .MuiSvgIcon-root': { color: isDictating ? 'white' : 'primary.main' },
+          },
+          '&:disabled': {
+            color: isDarkMode ? 'rgba(255, 255, 255, 0.3)' : 'rgba(0, 0, 0, 0.3)',
+          },
+        }}
+      >
+        <DictationIcon sx={{ fontSize: '1.25rem' }} />
+      </IconButton>
+    </Tooltip>
+  ) : null;
+
+  const dictationPanel = isDictating ? (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minHeight: 42, width: '100%' }}>
+      <IconButton
+        size="small"
+        onClick={() => stopDictation(true)}
+        sx={{
+          ...iconButtonSx(isDarkMode, isClassic),
+          color: isDarkMode ? 'rgba(255,255,255,0.92)' : 'rgba(0,0,0,0.78)',
+          bgcolor: isDarkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
+        }}
+      >
+        <CloseIcon sx={{ fontSize: '1.1rem' }} />
+      </IconButton>
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Typography
+          variant="body2"
+          sx={{ color: isDarkMode ? 'white' : '#1f1f1f', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', mb: 0.5 }}
+        >
+          {dictationPreview || 'Слушаю...'}
+        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1px', height: 14, width: '100%' }}>
+          {waveLevels.map((level, idx) => (
+            <Box
+              key={`dict-bar-${idx}`}
+              sx={{
+                flex: 1,
+                borderRadius: 2,
+                height: `${Math.max(3, Math.round(level * 14))}px`,
+                bgcolor: isDarkMode ? 'rgba(255,255,255,0.86)' : 'rgba(33,33,33,0.86)',
+                opacity: 0.45 + level * 0.55,
+                transition: 'height 90ms linear, opacity 90ms linear',
+                animation: 'dictationPulse 900ms ease-in-out infinite',
+                animationDelay: `${idx * 28}ms`,
+                '@keyframes dictationPulse': {
+                  '0%': { transform: 'scaleY(0.72)' },
+                  '50%': { transform: 'scaleY(1)' },
+                  '100%': { transform: 'scaleY(0.72)' },
+                },
+              }}
+            />
+          ))}
+        </Box>
+      </Box>
+      <IconButton
+        size="small"
+        onClick={() => stopDictation(false)}
+        sx={{ ...iconButtonSx(isDarkMode, isClassic), color: 'white', bgcolor: 'primary.main', '&:hover': { bgcolor: 'primary.dark' } }}
+      >
+        <CheckIcon sx={{ fontSize: '1.1rem' }} />
+      </IconButton>
+    </Box>
+  ) : null;
+
   // ─── Вложения и индикатор загрузки (общие для обоих стилей) ─────────────────
 
   const filesSection = uploadedFiles.length > 0 && onFileRemove ? (
@@ -439,34 +688,38 @@ export default function ChatInputBar({
         <Box sx={{ px: 1.5, pt: 2.75, pb: 1 }}>
           {filesSection}
           {uploadingSection}
-          <TextField
-            inputRef={inputRef}
-            multiline
-            minRows={2}
-            maxRows={8}
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            onKeyPress={onKeyPress}
-            onPaste={onPaste}
-            placeholder={placeholder}
-            variant="outlined"
-            disabled={inputDisabled}
-            fullWidth
-            sx={{
-              '& .MuiOutlinedInput-root': {
-                bgcolor: 'transparent',
-                border: 'none',
-                fontSize: '0.95rem',
-                lineHeight: 1.6,
-                p: 0,
-                px: 0,
-                '& fieldset': { border: 'none' },
-                '&:hover': { bgcolor: 'transparent' },
-                '&.Mui-focused': { bgcolor: 'transparent', '& fieldset': { border: 'none' } },
-                '& textarea': { resize: 'none' },
-              },
-            }}
-          />
+          {isDictating ? (
+            dictationPanel
+          ) : (
+            <TextField
+              inputRef={inputRef}
+              multiline
+              minRows={2}
+              maxRows={8}
+              value={value}
+              onChange={(e) => onChange(e.target.value)}
+              onKeyPress={onKeyPress}
+              onPaste={onPaste}
+              placeholder={placeholder}
+              variant="outlined"
+              disabled={inputDisabled}
+              fullWidth
+              sx={{
+                '& .MuiOutlinedInput-root': {
+                  bgcolor: 'transparent',
+                  border: 'none',
+                  fontSize: '0.95rem',
+                  lineHeight: 1.6,
+                  p: 0,
+                  px: 0,
+                  '& fieldset': { border: 'none' },
+                  '&:hover': { bgcolor: 'transparent' },
+                  '&.Mui-focused': { bgcolor: 'transparent', '& fieldset': { border: 'none' } },
+                  '& textarea': { resize: 'none' },
+                },
+              }}
+            />
+          )}
         </Box>
 
         {/* Тулбар снизу */}
@@ -491,9 +744,10 @@ export default function ChatInputBar({
 
           {/* Правая группа: отчёт, отправить/стоп, голос */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
-            {reportBtn}
-            {stopOrSendBtn}
-            {voiceBtn}
+            {isDictating ? null : reportBtn}
+            {isDictating ? null : stopOrSendBtn}
+            {isDictating ? null : voiceBtn}
+            {dictationBtn}
           </Box>
         </Box>
       </Box>
@@ -549,23 +803,27 @@ export default function ChatInputBar({
         }}
       >
         {/* Один TextField на всё время — не переключаем разметку через два разных инпута, чтобы не терять фокус и курсор */}
-        <TextField
-          inputRef={inputRef}
-          multiline
-          minRows={1}
-          maxRows={8}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onKeyPress={onKeyPress}
-          onPaste={onPaste}
-          placeholder={placeholder}
-          variant="outlined"
-          size="small"
-          disabled={inputDisabled}
-          fullWidth={compactMultiline}
-          sx={textFieldSx}
-        />
-        {compactMultiline ? (
+        {isDictating ? (
+          <Box sx={{ width: '100%' }}>{dictationPanel}</Box>
+        ) : (
+          <TextField
+            inputRef={inputRef}
+            multiline
+            minRows={1}
+            maxRows={8}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            onKeyPress={onKeyPress}
+            onPaste={onPaste}
+            placeholder={placeholder}
+            variant="outlined"
+            size="small"
+            disabled={inputDisabled}
+            fullWidth={compactMultiline}
+            sx={textFieldSx}
+          />
+        )}
+        {isDictating ? null : compactMultiline ? (
           <Box sx={{ order: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'nowrap' }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
               {attachBtn}
@@ -577,6 +835,7 @@ export default function ChatInputBar({
               {reportBtn}
               {stopOrSendBtn}
               {voiceBtn}
+              {dictationBtn}
             </Box>
           </Box>
         ) : (
@@ -591,6 +850,7 @@ export default function ChatInputBar({
               {reportBtn}
               {stopOrSendBtn}
               {voiceBtn}
+              {dictationBtn}
             </Box>
           </>
         )}

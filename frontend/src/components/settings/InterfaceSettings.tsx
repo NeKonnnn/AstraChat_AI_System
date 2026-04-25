@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useTheme } from '@mui/material/styles';
 import {
   Box,
@@ -36,7 +36,9 @@ import { useAppActions } from '../../contexts/AppContext';
 import { SIDEBAR_PANEL_COLOR_KEY, DEFAULT_SIDEBAR_GRADIENT } from '../../constants/sidebarPanelColor';
 import {
   WORK_ZONE_BG_MODE_KEY,
+  WORK_ZONE_BG_CUSTOM_IMAGE_KEY,
   getWorkZoneBgMode,
+  getWorkZoneCustomImage,
   type WorkZoneBgMode,
 } from '../../constants/workZoneBackground';
 import {
@@ -71,6 +73,9 @@ const SIDEBAR_PALETTE = [
 ];
 
 const HEX_COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
+const MAX_WORK_ZONE_IMAGE_SIZE_MB = 4;
+const MAX_WORK_ZONE_IMAGE_SIZE_BYTES = MAX_WORK_ZONE_IMAGE_SIZE_MB * 1024 * 1024;
+const MAX_WORK_ZONE_IMAGE_DIMENSION_PX = 4096;
 
 const normalizeHexInput = (rawValue: string): string => {
   const trimmed = rawValue.trim().replace(/[^0-9a-fA-F#]/g, '');
@@ -78,6 +83,21 @@ const normalizeHexInput = (rawValue: string): string => {
   const withPrefix = trimmed.startsWith('#') ? trimmed : `#${trimmed}`;
   return withPrefix.slice(0, 7);
 };
+
+const readImageDimensions = (file: File): Promise<{ width: number; height: number }> =>
+  new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      resolve({ width: image.naturalWidth, height: image.naturalHeight });
+      URL.revokeObjectURL(objectUrl);
+    };
+    image.onerror = () => {
+      reject(new Error('invalid-image'));
+      URL.revokeObjectURL(objectUrl);
+    };
+    image.src = objectUrl;
+  });
 
 export default function InterfaceSettings() {
   const theme = useTheme();
@@ -114,6 +134,7 @@ export default function InterfaceSettings() {
   });
 
   const [colorPickerOpen, setColorPickerOpen] = useState(false);
+  const [workZoneImageDialogOpen, setWorkZoneImageDialogOpen] = useState(false);
   const [stylePopoverAnchor, setStylePopoverAnchor] = useState<HTMLElement | null>(null);
   const [colorPopoverAnchor, setColorPopoverAnchor] = useState<HTMLElement | null>(null);
   const [workZoneBgPopoverAnchor, setWorkZoneBgPopoverAnchor] = useState<HTMLElement | null>(null);
@@ -124,6 +145,8 @@ export default function InterfaceSettings() {
   });
 
   const [workZoneBgMode, setWorkZoneBgMode] = useState<WorkZoneBgMode>(() => getWorkZoneBgMode());
+  const [workZoneCustomImage, setWorkZoneCustomImage] = useState<string | null>(() => getWorkZoneCustomImage());
+  const workZoneImageInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const sync = () => setWorkZoneBgMode(getWorkZoneBgMode());
@@ -199,6 +222,10 @@ export default function InterfaceSettings() {
   };
 
   const handleWorkZoneBgMode = (mode: WorkZoneBgMode) => {
+    if (mode === 'custom' && !workZoneCustomImage) {
+      showNotification('warning', 'Сначала загрузите своё изображение для фона');
+      return;
+    }
     setWorkZoneBgMode(mode);
     localStorage.setItem(WORK_ZONE_BG_MODE_KEY, mode);
     window.dispatchEvent(new Event('interfaceSettingsChanged'));
@@ -208,9 +235,78 @@ export default function InterfaceSettings() {
         ? 'Включён фон «Звёздное небо» в рабочей зоне'
         : mode === 'snowfall'
           ? 'Включён фон «Снегопад» в рабочей зоне'
+      : mode === 'custom'
+            ? 'Включён пользовательский фон рабочей зоны'
           : 'Фон рабочей зоны: по умолчанию',
     );
     setWorkZoneBgPopoverAnchor(null);
+  };
+
+  const handleUploadWorkZonePhoto = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      showNotification('warning', 'Можно загрузить только изображение');
+      event.target.value = '';
+      return;
+    }
+    if (file.size > MAX_WORK_ZONE_IMAGE_SIZE_BYTES) {
+      showNotification('warning', `Размер изображения должен быть не больше ${MAX_WORK_ZONE_IMAGE_SIZE_MB} МБ`);
+      event.target.value = '';
+      return;
+    }
+    try {
+      const { width, height } = await readImageDimensions(file);
+      if (width > MAX_WORK_ZONE_IMAGE_DIMENSION_PX || height > MAX_WORK_ZONE_IMAGE_DIMENSION_PX) {
+        showNotification(
+          'warning',
+          `Максимальный размер изображения: ${MAX_WORK_ZONE_IMAGE_DIMENSION_PX}x${MAX_WORK_ZONE_IMAGE_DIMENSION_PX} px`,
+        );
+        event.target.value = '';
+        return;
+      }
+    } catch {
+      showNotification('error', 'Не удалось прочитать размеры изображения');
+      event.target.value = '';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : null;
+      if (!result) {
+        showNotification('error', 'Не удалось прочитать изображение');
+        return;
+      }
+      localStorage.setItem(WORK_ZONE_BG_CUSTOM_IMAGE_KEY, result);
+      setWorkZoneCustomImage(result);
+      localStorage.setItem(WORK_ZONE_BG_MODE_KEY, 'custom');
+      setWorkZoneBgMode('custom');
+      window.dispatchEvent(new Event('interfaceSettingsChanged'));
+      showNotification('success', 'Фото загружено и установлено фоном рабочей зоны');
+    };
+    reader.onerror = () => showNotification('error', 'Ошибка при загрузке изображения');
+    reader.readAsDataURL(file);
+    event.target.value = '';
+  };
+
+  const handleRemoveWorkZonePhoto = () => {
+    localStorage.removeItem(WORK_ZONE_BG_CUSTOM_IMAGE_KEY);
+    setWorkZoneCustomImage(null);
+    if (workZoneBgMode === 'custom') {
+      localStorage.setItem(WORK_ZONE_BG_MODE_KEY, 'default');
+      setWorkZoneBgMode('default');
+    }
+    window.dispatchEvent(new Event('interfaceSettingsChanged'));
+    showNotification('success', 'Пользовательский фон удалён');
+  };
+
+  const handleApplyCustomWorkZoneBg = () => {
+    if (!workZoneCustomImage) {
+      showNotification('warning', 'Сначала загрузите своё изображение для фона');
+      return;
+    }
+    handleWorkZoneBgMode('custom');
+    setWorkZoneImageDialogOpen(false);
   };
 
   const handleInterfaceSettingChange = async (key: keyof typeof interfaceSettings, value: boolean) => {
@@ -726,6 +822,8 @@ export default function InterfaceSettings() {
                       ? 'Звёздное небо'
                       : workZoneBgMode === 'snowfall'
                         ? 'Снегопад'
+                        : workZoneBgMode === 'custom'
+                          ? 'Своё изображение'
                         : 'По умолчанию'}
                   </Typography>
                   <ExpandMoreIcon
@@ -773,6 +871,20 @@ export default function InterfaceSettings() {
                       }}
                     >
                       Снегопад
+                    </Box>
+                    <Box
+                      onClick={() => {
+                        setWorkZoneBgPopoverAnchor(null);
+                        setWorkZoneImageDialogOpen(true);
+                      }}
+                      sx={{
+                        ...dropdownItemSx,
+                        color: workZoneBgMode === 'custom' ? 'white' : 'rgba(255,255,255,0.9)',
+                        fontWeight: workZoneBgMode === 'custom' ? 600 : 400,
+                        bgcolor: workZoneBgMode === 'custom' ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
+                      }}
+                    >
+                      Своё изображение
                     </Box>
                   </Box>
                 </Popover>
@@ -935,6 +1047,66 @@ export default function InterfaceSettings() {
               Применить
             </Button>
           </Box>
+        </DialogContent>
+      </Dialog>
+
+      {/* Модальное окно пользовательского фона рабочей зоны */}
+      <Dialog open={workZoneImageDialogOpen} onClose={() => setWorkZoneImageDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          Своё изображение
+          <IconButton onClick={() => setWorkZoneImageDialogOpen(false)} size="small" aria-label="Закрыть">
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1.5 }}>
+            <Typography variant="body2">
+              Загрузите изображение для фона рабочей зоны или удалите текущее.
+            </Typography>
+            <Tooltip
+              title={`Лимиты: до ${MAX_WORK_ZONE_IMAGE_DIMENSION_PX}x${MAX_WORK_ZONE_IMAGE_DIMENSION_PX} px и до ${MAX_WORK_ZONE_IMAGE_SIZE_MB} МБ.`}
+              arrow
+            >
+              <IconButton
+                size="small"
+                sx={{
+                  p: 0,
+                  opacity: 0.7,
+                  '&:hover': {
+                    opacity: 1,
+                    '& .MuiSvgIcon-root': { color: 'primary.main' },
+                  },
+                }}
+              >
+                <HelpOutlineIcon fontSize="small" color="action" />
+              </IconButton>
+            </Tooltip>
+          </Box>
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+            <Button variant="outlined" size="small" onClick={() => workZoneImageInputRef.current?.click()}>
+              Загрузить фото
+            </Button>
+            <Button
+              variant="text"
+              size="small"
+              color="inherit"
+              disabled={!workZoneCustomImage}
+              onClick={handleRemoveWorkZonePhoto}
+            >
+              Удалить фото
+            </Button>
+            <Button variant="contained" size="small" disabled={!workZoneCustomImage} onClick={handleApplyCustomWorkZoneBg}>
+              Применить
+            </Button>
+          </Box>
+          <Box
+            component="input"
+            ref={workZoneImageInputRef}
+            type="file"
+            accept="image/*"
+            onChange={handleUploadWorkZonePhoto}
+            sx={{ display: 'none' }}
+          />
         </DialogContent>
       </Dialog>
     </Box>

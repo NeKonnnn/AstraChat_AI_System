@@ -80,7 +80,7 @@ import AgentSelector from '../components/AgentSelector';
 import ChatInputStatusCluster from '../components/ChatInputStatusCluster';
 import { useMyAgentSelection, useOrchestratorAgentsAnyActive } from '../hooks/useChatInputAgentIndicators';
 import { getSidebarPanelBackground } from '../constants/sidebarPanelColor';
-import { getWorkZoneBackgroundColor, isWorkZoneAnimatedMode } from '../constants/workZoneBackground';
+import { getWorkZoneBackgroundColor, getWorkZoneCustomImage, isWorkZoneAnimatedMode } from '../constants/workZoneBackground';
 import { useWorkZoneBgMode } from '../hooks/useWorkZoneBgMode';
 import WorkZoneStarrySky from '../components/WorkZoneStarrySky';
 import WorkZoneSnowfall from '../components/WorkZoneSnowfall';
@@ -780,6 +780,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   const workZoneMode = useWorkZoneBgMode();
   const workZoneAnimated = isWorkZoneAnimatedMode(workZoneMode);
   const workZoneBgColor = getWorkZoneBackgroundColor(isDarkMode, workZoneMode);
+  const workZoneCustomImage = getWorkZoneCustomImage();
 
   useEffect(() => {
     const onColorChanged = () => setRightSidebarPanelBg(getSidebarPanelBackground());
@@ -989,6 +990,10 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       ),
     [messages],
   );
+  const currentChatLoading = useMemo(
+    () => (currentChat ? state.loadingChatIds.includes(currentChat.id) : false),
+    [currentChat, state.loadingChatIds],
+  );
 
   const dropdownPanelSx = getDropdownPanelSx(isDarkMode);
   const dropdownItemSx = useMemo(() => getDropdownItemSx(isDarkMode), [isDarkMode]);
@@ -1060,11 +1065,11 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   // Обновляем ref при изменении зависимостей, но НЕ создаем новую функцию
   useEffect(() => {
     handleSendMessageFromRendererRef.current = (prompt: string) => {
-      if (currentChat && isConnected && !state.isLoading) {
+      if (currentChat && isConnected && !currentChatLoading) {
         sendMessage(prompt, currentChat.id);
       }
     };
-  }, [currentChat, isConnected, state.isLoading, sendMessage]);
+  }, [currentChat, isConnected, currentChatLoading, sendMessage]);
   
   // Создаем стабильную функцию ОДИН РАЗ (никогда не меняется!)
   const handleSendMessageFromRenderer = useCallback((prompt: string) => {
@@ -1093,7 +1098,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     [modelWindows],
   );
   const multiLlmInputBlocked = isMultiLlmMode && !multiLlmHasSelection;
-  const chatAwaitingTokens = state.isLoading && !hasActiveChatStreaming;
+  const chatAwaitingTokens = currentChatLoading && !hasActiveChatStreaming;
   const prevAgentModeRef = useRef<string | undefined>(undefined);
   const skipNextMultiLlmChatResetRef = useRef(false);
   const lastMultiLlmPostedKeyRef = useRef<string>('');
@@ -1138,7 +1143,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       );
       return;
     }
-    if (state.isLoading || hasActiveChatStreaming) {
+    if (currentChatLoading || hasActiveChatStreaming) {
       showNotification('warning', 'Дождитесь окончания генерации перед сменой режима');
       return;
     }
@@ -1173,7 +1178,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     } catch {
       showNotification('error', 'Не удалось переключить режим');
     }
-  }, [agentStatus, loadAgentStatus, showNotification, state.isLoading, hasActiveChatStreaming]);
+  }, [agentStatus, loadAgentStatus, showNotification, currentChatLoading, hasActiveChatStreaming]);
 
   /** Кнопка multi-LLM в поле ввода, когда селектор модели/агента спрятан в настройках. */
   const multiLlmSettingsExtraAction = useMemo(
@@ -1188,7 +1193,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
               disabled={
                 !agentStatus?.is_initialized ||
                 !isConnected ||
-                state.isLoading ||
+                currentChatLoading ||
                 hasActiveChatStreaming
               }
               sx={multiLlmModeToggleIconButtonSx}
@@ -1203,7 +1208,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       handleToggleMultiLlmMode,
       agentStatus?.is_initialized,
       isConnected,
-      state.isLoading,
+      currentChatLoading,
       hasActiveChatStreaming,
       isDarkMode,
       multiLlmModeToggleIconButtonSx,
@@ -1538,7 +1543,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       return;
     }
 
-    if (state.isLoading || hasActiveChatStreaming) {
+    if (currentChatLoading || hasActiveChatStreaming) {
       return;
     }
 
@@ -1593,7 +1598,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       return;
     }
 
-    if (!inputMessage.trim() || !isConnected || state.isLoading) {
+    if (!inputMessage.trim() || !isConnected || currentChatLoading) {
       if (!isConnected) {
         showNotification('error', 'Нет соединения с сервером. Попробуйте переподключиться.');
       }
@@ -2884,6 +2889,14 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
           transition: 'margin-right 0.3s ease',
           pt: 8,
           backgroundColor: workZoneBgColor,
+          ...(workZoneMode === 'custom' && workZoneCustomImage
+            ? {
+                backgroundImage: `url("${workZoneCustomImage}")`,
+                backgroundSize: 'cover',
+                backgroundPosition: 'center',
+                backgroundRepeat: 'no-repeat',
+              }
+            : {}),
           color: isDarkMode ? 'white' : '#333',
           position: 'relative',
         }}
@@ -2952,7 +2965,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                   disabled={
                     !agentStatus?.is_initialized ||
                     !isConnected ||
-                    state.isLoading ||
+                    currentChatLoading ||
                     hasActiveChatStreaming
                   }
                   sx={multiLlmModeToggleIconButtonSx}
@@ -3003,7 +3016,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                   disabled={
                     !agentStatus?.is_initialized ||
                     !isConnected ||
-                    state.isLoading ||
+                    currentChatLoading ||
                     hasActiveChatStreaming
                   }
                   sx={multiLlmModeToggleIconButtonSx}
@@ -3354,7 +3367,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                                    ? 'Выберите модели для сравнения (до 4, хотя бы одну)'
                                    : chatAwaitingTokens
                                      ? 'astrachat думает...'
-                                     : state.isLoading && hasActiveChatStreaming
+                                     : currentChatLoading && hasActiveChatStreaming
                                        ? isMultiLlmMode
                                          ? 'Модели генерируют ответ... Нажмите ⏹️ чтобы остановить'
                                          : 'astrachat генерирует ответ... Нажмите ⏹️ чтобы остановить'
@@ -3386,7 +3399,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                            reportDisabled={isUploading || multiLlmInputBlocked || chatAwaitingTokens}
                            onSettingsClick={handleMenuOpen}
                            settingsDisabled={multiLlmInputBlocked || chatAwaitingTokens}
-                           showStopButton={state.isLoading || hasActiveChatStreaming}
+                           showStopButton={currentChatLoading || hasActiveChatStreaming}
                            onStopClick={handleStopGeneration}
                            onSendClick={handleSendMessage}
                            sendDisabled={!inputMessage.trim() || !isConnected || multiLlmInputBlocked || chatAwaitingTokens}
@@ -3418,7 +3431,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                        ? 'Выберите модели для сравнения (до 4, хотя бы одну)'
                        : chatAwaitingTokens
                          ? 'astrachat думает...'
-                         : state.isLoading && hasActiveChatStreaming
+                        : currentChatLoading && hasActiveChatStreaming
                            ? isMultiLlmMode
                              ? 'Модели генерируют ответ... Нажмите ⏹️ чтобы остановить'
                              : 'astrachat генерирует ответ... Нажмите ⏹️ чтобы остановить'
@@ -3450,7 +3463,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                reportDisabled={isUploading || multiLlmInputBlocked || chatAwaitingTokens}
                onSettingsClick={handleMenuOpen}
                settingsDisabled={multiLlmInputBlocked || chatAwaitingTokens}
-               showStopButton={state.isLoading || hasActiveChatStreaming}
+               showStopButton={currentChatLoading || hasActiveChatStreaming}
                onStopClick={handleStopGeneration}
                onSendClick={handleSendMessage}
                sendDisabled={!inputMessage.trim() || !isConnected || multiLlmInputBlocked || chatAwaitingTokens}

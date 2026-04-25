@@ -13,6 +13,7 @@ import os
 from datetime import datetime
 
 import backend.app_state as state
+from backend.auth.jwt_handler import decode_token
 from backend.app_state import (
     ask_agent, save_dialog_entry, get_recent_dialog_history,
     rag_client, get_agent_orchestrator,
@@ -59,9 +60,23 @@ async def _get_conversation_project_id(conversation_id: str) -> "Optional[str]":
 
 def register_handlers(sio):
     """Регистрирует все Socket.IO обработчики на переданный sio-сервер"""
+    sid_tokens: dict[str, str] = {}
 
     @sio.event
-    async def connect(sid, environ):
+    async def connect(sid, environ, auth):
+        token = None
+        if isinstance(auth, dict):
+            token = auth.get("token")
+        if not token:
+            logger.warning(f"Socket.IO auth failed: token missing sid={sid}")
+            return False
+        try:
+            decode_token(token)
+        except Exception as e:
+            logger.warning(f"Socket.IO auth failed: sid={sid} error={e}")
+            return False
+
+        sid_tokens[sid] = token
         logger.info(f"Socket.IO client connected: {sid}")
         stop_generation_flags[sid] = False
         await sio.emit("connected", {"data": "Connected to astrachat"}, room=sid)
@@ -70,6 +85,7 @@ def register_handlers(sio):
     async def disconnect(sid):
         logger.info(f"Socket.IO client disconnected: {sid}")
         stop_generation_flags.pop(sid, None)
+        sid_tokens.pop(sid, None)
 
     @sio.event
     async def ping(sid, data):
@@ -109,7 +125,32 @@ def register_handlers(sio):
             await sio.emit("chat_error", {"error": "AI services not available"}, room=sid)
             return
 
+        token = sid_tokens.get(sid)
+        if not token:
+            await sio.emit("chat_error", {"error": "Не авторизован. Выполните вход снова."}, room=sid)
+            return
         try:
+            user_data = decode_token(token)
+        except Exception:
+            await sio.emit(
+                "chat_error",
+                {"error": "Сессия завершена: выполнен вход в другом окне. Обновите страницу и войдите снова."},
+                room=sid,
+            )
+            return
+
+        def session_still_valid() -> bool:
+            current_token = sid_tokens.get(sid)
+            if not current_token:
+                return False
+            try:
+                decode_token(current_token)
+                return True
+            except Exception:
+                return False
+
+        try:
+            current_user_id = user_data.get("user_id")
             user_message = data.get("message", "")
             streaming = data.get("streaming", True)
             stop_generation_flags[sid] = False
@@ -173,10 +214,10 @@ def register_handlers(sio):
                     if project_id:
                         from backend.database.memory_service import save_dialog_entry_to_project
                         await save_dialog_entry_to_project(
-                            "user", user_message, project_id, conversation_id, user_message_id
+                            "user", user_message, project_id, conversation_id, user_message_id, current_user_id
                         )
                     else:
-                        await save_dialog_entry("user", user_message, None, user_message_id, conversation_id)
+                        await save_dialog_entry("user", user_message, None, user_message_id, conversation_id, current_user_id)
                 except RuntimeError as e:
                     if "MongoDB" in str(e):
                         await sio.emit("chat_error", {"error": "MongoDB недоступен."}, room=sid)
@@ -212,7 +253,7 @@ def register_handlers(sio):
             loop = asyncio.get_event_loop()
 
             def sync_stream_cb(chunk, acc):
-                if stop_generation_flags.get(sid, False):
+                if stop_generation_flags.get(sid, False) or not session_still_valid():
                     return False
                 asyncio.run_coroutine_threadsafe(async_stream_cb(chunk, acc), loop)
                 return True
@@ -229,6 +270,7 @@ def register_handlers(sio):
                     project_instructions=project_instructions,
                     rag_strategy=effective_rag_strategy,
                     models_subset=models_subset,
+                    session_still_valid=session_still_valid,
                 )
                 return
 
@@ -242,6 +284,8 @@ def register_handlers(sio):
                     project_id=project_id,
                     project_instructions=project_instructions,
                     rag_strategy=effective_rag_strategy,
+                    session_still_valid=session_still_valid,
+                    user_id=current_user_id,
                 )
                 return
 
@@ -254,6 +298,8 @@ def register_handlers(sio):
                 project_id=project_id,
                 project_instructions=project_instructions,
                 rag_strategy=effective_rag_strategy,
+                session_still_valid=session_still_valid,
+                user_id=current_user_id,
             )
 
         except Exception as e:
@@ -277,6 +323,7 @@ async def _handle_multi_llm(
     project_instructions=None,
     rag_strategy="auto",
     models_subset=None,
+    session_still_valid=lambda: True,
 ):
     orchestrator = get_agent_orchestrator()
     multi_llm_models = orchestrator.get_multi_llm_models()
@@ -516,7 +563,7 @@ async def _handle_multi_llm(
             # (create_task ставит emit в очередь loop'а; loop обслуживает её
             # между чанками stream_chat).
             def _model_stream_cb(chunk: str, acc: str) -> bool:
-                if stop_generation_flags.get(sid, False):
+                if stop_generation_flags.get(sid, False) or not session_still_valid():
                     return False
                 loop.call_soon_threadsafe(
                     lambda: asyncio.ensure_future(
@@ -593,6 +640,8 @@ async def _handle_agent_mode(
     project_id=None,
     project_instructions=None,
     rag_strategy="auto",
+    session_still_valid=lambda: True,
+    user_id: str = "default_user",
 ):
     await sio.emit("chat_thinking", {"status": "processing", "message": "Обрабатываю запрос через агентную архитектуру..."}, room=sid)
     agentic_rag_enabled = bool(getattr(state, "agentic_rag_enabled", True))
@@ -601,7 +650,7 @@ async def _handle_agent_mode(
     eff_model_path = ap.get("model_path") or get_current_model_path()
 
     async def agent_stream_cb(chunk, acc):
-        if stop_generation_flags.get(sid, False):
+        if stop_generation_flags.get(sid, False) or not session_still_valid():
             return False
         await sio.emit("chat_chunk", {"chunk": chunk, "accumulated": acc}, room=sid)
         return True
@@ -695,7 +744,7 @@ async def _handle_agent_mode(
     try:
         response = await orchestrator.process_message(effective_message, history=history, context=context)
 
-        if stop_generation_flags.get(sid, False):
+        if stop_generation_flags.get(sid, False) or not session_still_valid():
             stop_generation_flags[sid] = False
             await sio.emit("generation_stopped", {"message": "Генерация остановлена"}, room=sid)
             return
@@ -716,9 +765,9 @@ async def _handle_agent_mode(
     try:
         if project_id:
             from backend.database.memory_service import save_dialog_entry_to_project
-            await save_dialog_entry_to_project("assistant", response, project_id, conversation_id)
+            await save_dialog_entry_to_project("assistant", response, project_id, conversation_id, None, user_id)
         else:
-            await save_dialog_entry("assistant", response, None, None, conversation_id)
+            await save_dialog_entry("assistant", response, None, None, conversation_id, user_id)
     except Exception as e:
         logger.warning(f"Не удалось сохранить ответ агента: {e}")
 
@@ -732,6 +781,8 @@ async def _handle_direct(
     project_id=None,
     project_instructions=None,
     rag_strategy="auto",
+    session_still_valid=lambda: True,
+    user_id: str = "default_user",
 ):
     min_sim, rag_block = rag_guard_env()
     context_added = False
@@ -1062,7 +1113,7 @@ async def _handle_direct(
             final_message[:20000], response, RAG_STRICT_NOT_FOUND_MESSAGE
         )
 
-    if stop_generation_flags.get(sid, False):
+    if stop_generation_flags.get(sid, False) or not session_still_valid():
         stop_generation_flags[sid] = False
         await sio.emit("generation_stopped", {"message": "Генерация остановлена"}, room=sid)
         return
@@ -1071,9 +1122,9 @@ async def _handle_direct(
         meta = {"document_search": document_search_trace} if document_search_trace else None
         if project_id:
             from backend.database.memory_service import save_dialog_entry_to_project
-            await save_dialog_entry_to_project("assistant", response, project_id, conversation_id)
+            await save_dialog_entry_to_project("assistant", response, project_id, conversation_id, None, user_id)
         else:
-            await save_dialog_entry("assistant", response, meta, None, conversation_id)
+            await save_dialog_entry("assistant", response, meta, None, conversation_id, user_id)
     except RuntimeError as e:
         logger.warning(f"Не удалось сохранить ответ: {e}")
 

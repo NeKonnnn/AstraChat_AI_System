@@ -1,4 +1,7 @@
 import React, { createContext, useContext, useReducer, useEffect, ReactNode } from 'react';
+import { getApiUrl } from '../config/api';
+import { initSettings } from '../settings';
+import { useAuth } from './AuthContext';
 
 /** Один столбец ответа в режиме multi-LLM (на карточке — свои кнопки и варианты перегенерации). */
 export interface MultiLLMResponseSlot {
@@ -107,6 +110,7 @@ export interface AppState {
   folders: Folder[];
   projects: Project[];
   isLoading: boolean;
+  loadingChatIds: string[];
   isInitialized: boolean;
   
   // Модель
@@ -161,6 +165,7 @@ type AppAction =
   | { type: 'UPDATE_MESSAGE'; payload: { chatId: string; messageId: string; content?: string; isStreaming?: boolean; multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>; alternativeResponses?: string[]; currentResponseIndex?: number; documentSearch?: Message['documentSearch'] } }
   | { type: 'APPEND_CHUNK'; payload: { chatId: string; messageId: string; chunk: string; isStreaming?: boolean } }
   | { type: 'SET_LOADING'; payload: boolean }
+  | { type: 'SET_CHAT_LOADING'; payload: { chatId: string; loading: boolean } }
   | { type: 'SET_CURRENT_MODEL'; payload: ModelInfo }
   | { type: 'SET_MODEL_SETTINGS'; payload: ModelSettings }
   | { type: 'SET_AVAILABLE_MODELS'; payload: any[] }
@@ -238,6 +243,7 @@ const initialState: AppState = {
   folders: [],
   projects: [],
   isLoading: false,
+  loadingChatIds: [],
   isInitialized: false,
   currentModel: null,
   modelSettings: {
@@ -435,6 +441,18 @@ function appReducer(state: AppState, action: AppAction): AppState {
         ...state,
         isLoading: action.payload,
       };
+
+    case 'SET_CHAT_LOADING': {
+      const { chatId, loading } = action.payload;
+      const hasChat = state.loadingChatIds.includes(chatId);
+      const nextLoadingChatIds = loading
+        ? (hasChat ? state.loadingChatIds : [...state.loadingChatIds, chatId])
+        : state.loadingChatIds.filter((id) => id !== chatId);
+      return {
+        ...state,
+        loadingChatIds: nextLoadingChatIds,
+      };
+    }
       
     case 'SET_CURRENT_MODEL':
       return {
@@ -724,42 +742,94 @@ const AppContext = createContext<{
 export function AppProvider({ children }: { children: ReactNode }) {
   // Загружаем состояние из localStorage при инициализации
   const [state, dispatch] = useReducer(appReducer, initialState);
+  const { token } = useAuth();
 
-  // Инициализация из localStorage
+  const mapServerConversationToChat = (conversation: any): Chat => {
+    const messages: Message[] = Array.isArray(conversation?.messages)
+      ? conversation.messages.map((msg: any) => ({
+          id: String(msg?.message_id || `msg_${Math.random().toString(36).slice(2, 14)}`),
+          role: msg?.role === 'assistant' ? 'assistant' : 'user',
+          content: String(msg?.content || ''),
+          timestamp: String(msg?.timestamp || new Date().toISOString()),
+          isStreaming: false,
+        }))
+      : [];
+
+    const firstUserContent =
+      messages.find((m) => m.role === 'user')?.content?.slice(0, 60) || 'Новый чат';
+
+    const storedTitle = conversation?.title ? String(conversation.title).trim() : '';
+
+    return {
+      id: String(conversation?.conversation_id || Date.now().toString()),
+      title: storedTitle || firstUserContent,
+      messages,
+      createdAt: String(conversation?.created_at || new Date().toISOString()),
+      updatedAt: String(conversation?.updated_at || new Date().toISOString()),
+      projectId: conversation?.project_id ? String(conversation.project_id) : undefined,
+    };
+  };
+
+  // Инициализация/перезагрузка состояния при смене токена (LDAP login/logout)
   useEffect(() => {
-    try {
-      const savedState = localStorage.getItem('memo-chats');
-      if (savedState) {
-        const parsed = JSON.parse(savedState);
-        if (parsed.chats && parsed.chats.length > 0) {
-          // Восстанавливаем чаты и папки напрямую в состояние
-          dispatch({ 
-            type: 'RESTORE_CHATS', 
-            payload: {
-              chats: parsed.chats || [],
-              currentChatId: parsed.currentChatId || null,
-              folders: parsed.folders || []
-            }
+    const loadInitialState = async () => {
+      let parsed: any = null;
+      try {
+        const savedState = localStorage.getItem('memo-chats');
+        parsed = savedState ? JSON.parse(savedState) : null;
+      } catch (error) {
+        console.error('Ошибка загрузки состояния из localStorage:', error);
+      }
+
+      if (parsed?.projects?.length > 0) {
+        dispatch({ type: 'RESTORE_PROJECTS', payload: parsed.projects });
+      }
+
+      const effectiveToken = token || localStorage.getItem('auth_token');
+      if (effectiveToken) {
+        try {
+          await initSettings();
+          const response = await fetch(getApiUrl('/api/conversations?limit=500'), {
+            headers: { Authorization: `Bearer ${effectiveToken}` },
           });
+          if (response.ok) {
+            const payload = await response.json();
+            const serverChats: Chat[] = Array.isArray(payload?.conversations)
+              ? payload.conversations.map(mapServerConversationToChat)
+              : [];
+            if (serverChats.length > 0) {
+              dispatch({
+                type: 'RESTORE_CHATS',
+                payload: {
+                  chats: serverChats,
+                  currentChatId: serverChats[0]?.id || null,
+                  folders: parsed?.folders || [],
+                },
+              });
+              return;
+            }
+          }
+        } catch (error) {
+          console.warn('Не удалось загрузить диалоги из backend, используем localStorage', error);
         }
-        // Восстанавливаем проекты
-        if (parsed.projects && parsed.projects.length > 0) {
-          dispatch({ type: 'RESTORE_PROJECTS', payload: parsed.projects });
-        }
-        if (!parsed.chats || parsed.chats.length === 0) {
-          // Если нет сохраненных чатов, помечаем как инициализированное
-          dispatch({ type: 'SET_INITIALIZED', payload: true });
-        }
+      }
+
+      if (parsed?.chats?.length > 0) {
+        dispatch({
+          type: 'RESTORE_CHATS',
+          payload: {
+            chats: parsed.chats || [],
+            currentChatId: parsed.currentChatId || null,
+            folders: parsed.folders || [],
+          },
+        });
       } else {
-        // Если нет сохраненного состояния, помечаем как инициализированное
         dispatch({ type: 'SET_INITIALIZED', payload: true });
       }
-    } catch (error) {
-      console.error('Ошибка загрузки состояния из localStorage:', error);
-      // В случае ошибки тоже помечаем как инициализированное
-      dispatch({ type: 'SET_INITIALIZED', payload: true });
-    }
-  }, []);
+    };
+
+    loadInitialState();
+  }, [token]);
 
   // Сохраняем состояние в localStorage при изменении
   useEffect(() => {
@@ -795,6 +865,7 @@ export function useAppContext() {
 // Хелперы для часто используемых действий
 export function useAppActions() {
   const { dispatch, state } = useAppContext();
+  const { token } = useAuth();
 
   return {
     createChat: (title: string = 'Новый чат') => {
@@ -829,6 +900,22 @@ export function useAppActions() {
         type: 'UPDATE_CHAT_TITLE',
         payload: { chatId, title },
       });
+      // Синхронизируем заголовок с бэкендом в фоне
+      const effectiveToken = token || localStorage.getItem('auth_token');
+      if (effectiveToken) {
+        initSettings().then(() => {
+          fetch(getApiUrl(`/api/conversations/${chatId}/title`), {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${effectiveToken}`,
+            },
+            body: JSON.stringify({ title }),
+          }).catch(() => {
+            // Тихая ошибка — заголовок обновлён локально, backend недоступен
+          });
+        }).catch(() => {});
+      }
     },
     
     updateChatMessages: (chatId: string, messages: Message[]) => {
@@ -843,12 +930,30 @@ export function useAppActions() {
         type: 'DELETE_CHAT',
         payload: chatId,
       });
+      const effectiveToken = token || localStorage.getItem('auth_token');
+      if (effectiveToken) {
+        initSettings().then(() => {
+          fetch(getApiUrl(`/api/conversations/${chatId}`), {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${effectiveToken}` },
+          }).catch(() => {});
+        }).catch(() => {});
+      }
     },
     
     deleteAllChats: () => {
       dispatch({
         type: 'DELETE_ALL_CHATS',
       });
+      const effectiveToken = token || localStorage.getItem('auth_token');
+      if (effectiveToken) {
+        initSettings().then(() => {
+          fetch(getApiUrl('/api/conversations'), {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${effectiveToken}` },
+          }).catch(() => {});
+        }).catch(() => {});
+      }
     },
     
     addMessage: (chatId: string, message: Omit<Message, 'id'>) => {
@@ -881,6 +986,10 @@ export function useAppActions() {
     
     setLoading: (loading: boolean) => {
       dispatch({ type: 'SET_LOADING', payload: loading });
+    },
+
+    setChatLoading: (chatId: string, loading: boolean) => {
+      dispatch({ type: 'SET_CHAT_LOADING', payload: { chatId, loading } });
     },
     
     showNotification: (type: 'success' | 'error' | 'info' | 'warning', message: string) => {

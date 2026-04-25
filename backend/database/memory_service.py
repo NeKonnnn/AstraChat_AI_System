@@ -81,7 +81,7 @@ def reset_conversation():
     current_conversation_id = None
 
 
-async def save_dialog_entry_mongodb(role: str, content: str, metadata: Optional[Dict[str, Any]] = None, message_id: Optional[str] = None, conversation_id: Optional[str] = None) -> bool:
+async def save_dialog_entry_mongodb(role: str, content: str, metadata: Optional[Dict[str, Any]] = None, message_id: Optional[str] = None, conversation_id: Optional[str] = None, user_id: Optional[str] = None) -> bool:
     """
     Сохранение сообщения в MongoDB
     
@@ -130,8 +130,8 @@ async def save_dialog_entry_mongodb(role: str, content: str, metadata: Optional[
             # Создаем новый диалог
             conversation = Conversation(
                 conversation_id=conversation_id,
-                user_id="default_user",  # TODO: добавить поддержку пользователей
-                title=f"Диалог {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}",
+                user_id=user_id or "default_user",
+                title=content[:60],
                 messages=[message],
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow()
@@ -155,7 +155,7 @@ async def save_dialog_entry_mongodb(role: str, content: str, metadata: Optional[
         return False
 
 
-async def save_dialog_entry(role: str, content: str, metadata: Optional[Dict[str, Any]] = None, message_id: Optional[str] = None, conversation_id: Optional[str] = None):
+async def save_dialog_entry(role: str, content: str, metadata: Optional[Dict[str, Any]] = None, message_id: Optional[str] = None, conversation_id: Optional[str] = None, user_id: Optional[str] = None):
     """
     Сохранение сообщения в MongoDB (файловый режим отключен)
     При "Event loop is closed" переинициализирует MongoDB в текущем loop и повторяет попытку.
@@ -166,7 +166,7 @@ async def save_dialog_entry(role: str, content: str, metadata: Optional[Dict[str
 
     for attempt in range(2):
         try:
-            success = await save_dialog_entry_mongodb(role, content, metadata, message_id, conversation_id)
+            success = await save_dialog_entry_mongodb(role, content, metadata, message_id, conversation_id, user_id)
             if not success:
                 raise RuntimeError("Не удалось сохранить сообщение в MongoDB")
             return
@@ -455,6 +455,7 @@ async def save_dialog_entry_to_project(
     project_id: str,
     conversation_id: Optional[str] = None,
     message_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> bool:
     """
     Сохраняет сообщение в MongoDB с привязкой к проекту.
@@ -488,8 +489,8 @@ async def save_dialog_entry_to_project(
         if existing is None:
             conversation = Conversation(
                 conversation_id=conversation_id,
-                user_id="default_user",
-                title=f"Проект {project_id} — {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}",
+                user_id=user_id or "default_user",
+                title=content[:60],
                 messages=[message],
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow(),

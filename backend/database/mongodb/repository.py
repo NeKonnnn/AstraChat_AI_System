@@ -324,6 +324,17 @@ class ConversationRepository:
         except Exception as e:
             logger.error(f"Ошибка при удалении диалога: {e}")
             return False
+
+    async def delete_user_conversations(self, user_id: str) -> int:
+        """Удаление всех диалогов пользователя. Возвращает количество удалённых."""
+        try:
+            collection = self._get_collection()
+            result = await collection.delete_many({"user_id": user_id})
+            logger.info(f"Удалено {result.deleted_count} диалогов пользователя {user_id}")
+            return result.deleted_count
+        except Exception as e:
+            logger.error(f"Ошибка при удалении диалогов пользователя {user_id}: {e}")
+            return 0
     
     async def set_conversation_ttl(
         self, 

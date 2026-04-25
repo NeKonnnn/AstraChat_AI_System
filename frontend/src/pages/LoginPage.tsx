@@ -44,6 +44,8 @@ export default function LoginPage() {
   const togglePasswordVisibility = () => {
     setShowPassword(!showPassword);
   };
+  const inputBackgroundColor = isDarkMode ? '#2a2a2a' : '#ffffff';
+  const inputTextColor = isDarkMode ? '#fff' : '#000';
 
   // Устанавливаем фон при монтировании
   React.useEffect(() => {
@@ -167,9 +169,11 @@ export default function LoginPage() {
                 disabled={isLoading}
                 required
                 autoFocus
+                autoComplete="username"
                 sx={{
                   '& .MuiOutlinedInput-root': {
-                    backgroundColor: isDarkMode ? 'rgba(255,255,255,0.05)' : '#ffffff',
+                    backgroundColor: inputBackgroundColor,
+                    colorScheme: isDarkMode ? 'dark' : 'light',
                     '& fieldset': {
                       borderColor: isDarkMode ? 'rgba(255,255,255,0.23)' : 'rgba(0,0,0,0.23)',
                     },
@@ -188,7 +192,18 @@ export default function LoginPage() {
                     },
                   },
                   '& .MuiInputBase-input': {
-                    color: isDarkMode ? '#fff' : '#000',
+                    color: inputTextColor,
+                    colorScheme: isDarkMode ? 'dark' : 'light',
+                  },
+                  '& input:-webkit-autofill, & input:-webkit-autofill:hover, & input:-webkit-autofill:focus, & input:-webkit-autofill:active, & .MuiOutlinedInput-input:-webkit-autofill, & .MuiOutlinedInput-input:-webkit-autofill:hover, & .MuiOutlinedInput-input:-webkit-autofill:focus, & .MuiOutlinedInput-input:-webkit-autofill:active': {
+                    WebkitBoxShadow: `0 0 0 1000px ${inputBackgroundColor} inset !important`,
+                    boxShadow: `0 0 0 1000px ${inputBackgroundColor} inset !important`,
+                    WebkitTextFillColor: `${inputTextColor} !important`,
+                    color: `${inputTextColor} !important`,
+                    caretColor: `${inputTextColor} !important`,
+                    backgroundColor: `${inputBackgroundColor} !important`,
+                    WebkitBackgroundClip: 'padding-box !important',
+                    transition: 'background-color 999999s ease-in-out 0s',
                   },
                 }}
               />
@@ -203,9 +218,11 @@ export default function LoginPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 disabled={isLoading}
                 required
+                autoComplete="current-password"
                 sx={{
                   '& .MuiOutlinedInput-root': {
-                    backgroundColor: isDarkMode ? 'rgba(255,255,255,0.05)' : '#ffffff',
+                    backgroundColor: inputBackgroundColor,
+                    colorScheme: isDarkMode ? 'dark' : 'light',
                     '& fieldset': {
                       borderColor: isDarkMode ? 'rgba(255,255,255,0.23)' : 'rgba(0,0,0,0.23)',
                     },
@@ -224,7 +241,18 @@ export default function LoginPage() {
                     },
                   },
                   '& .MuiInputBase-input': {
-                    color: isDarkMode ? '#fff' : '#000',
+                    color: inputTextColor,
+                    colorScheme: isDarkMode ? 'dark' : 'light',
+                  },
+                  '& input:-webkit-autofill, & input:-webkit-autofill:hover, & input:-webkit-autofill:focus, & input:-webkit-autofill:active, & .MuiOutlinedInput-input:-webkit-autofill, & .MuiOutlinedInput-input:-webkit-autofill:hover, & .MuiOutlinedInput-input:-webkit-autofill:focus, & .MuiOutlinedInput-input:-webkit-autofill:active': {
+                    WebkitBoxShadow: `0 0 0 1000px ${inputBackgroundColor} inset !important`,
+                    boxShadow: `0 0 0 1000px ${inputBackgroundColor} inset !important`,
+                    WebkitTextFillColor: `${inputTextColor} !important`,
+                    color: `${inputTextColor} !important`,
+                    caretColor: `${inputTextColor} !important`,
+                    backgroundColor: `${inputBackgroundColor} !important`,
+                    WebkitBackgroundClip: 'padding-box !important',
+                    transition: 'background-color 999999s ease-in-out 0s',
                   },
                 }}
                 InputProps={{
@@ -283,16 +311,6 @@ export default function LoginPage() {
               </Button>
             </form>
 
-            <Box sx={{ mt: 2, textAlign: 'center' }}>
-              <Typography 
-                variant="body2" 
-                sx={{ 
-                  color: isDarkMode ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.6)'
-                }}
-              >
-                Проблемы со входом? Обратитесь к системному администратору
-              </Typography>
-            </Box>
           </CardContent>
         </Card>
       </Box>

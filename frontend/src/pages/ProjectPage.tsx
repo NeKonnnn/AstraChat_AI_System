@@ -118,7 +118,7 @@ import {
   SidebarRailAgentIcon,
 } from '../constants/sidebarRailIcons';
 import { getSidebarPanelBackground } from '../constants/sidebarPanelColor';
-import { getWorkZoneBackgroundColor, isWorkZoneAnimatedMode } from '../constants/workZoneBackground';
+import { getWorkZoneBackgroundColor, getWorkZoneCustomImage, isWorkZoneAnimatedMode } from '../constants/workZoneBackground';
 import { useWorkZoneBgMode } from '../hooks/useWorkZoneBgMode';
 import { useMyAgentSelection, useOrchestratorAgentsAnyActive } from '../hooks/useChatInputAgentIndicators';
 import WorkZoneStarrySky from '../components/WorkZoneStarrySky';
@@ -352,6 +352,7 @@ export default function ProjectPage() {
   const workZoneMode = useWorkZoneBgMode();
   const workZoneAnimated = isWorkZoneAnimatedMode(workZoneMode);
   const workZoneBgColor = getWorkZoneBackgroundColor(isDarkMode, workZoneMode);
+  const workZoneCustomImage = getWorkZoneCustomImage();
 
   useEffect(() => {
     const onColorChanged = () => setRightSidebarPanelBg(getSidebarPanelBackground());
@@ -649,6 +650,14 @@ export default function ProjectPage() {
         flexDirection: 'column',
         position: 'relative',
         backgroundColor: workZoneBgColor,
+        ...(workZoneMode === 'custom' && workZoneCustomImage
+          ? {
+              backgroundImage: `url("${workZoneCustomImage}")`,
+              backgroundSize: 'cover',
+              backgroundPosition: 'center',
+              backgroundRepeat: 'no-repeat',
+            }
+          : {}),
       }}
     >
       {workZoneMode === 'starry' ? <WorkZoneStarrySky isDarkMode={isDarkMode} /> : null}

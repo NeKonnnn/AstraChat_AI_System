@@ -9,7 +9,7 @@ import os
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends, Request
 
 import backend.app_state as state
 from backend.app_state import (
@@ -19,9 +19,11 @@ from backend.app_state import (
     get_current_model_path,
     get_rag_chat_top_k,
     reload_model_by_path,
+    get_conversation_repository,
 )
 from backend.llm_providers import get_registry
 from backend.schemas import ChatMessage
+from backend.auth.jwt_handler import get_current_user
 from backend.realtime.helpers import _is_structure_query, _terminal_chat_inference_banner
 from backend.realtime.rag_evidence import (
     build_rag_id_to_filename,
@@ -57,7 +59,7 @@ manager = ConnectionManager()
 
 # -- REST /api/chat
 @router.post("/api/chat")
-async def chat_with_ai(message: ChatMessage):
+async def chat_with_ai(message: ChatMessage, current_user: dict = Depends(get_current_user)):
     if not ask_agent:
         raise HTTPException(status_code=503, detail="AI agent не доступен")
     if not save_dialog_entry:
@@ -155,13 +157,102 @@ async def chat_with_ai(message: ChatMessage):
             else:
                 logger.info(f"ПРЯМОЙ РЕЖИМ: ответ готов, длина: {len(response)} символов")
 
-        await save_dialog_entry("user", message.message)
-        await save_dialog_entry("assistant", response)
+        await save_dialog_entry("user", message.message, user_id=current_user["user_id"])
+        await save_dialog_entry("assistant", response, user_id=current_user["user_id"])
 
         return {"response": response, "timestamp": datetime.now().isoformat(), "success": True}
     except Exception as e:
         logger.error(f"/api/chat error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/conversations")
+async def get_conversations(limit: int = 200, current_user: dict = Depends(get_current_user)):
+    repo = get_conversation_repository()
+    if repo is None:
+        raise HTTPException(status_code=503, detail="MongoDB repository не доступен")
+
+    user_id = current_user["user_id"]
+    conversations = await repo.get_user_conversations(user_id=user_id, limit=limit)
+    if not conversations:
+        # Совместимость со старыми записями, где user_id не проставлялся.
+        conversations = await repo.get_user_conversations(user_id="default_user", limit=limit)
+
+    result = []
+    for conv in conversations:
+        result.append(
+            {
+                "conversation_id": conv.conversation_id,
+                "title": conv.title,
+                "created_at": conv.created_at.isoformat() if conv.created_at else None,
+                "updated_at": conv.updated_at.isoformat() if conv.updated_at else None,
+                "project_id": conv.project_id,
+                "messages": [
+                    {
+                        "message_id": msg.message_id,
+                        "role": msg.role,
+                        "content": msg.content,
+                        "timestamp": msg.timestamp.isoformat() if msg.timestamp else None,
+                    }
+                    for msg in (conv.messages or [])
+                ],
+            }
+        )
+
+    return {"conversations": result, "count": len(result)}
+
+
+@router.delete("/api/conversations")
+async def delete_all_conversations(current_user: dict = Depends(get_current_user)):
+    repo = get_conversation_repository()
+    if repo is None:
+        raise HTTPException(status_code=503, detail="MongoDB repository не доступен")
+    deleted = await repo.delete_user_conversations(current_user["user_id"])
+    return {"success": True, "deleted": deleted}
+
+
+@router.delete("/api/conversations/{conversation_id}")
+async def delete_conversation(
+    conversation_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    repo = get_conversation_repository()
+    if repo is None:
+        raise HTTPException(status_code=503, detail="MongoDB repository не доступен")
+
+    conv = await repo.get_conversation(conversation_id)
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Диалог не найден")
+    if conv.user_id not in (current_user["user_id"], "default_user"):
+        raise HTTPException(status_code=403, detail="Нет доступа к этому диалогу")
+
+    await repo.delete_conversation(conversation_id)
+    return {"success": True, "conversation_id": conversation_id}
+
+
+@router.put("/api/conversations/{conversation_id}/title")
+async def update_conversation_title(
+    conversation_id: str,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
+    body = await request.json()
+    title = body.get("title", "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Поле 'title' обязательно")
+
+    repo = get_conversation_repository()
+    if repo is None:
+        raise HTTPException(status_code=503, detail="MongoDB repository не доступен")
+
+    conv = await repo.get_conversation(conversation_id)
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Диалог не найден")
+    if conv.user_id not in (current_user["user_id"], "default_user"):
+        raise HTTPException(status_code=403, detail="Нет доступа к этому диалогу")
+
+    await repo.update_conversation(conversation_id, {"title": title})
+    return {"success": True, "conversation_id": conversation_id, "title": title}
 
 
 @router.put("/api/messages/{conversation_id}/{message_id}")
