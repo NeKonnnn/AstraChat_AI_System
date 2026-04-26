@@ -150,7 +150,7 @@ export default function ChatInputBar({
   const isClassic = styleVariant === 'classic';
   const [isDictating, setIsDictating] = useState(false);
   const [dictationPreview, setDictationPreview] = useState('');
-  const [waveLevels, setWaveLevels] = useState<number[]>(() => Array.from({ length: 72 }, () => 0.25));
+  const [waveLevels, setWaveLevels] = useState<number[]>(() => Array.from({ length: 72 }, () => 0.1));
   const recognitionRef = useRef<any>(null);
   const keepRunningRef = useRef(false);
   const dictationBaseTextRef = useRef('');
@@ -158,6 +158,10 @@ export default function ChatInputBar({
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const rafRef = useRef<number | null>(null);
+  const wavePhaseRef = useRef(0);
+  const noiseFloorRef = useRef(0.004);
+  const speakingRef = useRef(false);
+  const silenceFramesRef = useRef(0);
   const finalTranscriptRef = useRef('');
   const interimTranscriptRef = useRef('');
   const [chatInputContrast, setChatInputContrast] = useState<number>(() => {
@@ -199,7 +203,9 @@ export default function ChatInputBar({
       audioStreamRef.current = null;
     }
     analyserRef.current = null;
-    setWaveLevels(Array.from({ length: 72 }, () => 0.25));
+    speakingRef.current = false;
+    silenceFramesRef.current = 0;
+    setWaveLevels(Array.from({ length: 72 }, () => 0.1));
   };
 
   const stopDictation = (cancel: boolean) => {
@@ -233,26 +239,53 @@ export default function ChatInputBar({
     audioContextRef.current = audioCtx;
     const source = audioCtx.createMediaStreamSource(stream);
     const analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 256;
-    analyser.smoothingTimeConstant = 0.82;
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.88;
     source.connect(analyser);
     analyserRef.current = analyser;
-    const data = new Uint8Array(analyser.frequencyBinCount);
+    const data = new Uint8Array(analyser.fftSize);
     const bars = 72;
 
     const tick = () => {
       if (!analyserRef.current) return;
-      analyserRef.current.getByteFrequencyData(data);
-      const step = Math.max(1, Math.floor(data.length / bars));
-      const next = new Array<number>(bars).fill(0.25).map((_, index) => {
-        const start = index * step;
-        const end = Math.min(data.length, start + step);
-        let sum = 0;
-        for (let i = start; i < end; i += 1) sum += data[i];
-        const avg = sum / Math.max(1, end - start);
-        return Math.max(0.2, Math.min(1, avg / 170));
+      analyserRef.current.getByteTimeDomainData(data);
+      let sumSquares = 0;
+      for (let i = 0; i < data.length; i += 1) {
+        const centered = (data[i] - 128) / 128;
+        sumSquares += centered * centered;
+      }
+      const rms = Math.sqrt(sumSquares / Math.max(1, data.length));
+      // Адаптивный шумовой пол: подстраивается к фоновой тишине/микрошуму микрофона.
+      if (!speakingRef.current) {
+        noiseFloorRef.current = noiseFloorRef.current * 0.97 + rms * 0.03;
+      }
+      const gateOn = noiseFloorRef.current + 0.0035;
+      const gateOff = noiseFloorRef.current + 0.0018;
+      if (speakingRef.current) {
+        if (rms < gateOff) silenceFramesRef.current += 1;
+        else silenceFramesRef.current = 0;
+        if (silenceFramesRef.current > 8) speakingRef.current = false;
+      } else if (rms > gateOn) {
+        speakingRef.current = true;
+        silenceFramesRef.current = 0;
+      }
+
+      const voiceLevel = clamp((rms - noiseFloorRef.current - 0.001) * 100, 0, 1);
+      const speaking = speakingRef.current && voiceLevel > 0.015;
+
+      // Паттерн справа налево только во время речи.
+      if (speaking) wavePhaseRef.current += 0.22;
+      const phase = wavePhaseRef.current;
+      const next = new Array<number>(bars).fill(0).map((_, index) => {
+        if (!speaking) return 0.1;
+        const travel = Math.sin(index * 0.42 + phase) * 0.5 + 0.5;
+        const ripple = Math.sin(index * 0.17 + phase * 0.63) * 0.5 + 0.5;
+        const spread = travel * 0.7 + ripple * 0.3;
+        return clamp(0.12 + voiceLevel * (0.25 + spread * 0.75), 0.1, 1);
       });
-      setWaveLevels(next);
+      setWaveLevels((prev) =>
+        prev.map((p, i) => clamp(p * (speaking ? 0.74 : 0.86) + next[i] * (speaking ? 0.26 : 0.14), 0.1, 1)),
+      );
       rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
