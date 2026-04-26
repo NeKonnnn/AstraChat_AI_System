@@ -17,6 +17,7 @@ import {
   IconButton,
   Tooltip,
   Popover,
+  Slider,
 } from '@mui/material';
 import {
   Computer as ComputerIcon,
@@ -76,6 +77,21 @@ const HEX_COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
 const MAX_WORK_ZONE_IMAGE_SIZE_MB = 4;
 const MAX_WORK_ZONE_IMAGE_SIZE_BYTES = MAX_WORK_ZONE_IMAGE_SIZE_MB * 1024 * 1024;
 const MAX_WORK_ZONE_IMAGE_DIMENSION_PX = 4096;
+const CHAT_INPUT_CONTRAST_KEY = 'chat_input_contrast';
+const CHAT_INPUT_COLOR_KEY = 'chat_input_color';
+
+const CHAT_INPUT_PALETTE = [
+  { name: 'По умолчанию', value: '' },
+  { name: 'Лёгкое стекло', value: 'rgba(255, 255, 255, 0.10)' },
+  { name: 'Плотное стекло', value: 'rgba(255, 255, 255, 0.18)' },
+  { name: 'Тёмное стекло', value: 'rgba(20, 24, 32, 0.55)' },
+  { name: 'Графит', value: 'rgba(32, 32, 38, 0.72)' },
+  { name: 'Индиго', value: 'rgba(79, 70, 229, 0.45)' },
+  { name: 'Фиолетовый', value: 'rgba(124, 58, 237, 0.45)' },
+  { name: 'Бирюзовый', value: 'rgba(13, 148, 136, 0.40)' },
+  { name: 'Изумруд', value: 'rgba(5, 150, 105, 0.38)' },
+  { name: 'Тёплый янтарный', value: 'rgba(245, 158, 11, 0.36)' },
+];
 
 const normalizeHexInput = (rawValue: string): string => {
   const trimmed = rawValue.trim().replace(/[^0-9a-fA-F#]/g, '');
@@ -115,7 +131,10 @@ export default function InterfaceSettings() {
     const savedBrowserNotifications = localStorage.getItem('browser_notifications_enabled');
     const savedShowDialoguesPanel = localStorage.getItem('show_dialogues_panel');
     const savedChatInputStyle = localStorage.getItem('chat_input_style');
+    const savedChatInputColor = localStorage.getItem(CHAT_INPUT_COLOR_KEY) || '';
+    const savedChatInputContrastRaw = localStorage.getItem(CHAT_INPUT_CONTRAST_KEY);
     const savedSidebarColor = localStorage.getItem(SIDEBAR_PANEL_COLOR_KEY) || '';
+    const savedChatInputContrast = Number(savedChatInputContrastRaw);
     return {
       autoGenerateTitles: savedAutoTitle !== null ? savedAutoTitle === 'true' : true,
       largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
@@ -129,14 +148,20 @@ export default function InterfaceSettings() {
       browserNotifications: savedBrowserNotifications !== null ? savedBrowserNotifications === 'true' : false,
       showDialoguesPanel: savedShowDialoguesPanel !== null ? savedShowDialoguesPanel === 'true' : true,
       chatInputStyle: (savedChatInputStyle as 'compact' | 'classic') || 'compact',
+      chatInputColor: savedChatInputColor,
+      chatInputContrast: Number.isFinite(savedChatInputContrast)
+        ? Math.min(100, Math.max(20, savedChatInputContrast))
+        : 35,
       sidebarPanelColor: savedSidebarColor,
     };
   });
 
   const [colorPickerOpen, setColorPickerOpen] = useState(false);
+  const [chatInputColorPickerOpen, setChatInputColorPickerOpen] = useState(false);
   const [workZoneImageDialogOpen, setWorkZoneImageDialogOpen] = useState(false);
   const [stylePopoverAnchor, setStylePopoverAnchor] = useState<HTMLElement | null>(null);
   const [colorPopoverAnchor, setColorPopoverAnchor] = useState<HTMLElement | null>(null);
+  const [chatInputColorPopoverAnchor, setChatInputColorPopoverAnchor] = useState<HTMLElement | null>(null);
   const [workZoneBgPopoverAnchor, setWorkZoneBgPopoverAnchor] = useState<HTMLElement | null>(null);
   const [modelModePopoverAnchor, setModelModePopoverAnchor] = useState<HTMLElement | null>(null);
   const [customSidebarHex, setCustomSidebarHex] = useState<string>(() => {
@@ -212,6 +237,7 @@ export default function InterfaceSettings() {
   };
 
   const selectedSidebarPreset = SIDEBAR_PALETTE.find((item) => item.value === interfaceSettings.sidebarPanelColor);
+  const selectedChatInputPreset = CHAT_INPUT_PALETTE.find((item) => item.value === interfaceSettings.chatInputColor);
 
   const handleChatInputStyleChange = (value: 'compact' | 'classic') => {
     const newSettings = { ...interfaceSettings, chatInputStyle: value };
@@ -219,6 +245,21 @@ export default function InterfaceSettings() {
     localStorage.setItem('chat_input_style', value);
     window.dispatchEvent(new Event('interfaceSettingsChanged'));
     showNotification('success', 'Стиль поля ввода изменён');
+  };
+
+  const handleChatInputColorSelect = (value: string) => {
+    const newSettings = { ...interfaceSettings, chatInputColor: value };
+    setInterfaceSettings(newSettings);
+    localStorage.setItem(CHAT_INPUT_COLOR_KEY, value);
+    window.dispatchEvent(new Event('interfaceSettingsChanged'));
+    showNotification('success', value ? 'Цвет окна ввода изменён' : 'Цвет окна ввода сброшен');
+  };
+
+  const handleChatInputContrastChange = (_: Event, value: number | number[]) => {
+    const next = Array.isArray(value) ? value[0] : value;
+    setInterfaceSettings((prev) => ({ ...prev, chatInputContrast: next }));
+    localStorage.setItem(CHAT_INPUT_CONTRAST_KEY, String(next));
+    window.dispatchEvent(new Event('interfaceSettingsChanged'));
   };
 
   const handleWorkZoneBgMode = (mode: WorkZoneBgMode) => {
@@ -767,6 +808,68 @@ export default function InterfaceSettings() {
 
             <Divider />
 
+            {/* Цвет окна ввода */}
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: 2,
+                flexWrap: 'wrap',
+              }}
+            >
+              <ListItemText
+                primary="Цвет окна ввода"
+                primaryTypographyProps={{ variant: 'body1', fontWeight: 500 }}
+                secondary="Цвет пилюли ввода поверх рабочей зоны"
+                secondaryTypographyProps={{ variant: 'body2', sx: { mt: 0.5 } }}
+              />
+              <Box sx={{ minWidth: 220, flexShrink: 0 }}>
+                <Box onClick={(e) => setChatInputColorPopoverAnchor(e.currentTarget)} sx={DROPDOWN_TRIGGER_BUTTON_SX}>
+                  <Typography sx={{ color: 'white', fontWeight: 500, fontSize: '0.875rem' }}>
+                    {!interfaceSettings.chatInputColor
+                      ? 'По умолчанию'
+                      : selectedChatInputPreset
+                        ? selectedChatInputPreset.name
+                        : 'Пользовательский'}
+                  </Typography>
+                  <ExpandMoreIcon sx={{ ...DROPDOWN_CHEVRON_SX, transform: chatInputColorPopoverAnchor ? 'rotate(180deg)' : 'none' }} />
+                </Box>
+                <Popover
+                  open={Boolean(chatInputColorPopoverAnchor)}
+                  anchorEl={chatInputColorPopoverAnchor}
+                  onClose={() => setChatInputColorPopoverAnchor(null)}
+                  anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+                  transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(chatInputColorPopoverAnchor) } }}
+                >
+                  <Box sx={{ py: 0.5 }}>
+                    <Box
+                      onClick={() => { handleChatInputColorSelect(''); setChatInputColorPopoverAnchor(null); }}
+                      sx={{
+                        ...dropdownItemSx,
+                        color: !interfaceSettings.chatInputColor ? 'white' : 'rgba(255,255,255,0.9)',
+                        fontWeight: !interfaceSettings.chatInputColor ? 600 : 400,
+                        bgcolor: !interfaceSettings.chatInputColor ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
+                      }}
+                    >
+                      По умолчанию
+                    </Box>
+                    <Box
+                      onClick={() => { setChatInputColorPopoverAnchor(null); setChatInputColorPickerOpen(true); }}
+                      sx={{ ...dropdownItemSx, color: 'rgba(255,255,255,0.9)', bgcolor: 'transparent' }}
+                    >
+                      Цвет и контрастность окна ввода
+                    </Box>
+                  </Box>
+                </Popover>
+              </Box>
+            </ListItem>
+
+            <Divider />
+
             {/* Панель с диалогами (навигация по сообщениям) */}
             <ListItem
               sx={{
@@ -1047,6 +1150,100 @@ export default function InterfaceSettings() {
               Применить
             </Button>
           </Box>
+        </DialogContent>
+      </Dialog>
+
+      {/* Модальное окно выбора цвета окна ввода */}
+      <Dialog open={chatInputColorPickerOpen} onClose={() => setChatInputColorPickerOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          Выберите цвет окна ввода
+          <IconButton onClick={() => setChatInputColorPickerOpen(false)} size="small" aria-label="Закрыть">
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent sx={{ overflowX: 'hidden', pb: 3 }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5, pt: 1 }}>
+            {CHAT_INPUT_PALETTE.map((item) => (
+              <Box
+                key={item.value || 'default'}
+                onClick={() => { handleChatInputColorSelect(item.value); setChatInputColorPickerOpen(false); }}
+                sx={{
+                  width: 48,
+                  height: 48,
+                  borderRadius: 2,
+                  background: item.value || (theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'),
+                  cursor: 'pointer',
+                  border: '2px solid',
+                  borderColor: interfaceSettings.chatInputColor === item.value ? 'primary.main' : 'transparent',
+                  '&:hover': { opacity: 0.92, borderColor: 'primary.light' },
+                }}
+                title={item.name}
+              />
+            ))}
+          </Box>
+          <Divider sx={{ my: 2 }} />
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            Контрастность окна ввода
+          </Typography>
+          <Slider
+            size="small"
+            min={20}
+            max={100}
+            step={5}
+            value={interfaceSettings.chatInputContrast}
+            onChange={handleChatInputContrastChange}
+            valueLabelDisplay="auto"
+            marks={[
+              { value: 20, label: 'Мягко' },
+              { value: 55, label: 'Баланс' },
+              { value: 100, label: 'Ярко' },
+            ]}
+            sx={{
+              px: 0.5,
+              '& .MuiSlider-rail': {
+                height: 7,
+                borderRadius: 999,
+                opacity: 1,
+                background: theme.palette.mode === 'dark'
+                  ? 'linear-gradient(90deg, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0.45) 100%)'
+                  : 'linear-gradient(90deg, rgba(0,0,0,0.12) 0%, rgba(0,0,0,0.35) 100%)',
+              },
+              '& .MuiSlider-track': {
+                height: 7,
+                border: 0,
+                borderRadius: 999,
+                background: 'linear-gradient(90deg, #6D7CFF 0%, #8B5CF6 55%, #22D3EE 100%)',
+              },
+              '& .MuiSlider-thumb': {
+                width: 18,
+                height: 18,
+                boxShadow: theme.palette.mode === 'dark'
+                  ? '0 0 0 6px rgba(109,124,255,0.15)'
+                  : '0 0 0 6px rgba(109,124,255,0.20)',
+                '&:hover, &.Mui-focusVisible, &.Mui-active': {
+                  boxShadow: theme.palette.mode === 'dark'
+                    ? '0 0 0 8px rgba(109,124,255,0.22)'
+                    : '0 0 0 8px rgba(109,124,255,0.28)',
+                },
+              },
+              '& .MuiSlider-markLabel': {
+                mt: 0.5,
+                color: theme.palette.text.secondary,
+                fontSize: '0.72rem',
+                whiteSpace: 'nowrap',
+              },
+              '& .MuiSlider-markLabel[data-index="0"]': {
+                transform: 'translateX(0%)',
+              },
+              '& .MuiSlider-markLabel[data-index="2"]': {
+                transform: 'translateX(-100%)',
+              },
+              '& .MuiSlider-valueLabel': {
+                background: 'linear-gradient(135deg, #6D7CFF 0%, #8B5CF6 100%)',
+                fontWeight: 600,
+              },
+            }}
+          />
         </DialogContent>
       </Dialog>
 

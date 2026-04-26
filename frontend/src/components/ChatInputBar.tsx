@@ -98,6 +98,11 @@ const iconButtonSx = (isDark: boolean, isClassic: boolean) => ({
   '&:active': { transform: 'none' },
 });
 
+const CHAT_INPUT_CONTRAST_KEY = 'chat_input_contrast';
+const CHAT_INPUT_COLOR_KEY = 'chat_input_color';
+const CHAT_INPUT_CONTRAST_DEFAULT = 35;
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
 export default function ChatInputBar({
   value,
   onChange,
@@ -155,6 +160,16 @@ export default function ChatInputBar({
   const rafRef = useRef<number | null>(null);
   const finalTranscriptRef = useRef('');
   const interimTranscriptRef = useRef('');
+  const [chatInputContrast, setChatInputContrast] = useState<number>(() => {
+    if (typeof window === 'undefined') return CHAT_INPUT_CONTRAST_DEFAULT;
+    const raw = Number(localStorage.getItem(CHAT_INPUT_CONTRAST_KEY));
+    if (!Number.isFinite(raw)) return CHAT_INPUT_CONTRAST_DEFAULT;
+    return clamp(raw, 20, 100);
+  });
+  const [chatInputColor, setChatInputColor] = useState<string>(() => {
+    if (typeof window === 'undefined') return '';
+    return localStorage.getItem(CHAT_INPUT_COLOR_KEY) || '';
+  });
 
   const speechCtor =
     typeof window !== 'undefined'
@@ -307,13 +322,34 @@ export default function ChatInputBar({
     };
   }, []);
 
+  useEffect(() => {
+    const syncContrast = () => {
+      const raw = Number(localStorage.getItem(CHAT_INPUT_CONTRAST_KEY));
+      setChatInputColor(localStorage.getItem(CHAT_INPUT_COLOR_KEY) || '');
+      if (!Number.isFinite(raw)) {
+        setChatInputContrast(CHAT_INPUT_CONTRAST_DEFAULT);
+        return;
+      }
+      setChatInputContrast(clamp(raw, 20, 100));
+    };
+    syncContrast();
+    window.addEventListener('interfaceSettingsChanged', syncContrast);
+    return () => window.removeEventListener('interfaceSettingsChanged', syncContrast);
+  }, []);
+
+  const contrastDelta = chatInputContrast - CHAT_INPUT_CONTRAST_DEFAULT;
+  const nonSolidBgAlpha = clamp(0.05 + contrastDelta * 0.004, 0.03, 0.32);
+  const nonSolidBorderAlpha = clamp(0.1 + contrastDelta * 0.005, 0.06, 0.45);
+  const nonSolidBoxShadowAlpha = clamp(0.08 + contrastDelta * 0.004, 0.06, 0.4);
+
   const shellBg = solidWorkZoneBackground
     ? isDarkMode
       ? CHAT_INPUT_SURFACE_DARK
       : CHAT_INPUT_SURFACE_LIGHT
     : isDarkMode
-      ? 'rgba(255, 255, 255, 0.05)'
-      : 'rgba(0, 0, 0, 0.05)';
+      ? `rgba(255, 255, 255, ${nonSolidBgAlpha})`
+      : `rgba(0, 0, 0, ${nonSolidBgAlpha})`;
+  const resolvedShellBg = chatInputColor || shellBg;
 
   const shellBorder = solidWorkZoneBackground
     ? isDarkMode
@@ -325,16 +361,16 @@ export default function ChatInputBar({
         : CHAT_INPUT_BORDER_LIGHT
     : isClassic
       ? isDarkMode
-        ? 'rgba(255, 255, 255, 0.12)'
-        : 'rgba(0, 0, 0, 0.12)'
+        ? `rgba(255, 255, 255, ${clamp(nonSolidBorderAlpha + 0.02, 0.08, 0.52)})`
+        : `rgba(0, 0, 0, ${clamp(nonSolidBorderAlpha + 0.02, 0.08, 0.52)})`
       : isDarkMode
-        ? 'rgba(255, 255, 255, 0.1)'
-        : 'rgba(0, 0, 0, 0.1)';
+        ? `rgba(255, 255, 255, ${nonSolidBorderAlpha})`
+        : `rgba(0, 0, 0, ${nonSolidBorderAlpha})`;
 
   const shellChrome = solidWorkZoneBackground
     ? {
-        bgcolor: shellBg,
-        backgroundColor: shellBg,
+        bgcolor: resolvedShellBg,
+        backgroundColor: resolvedShellBg,
         border: `1px solid ${shellBorder}`,
         boxShadow: isDarkMode
           ? '0 2px 16px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.06)'
@@ -342,7 +378,12 @@ export default function ChatInputBar({
         position: 'relative' as const,
         zIndex: 1,
       }
-    : {};
+    : {
+        boxShadow: isDarkMode
+          ? `0 2px 16px rgba(0,0,0,${nonSolidBoxShadowAlpha})`
+          : `0 2px 12px rgba(0,0,0,${clamp(nonSolidBoxShadowAlpha * 0.9, 0.05, 0.35)})`,
+        backdropFilter: `blur(${clamp(2 + contrastDelta * 0.12, 2, 9)}px)`,
+      };
 
   // В компактном режиме: одна строка — кнопки по бокам; со 2-й строки — кнопки снизу.
   // Переключение по числу символов + гистерезис, чтобы не скакало (scrollHeight давал дребезг).
@@ -679,7 +720,7 @@ export default function ChatInputBar({
           borderRadius: '28px',
           overflow: 'hidden',
           ...containerSx,
-          bgcolor: shellBg,
+          bgcolor: resolvedShellBg,
           border: `1px solid ${shellBorder}`,
           ...shellChrome,
         }}
@@ -783,7 +824,7 @@ export default function ChatInputBar({
         px: 2,
         borderRadius: '28px',
         ...containerSx,
-        bgcolor: shellBg,
+        bgcolor: resolvedShellBg,
         border: `1px solid ${shellBorder}`,
         ...shellChrome,
       }}
