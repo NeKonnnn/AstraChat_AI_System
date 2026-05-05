@@ -94,6 +94,7 @@ import {
   ASTRA_OPEN_AGENT_CONSTRUCTOR,
   ASTRA_OPEN_TRANSCRIPTION_SIDEBAR,
 } from '../constants/hotkeys';
+import { MESSAGE_BUBBLE_GLASS_EFFECT_KEY } from '../constants/messageBubbleGlass';
 import {
   getDropdownPanelSx,
   getDropdownItemSx,
@@ -217,6 +218,21 @@ function dataTransferHasFiles(dt: DataTransfer | null): boolean {
   return Array.from(types).includes('Files');
 }
 
+/** Стиль «стекла» для карточки сообщения (нужен непрозрачный фон за карточкой — blur). */
+function getMessageBubbleGlassCardSx(theme: Theme, isDarkMode: boolean, isUser: boolean): SxProps<Theme> {
+  return {
+    backdropFilter: 'saturate(180%) blur(14px)',
+    WebkitBackdropFilter: 'saturate(180%) blur(14px)',
+    backgroundColor: isUser
+      ? alpha(theme.palette.primary.main, 0.4)
+      : isDarkMode
+        ? alpha(theme.palette.background.paper, 0.42)
+        : alpha('#f8f9fa', 0.55),
+    border: `1px solid ${alpha(theme.palette.common.white, isUser ? 0.32 : isDarkMode ? 0.12 : 0.65)}`,
+    boxShadow: isDarkMode ? '0 4px 22px rgba(0,0,0,0.22)' : '0 4px 22px rgba(0,0,0,0.07)',
+  };
+}
+
 // ================================
 // ИНТЕРФЕЙС ДАННЫХ ДЛЯ КАРТОЧКИ СООБЩЕНИЯ
 // (callback-и передаются через ref, чтобы React.memo не реагировал на их пересоздание)
@@ -259,6 +275,7 @@ interface MessageCardProps {
     assistantNoBorder: boolean;
     leftAlignMessages: boolean;
     showUserName: boolean;
+    messageBubbleGlass: boolean;
   };
   username: string | undefined;
   dataRef: React.MutableRefObject<MessageCardData>;
@@ -268,6 +285,7 @@ const MessageCardComponent = ({
   message, index, isPairStart, isSelected, nextMessageId,
   shareMode, isSpeaking, isDarkMode, interfaceSettings, username, dataRef,
 }: MessageCardProps): React.ReactElement => {
+  const theme = useTheme();
   const isUser = message.role === 'user';
   const [isHovered, setIsHovered] = useState(false);
   const [hoveredMultiLlmCol, setHoveredMultiLlmCol] = useState<number | null>(null);
@@ -286,6 +304,13 @@ const MessageCardComponent = ({
   const shouldShowBorder = isUser
     ? !interfaceSettings.userNoBorder
     : !interfaceSettings.assistantNoBorder;
+  const hasMultiLlmColumns = !isUser && (message.multiLLMResponses?.length ?? 0) > 0;
+  const glassOnOuterBubble =
+    interfaceSettings.messageBubbleGlass &&
+    shouldShowBorder &&
+    !hasMultiLlmColumns;
+  const glassOnMultiLlmColumns =
+    interfaceSettings.messageBubbleGlass && !interfaceSettings.assistantNoBorder;
 
   const messageContent = (
     <>
@@ -338,9 +363,11 @@ const MessageCardComponent = ({
                   sx={{
                     border: '1px solid',
                     borderColor: response.error ? 'error.main' : 'divider',
-                    bgcolor: response.error ? 'error.light' : 'background.paper',
                     display: 'flex',
                     flexDirection: 'column',
+                    ...(glassOnMultiLlmColumns && !response.error
+                      ? getMessageBubbleGlassCardSx(theme, isDarkMode, false)
+                      : { bgcolor: response.error ? 'error.light' : 'background.paper' }),
                   }}
                 >
                   <CardContent sx={{ flex: 1, display: 'flex', flexDirection: 'column', pb: 1 }}>
@@ -571,9 +598,13 @@ const MessageCardComponent = ({
               maxWidth: interfaceSettings.leftAlignMessages ? '100%' : (isUser ? '75%' : '100%'),
               minWidth: '180px',
               width: interfaceSettings.leftAlignMessages ? '100%' : (isUser ? undefined : '100%'),
-              backgroundColor: isUser ? 'primary.main' : isDarkMode ? 'background.paper' : '#f8f9fa',
               color: isUser ? 'primary.contrastText' : isDarkMode ? 'text.primary' : '#333',
-              boxShadow: isDarkMode ? '0 2px 8px rgba(0,0,0,0.15)' : '0 2px 8px rgba(0,0,0,0.1)',
+              ...(glassOnOuterBubble
+                ? getMessageBubbleGlassCardSx(theme, isDarkMode, isUser)
+                : {
+                    backgroundColor: isUser ? 'primary.main' : isDarkMode ? 'background.paper' : '#f8f9fa',
+                    boxShadow: isDarkMode ? '0 2px 8px rgba(0,0,0,0.15)' : '0 2px 8px rgba(0,0,0,0.1)',
+                  }),
             }}
           >
             <CardContent sx={{ p: 1.2, '&:last-child': { pb: 1.2 } }}>
@@ -1223,6 +1254,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     const savedLargeTextAsFile = localStorage.getItem('large_text_as_file');
     const savedUserNoBorder = localStorage.getItem('user_no_border');
     const savedAssistantNoBorder = localStorage.getItem('assistant_no_border');
+    const savedMessageBubbleGlass = localStorage.getItem(MESSAGE_BUBBLE_GLASS_EFFECT_KEY);
     const savedLeftAlignMessages = localStorage.getItem('left_align_messages');
     const savedWidescreenMode = localStorage.getItem('widescreen_mode');
     const savedShowUserName = localStorage.getItem('show_user_name');
@@ -1233,6 +1265,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
       userNoBorder: savedUserNoBorder !== null ? savedUserNoBorder === 'true' : false,
       assistantNoBorder: savedAssistantNoBorder !== null ? savedAssistantNoBorder === 'true' : false,
+      messageBubbleGlass: savedMessageBubbleGlass === 'true',
       leftAlignMessages: savedLeftAlignMessages !== null ? savedLeftAlignMessages === 'true' : false,
       widescreenMode: savedWidescreenMode !== null ? savedWidescreenMode === 'true' : false,
       showUserName: savedShowUserName !== null ? savedShowUserName === 'true' : false,
@@ -1248,6 +1281,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       const savedLargeTextAsFile = localStorage.getItem('large_text_as_file');
       const savedUserNoBorder = localStorage.getItem('user_no_border');
       const savedAssistantNoBorder = localStorage.getItem('assistant_no_border');
+      const savedMessageBubbleGlass = localStorage.getItem(MESSAGE_BUBBLE_GLASS_EFFECT_KEY);
       const savedLeftAlignMessages = localStorage.getItem('left_align_messages');
       const savedWidescreenMode = localStorage.getItem('widescreen_mode');
       const savedShowUserName = localStorage.getItem('show_user_name');
@@ -1258,6 +1292,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
         userNoBorder: savedUserNoBorder !== null ? savedUserNoBorder === 'true' : false,
         assistantNoBorder: savedAssistantNoBorder !== null ? savedAssistantNoBorder === 'true' : false,
+        messageBubbleGlass: savedMessageBubbleGlass === 'true',
         leftAlignMessages: savedLeftAlignMessages !== null ? savedLeftAlignMessages === 'true' : false,
         widescreenMode: savedWidescreenMode !== null ? savedWidescreenMode === 'true' : false,
         showUserName: savedShowUserName !== null ? savedShowUserName === 'true' : false,
@@ -3148,12 +3183,16 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                   >
                     <Card
                       sx={{
-                        backgroundColor: isDarkMode ? 'background.paper' : '#f8f9fa',
-                        color: isDarkMode ? 'text.primary' : '#333',
-                        boxShadow: isDarkMode 
-                          ? '0 2px 8px rgba(0, 0, 0, 0.15)' 
-                          : '0 2px 8px rgba(0, 0, 0, 0.1)',
                         width: '100%',
+                        color: isDarkMode ? 'text.primary' : '#333',
+                        ...(interfaceSettings.messageBubbleGlass && !interfaceSettings.assistantNoBorder
+                          ? getMessageBubbleGlassCardSx(theme, isDarkMode, false)
+                          : {
+                              backgroundColor: isDarkMode ? 'background.paper' : '#f8f9fa',
+                              boxShadow: isDarkMode
+                                ? '0 2px 8px rgba(0, 0, 0, 0.15)'
+                                : '0 2px 8px rgba(0, 0, 0, 0.1)',
+                            }),
                       }}
                     >
                       <CardContent sx={{ p: 1.2, pb: 0.8 }}>

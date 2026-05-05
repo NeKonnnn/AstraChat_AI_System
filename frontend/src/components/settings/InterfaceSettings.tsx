@@ -49,6 +49,7 @@ import {
   setNotificationsEnabled,
 } from '../../utils/browserNotifications';
 import LlmProvidersSection from './LlmProvidersSection';
+import { MESSAGE_BUBBLE_GLASS_EFFECT_KEY } from '../../constants/messageBubbleGlass';
 
 const SIDEBAR_PALETTE = [
   { name: 'По умолчанию', value: '' },
@@ -123,6 +124,7 @@ export default function InterfaceSettings() {
     const savedLargeTextAsFile = localStorage.getItem('large_text_as_file');
     const savedUserNoBorder = localStorage.getItem('user_no_border');
     const savedAssistantNoBorder = localStorage.getItem('assistant_no_border');
+    const savedMessageBubbleGlass = localStorage.getItem(MESSAGE_BUBBLE_GLASS_EFFECT_KEY);
     const savedLeftAlignMessages = localStorage.getItem('left_align_messages');
     const savedWidescreenMode = localStorage.getItem('widescreen_mode');
     const savedShowUserName = localStorage.getItem('show_user_name');
@@ -140,6 +142,7 @@ export default function InterfaceSettings() {
       largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
       userNoBorder: savedUserNoBorder !== null ? savedUserNoBorder === 'true' : false,
       assistantNoBorder: savedAssistantNoBorder !== null ? savedAssistantNoBorder === 'true' : false,
+      messageBubbleGlass: savedMessageBubbleGlass === 'true',
       leftAlignMessages: savedLeftAlignMessages !== null ? savedLeftAlignMessages === 'true' : false,
       widescreenMode: savedWidescreenMode !== null ? savedWidescreenMode === 'true' : false,
       showUserName: savedShowUserName !== null ? savedShowUserName === 'true' : false,
@@ -371,6 +374,7 @@ export default function InterfaceSettings() {
     localStorage.setItem('large_text_as_file', String(newSettings.largeTextAsFile));
     localStorage.setItem('user_no_border', String(newSettings.userNoBorder));
     localStorage.setItem('assistant_no_border', String(newSettings.assistantNoBorder));
+    localStorage.setItem(MESSAGE_BUBBLE_GLASS_EFFECT_KEY, String(newSettings.messageBubbleGlass));
     localStorage.setItem('left_align_messages', String(newSettings.leftAlignMessages));
     localStorage.setItem('widescreen_mode', String(newSettings.widescreenMode));
     localStorage.setItem('show_user_name', String(newSettings.showUserName));
@@ -514,6 +518,36 @@ export default function InterfaceSettings() {
               <Switch
                 checked={interfaceSettings.assistantNoBorder}
                 onChange={(e) => handleInterfaceSettingChange('assistantNoBorder', e.target.checked)}
+              />
+            </ListItem>
+
+            <Divider />
+
+            {/* Эффект стекла на карточках сообщений */}
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <ListItemText
+                primary="Эффект стекла"
+                secondary="Размытие и полупрозрачность только у карточек в чате; не действует в режиме «без рамки»"
+                primaryTypographyProps={{
+                  variant: 'body1',
+                  fontWeight: 500,
+                }}
+                secondaryTypographyProps={{
+                  variant: 'body2',
+                  sx: { mt: 0.5 },
+                }}
+              />
+              <Switch
+                checked={interfaceSettings.messageBubbleGlass}
+                onChange={(e) => handleInterfaceSettingChange('messageBubbleGlass', e.target.checked)}
               />
             </ListItem>
 
