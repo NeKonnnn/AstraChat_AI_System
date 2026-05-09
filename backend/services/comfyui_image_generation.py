@@ -1,0 +1,196 @@
+"""
+Клиент HTTP API ComfyUI для постановки workflow в очередь и получения PNG/JPEG.
+
+Аналогично Open WebUI: отдельный процесс ComfyUI (--listen), бэкенд только дергает /prompt и /history.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import copy
+import json
+import logging
+import uuid
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+
+class ComfyImageGenError(Exception):
+    pass
+
+
+def resolve_workflow_file(workflow_path: str, project_root: Path) -> Path:
+    p = Path(workflow_path)
+    if p.is_absolute():
+        return p
+    return (project_root / p).resolve()
+
+
+def load_workflow_template(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        raise ComfyImageGenError(f"Файл workflow не найден: {path}")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        raise ComfyImageGenError(f"Невалидный JSON workflow: {e}") from e
+    if not isinstance(data, dict):
+        raise ComfyImageGenError("Workflow должен быть JSON-объектом (формат API ComfyUI)")
+    return data
+
+
+def inject_workflow_inputs(
+    workflow: Dict[str, Any],
+    node_map: Dict[str, Tuple[str, str]],
+    payload: Dict[str, Any],
+) -> None:
+    """
+    node_map: logical_key -> (node_id_str, input_field_name)
+    payload: logical_key -> value (пропускаем None и отсутствующие в node_map)
+    """
+    for key, raw_val in payload.items():
+        if raw_val is None:
+            continue
+        ref = node_map.get(key)
+        if not ref:
+            continue
+        node_id, field = ref
+        node = workflow.get(str(node_id))
+        if not isinstance(node, dict):
+            raise ComfyImageGenError(f'В workflow нет ноды "{node_id}" (ключ "{key}")')
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            raise ComfyImageGenError(f'Нода "{node_id}" без объекта inputs')
+        inputs[field] = raw_val
+
+
+def _collect_output_images(history_entry: Dict[str, Any]) -> List[Dict[str, str]]:
+    out: List[Dict[str, str]] = []
+    outputs = history_entry.get("outputs") or {}
+    if not isinstance(outputs, dict):
+        return out
+    for _nid, nod in outputs.items():
+        if not isinstance(nod, dict):
+            continue
+        for im in nod.get("images") or []:
+            if isinstance(im, dict) and im.get("filename"):
+                out.append(
+                    {
+                        "filename": str(im["filename"]),
+                        "subfolder": str(im.get("subfolder") or ""),
+                        "type": str(im.get("type") or "output"),
+                    }
+                )
+    return out
+
+
+async def _fetch_history_prompt(
+    client: httpx.AsyncClient, base: str, prompt_id: str
+) -> Optional[Dict[str, Any]]:
+    url = f"{base}/history/{prompt_id}"
+    r = await client.get(url)
+    if r.status_code == 404:
+        return None
+    r.raise_for_status()
+    data = r.json()
+    if not isinstance(data, dict):
+        return None
+    # Ответ вида { prompt_id: [ { status, outputs, ... }, ... ] }
+    block = data.get(prompt_id)
+    if isinstance(block, list) and block:
+        return block[-1]
+    # Реже — сразу один объект
+    if isinstance(block, dict):
+        return block
+    return None
+
+
+async def _download_image_bytes(
+    client: httpx.AsyncClient, base: str, spec: Dict[str, str]
+) -> bytes:
+    params = {
+        "filename": spec["filename"],
+        "type": spec.get("type") or "output",
+        "subfolder": spec.get("subfolder") or "",
+    }
+    r = await client.get(f"{base}/view", params=params)
+    r.raise_for_status()
+    return r.content
+
+
+async def generate_images_via_comfyui(
+    *,
+    comfyui_base_url: str,
+    workflow: Dict[str, Any],
+    timeout_sec: float,
+    poll_interval_sec: float,
+) -> List[Tuple[bytes, str]]:
+    """
+    Возвращает список (bytes, mime) для каждого выходного изображения из workflow.
+    """
+    base = comfyui_base_url.rstrip("/")
+    client_id = str(uuid.uuid4())
+    wf = copy.deepcopy(workflow)
+
+    limits = httpx.Limits(max_keepalive_connections=5, max_connections=10)
+    timeout = httpx.Timeout(timeout_sec, connect=30.0)
+
+    async with httpx.AsyncClient(timeout=timeout, limits=limits) as client:
+        post = await client.post(
+            f"{base}/prompt",
+            json={"prompt": wf, "client_id": client_id},
+        )
+        if post.status_code >= 400:
+            try:
+                detail = post.json()
+            except Exception:
+                detail = post.text
+            raise ComfyImageGenError(f"ComfyUI /prompt: {post.status_code} {detail}")
+
+        body = post.json()
+        prompt_id = body.get("prompt_id")
+        if not prompt_id:
+            raise ComfyImageGenError(f"ComfyUI не вернул prompt_id: {body}")
+        node_errors = body.get("node_errors") or {}
+        if node_errors:
+            raise ComfyImageGenError(f"Ошибки нод ComfyUI: {node_errors}")
+
+        waited = 0.0
+        history_entry: Optional[Dict[str, Any]] = None
+        while waited < timeout_sec:
+            await asyncio.sleep(poll_interval_sec)
+            waited += poll_interval_sec
+            history_entry = await _fetch_history_prompt(client, base, str(prompt_id))
+            if not history_entry:
+                continue
+            status = history_entry.get("status")
+            if status and status.get("completed") is False and status.get("status_str") == "error":
+                messages = status.get("messages") or []
+                raise ComfyImageGenError(f"ComfyUI execution error: {messages}")
+            imgs = _collect_output_images(history_entry)
+            if imgs:
+                results: List[Tuple[bytes, str]] = []
+                for spec in imgs:
+                    raw = await _download_image_bytes(client, base, spec)
+                    fn = spec["filename"].lower()
+                    mime = "image/png"
+                    if fn.endswith((".jpg", ".jpeg")):
+                        mime = "image/jpeg"
+                    elif fn.endswith(".webp"):
+                        mime = "image/webp"
+                    results.append((raw, mime))
+                return results
+
+        raise ComfyImageGenError(
+            f"Таймаут ожидания результата ComfyUI ({timeout_sec}s), prompt_id={prompt_id}"
+        )
+
+
+def bytes_to_data_uri(data: bytes, mime: str) -> str:
+    b64 = base64.standard_b64encode(data).decode("ascii")
+    return f"data:{mime};base64,{b64}"

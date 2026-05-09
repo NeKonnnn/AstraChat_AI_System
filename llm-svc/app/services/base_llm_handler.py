@@ -32,6 +32,7 @@ class BaseLLMHandler(ABC):
         max_tokens: Optional[int] = None,
         stream: bool = False,
         chat_model_id: Optional[str] = None,
+        enable_thinking: Optional[bool] = None,
     ) -> Union[ChatResponse, AsyncGenerator[str, None]]:
         """Универсальный метод для генерации ответа."""
         pass

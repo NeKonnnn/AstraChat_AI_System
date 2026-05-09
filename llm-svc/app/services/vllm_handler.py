@@ -169,9 +169,11 @@ class VLLMHandler(BaseLLMHandler):
         max_tokens: Optional[int] = None,
         stream: bool = False,
         chat_model_id: Optional[str] = None,
+        enable_thinking: Optional[bool] = None,
     ) -> Union[ChatResponse, AsyncGenerator[str, None]]:
         """Универсальный метод для генерации ответа через vLLM."""
         _ = chat_model_id
+        _ = enable_thinking
         if not self.is_loaded():
             raise ValueError("Model not loaded")
 

@@ -684,7 +684,7 @@ class LangGraphOrchestrator:
             if streaming and stream_callback_async:
                 import asyncio
                 
-                def sync_wrapper(chunk: str, accumulated: str):
+                def sync_wrapper(chunk: str, accumulated: str, stream_role: str = "content"):
                     try:
                         # Получаем текущий event loop
                         try:
@@ -696,13 +696,13 @@ class LangGraphOrchestrator:
                         if loop.is_running():
                             # Если loop запущен, используем run_coroutine_threadsafe
                             future = asyncio.run_coroutine_threadsafe(
-                                stream_callback_async(chunk, accumulated),
+                                stream_callback_async(chunk, accumulated, stream_role),
                                 loop
                             )
                             # Не ждем результат - просто запускаем в фоне
                         else:
                             # Если loop не запущен, используем run_until_complete
-                            loop.run_until_complete(stream_callback_async(chunk, accumulated))
+                            loop.run_until_complete(stream_callback_async(chunk, accumulated, stream_role))
                         return True
                     except asyncio.CancelledError:
                         logger.warning("Stream callback был отменен")
@@ -734,7 +734,8 @@ class LangGraphOrchestrator:
                     history=context.get("history", []),
                     streaming=streaming,
                     stream_callback=stream_callback_sync if streaming else None,
-                    model_path=context.get("selected_model")
+                    model_path=context.get("selected_model"),
+                    enable_thinking=context.get("enable_thinking"),
                 )
                 
                 # Проверяем, не была ли генерация отменена
@@ -843,7 +844,8 @@ class LangGraphOrchestrator:
                 history=[],
                 streaming=streaming,
                 stream_callback=stream_callback_sync if streaming else None,
-                model_path=context.get("selected_model")
+                model_path=context.get("selected_model"),
+                enable_thinking=context.get("enable_thinking"),
             )
             
             # Проверяем, не была ли генерация отменена

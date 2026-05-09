@@ -87,6 +87,11 @@ class MultiLLMModelsRequest(BaseModel):
     models: List[str]
 
 
+# Совместимость с перенесёнными роутами/фронтом из GPB_ASTRA
+class ModelComparisonModelsRequest(MultiLLMModelsRequest):
+    pass
+
+
 class AgentStatusResponse(BaseModel):
     is_initialized: bool
     mode: str

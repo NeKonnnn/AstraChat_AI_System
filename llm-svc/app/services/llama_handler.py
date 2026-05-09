@@ -212,16 +212,48 @@ class LlamaHandler(BaseLLMHandler):
         temperature: float,
         max_tokens: int,
         stream: bool,
+        enable_thinking: Optional[bool] = None,
     ) -> Union[Dict[str, Any], AsyncGenerator[Dict[str, Any], None]]:
 
         def create_completion(messages_formatter: Callable):
             formatted_messages = messages_formatter(messages)
-            return llama.create_chat_completion(
-                messages=formatted_messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                stream=stream,
-            )
+            kwargs: Dict[str, Any] = {
+                "messages": formatted_messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "stream": stream,
+            }
+            if enable_thinking is not None:
+                # Для Qwen3.x thinking в llama.cpp это, как правило, параметр
+                # шаблона, а не прямой аргумент create_chat_completion.
+                kwargs["chat_template_kwargs"] = {"enable_thinking": bool(enable_thinking)}
+            try:
+                return llama.create_chat_completion(**kwargs)
+            except TypeError as e:
+                msg = str(e)
+                # Совместимость с разными версиями llama-cpp-python:
+                # часть версий не понимает chat_template_kwargs/enable_thinking.
+                if "chat_template_kwargs" in msg or "enable_thinking" in msg:
+                    if enable_thinking:
+                        logger.warning(
+                            "llama-cpp does not support thinking kwargs; fallback to manual prompt completion"
+                        )
+                        prompt = self._build_qwen_prompt(formatted_messages, enable_thinking=True)
+                        return llama.create_completion(
+                            prompt=prompt,
+                            temperature=temperature,
+                            max_tokens=max_tokens,
+                            stream=stream,
+                            stop=["<|im_end|>"],
+                        )
+                    safe_kwargs = dict(kwargs)
+                    safe_kwargs.pop("chat_template_kwargs", None)
+                    safe_kwargs.pop("enable_thinking", None)
+                    logger.warning(
+                        "llama-cpp does not support thinking kwargs; fallback to plain chat completion"
+                    )
+                    return llama.create_chat_completion(**safe_kwargs)
+                raise
 
         return await self._run_in_executor(lambda: create_completion(convert_to_dict_messages))
 
@@ -239,6 +271,7 @@ class LlamaHandler(BaseLLMHandler):
         max_tokens: Optional[int] = None,
         stream: bool = False,
         chat_model_id: Optional[str] = None,
+        enable_thinking: Optional[bool] = None,
     ) -> Union[ChatResponse, AsyncGenerator[str, None]]:
         if not self.is_loaded():
             raise ValueError("Model not loaded")
@@ -255,7 +288,12 @@ class LlamaHandler(BaseLLMHandler):
         async with slot.gen_lock:
             if stream:
                 stream_result = await self._try_create_completion(
-                    slot.llama, messages, temperature, max_tokens, stream=True
+                    slot.llama,
+                    messages,
+                    temperature,
+                    max_tokens,
+                    stream=True,
+                    enable_thinking=enable_thinking,
                 )
 
                 async def stream_generator():
@@ -264,7 +302,9 @@ class LlamaHandler(BaseLLMHandler):
                             chunk = await self._run_in_executor(lambda: next(stream_result, None))
                             if chunk is None:
                                 break
-                            yield f"data: {json.dumps(chunk)}\n\n"
+                            normalized_chunk = self._normalize_stream_chunk(chunk, slot_id)
+                            if normalized_chunk is not None:
+                                yield f"data: {json.dumps(normalized_chunk)}\n\n"
                     except StopIteration:
                         pass
                     finally:
@@ -273,14 +313,67 @@ class LlamaHandler(BaseLLMHandler):
                 logger.info(f"Stream [{slot_id}] started in {time.time() - start_time:.2f}s")
                 return stream_generator()
             response = await self._try_create_completion(
-                slot.llama, messages, temperature, max_tokens, stream=False
+                slot.llama,
+                messages,
+                temperature,
+                max_tokens,
+                stream=False,
+                enable_thinking=enable_thinking,
             )
             logger.info(f"Response [{slot_id}] in {time.time() - start_time:.2f}s")
             return self._format_response(response, slot_id)
 
+    def _build_qwen_prompt(self, messages: List[Dict[str, Any]], enable_thinking: bool) -> str:
+        parts: List[str] = []
+        for msg in messages:
+            role = str(msg.get("role", "user"))
+            content = str(msg.get("content") or "")
+            parts.append(f"<|im_start|>{role}\n{content}<|im_end|>\n")
+        parts.append("<|im_start|>assistant\n")
+        if enable_thinking:
+            parts.append("<think>\n")
+        else:
+            parts.append("<think>\n\n</think>\n\n")
+        return "".join(parts)
+
+    def _normalize_stream_chunk(
+        self, chunk: Dict[str, Any], response_model_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Нормализует stream-чанки из create_completion в chat.completion.chunk.
+        Если chunk уже chat-формата — возвращает как есть.
+        """
+        choices = chunk.get("choices") or []
+        if not choices:
+            return None
+        first_choice = choices[0]
+        if "delta" in first_choice:
+            return chunk
+        text_delta = first_choice.get("text")
+        finish_reason = first_choice.get("finish_reason")
+        return {
+            "id": chunk.get("id", f"chatcmpl-{int(time.time())}"),
+            "object": "chat.completion.chunk",
+            "created": chunk.get("created", int(time.time())),
+            "model": response_model_id,
+            "choices": [
+                {
+                    "index": first_choice.get("index", 0),
+                    "delta": {"content": text_delta} if text_delta else {},
+                    "finish_reason": finish_reason,
+                }
+            ],
+        }
+
     def _format_response(self, raw_response: Dict[str, Any], response_model_id: str) -> ChatResponse:
         choice = raw_response["choices"][0]
-        message = choice["message"]
+        message_obj = choice.get("message")
+        if isinstance(message_obj, dict):
+            role = message_obj.get("role", "assistant")
+            content = message_obj.get("content")
+        else:
+            role = "assistant"
+            content = choice.get("text", "")
         return ChatResponse(
             id=f"chatcmpl-{int(time.time())}",
             created=int(time.time()),
@@ -289,8 +382,8 @@ class LlamaHandler(BaseLLMHandler):
                 ChatChoice(
                     index=0,
                     message=AssistantMessage(
-                        role=message["role"],
-                        content=message["content"],
+                        role=role,
+                        content=content,
                     ),
                     finish_reason=choice.get("finish_reason", "stop"),
                 )

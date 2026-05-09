@@ -35,6 +35,7 @@ import ModelSettingsFields from '../ModelSettingsFields';
 import { useTheme } from '@mui/material';
 import { getApiUrl } from '../../config/api';
 import { MODEL_SETTINGS_SECTION_TITLE_SX, MODEL_SETTINGS_CARD_SX, MODEL_SETTINGS_RESET_BUTTON_SX, MODEL_SETTINGS_DEFAULT } from '../../constants/modelSettingsStyles';
+import ImageGenerationSettingsSection from './ImageGenerationSettingsSection';
 
 
 export default function ModelsSettings() {
@@ -419,6 +420,8 @@ export default function ModelsSettings() {
         </CardContent>
       </Card>
       )}
+
+      <ImageGenerationSettingsSection />
 
       {/* Настройки модели astrachat */}
       <Card sx={MODEL_SETTINGS_CARD_SX}>

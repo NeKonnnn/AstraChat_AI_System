@@ -92,6 +92,24 @@ minio:
   documents_bucket_name: "astrachat-documents"
 
 # ========================================================
+# ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ (ComfyUI, как Open WebUI)
+# В Docker: сервис comfyui в docker-compose, URL бэкенда: http://comfyui:8188 (см. IMAGE_GEN_COMFYUI_URL).
+# Локально: python main.py --listen 0.0.0.0 --port 8188
+# Ноды: ComfyUI-GGUF (Unet Loader), workflow экспорт «Save (API Format)».
+# node_map — id нод из JSON (строками): куда подставить prompt / width / height / steps / seed.
+# Пример: prompt.node / prompt.input, width.node для KSampler или EmptyLatentImage и т.д. — см. свой API JSON.
+# При необходимости задайте IMAGE_GEN_* в .env (см. ImageGenerationConfig в backend/settings/config.py).
+# ========================================================
+image_generation:
+  enabled: false
+  comfyui_base_url: "http://127.0.0.1:8188"
+  # Путь от каталога backend/ (в Docker: /app): см. backend/config/comfy_workflows/
+  workflow_path: "config/comfy_workflows/qwen_image_api.json"
+  request_timeout_sec: 900
+  poll_interval_sec: 1.0
+  node_map: {}
+
+# ========================================================
 # ПУТИ И СИСТЕМНЫЕ НАСТРОЙКИ
 # ========================================================
 paths:

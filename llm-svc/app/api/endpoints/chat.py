@@ -37,6 +37,7 @@ async def chat_completion(
                 max_tokens=request.max_tokens,
                 stream=True,
                 chat_model_id=request.model,
+                enable_thinking=request.enable_thinking,
             )
             return StreamingResponse(
                 response_generator,
@@ -50,6 +51,7 @@ async def chat_completion(
                 max_tokens=request.max_tokens,
                 stream=False,
                 chat_model_id=request.model,
+                enable_thinking=request.enable_thinking,
             )
             logger.info("Chat request: Response generated successfully")
             return response

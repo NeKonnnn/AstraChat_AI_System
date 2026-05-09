@@ -29,6 +29,7 @@ def _terminal_chat_inference_banner(
     mode_label: str,
     model_path_for_call: str = None,
     extra_line: str = None,
+    enable_thinking: Optional[bool] = None,
 ):
     import backend.app_state as _state
 
@@ -43,6 +44,10 @@ def _terminal_chat_inference_banner(
     ]
     path = model_path_for_call if model_path_for_call is not None else _state.get_current_model_path()
     lines.append(f"  Модель (путь для вызова LLM): {path!r}")
+    if enable_thinking is None:
+        lines.append("  enable_thinking: не передан в баннер (не socket / старый вызов)")
+    else:
+        lines.append(f"  enable_thinking (режим «Мышление» и т.п.): {enable_thinking!r}")
 
     if _state.get_model_info:
         try:

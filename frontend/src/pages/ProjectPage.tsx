@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo, useEffect, useLayoutEffect, useCallback } from 'react';
+import React, { useState, useRef, useMemo, useEffect, useLayoutEffect, useCallback, startTransition } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -75,6 +75,9 @@ import {
   ChevronRight as ChevronRightIcon,
   Check as CheckIcon,
   SmartToyOutlined as GearMenuAgentsIcon,
+  Psychology as ThinkingModeIcon,
+  Bolt as FastModeIcon,
+  AutoAwesome as AutoModeIcon,
 } from '@mui/icons-material';
 import { useAppContext, useAppActions, chatIsListedInAllChatsSection } from '../contexts/AppContext';
 import { useSocket } from '../contexts/SocketContext';
@@ -133,6 +136,10 @@ import {
   ASTRA_OPEN_AGENT_CONSTRUCTOR,
   ASTRA_OPEN_TRANSCRIPTION_SIDEBAR,
 } from '../constants/hotkeys';
+import {
+  MODEL_THINKING_MODE_STORAGE_KEY,
+  ModelThinkingMode,
+} from '../utils/modelThinking';
 
 interface ProjectPageAgentStatus {
   is_initialized: boolean;
@@ -179,7 +186,7 @@ export default function ProjectPage() {
   const theme = useTheme();
   const { state } = useAppContext();
   const { getProjectById, setCurrentChat, createChat, moveChatToProject, updateChatTitle, deleteChat, archiveChat, getChatById, moveChatToFolder, togglePinInProject, showNotification } = useAppActions();
-  const { sendMessage, isConnected } = useSocket();
+  const { sendMessage, isConnected, isConnecting } = useSocket();
   const [chatsExpanded, setChatsExpanded] = useState(true);
   const [inputMessage, setInputMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
@@ -194,14 +201,18 @@ export default function ProjectPage() {
 
   useEffect(() => {
     const onAgent = () => {
-      setRightSidebarHidden(false);
-      setRightSidebarOpen(true);
-      setAgentConstructorOpen(true);
+      startTransition(() => {
+        setRightSidebarHidden(false);
+        setRightSidebarOpen(true);
+        setAgentConstructorOpen(true);
+      });
     };
     const onTranscription = () => {
-      setRightSidebarHidden(false);
-      setRightSidebarOpen(true);
-      setTranscriptionModalOpen(true);
+      startTransition(() => {
+        setRightSidebarHidden(false);
+        setRightSidebarOpen(true);
+        setTranscriptionModalOpen(true);
+      });
     };
     window.addEventListener(ASTRA_OPEN_AGENT_CONSTRUCTOR, onAgent);
     window.addEventListener(ASTRA_OPEN_TRANSCRIPTION_SIDEBAR, onTranscription);
@@ -224,7 +235,11 @@ export default function ProjectPage() {
   const [isUploading, setIsUploading] = useState(false);
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   /** Раскрытый подпункт меню «Инструменты» (панель агентов). */
-  const [gearToolsPanel, setGearToolsPanel] = useState<'main' | 'agents'>('main');
+  const [gearToolsPanel, setGearToolsPanel] = useState<'main' | 'agents' | 'model-mode'>('main');
+  const [modelThinkingMode, setModelThinkingMode] = useState<ModelThinkingMode>(() => {
+    const saved = (localStorage.getItem(MODEL_THINKING_MODE_STORAGE_KEY) || 'fast') as ModelThinkingMode;
+    return saved === 'auto' || saved === 'thinking' || saved === 'fast' ? saved : 'fast';
+  });
   const gearToolsPopoverActionRef = useRef<PopoverActions | null>(null);
   /** Якорь меню «Инструменты» — вся оболочка поля ввода (верх), а не кнопка виджетов */
   const chatInputToolsAnchorRef = useRef<HTMLDivElement>(null);
@@ -255,6 +270,10 @@ export default function ProjectPage() {
     window.addEventListener(KNOWLEDGE_RAG_STORAGE_EVENT, onRag);
     return () => window.removeEventListener(KNOWLEDGE_RAG_STORAGE_EVENT, onRag);
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem(MODEL_THINKING_MODE_STORAGE_KEY, modelThinkingMode);
+  }, [modelThinkingMode]);
 
   const loadAgentStatus = useCallback(async () => {
     try {
@@ -467,7 +486,7 @@ export default function ProjectPage() {
   };
 
   const handleSendMessage = async () => {
-    if (!inputMessage.trim() || !isConnected || isSending || !projectId) {
+    if (!inputMessage.trim() || (!isConnected && !isConnecting) || isSending || !projectId) {
       return;
     }
 
@@ -699,13 +718,13 @@ export default function ProjectPage() {
           onChange={setInputMessage}
           onKeyPress={handleKeyPress}
           placeholder={
-            !isConnected
+            !isConnected && !isConnecting
               ? 'Нет соединения с сервером'
               : isSending
                 ? 'Отправка сообщения...'
                 : 'Чем я могу помочь вам сегодня?'
           }
-          inputDisabled={!isConnected || isSending}
+          inputDisabled={(!isConnected && !isConnecting) || isSending}
           inputRef={inputRef}
           isDarkMode={theme.palette.mode === 'dark'}
           solidWorkZoneBackground={workZoneAnimated}
@@ -733,7 +752,7 @@ export default function ProjectPage() {
           onSettingsClick={handleMenuOpen}
           settingsDisabled={isSending}
           onSendClick={handleSendMessage}
-          sendDisabled={!inputMessage.trim() || !isConnected || isSending}
+          sendDisabled={!inputMessage.trim() || (!isConnected && !isConnecting) || isSending}
           isSending={isSending}
           onVoiceClick={() => setTranscriptionModalOpen(true)}
           voiceDisabled={isSending}
@@ -999,7 +1018,9 @@ export default function ProjectPage() {
                         gearToolsPaperHeightPx < CHAT_GEAR_MENU_PAPER_MAX_HEIGHT_PX ? 'auto' : 'hidden',
                     }
                   : { maxHeight: CHAT_GEAR_MENU_PAPER_MAX_HEIGHT, overflowY: 'auto' }),
-                ...(gearToolsPanel === 'agents' ? CHAT_GEAR_SCROLL_AREA_NO_VISIBLE_SCROLLBAR_SX : {}),
+                ...((gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode')
+                  ? CHAT_GEAR_SCROLL_AREA_NO_VISIBLE_SCROLLBAR_SX
+                  : {}),
               },
             },
           }}
@@ -1009,15 +1030,15 @@ export default function ProjectPage() {
               display: 'flex',
               flexDirection: 'row',
               alignItems: 'stretch',
-              gap: gearToolsPanel === 'agents' ? `${CHAT_GEAR_MENU_PANELS_GAP_PX}px` : 0,
+              gap: gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode' ? `${CHAT_GEAR_MENU_PANELS_GAP_PX}px` : 0,
               width:
-                gearToolsPanel === 'agents' && gearToolsMenuWidthPx != null
+                (gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode') && gearToolsMenuWidthPx != null
                   ? `${gearToolsMenuWidthPx}px`
-                  : gearToolsPanel === 'agents'
+                  : gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode'
                     ? CHAT_GEAR_MENU_EXPANDED_WIDTH_PX
                     : CHAT_GEAR_MENU_PANEL_WIDTH_PX,
               maxWidth:
-                gearToolsPanel === 'agents' && gearToolsMenuWidthPx != null
+                (gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode') && gearToolsMenuWidthPx != null
                   ? `${gearToolsMenuWidthPx}px`
                   : 'min(96vw, 580px)',
               minHeight: gearToolsPaperHeightPx != null ? `${gearToolsPaperHeightPx}px` : undefined,
@@ -1031,7 +1052,9 @@ export default function ProjectPage() {
               sx={{
                 ...dropdownPanelSx,
                 width:
-                  gearToolsPanel === 'agents' ? CHAT_GEAR_MENU_LEFT_RAIL_WIDTH_PX : '100%',
+                  gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode'
+                    ? CHAT_GEAR_MENU_LEFT_RAIL_WIDTH_PX
+                    : '100%',
                 flexShrink: 0,
                 boxSizing: 'border-box',
                 py: 0.5,
@@ -1075,6 +1098,36 @@ export default function ProjectPage() {
                 />
               </Box>
               <Box
+                onClick={() => setGearToolsPanel((p) => (p === 'model-mode' ? 'main' : 'model-mode'))}
+                sx={{
+                  ...dropdownItemSx,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1,
+                  color: isDarkMode ? 'white' : '#333',
+                  bgcolor:
+                    gearToolsPanel === 'model-mode'
+                      ? isDarkMode
+                        ? DROPDOWN_ITEM_HOVER_BG_DARK
+                        : DROPDOWN_ITEM_HOVER_BG_LIGHT
+                      : 'transparent',
+                }}
+              >
+                <ThinkingModeIcon
+                  sx={{ fontSize: 18, color: isDarkMode ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.6)', flexShrink: 0 }}
+                />
+                <Typography sx={{ flex: 1, minWidth: 0, fontSize: MENU_ACTION_TEXT_SIZE, whiteSpace: 'nowrap' }}>
+                  Режим модели
+                </Typography>
+                <ChevronRightIcon
+                  sx={{
+                    ...DROPDOWN_CHEVRON_SX,
+                    flexShrink: 0,
+                    transform: gearToolsPanel === 'model-mode' ? 'rotate(90deg)' : 'none',
+                  }}
+                />
+              </Box>
+              <Box
                 onClick={() => {
                   toggleKbRag();
                   handleMenuClose();
@@ -1114,7 +1167,7 @@ export default function ProjectPage() {
                 </Typography>
               </Box>
             </Box>
-            {gearToolsPanel === 'agents' ? (
+            {gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode' ? (
               <Box
                 sx={{
                   ...dropdownPanelSx,
@@ -1127,10 +1180,48 @@ export default function ProjectPage() {
                   overflow: 'hidden',
                 }}
               >
-                <ChatGearAgentsPanel
-                  isDarkMode={isDarkMode}
-                  canUseAgents={Boolean(agentStatus?.is_initialized)}
-                />
+                {gearToolsPanel === 'agents' ? (
+                  <ChatGearAgentsPanel
+                    isDarkMode={isDarkMode}
+                    canUseAgents={Boolean(agentStatus?.is_initialized)}
+                  />
+                ) : (
+                  <Box sx={{ p: 1, display: 'flex', flexDirection: 'column', gap: 0.5, overflowY: 'auto' }}>
+                    {([
+                      { id: 'auto', label: 'Автоматический', icon: <AutoModeIcon sx={{ fontSize: 16 }} /> },
+                      { id: 'thinking', label: 'Мышление', icon: <ThinkingModeIcon sx={{ fontSize: 16 }} /> },
+                      { id: 'fast', label: 'Быстрый', icon: <FastModeIcon sx={{ fontSize: 16 }} /> },
+                    ] as const).map((mode) => (
+                      <Box
+                        key={mode.id}
+                        onClick={() => {
+                          setModelThinkingMode(mode.id);
+                        }}
+                        sx={{
+                          ...dropdownItemSx,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 1,
+                          color: isDarkMode ? 'white' : '#333',
+                          bgcolor:
+                            modelThinkingMode === mode.id
+                              ? isDarkMode
+                                ? DROPDOWN_ITEM_HOVER_BG_DARK
+                                : DROPDOWN_ITEM_HOVER_BG_LIGHT
+                              : 'transparent',
+                        }}
+                      >
+                        <Box sx={{ display: 'inline-flex', opacity: 0.9 }}>{mode.icon}</Box>
+                        <Typography sx={{ flex: 1, minWidth: 0, fontSize: MENU_ACTION_TEXT_SIZE }}>
+                          {mode.label}
+                        </Typography>
+                        {modelThinkingMode === mode.id ? (
+                          <CheckIcon sx={{ fontSize: 16, color: 'primary.main', flexShrink: 0 }} />
+                        ) : null}
+                      </Box>
+                    ))}
+                  </Box>
+                )}
               </Box>
             ) : null}
           </Box>
@@ -1307,7 +1398,7 @@ export default function ProjectPage() {
               >
                 <Tooltip title="Скрыть панель" placement="left">
                   <IconButton
-                    onClick={() => setRightSidebarHidden(true)}
+                    onClick={() => startTransition(() => setRightSidebarHidden(true))}
                     sx={{
                       color: 'white',
                       opacity: 1,
@@ -1498,8 +1589,10 @@ export default function ProjectPage() {
           <Tooltip title="Показать панель" placement="left">
             <IconButton
               onClick={() => {
-                setRightSidebarHidden(false);
-                setRightSidebarOpen(false);
+                startTransition(() => {
+                  setRightSidebarHidden(false);
+                  setRightSidebarOpen(false);
+                });
               }}
               sx={{
                 bgcolor: 'transparent',

@@ -103,7 +103,7 @@ def _run_in_new_loop(agent_class, message: str, context: Dict[str, Any] = None):
             logger.info(f"[_run_in_new_loop] Используем прямой синхронный emit через Socket.IO (thread-safe)")
             
             # Создаем синхронный wrapper для async emit через Socket.IO
-            def sync_callback_wrapper(chunk: str, accumulated: str):
+            def sync_callback_wrapper(chunk: str, accumulated: str, stream_role: str = "content"):
                 try:
                     # logger.info(f"[sync_callback_wrapper] Вызван! chunk_len={len(chunk)}, накоплено={len(accumulated)}")
                     
@@ -112,11 +112,19 @@ def _run_in_new_loop(agent_class, message: str, context: Dict[str, Any] = None):
                         # Используем run_coroutine_threadsafe для отправки в основной event loop
                         try:
                             import asyncio
+                            if stream_role == "reasoning":
+                                payload = {
+                                    "chunk": chunk,
+                                    "accumulated": accumulated,
+                                    "thinking": chunk,
+                                    "stream_role": "reasoning",
+                                }
+                                event_name = "chat_thinking"
+                            else:
+                                payload = {"chunk": chunk, "accumulated": accumulated}
+                                event_name = "chat_chunk"
                             future = asyncio.run_coroutine_threadsafe(
-                                sio.emit('chat_chunk', {
-                                    'chunk': chunk,
-                                    'accumulated': accumulated
-                                }, room=socket_id),
+                                sio.emit(event_name, payload, room=socket_id),
                                 main_loop
                             )
                             # Не ждем результат - просто запускаем в фоне

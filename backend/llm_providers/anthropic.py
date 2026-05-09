@@ -173,7 +173,11 @@ class AnthropicProvider(LLMProvider):
         model: str,
         temperature: float = 0.7,
         max_tokens: int = 1024,
+        *,
+        request_extra: Optional[Dict[str, Any]] = None,
     ) -> str:
+        # Anthropic Messages API не использует OpenAI-поле enable_thinking — игнорируем.
+        _ = request_extra
         payload = self._build_payload(messages, model, temperature, max_tokens, stream=False)
         logger.info("[%s:anthropic] POST /v1/messages model=%r", self.id, model)
         async with httpx.AsyncClient(timeout=self._timeout()) as client:
@@ -199,7 +203,10 @@ class AnthropicProvider(LLMProvider):
         callback: StreamCallback,
         temperature: float = 0.7,
         max_tokens: int = 1024,
+        *,
+        request_extra: Optional[Dict[str, Any]] = None,
     ) -> str:
+        _ = request_extra
         payload = self._build_payload(messages, model, temperature, max_tokens, stream=True)
         accumulated = ""
         try:

@@ -39,6 +39,8 @@ export interface Message {
       store: string;
     }>;
   };
+  /** Рассуждение модели отдельно от основного ответа (стриминг chat_thinking) */
+  reasoningContent?: string;
 }
 
 export interface Chat {
@@ -162,7 +164,7 @@ type AppAction =
   | { type: 'DELETE_CHAT'; payload: string }
   | { type: 'DELETE_ALL_CHATS' }
   | { type: 'ADD_MESSAGE'; payload: { chatId: string; message: Message } }
-  | { type: 'UPDATE_MESSAGE'; payload: { chatId: string; messageId: string; content?: string; isStreaming?: boolean; multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>; alternativeResponses?: string[]; currentResponseIndex?: number; documentSearch?: Message['documentSearch'] } }
+  | { type: 'UPDATE_MESSAGE'; payload: { chatId: string; messageId: string; content?: string; isStreaming?: boolean; multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>; alternativeResponses?: string[]; currentResponseIndex?: number; documentSearch?: Message['documentSearch']; reasoningContent?: string } }
   | { type: 'APPEND_CHUNK'; payload: { chatId: string; messageId: string; chunk: string; isStreaming?: boolean } }
   | { type: 'SET_LOADING'; payload: boolean }
   | { type: 'SET_CHAT_LOADING'; payload: { chatId: string; loading: boolean } }
@@ -363,10 +365,11 @@ function appReducer(state: AppState, action: AppAction): AppState {
     }
       
     case 'UPDATE_MESSAGE': {
-      const { chatId, messageId, content, isStreaming, multiLLMResponses, alternativeResponses, currentResponseIndex, documentSearch } = action.payload;
+      const { chatId, messageId, content, isStreaming, multiLLMResponses, alternativeResponses, currentResponseIndex, documentSearch, reasoningContent } = action.payload;
       
       const currentChat = state.chats.find(chat => chat.id === chatId);
       const updatedMessage = currentChat?.messages.find(msg => msg.id === messageId);
+      const nextContent = content !== undefined ? content : (updatedMessage?.content || '');
       
       const newState = {
         ...state,
@@ -383,7 +386,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
                         ...(multiLLMResponses !== undefined ? { multiLLMResponses } : {}),
                         ...(alternativeResponses !== undefined ? { alternativeResponses } : {}),
                         ...(currentResponseIndex !== undefined ? { currentResponseIndex } : {}),
-                        ...(documentSearch !== undefined ? { documentSearch } : {})
+                        ...(documentSearch !== undefined ? { documentSearch } : {}),
+                        ...(reasoningContent !== undefined ? { reasoningContent } : {}),
                       }
                     : msg
                 ),
@@ -393,8 +397,12 @@ function appReducer(state: AppState, action: AppAction): AppState {
         ),
         stats: {
           ...state.stats,
-          // Обновляем токены при изменении содержимого сообщения
-          totalTokens: state.stats.totalTokens - estimateTokens(updatedMessage?.content || '') + estimateTokens(content || ''),
+          totalTokens:
+            content !== undefined && updatedMessage
+              ? state.stats.totalTokens -
+                estimateTokens(updatedMessage.content || '') +
+                estimateTokens(nextContent || '')
+              : state.stats.totalTokens,
         },
       };
       
@@ -976,8 +984,8 @@ export function useAppActions() {
       return messageId;
     },
     
-    updateMessage: (chatId: string, messageId: string, content?: string, isStreaming?: boolean, multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>, alternativeResponses?: string[], currentResponseIndex?: number, documentSearch?: Message['documentSearch']) => {
-      dispatch({ type: 'UPDATE_MESSAGE', payload: { chatId, messageId, content, isStreaming, multiLLMResponses, alternativeResponses, currentResponseIndex, documentSearch } });
+    updateMessage: (chatId: string, messageId: string, content?: string, isStreaming?: boolean, multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>, alternativeResponses?: string[], currentResponseIndex?: number, documentSearch?: Message['documentSearch'], reasoningContent?: string) => {
+      dispatch({ type: 'UPDATE_MESSAGE', payload: { chatId, messageId, content, isStreaming, multiLLMResponses, alternativeResponses, currentResponseIndex, documentSearch, reasoningContent } });
     },
     
     appendChunk: (chatId: string, messageId: string, chunk: string, isStreaming?: boolean) => {

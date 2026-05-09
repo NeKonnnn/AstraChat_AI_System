@@ -3,6 +3,7 @@
 Сетевые URL микросервисов задаются в backend/config/config.yml (секция urls).
 """
 
+import json
 import yaml
 import os
 from pathlib import Path
@@ -117,6 +118,90 @@ class FilesConfig(BaseModel):
     temp_dir: str = "/tmp/astrachat"
 
 
+class NodeInputTarget(BaseModel):
+    """Ссылка на input ноды ComfyUI workflow (формат API): node id + имя поля."""
+
+    node: str
+    input: str
+
+
+class ImageGenerationConfig(BaseModel):
+    """
+    Генерация картинок через HTTP API ComfyUI (как Open WebUI: отдельный ComfyUI + workflow API JSON).
+
+    Переменные окружения (перекрывают YAML, если заданы):
+    IMAGE_GEN_ENABLED, IMAGE_GEN_COMFYUI_URL, IMAGE_GEN_WORKFLOW_PATH,
+    IMAGE_GEN_REQUEST_TIMEOUT_SEC, IMAGE_GEN_POLL_INTERVAL_SEC,
+    IMAGE_GEN_NODE_MAP (JSON: {\"prompt\": {\"node\":\"6\",\"input\":\"text\"}, ...})
+    """
+
+    enabled: bool = False
+    comfyui_base_url: Optional[str] = None
+    workflow_path: Optional[str] = None
+    request_timeout_sec: int = 900
+    poll_interval_sec: float = 0.75
+    node_map: Dict[str, NodeInputTarget] = Field(default_factory=dict)
+
+    @staticmethod
+    def _env_bool(key: str) -> Optional[bool]:
+        v = os.getenv(key)
+        if v is None or str(v).strip() == "":
+            return None
+        return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+    @staticmethod
+    def _env_float(key: str) -> Optional[float]:
+        v = os.getenv(key)
+        if v is None or str(v).strip() == "":
+            return None
+        try:
+            return float(v)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _env_int(key: str) -> Optional[int]:
+        v = os.getenv(key)
+        if v is None or str(v).strip() == "":
+            return None
+        try:
+            return int(v)
+        except ValueError:
+            return None
+
+    @model_validator(mode="after")
+    def merge_env_overrides(self) -> "ImageGenerationConfig":
+        b = self._env_bool("IMAGE_GEN_ENABLED")
+        if b is not None:
+            self.enabled = b
+        url = os.getenv("IMAGE_GEN_COMFYUI_URL")
+        if url and str(url).strip():
+            self.comfyui_base_url = str(url).strip().rstrip("/")
+        wpath = os.getenv("IMAGE_GEN_WORKFLOW_PATH")
+        if wpath and str(wpath).strip():
+            self.workflow_path = str(wpath).strip()
+        ti = self._env_int("IMAGE_GEN_REQUEST_TIMEOUT_SEC")
+        if ti is not None and ti > 0:
+            self.request_timeout_sec = ti
+        poll = self._env_float("IMAGE_GEN_POLL_INTERVAL_SEC")
+        if poll is not None and poll > 0:
+            self.poll_interval_sec = poll
+        raw_nm = os.getenv("IMAGE_GEN_NODE_MAP")
+        if raw_nm and str(raw_nm).strip():
+            try:
+                parsed = json.loads(raw_nm)
+                if isinstance(parsed, dict):
+                    nm: Dict[str, NodeInputTarget] = {}
+                    for k, v in parsed.items():
+                        if isinstance(v, dict) and "node" in v and "input" in v:
+                            nm[str(k)] = NodeInputTarget(node=str(v["node"]), input=str(v["input"]))
+                    if nm:
+                        self.node_map = nm
+            except json.JSONDecodeError:
+                pass
+        return self
+
+
 def _docker_runtime() -> bool:
     de = os.getenv("DOCKER_ENV")
     if de is not None:
@@ -220,6 +305,8 @@ class Settings(BaseModel):
     # Если пуст — auto-migration из llm_service.hosts в registry.
     llm_providers: List[Dict[str, Any]] = Field(default_factory=list)
     default_llm_provider: Optional[str] = None
+
+    image_generation: ImageGenerationConfig = Field(default_factory=ImageGenerationConfig)
 
     class Config:
         """Настройки Pydantic"""

@@ -1,13 +1,6 @@
 """
-LLM Client для взаимодействия с микросервисами AI (LLM, STT, TTS, OCR, Diarization).
-
-Начиная с рефакторинга на ``backend/llm_providers`` все LLM-методы
-(``chat_completion``, ``stream_generation``, ``health_check``, ``get_models``,
-``load_model``, ``load_model_if_needed``, ``unload_excess_llm_models``) — это
-тонкие адаптеры над ``ProviderRegistry``. STT/TTS/OCR/Diarization остаются
-как были, они не относятся к LLM.
+LLM Client для взаимодействия с микросервисами AI (LLM, STT, TTS, OCR, Diarization)
 """
-
 import httpx
 import json
 import asyncio
@@ -18,49 +11,96 @@ from typing import List, Dict, Any, Optional, Callable, AsyncGenerator, Tuple
 from datetime import datetime
 import io
 import os
-
-from backend.llm_providers import (
-    LLMProvider,
-    ModelInfo,
-    ProviderHealth,
-    ProviderRegistry,
-    get_registry,
-    get_registry_sync_or_none,
-    split_model_path,
+import uuid
+from backend.settings.cef_logger.cef_logger import (
+    log_cef_int003_llm_request,
+    log_cef_obj002_llm_api_failure,
 )
-from backend.llm_providers.llm_svc import LlmSvcProvider, pool_contains_model, same_llm_svc_model_id
-from backend.llm_providers.openai_compat import clean_llm_response as _clean_llm_response_new
+
+
+def _invoke_stream_callback_safe(
+    cb: Callable[..., Any], chunk: str, acc: str, stream_role: str = "content"
+) -> bool:
+    try:
+        return bool(cb(chunk, acc, stream_role))
+    except TypeError:
+        return bool(cb(chunk, acc))
 
 
 def resolve_llm_svc_model_id_for_request(model_path: Optional[str], fallback_model_name: str) -> str:
     """
-    Legacy-API: получает model_id из произвольной ссылки на модель.
-
-    Теперь это просто обёртка над ``split_model_path`` из ``llm_providers``:
-
-    - ``llm-svc://host/model`` / ``llm-svc://model`` / ``provider_id/model`` → model_id;
-    - плоский ``model`` → он же.
-
-    Возвращает ``fallback_model_name``, если path пуст.
+    Получает <id> для JSON model в /v1/chat/completions и для POST /v1/models/load.
+    - llm-svc://<id> (и опечатка 1lm-svc://) → <id>
+    - models/<name> или путь к .gguf → имя файла без .gguf (как в GET /v1/models)
+    - иначе → fallback (имя загруженной в llm-svc модели из health)
     """
     if not model_path or not str(model_path).strip():
         return fallback_model_name
-    _, mid = split_model_path(str(model_path))
-    return mid or fallback_model_name
-
-
+    s = re.sub(r"\s+", "", str(model_path).strip())
+    low = s.lower()
+    if low.startswith("1lm-svc://"):
+        s = "llm-svc://" + s[10:]
+        low = s.lower()
+    if low.startswith("llm-svc://"):
+        return s[10:]
+    # Multi-LLM / выбор с диска: backend передаёт models/<id> без префикса llm-svc://
+    norm = s.replace("\\", "/")
+    base = os.path.basename(norm.rstrip("/"))
+    if base and base not in (".", ".."):
+        if base.lower().endswith(".gguf"):
+            base = base[:-5]
+        looks_like_filesystem_path = (
+            low.startswith("models/")
+            or "/models/" in low
+            or low.endswith(".gguf")
+            or ("/" in norm)
+        )
+        if looks_like_filesystem_path:
+            return base
+    return fallback_model_name
+def same_llm_svc_model_id(loaded: str, requested: str) -> bool:
+    """
+    Совпадение «та же модель» для llm-svc: в /v1/health часто короткое имя из конфига,
+    а в агенте - полное имя файла без .gguf
+    """
+    if not loaded or not requested:
+        return False
+    a, b = loaded.strip().lower(), requested.strip().lower()
+    if a == b:
+        return True
+    # Длинное имя начинается с короткого и дефиса: ...-instruct-...
+    if a.startswith(b + "-") or b.startswith(a + "-"):
+        return True
+    return False
+def pool_contains_model(health: Optional[Dict[str, Any]], model_id: Optional[str]) -> bool:
+    """
+    True, если model_id уже в RAMе llm-svc
+    """
+    if not health or not model_id or not str(model_id).strip():
+        return False
+    mid = str(model_id).strip()
+    loaded = health.get("loaded_models")
+    if isinstance(loaded, list) and len(loaded) > 0:
+        for lid in loaded:
+            if lid and same_llm_svc_model_id(str(lid), mid):
+                return True
+        return False
+    if health.get("model_loaded") and health.get("model_name"):
+        return same_llm_svc_model_id(str(health["model_name"]), mid)
+    return False
 def infer_llm_host_for_openai_model_id(
     model_id: str,
     llm_hosts: Dict[str, str],
     default_host_id: str,
 ) -> Tuple[str, str]:
-    """Legacy: возвращает (default_host_id, model_id). Новый код напрямую использует registry."""
+    """
+    Выбор инстанса llm-svc по id модели, когда нет полного пути llm-svc://<host_id>/...
+    (полный путь разбирается в resolve_llm_host_and_model_for_svc)
+    """
     mid = (model_id or "").strip()
     if not mid:
         return default_host_id, mid
     return default_host_id, mid
-
-
 def resolve_llm_host_and_model_for_svc(
     model_ref: Optional[str],
     fallback_model: str,
@@ -68,67 +108,205 @@ def resolve_llm_host_and_model_for_svc(
     default_host_id: Optional[str],
 ) -> Tuple[str, str]:
     """
-    Legacy-API: разбирает ``<provider_id>/<model_id>`` или ``llm-svc://...`` и
-    возвращает ``(provider_id, model_id)``.
-
-    Новый код должен использовать ``registry.resolve(path)`` напрямую.
-    Эта функция оставлена для обратной совместимости ``agent_llm_svc``.
+    Маршрутизация на инстанс llm-svc (или совместимый OpenAI API)
+    Returns:
+        (host_id, model_id) — model_id только для поля JSON model (без host/)
+    Пути:
+        - llm-svc://<host_id>/<model_id> при известном host_id в llm_hosts
+        - llm-svc://<model_id> — хост по умолчанию
+        - иначе — как resolve_llm_svc_model_id_for_request, хост по умолчанию
     """
+    if not llm_hosts:
+        fb = (fallback_model or "").strip() or "qwen-coder-30b"
+        mid = resolve_llm_svc_model_id_for_request(model_ref, fb)
+        return "default", mid
+    keys = list(llm_hosts.keys())
+    default_h = default_host_id if default_host_id in llm_hosts else keys[0]
     fb = (fallback_model or "").strip() or "qwen-coder-30b"
-    default_h = default_host_id if default_host_id and default_host_id in (llm_hosts or {}) else (
-        next(iter(llm_hosts)) if llm_hosts else "default"
-    )
     if not model_ref or not str(model_ref).strip():
-        return default_h, fb
+        return infer_llm_host_for_openai_model_id(fb, llm_hosts, default_h)
+    s = re.sub(r"\s+", "", str(model_ref).strip())
+    low = s.lower()
+    if low.startswith("1lm-svc://"):
+        s = "llm-svc://" + s[10:]
+        low = s.lower()
+    if low.startswith("llm-svc://"):
+        rest = s[10:].strip()
+        if not rest:
+            return infer_llm_host_for_openai_model_id(fb, llm_hosts, default_h)
+        if "/" in rest:
+            hid, tail = rest.split("/", 1)
+            tail = (tail or "").strip()
+            if hid in llm_hosts and tail:
+                return hid, tail
+            # rest целиком — model_id со слэшем, первый сегмент не id хоста в llm_hosts
+            return infer_llm_host_for_openai_model_id(rest, llm_hosts, default_h)
+        return infer_llm_host_for_openai_model_id(rest, llm_hosts, default_h)
+    # Легаси: в настройках иногда лежит только «llm-svc» без // — опираемся на fallback id
+    if low in ("llm-svc", "llm-svc://"):
+        return infer_llm_host_for_openai_model_id(fb, llm_hosts, default_h)
+    mid = resolve_llm_svc_model_id_for_request(model_ref, fb)
+    return infer_llm_host_for_openai_model_id(mid, llm_hosts, default_h)
+def _clean_llm_response(text: str) -> str:
+    """Очистка ответа LLM от артефактов chat template (im_start/im_end теги, HTML entities)."""
+    if not text:
+        return text
+    # Убираем всё начиная с <|im_start|> (включая HTML-escaped варианты)
+    patterns = [
+        r'<\|im_start\|>.*',
+        r'<\|im_start\|>.*',
+        r'<\|im_start\|>.*',
+        r'<\|im_start\|>.*',
+        r'<\|im_start\|>.*',
+    ]
+    for pattern in patterns:
+        text = re.sub(pattern, '', text, flags=re.DOTALL)
+    patterns_end = [
+        r'<\|im_end\|>.*',
+        r'<\|im_end\|>.*',
+        r'<\|im_end\|>.*',
+    ]
+    for pattern in patterns_end:
+        text = re.sub(pattern, '', text, flags=re.DOTALL)
+    # Декодируем HTML entities несколько раз для вложенного escaping
+    for _ in range(3):
+        new_text = html_module.unescape(text)
+        if new_text == text:
+            break
+        text = new_text
+    text = text.rstrip()
+    return text
 
-    head, tail = split_model_path(str(model_ref))
-    if head and (not llm_hosts or head in llm_hosts):
-        return head, (tail or fb)
-    if head and llm_hosts and head not in llm_hosts:
-        # Head существует, но не зарегистрирован в legacy-словаре → пусть регистратор
-        # (если есть) сам решает. Для legacy-вызывающих возвращаем default + склейку.
-        combined = f"{head}/{tail}" if tail else head
-        return default_h, combined
-    return default_h, (tail or fb)
+
+def _strip_think_tags(text: str) -> str:
+    """Удаляет блоки <think>...</think> и незакрытые <think>... из текста.
+
+    Используется в режиме быстрого ответа (thinking_requested=False), чтобы
+    рассуждения модели не попадали в финальный ответ пользователю.
+    """
+    if not text or "<think>" not in text.lower():
+        return text
+    # Закрытые блоки
+    text = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE)
+    # Незакрытый блок (модель не успела закрыть тег)
+    text = re.sub(r"<think>[\s\S]*$", "", text, flags=re.IGNORECASE)
+    return text.strip()
 
 
-# Алиас на новую реализацию — чтобы legacy-импорт "_clean_llm_response" сохранил работу.
-_clean_llm_response = _clean_llm_response_new
+def _normalize_reasoning_payload(value: Any) -> str:
+    """Нормализует reasoning payload из OpenAI-compat ответов к строке."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts: List[str] = []
+        for item in value:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                txt = item.get("text") or item.get("content") or item.get("reasoning")
+                if isinstance(txt, str):
+                    parts.append(txt)
+        return "".join(parts)
+    if isinstance(value, dict):
+        txt = (
+            value.get("text")
+            or value.get("content")
+            or value.get("reasoning")
+            or value.get("reasoning_text")
+            or value.get("thinking")
+            or value.get("thought")
+        )
+        if isinstance(txt, str):
+            return txt
+        nested_content = value.get("content")
+        if isinstance(nested_content, list):
+            return _normalize_reasoning_payload(nested_content)
+        parts: List[str] = []
+        for k, v in value.items():
+            if any(token in str(k).lower() for token in ("reason", "think", "thought")):
+                parts.append(_normalize_reasoning_payload(v))
+        return "".join(parts)
+    return str(value)
 
-# Импортируем настройки 
+
+def _normalize_content_payload(value: Any) -> str:
+    """Нормализует content payload из OpenAI-compat ответов к строке."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts: List[str] = []
+        for item in value:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                if item.get("type") in ("text", "output_text"):
+                    txt = item.get("text") or item.get("content")
+                    if isinstance(txt, str):
+                        parts.append(txt)
+                else:
+                    txt = item.get("content") or item.get("text")
+                    if isinstance(txt, str):
+                        parts.append(txt)
+        return "".join(parts)
+    if isinstance(value, dict):
+        txt = value.get("text") or value.get("content")
+        return txt if isinstance(txt, str) else ""
+    return str(value)
+def _build_ssl_verify():
+    """
+    Определяет параметр verify для httpx из переменных окружения.
+    Приоритет: NEXUS_CERT_PATH (путь к CA bundle) > LLM_VERIFY_SSL > True (дефолт).
+    Читается напрямую из os.environ, без зависимости от settings/config.yml.
+    """
+    nexus_cert = os.environ.get("NEXUS_CERT_PATH", "").strip()
+    if nexus_cert:
+        if os.path.isfile(nexus_cert):
+            logger.info(f"[SSL] CA bundle из NEXUS_CERT_PATH: {nexus_cert}")
+            return nexus_cert
+        else:
+            logger.warning(f"[SSL] NEXUS_CERT_PATH задан, но файл не найден: {nexus_cert}. Используется verify=True")
+            return True
+    verify_str = os.environ.get("LLM_VERIFY_SSL", "").strip().lower()
+    if verify_str in ("false", "0", "no"):
+        logger.warning("[SSL] Проверка SSL отключена (LLM_VERIFY_SSL=false)")
+        return False
+    return True
+# Импортируем настройки
 try:
     from settings import get_settings
 except ImportError:
     from backend.settings import get_settings
-
 logger = logging.getLogger(__name__)
-
 class LLMClient:
     """Клиент для взаимодействия с распределенными API сервисов"""
-    
     def __init__(self, base_url: Optional[str] = None, api_key: Optional[str] = None):
-        # Получаем настройки из синглтона 
+        # Получаем настройки из синглтона
         settings = get_settings()
-        
         # Определяем URL-адреса для каждого сервиса
-        # Если передан base_url (в старом коде), считаем его LLM-адресом
         if base_url:
             self.llm_url = base_url.rstrip('/')
         else:
             self.llm_url = settings.get_llm_service_url().rstrip('/')
-
-        self.stt_url = settings.microservice_http_base("stt_service_docker", "stt_service_port")
-        self.tts_url = settings.microservice_http_base("tts_service_docker", "tts_service_port")
-        self.ocr_url = settings.microservice_http_base("ocr_service_docker", "ocr_service_port")
-        self.diarization_url = settings.microservice_http_base(
-            "diarization_service_docker", "diarization_service_port"
-        )
-        
+        def _optional_url(docker_key: str, port_key: str):
+            try:
+                return settings.microservice_http_base(docker_key, port_key)
+            except Exception as e:
+                logger.warning("Optional service url not set %s/%s: %s", docker_key, port_key, e)
+                return None
+        self.stt_url = _optional_url("stt_service_docker", "stt_service_port")
+        self.tts_url = _optional_url("tts_service_docker", "tts_service_port")
+        self.ocr_url = _optional_url("ocr_service_docker", "ocr_service_port")
+        self.diarization_url = _optional_url("diarization_service_docker", "diarization_service_port")
         # Проверка на опечатки в LLM URL
         if "1lm-svc" in self.llm_url or "11m-svc" in self.llm_url:
             logger.error(f"ОБНАРУЖЕНА ОПЕЧАТКА В URL: {self.llm_url}. Исправляем.")
             self.llm_url = self.llm_url.replace("1lm-svc", "llm-svc").replace("11m-svc", "llm-svc")
-
+        # SSL verify — читаем напрямую из env, не зависим от config.yml
+        self._verify = _build_ssl_verify()
         # Несколько инстансов LLM: id -> base_url (из settings.llm_service.hosts)
         self.llm_hosts: Dict[str, str] = {}
         try:
@@ -151,119 +329,239 @@ class LLMClient:
         dh = getattr(settings.llm_service, "default_host_id", None)
         self.default_llm_host: str = dh if dh and dh in self.llm_hosts else next(iter(self.llm_hosts))
         self.llm_url = self.llm_hosts[self.default_llm_host]
-        
         logger.info(f"LLMClient инициализирован. Маршруты:")
         logger.info(
             f"  LLM: {self.llm_url} (hosts={list(self.llm_hosts.keys())}, default_host={self.default_llm_host}) | "
             f"STT: {self.stt_url} | TTS: {self.tts_url}"
         )
-            
-        self.api_key = api_key
-        # Берем таймаут из конфига LLM сервиса для совместимости
+        logger.info(f"  SSL verify: {self._verify}")
+        cfg_api_key = getattr(settings.llm_service, "api_key", None) or os.getenv("LLM_API_KEY")
+        self.api_key = api_key or cfg_api_key
+        if self.api_key:
+            logger.info("LLMClient: API key configured for upstream requests")
         try:
             self.timeout = settings.llm_service.timeout
-        except:
+        except Exception:
             self.timeout = 120.0
-        
+        # Дополнительно подхватываем хосты из новой секции llm_providers,
+        # чтобы PHOENIX/CORSUR были видны даже при legacy-маршрутизации llm_hosts.
+        try:
+            providers = getattr(settings, "llm_providers", None) or []
+            for p in providers:
+                if not isinstance(p, dict):
+                    continue
+                if not bool(p.get("enabled", True)):
+                    continue
+                pid = str(p.get("id") or "").strip()
+                burl = str(p.get("base_url") or "").strip().rstrip("/")
+                kind = str(p.get("kind") or "").strip().lower()
+                if pid and burl and kind in {"openai-compat", "llm-svc", "vllm", "ollama", "litellm"}:
+                    self.llm_hosts.setdefault(pid, burl)
+        except Exception as e:
+            logger.warning(f"LLM providers из конфига не разобраны: {e}")
     def _get_headers(self) -> Dict[str, str]:
         """Получение заголовков"""
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         if self.api_key:
             headers["X-API-Key"] = self.api_key
         return headers
-
     def _url_for_llm_host(self, host_id: Optional[str] = None) -> str:
-        """Legacy: base_url по host_id. Если registry готов — берём оттуда."""
-        r = get_registry_sync_or_none()
-        if r is not None:
-            try:
-                return r.get(host_id).base_url
-            except Exception:
-                pass
         hid = host_id if host_id and host_id in self.llm_hosts else self.default_llm_host
         return self.llm_hosts.get(hid) or self.llm_url
-
-    async def _get_provider(self, host_id: Optional[str] = None) -> LLMProvider:
-        """Единая точка получения провайдера с учётом legacy host_id."""
-        r = await get_registry()
-        return r.get(host_id)
-
-    # --- МЕТОДЫ LLM (делегируют в ProviderRegistry) ---
-
-    async def health_check(self, host_id: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Проверка состояния LLM-провайдера. Возвращает dict с ключами
-        ``status``, ``loaded_models``, ``model_loaded``, ``model_name`` —
-        совместимый с legacy-вызывающими.
-        """
+    def _parse_json_or_log(
+        self,
+        response: httpx.Response,
+        *,
+        op_name: str,
+        base_url: str,
+    ) -> Tuple[Optional[Any], Optional[Dict[str, Any]]]:
         try:
-            provider = await self._get_provider(host_id)
-        except Exception as e:
-            return {"status": "unhealthy", "error": str(e)}
-        h: ProviderHealth = await provider.health()
-        result: Dict[str, Any] = {
-            "status": "healthy" if h.healthy else "unhealthy",
-            "loaded_models": list(h.loaded_models),
-            "model_loaded": bool(h.loaded_models),
-            "model_name": h.loaded_models[0] if h.loaded_models else None,
-        }
-        if h.error:
-            result["error"] = h.error
-        if h.raw:
-            result.setdefault("raw", h.raw)
-        return result
-
-    async def get_models(self, host_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Список моделей одного провайдера (legacy: только один host)."""
-        try:
-            provider = await self._get_provider(host_id)
-        except Exception as e:
-            logger.error("get_models(%s) registry error: %s", host_id, e)
-            return []
-        models: List[ModelInfo] = await provider.list_models()
-        # Формат, совместимый с legacy-вызывающими: список dict c "id" и "name".
-        return [
-            {
-                "id": m.model_id,
-                "name": m.display_name or m.model_id,
-                "provider_id": m.provider_id,
-                **(m.extra or {}),
+            return response.json(), None
+        except ValueError:
+            content_type = response.headers.get("content-type", "")
+            body_preview = (response.text or "")[:300]
+            diag = {
+                "status": "unhealthy",
+                "error": "invalid_json_response",
+                "http_status": response.status_code,
+                "content_type": content_type,
+                "body_preview": body_preview,
             }
-            for m in models
-        ]
-
+            logger.error(
+                "%s: невалидный JSON от LLM (%s) status=%s content-type=%s body=%r",
+                op_name,
+                base_url,
+                response.status_code,
+                content_type,
+                body_preview,
+            )
+            return None, diag
+    # --- МЕТОДЫ LLM ---
+    async def health_check(self, host_id: Optional[str] = None) -> Dict[str, Any]:
+        """Проверка состояния LLM на указанном хосте (или default_llm_host)."""
+        try:
+            from backend.llm_providers import get_registry  # type: ignore
+            registry = await get_registry()
+            pid = host_id if host_id and registry.contains(host_id) else None
+            provider = registry.get(pid)
+            health = await provider.health()
+            return {
+                "status": "healthy" if health.healthy else "unhealthy",
+                "provider_id": provider.id,
+                "provider_kind": provider.kind,
+                "loaded_models": health.loaded_models,
+                "error": health.error,
+                "raw": health.raw,
+            }
+        except Exception as e:
+            logger.debug("ProviderRegistry health_check fallback to legacy HTTP: %s", e)
+        base = self._url_for_llm_host(host_id)
+        try:
+            async with httpx.AsyncClient(verify=self._verify, timeout=10.0) as client:
+                for path in ("/v1/health", "/health", "/v1/models"):
+                    response = await client.get(f"{base}{path}", headers=self._get_headers())
+                    if not response.is_success:
+                        continue
+                    payload, parse_error = self._parse_json_or_log(
+                        response,
+                        op_name=f"health_check:{path}",
+                        base_url=base,
+                    )
+                    if parse_error:
+                        continue
+                    if path == "/v1/models":
+                        if isinstance(payload, dict) and isinstance(payload.get("data"), list):
+                            return {"status": "healthy", "source": path, "models_count": len(payload.get("data", []))}
+                        continue
+                    if isinstance(payload, dict):
+                        if "status" not in payload:
+                            payload["status"] = "healthy"
+                        payload.setdefault("source", path)
+                        return payload
+                    return {"status": "healthy", "source": path, "data": payload}
+                return {"status": "unhealthy", "error": "no_valid_health_endpoint"}
+        except Exception as e:
+            logger.error(f"Ошибка здоровья LLM ({base}): {e}")
+            return {"status": "unhealthy", "error": str(e)}
+    async def get_models(self, host_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Получение списка моделей с инстанса host_id."""
+        try:
+            from backend.llm_providers import get_registry  # type: ignore
+            registry = await get_registry()
+            pid = host_id if host_id and registry.contains(host_id) else None
+            provider = registry.get(pid)
+            models = await provider.list_models()
+            data = []
+            for m in models:
+                data.append(
+                    {
+                        "id": m.model_id,
+                        "provider_id": m.provider_id,
+                        "path": m.path,
+                        "display_name": m.display_name or m.model_id,
+                        "context_size": m.context_size,
+                        "extra": m.extra or {},
+                    }
+                )
+            return data
+        except Exception as e:
+            logger.debug("ProviderRegistry get_models fallback to legacy HTTP: %s", e)
+        base = self._url_for_llm_host(host_id)
+        try:
+            async with httpx.AsyncClient(verify=self._verify, timeout=10.0) as client:
+                response = await client.get(f"{base}/v1/models", headers=self._get_headers())
+                response.raise_for_status()
+                data, parse_error = self._parse_json_or_log(
+                    response,
+                    op_name="get_models",
+                    base_url=base,
+                )
+                if parse_error:
+                    return []
+                if not isinstance(data, dict):
+                    logger.error("get_models: неожиданный формат ответа (%s): %r", base, type(data).__name__)
+                    return []
+                return data.get("data", [])
+        except Exception as e:
+            logger.error(f"Ошибка получения моделей ({base}): {e}")
+            return []
     async def load_model(self, model_name: str, host_id: Optional[str] = None) -> bool:
-        """Загрузить/переключить модель — делегирует в ``provider.ensure_model_loaded``."""
+        """Запросить LLM-сервис загрузит
+ь/переключить модель по имени (для llama.cpp backend)."""
         if not model_name or not model_name.strip():
             logger.warning("load_model: пустое имя модели")
             return False
-        provider = await self._get_provider(host_id)
-        return await provider.ensure_model_loaded(model_name.strip())
-
-    async def load_model_if_needed(self, model_name: str, host_id: Optional[str] = None) -> bool:
-        """Синоним ``load_model`` — ``ensure_model_loaded`` уже no-op если модель в пуле."""
-        return await self.load_model(model_name, host_id=host_id)
-
-    async def unload_excess_llm_models(self, host_id: Optional[str] = None) -> bool:
-        """
-        Очистка пула llm-svc. Для провайдеров, где пула нет (vLLM/Ollama/OpenAI)
-        возвращает True (нечего выгружать).
-        """
+        model_name = model_name.strip()
         try:
+            from backend.llm_providers import get_registry  # type: ignore
             registry = await get_registry()
+            pid = host_id if host_id and registry.contains(host_id) else None
+            provider = registry.get(pid)
+            ok = await provider.ensure_model_loaded(model_name)
+            logger.info(
+                "[load_model][provider] provider=%s kind=%s model=%r result=%s",
+                provider.id,
+                provider.kind,
+                model_name,
+                ok,
+            )
+            return bool(ok)
         except Exception as e:
-            logger.error("unload_excess_llm_models: registry error: %s", e)
+            logger.debug("ProviderRegistry load_model fallback to legacy HTTP: %s", e)
+        base = self._url_for_llm_host(host_id)
+        load_timeout = httpx.Timeout(1200.0, connect=10.0, read=1200.0, write=30.0)
+        try:
+            async with httpx.AsyncClient(verify=self._verify, timeout=load_timeout) as client:
+                response = await client.post(
+                    f"{base}/v1/models/load",
+                    headers=self._get_headers(),
+                    json={"model": model_name}
+                )
+                if not response.is_success:
+                    logger.error(f"llm-svc load_model failed ({base}): {response.status_code} {response.text}")
+                    return False
+                data = response.json()
+                if data.get("success"):
+                    logger.info(f"llm-svc ({base}) переключился на модель: {model_name}")
+                    return True
+                logger.warning(f"llm-svc load_model returned success=False: {data}")
+                return False
+        except Exception as e:
+            logger.error(f"Ошибка вызова llm-svc load_model ({base}): {e}")
             return False
-        targets: List[LLMProvider] = (
-            [registry.get(host_id)] if host_id else [p for p in registry.all() if isinstance(p, LlmSvcProvider)]
-        )
+    async def load_model_if_needed(self, model_name: str, host_id: Optional[str] = None) -> bool:
+        """POST /v1/models/load только если модели ещё нет в пуле на этом хосте."""
+        if not model_name or not model_name.strip():
+            return False
+        model_name = model_name.strip()
+        health = await self.health_check(host_id=host_id)
+        if pool_contains_model(health, model_name):
+            logger.info(f"llm-svc: модель {model_name!r} уже в пуле ({host_id or self.default_llm_host}), пропуск load_model")
+            return True
+        return await self.load_model(model_name, host_id=host_id)
+    async def unload_excess_llm_models(self, host_id: Optional[str] = None) -> bool:
+        """Оставить в llm-svc только модель из конфига сервиса. host_id=None — все хосты."""
+        t = httpx.Timeout(1200.0, connect=10.0, read=1200.0, write=60.0)
+        targets = [host_id] if host_id else list(self.llm_hosts.keys())
         ok_all = True
-        for p in targets:
-            if isinstance(p, LlmSvcProvider):
-                if not await p.unload_excess():
-                    ok_all = False
+        for hid in targets:
+            base = self._url_for_llm_host(hid)
+            try:
+                async with httpx.AsyncClient(verify=self._verify, timeout=t) as client:
+                    response = await client.post(
+                        f"{base}/v1/models/unload-excess",
+                        headers=self._get_headers(),
+                    )
+                    if not response.is_success:
+                        logger.error(f"llm-svc unload-excess failed ({base}): {response.status_code} {response.text}")
+                        ok_all = False
+                        continue
+                    data = response.json()
+                    ok_all = ok_all and bool(data.get("success", True))
+            except Exception as e:
+                logger.error(f"Ошибка вызова llm-svc unload-excess ({base}): {e}")
+                ok_all = False
         return ok_all
-
     async def chat_completion(
         self,
         messages: List[Dict[str, str]],
@@ -272,45 +570,64 @@ class LLMClient:
         max_tokens: int = 1024,
         stream: bool = False,
         host_id: Optional[str] = None,
+        request_extra: Optional[Dict[str, Any]] = None,
     ) -> Any:
-        """
-        Non-streaming chat. Возвращает OpenAI-style dict ``{"choices": [...]}``
-        для совместимости с legacy-вызывающими.
-        """
-        provider = await self._get_provider(host_id)
-        content = await provider.chat(
-            messages=messages, model=model, temperature=temperature, max_tokens=max_tokens,
-        )
-        return {
-            "choices": [{"message": {"role": "assistant", "content": content}, "index": 0, "finish_reason": "stop"}],
+        """Генерация ответа LLM"""
+        payload: Dict[str, Any] = {
             "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": stream,
         }
+        if request_extra:
+            for k, v in request_extra.items():
+                if v is not None:
+                    payload[k] = v
+        base = self._url_for_llm_host(host_id)
+        if "enable_thinking" in payload:
+            print(
+                f"[LLMClient] POST /v1/chat/completions host={host_id!r} model={model!r} "
+                f"enable_thinking={payload.get('enable_thinking')!r} stream={stream!r}",
+                flush=True,
+            )
+        logger.info(f"[LLMClient] Запрос к {base}/v1/chat/completions model={model!r}")
+        try:
+            request_timeout = httpx.Timeout(self.timeout, connect=10.0, read=self.timeout, write=10.0)
+            async with httpx.AsyncClient(verify=self._verify, timeout=request_timeout) as client:
+                response = await client.post(
+f"{base}/v1/chat/completions",
+                    headers=self._get_headers(),
+                    json=payload,
+                )
+                response.raise_for_status()
+                return response.json()
+        except Exception as e:
+            logger.error(f"Ошибка чата LLM: {e}")
+            raise
     async def get_transcription_health(self) -> Dict[str, Any]:
         """Проверка состояния STT (WhisperX)"""
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(verify=self._verify, timeout=5.0) as client:
                 response = await client.get(f"{self.stt_url}/v1/whisperx/health")
                 if response.status_code == 200:
                     return response.json()
                 return {"status": "unhealthy", "code": response.status_code}
         except Exception as e:
             return {"status": "unhealthy", "error": str(e)}
-
     async def get_tts_health(self) -> Dict[str, Any]:
         """Проверка состояния TTS сервиса"""
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(verify=self._verify, timeout=5.0) as client:
                 response = await client.get(f"{self.tts_url}/v1/health")
                 if response.status_code == 200:
                     return response.json()
                 return {"status": "unhealthy", "code": response.status_code}
         except Exception as e:
             return {"status": "unhealthy", "error": str(e)}
-
     # ==========================================
     # STT МЕТОДЫ (ИСПОЛЬЗУЮТ self.stt_url)
     # ==========================================
-
     async def transcribe_audio_whisperx(
         self,
         audio_file: bytes,
@@ -320,10 +637,7 @@ class LLMClient:
         batch_size: int = 16,
         word_timestamps: bool = True,
     ) -> Dict[str, Any]:
-        """Транскрибация аудио файла через WhisperX.
-        word_timestamps=True запрашивает временны́е метки на уровне слов —
-        они нужны для точного сопоставления со спикерами (аналог assign_word_speakers).
-        """
+        """Транскрибация аудио файла через WhisperX."""
         try:
             ext = os.path.splitext(filename)[1].lower()
             content_type_map = {
@@ -338,47 +652,42 @@ class LLMClient:
                 "batch_size": batch_size,
                 "word_timestamps": str(word_timestamps).lower(),
             }
-            
-            # Таймаут 5 часов
             whisperx_timeout = httpx.Timeout(18000.0, connect=10.0, read=18000.0, write=60.0)
-            async with httpx.AsyncClient(timeout=whisperx_timeout) as client:
+            async with httpx.AsyncClient(verify=self._verify, timeout=whisperx_timeout) as client:
                 response = await client.post(
                     f"{self.stt_url}/v1/whisperx/transcribe",
                     files=files,
                     data=data,
-                    headers={"Accept": "application/json"}
+                    headers={"Accept": "application/json"},
                 )
                 response.raise_for_status()
                 return response.json()
         except Exception as e:
             logger.error(f"Ошибка транскрибации WhisperX: {e}")
             raise
-
     async def reload_whisperx_models(self) -> Dict[str, Any]:
         """Принудительная перезагрузка моделей WhisperX"""
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with httpx.AsyncClient(verify=self._verify, timeout=60.0) as client:
                 response = await client.post(
                     f"{self.stt_url}/v1/whisperx/reload",
-                    headers={"Accept": "application/json"}
+                    headers={"Accept": "application/json"},
                 )
                 response.raise_for_status()
                 return response.json()
         except Exception as e:
             logger.error(f"Ошибка перезагрузки WhisperX: {e}")
             raise
-
     # ==========================================
     # TTS МЕТОДЫ (ИСПОЛЬЗУЮТ self.tts_url)
     # ==========================================
-
     async def synthesize_speech(
         self,
         text: str,
         language: str = "auto",
         speaker: str = "baya",
         sample_rate: int = 48000,
-        speech_rate: float = 1.0
+        speech_rate: float = 1.0,
     ) -> bytes:
         """Синтез речи Silero"""
         try:
@@ -387,52 +696,51 @@ class LLMClient:
                 "language": language,
                 "speaker": speaker,
                 "sample_rate": sample_rate,
-                "speech_rate": speech_rate
+                "speech_rate": speech_rate,
             }
-            async with httpx.AsyncClient(timeout=300.0) as client:
+            async with httpx.AsyncClient(verify=self._verify, timeout=300.0) as client:
                 response = await client.post(
                     f"{self.tts_url}/v1/synthesize",
                     data=data,
-                    headers={"Accept": "audio/wav"}
+                    headers={"Accept": "audio/wav"},
                 )
                 response.raise_for_status()
                 return response.content
         except Exception as e:
             logger.error(f"Ошибка синтеза речи: {e}")
             raise
-
     # ==========================================
     # DIARIZATION МЕТОДЫ (ИСПОЛЬЗУЮТ self.diarization_url)
     # ==========================================
-
     async def diarize_audio(
         self,
         audio_file: bytes,
         filename: str = "audio.wav",
         min_speakers: int = 1,
         max_speakers: int = 10,
-        min_duration: float = 0.5
+        min_duration: float = 0.5,
     ) -> Dict[str, Any]:
         """Диаризация Pyannote"""
         try:
             files = {"file": (filename, io.BytesIO(audio_file), "audio/wav")}
-            data = {"min_speakers": min_speakers, "max_speakers": max_speakers, "min_duration": min_duration}
-            
-            # Таймаут 5 часов
+            data = {
+                "min_speakers": min_speakers,
+                "max_speakers": max_speakers,
+                "min_duration": min_duration,
+            }
             diarize_timeout = httpx.Timeout(18000.0, connect=10.0, read=18000.0, write=60.0)
-            async with httpx.AsyncClient(timeout=diarize_timeout) as client:
+            async with httpx.AsyncClient(verify=self._verify, timeout=diarize_timeout) as client:
                 response = await client.post(
                     f"{self.diarization_url}/v1/diarize",
                     files=files,
                     data=data,
-                    headers={"Accept": "application/json"}
+                    headers={"Accept": "application/json"},
                 )
                 response.raise_for_status()
                 return response.json()
         except Exception as e:
             logger.error(f"Ошибка диаризации: {e}")
             raise
-
     async def transcribe_with_diarization(
         self,
         audio_file: bytes,
@@ -451,35 +759,27 @@ class LLMClient:
         Возвращает {success, text, segments, speakers_count}.
         """
         try:
-            long_timeout = httpx.Timeout(18000.0, connect=10.0, read=18000.0, write=60.0)
-            
             # Шаг 1: Диаризация
-            # min_duration=0.5 — позволяет детектировать короткие реплики (< 1 сек),
-            # например "Да, всем добрый день." в начале разговора.
             logger.info(f"[transcribe_with_diarization] Шаг 1: диаризация... engine={engine}")
             diarization_result = await self.diarize_audio(
                 audio_file, filename=filename,
                 min_speakers=min_speakers, max_speakers=max_speakers,
-                min_duration=min_duration
+                min_duration=min_duration,
             )
-            
             diar_segments = diarization_result.get("segments", [])
             if not diar_segments:
                 logger.warning("[transcribe_with_diarization] Диаризация не нашла сегментов")
                 return {"success": True, "text": "", "segments": [], "speakers_count": 0}
-            
             # Шаг 2: Транскрипция
-            logger.info(f"[transcribe_with_diarization] Шаг 2: транскрипция (WhisperX, запрошенный engine={engine})...")
+            logger.info(f"[transcribe_with_diarization] Шаг 2: транскрипция (WhisperX, engine={engine})...")
             transcription_result = await self.transcribe_audio_whisperx(
                 audio_file, filename=filename, language=language
             )
-
             full_text = (
                 transcription_result.get("text", "")
                 if isinstance(transcription_result, dict)
                 else str(transcription_result)
             )
-            
             # Шаг 3: Сопоставление сегментов STT и диаризации по времени
             stt_segments = transcription_result.get("segments", []) if isinstance(transcription_result, dict) else []
             has_timestamps = (
@@ -489,25 +789,17 @@ class LLMClient:
                     for s in stt_segments
                 )
             )
-            
             if has_timestamps:
                 diar_sorted = sorted(diar_segments, key=lambda s: s.get("start", 0))
-
-                # Проверяем, есть ли word-level timestamps (приходят от WhisperX как
-                # segment["words"] = [{word, start, end}, ...]).
-                # Если есть — сопоставляем каждое слово со спикером, затем собираем
-                # сегменты (аналог whisperx.assign_word_speakers).
-                # Если нет — fallback: max-overlap на уровне сегментов.
                 all_words = []
                 for stt in stt_segments:
                     words = stt.get("words") or []
                     for w in words:
                         if isinstance(w, dict) and "start" in w and "end" in w and w.get("word"):
                             all_words.append(w)
-
                 if all_words:
-                    # --- Word-level сопоставление (точный аналог assign_word_speakers) ---
-                    raw_parts = []  # (start, end, speaker, word)
+                    # --- Word-level сопоставление ---
+                    raw_parts = []
                     for w in all_words:
                         w_start = float(w.get("start", 0))
                         w_end = float(w.get("end", 0))
@@ -524,8 +816,6 @@ class LLMClient:
                                 best_overlap = overlap
                                 best_speaker = d.get("speaker", "SPEAKER_0")
                         raw_parts.append((w_start, w_end, best_speaker, word_text))
-
-                    # Собираем слова в сегменты: слова одного спикера подряд → один сегмент
                     result_segments = []
                     for w_start, w_end, speaker, word_text in raw_parts:
                         if result_segments and result_segments[-1]["speaker"] == speaker:
@@ -540,33 +830,30 @@ class LLMClient:
                             })
                     logger.info(f"[transcribe_with_diarization] Word-level сопоставление: {len(result_segments)} сегментов")
                 else:
-                    # --- Segment-level: разбиваем каждый STT-сегмент по границам диаризации,
-                    # затем объединяем смежные части одного спикера в один блок. ---
-                    raw_parts = []  # (start, end, speaker, text_fragment)
+                    # --- Segment-level ---
+                    raw_parts = []
                     for stt in stt_segments:
                         t_start = float(stt.get("start", 0))
                         t_end = float(stt.get("end", 0))
                         text = (stt.get("text") or "").strip()
                         if not text:
                             continue
-
                         overlapping = sorted([
-                            (float(d.get("start", 0)), float(d.get("end", 0)),
-                             d.get("speaker", "SPEAKER_0"),
-                             max(0.0, min(t_end, float(d.get("end", 0))) - max(t_start, float(d.get("start", 0)))))
+                            (
+                                float(d.get("start", 0)), float(d.get("end", 0)),
+                                d.get("speaker", "SPEAKER_0"),
+                                max(0.0, min(t_end, float(d.get("end", 0))) - max(t_start, float(d.get("start", 0)))),
+                            )
                             for d in diar_sorted
                             if max(0.0, min(t_end, float(d.get("end", 0))) - max(t_start, float(d.get("start", 0)))) > 0
                         ], key=lambda x: x[0])
-
                         if not overlapping:
                             nearest = min(diar_sorted, key=lambda d: abs(float(d.get("start", 0)) - t_start))
                             raw_parts.append((t_start, t_end, nearest.get("speaker", "SPEAKER_0"), text))
                             continue
-
                         if len(overlapping) == 1:
                             raw_parts.append((t_start, t_end, overlapping[0][2], text))
                         else:
-                            # Делим текст пропорционально времени каждого спикера
                             total_overlap = sum(o for _, _, _, o in overlapping)
                             words_list = text.split()
                             word_idx = 0
@@ -580,8 +867,6 @@ class LLMClient:
                                 chunk_text = " ".join(chunk).strip()
                                 if chunk_text:
                                     raw_parts.append((d_start, d_end, speaker, chunk_text))
-
-                    # Объединяем смежные части одного спикера в один блок
                     result_segments = []
                     for p_start, p_end, speaker, text in sorted(raw_parts, key=lambda x: x[0]):
                         if result_segments and result_segments[-1]["speaker"] == speaker:
@@ -611,58 +896,49 @@ class LLMClient:
                 if word_idx < total_words and result_segments:
                     result_segments[-1]["text"] += " " + " ".join(words[word_idx:])
                 logger.info(f"[transcribe_with_diarization] Fallback по длительности: {len(diar_segments)} сегментов")
-            
             return {
                 "success": True,
                 "text": full_text,
                 "segments": result_segments,
-                "speakers_count": diarization_result.get("speakers_count", 0)
+                "speakers_count": diarization_result.get("speakers_count", 0),
             }
-            
         except Exception as e:
             logger.error(f"[transcribe_with_diarization] Ошибка: {e}")
             raise
-
     # ==========================================
-    # OCR - запросы идут в ocr-service (Surya), не в LLM (self.ocr_url)
+    # OCR (self.ocr_url)
     # ==========================================
-
     async def recognize_text_from_image(
         self,
         image_file: bytes,
         filename: str = "image.jpg",
-        languages: str = "ru,en"
+        languages: str = "ru,en",
     ) -> Dict[str, Any]:
-        """Распознавание текста с изображения: POST в ocr-service (Surya), не в LLM."""
+        """Распознавание текста с изображения через ocr-service (Surya)."""
         try:
             mime = "image/jpeg"
-            if filename.lower().endswith(".png"): mime = "image/png"
-            
+            if filename.lower().endswith(".png"):
+                mime = "image/png"
             files = {"file": (filename, io.BytesIO(image_file), mime)}
             data = {"languages": languages}
-            
-            async with httpx.AsyncClient(timeout=300.0) as client:
+            async with httpx.AsyncClient(verify=self._verify, timeout=300.0) as client:
                 response = await client.post(
                     f"{self.ocr_url}/v1/ocr",
                     files=files,
                     data=data,
-                    headers={"Accept": "application/json"}
+headers={"Accept": "application/json"},
                 )
                 response.raise_for_status()
                 return response.json()
         except Exception as e:
             logger.error(f"Ошибка OCR: {e}")
             raise
-
 class LLMService:
     """Сервис высокого уровня для работы с AI"""
-    
     def __init__(self, base_url: Optional[str] = None, api_key: Optional[str] = None):
         self.client = LLMClient(base_url, api_key)
-        # Сериализуем переключение моделей в llm-svc, чтобы параллельные чаты не ломали друг другу состояние
+        # Сериализуем переключение моделей в llm-svc
         self._model_switch_lock = asyncio.Lock()
-        
-        # Получаем настройки модели из конфигурации 
         settings = get_settings()
         if settings and hasattr(settings, 'llm_service'):
             llm_svc_config = settings.llm_service
@@ -673,7 +949,6 @@ class LLMService:
             self.model_name = "qwen-coder-30b"
             self.fallback_model = None
             self.auto_select = False
-        
     async def initialize(self) -> bool:
         """Инициализация связи с сервисом LLM (первый доступный хост из конфига)."""
         try:
@@ -696,12 +971,8 @@ class LLMService:
         except Exception as e:
             logger.error(f"Ошибка инициализации LLMService: {e}")
             return False
-
     async def _sync_loaded_model_name_from_health(self, host_id: Optional[str] = None):
-        """
-        Подтягивает self.model_name из GET /v1/health выбранного хоста (по умолчанию default_llm_host).
-        Возвращает (model_loaded_ok, health_json) для проверки пула loaded_models
-        """
+        """Подтягивает self.model_name из GET /v1/health выбранного хоста."""
         try:
             hid = host_id or self.client.default_llm_host
             health = await self.client.health_check(host_id=hid)
@@ -719,45 +990,38 @@ class LLMService:
         except Exception as e:
             logger.debug(f"[LLMService] Пропуск синхронизации model_name по health: {e}")
             return False, {}
-    
-    def prepare_messages(self, prompt: str, history: Optional[List[Dict[str, str]]] = None, 
-                        system_prompt: Optional[str] = None) -> List[Dict[str, str]]:
-        """Подготовка сообщений для OpenAI API формата """
+    def prepare_messages(
+        self,
+        prompt: str,
+        history: Optional[List[Dict[str, str]]] = None,
+        system_prompt: Optional[str] = None,
+    ) -> List[Dict[str, str]]:
+        """Подготовка сообщений для OpenAI API формата"""
         messages = []
-        
-        # Добавляем системный промпт 
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         elif history and len(history) > 0:
-            system_prompt_with_history = """Ты - полезный AI ассистент. У тебя есть доступ к полной истории диалога с пользователем.       
-            Важные возможности:
-            - Ты МОЖЕШЬ обращаться к предыдущим сообщениям в диалоге
-            - Ты МОЖЕШЬ подсчитать количество токенов и сообщений в истории
-            - Ты ВИДИШЬ все предыдущие сообщения в этом диалоге
-            - Ты МОЖЕШЬ ссылаться на информацию из предыдущих сообщений
-
-            Когда пользователь спрашивает о предыдущих сообщениях или токенах - используй доступную историю для ответа."""
+            system_prompt_with_history = (
+                "Ты - полезный AI ассистент. У тебя есть доступ к полной истории диалога с пользователем. "
+                "Важные возможности:\n"
+                "- Ты МОЖЕШЬ обращаться к предыдущим сообщениям в диалоге\n"
+                "- Ты МОЖЕШЬ подсчитать количество токенов и сообщений в истории\n"
+                "- Ты ВИДИШЬ все предыдущие сообщения в этом диалоге\n"
+                "- Ты МОЖЕШЬ ссылаться на информацию из предыдущих сообщений\n"
+                "Когда пользователь спрашивает о предыдущих сообщениях или токенах - используй доступную историю для ответа."
+            )
             messages.append({"role": "system", "content": system_prompt_with_history})
-        
-        # Наполнение историей с ограничением по токенам
-        # Приблизительная оценка: 1 токен ~ 4 символа для латиницы, ~2 для кириллицы
-        # Оставляем запас для системного промпта (~200 токенов), текущего запроса и ответа (max_tokens)
-        MAX_CONTEXT_TOKENS = 28000  # Для моделей с большим контекстом (qwen2.5 32k), чтобы помещалась история при большом RAG
-        
+        MAX_CONTEXT_TOKENS = 28000
         if history:
-            # Считаем токены текущего промпта и системного сообщения
             system_tokens = sum(len(m.get("content", "")) // 3 for m in messages)
             prompt_tokens = len(prompt) // 3
-            used_tokens = system_tokens + prompt_tokens + 1024  # запас на ответ
-            
-            # Добавляем историю с конца (новые сообщения важнее)
+            used_tokens = system_tokens + prompt_tokens + 1024
             trimmed_history = []
             for entry in reversed(history):
                 role = entry.get("role", "user")
                 content = entry.get("content", "")
                 if role not in ["user", "assistant", "system"]:
                     continue
-                # Обрезаем слишком длинные сообщения из истории (ошибки, документы)
                 if len(content) > 2000:
                     content = content[:2000] + "... [обрезано]"
                 entry_tokens = len(content) // 3
@@ -766,15 +1030,17 @@ class LLMService:
                     break
                 trimmed_history.append({"role": role, "content": content})
                 used_tokens += entry_tokens
-            
-            # Восстанавливаем хронологический порядок
             for entry in reversed(trimmed_history):
                 messages.append(entry)
-        
-        # Текущий запрос
         messages.append({"role": "user", "content": prompt})
         return messages
-    
+
+    @staticmethod
+    def _thinking_request_extra(enable_thinking: Optional[bool]) -> Optional[Dict[str, Any]]:
+        if enable_thinking is None:
+            return None
+        return {"enable_thinking": bool(enable_thinking)}
+
     async def generate_response(
         self,
         prompt: str,
@@ -783,19 +1049,24 @@ class LLMService:
         temperature: float = 0.7,
         max_tokens: int = 1024,
         streaming: bool = False,
-        stream_callback: Optional[Callable[[str, str], bool]] = None,
+        stream_callback: Optional[Callable[..., bool]] = None,
         images: Optional[List[str]] = None,
-        model_path: Optional[str] = None
+        model_path: Optional[str] = None,
+        enable_thinking: Optional[bool] = None,
     ) -> str:
         """Генерация ответа через распределенную систему"""
+        cef_llm_rid = uuid.uuid4().hex
         try:
             if history:
                 logger.info(f"История диалога: {len(history)} сообщений передается в LLM")
-            
             messages = self.prepare_messages(prompt, history, system_prompt)
-            
-            # Обработка изображений для мультимодальных моделей
-            # LLM-сервис в другом контейнере - передаём изображения как data URL (base64), а не file://
+            req_extra = self._thinking_request_extra(enable_thinking)
+            logger.info(
+                "[generate_response] thinking flag: enable_thinking=%r req_extra=%s",
+                enable_thinking,
+                req_extra,
+            )
+            # Обработка изображений
             if images:
                 logger.info(f"Добавление {len(images)} изображений к запросу")
                 import base64
@@ -820,149 +1091,407 @@ class LLMService:
                             for url in image_urls:
                                 msg["content"].append({
                                     "type": "image_url",
-                                    "image_url": {"url": url}
+                                    "image_url": {"url": url},
                                 })
                             break
-            
-            # Разрешаем путь модели через Registry (поддерживает новый формат
-            # <provider_id>/<model_id> и legacy llm-svc://host/model).
-            registry = await get_registry()
-            provider, resolved_model = registry.resolve(model_path)
-            # Если model_id в path не задан — используем закэшированный self.model_name
-            # (имя default-модели провайдера, подтягивается из health при initialize()).
-            model_to_use = resolved_model or self.model_name
-            if not model_to_use:
-                # Попытка: синхронизируем имя загруженной модели.
+            if not str(model_path or "").strip():
                 await self._sync_loaded_model_name_from_health()
-                model_to_use = self.model_name
-
+            hid, model_to_use = resolve_llm_host_and_model_for_svc(
+                model_path, self.model_name, self.client.llm_hosts, self.client.default_llm_host
+            )
+            # Для провайдеров без hot-swap (vLLM/OpenAI-compat) нельзя дергать
+            # POST /v1/models/load — модель выбирается только полем model в чате.
+            allow_hot_swap_load = True
+            try:
+                from backend.llm_providers import get_registry  # type: ignore
+                registry = await get_registry()
+                provider_ref, resolved_model = registry.resolve(model_path)
+                if resolved_model:
+                    model_to_use = resolved_model
+                invalid_model_tokens = {"", "llm-svc", "llm-svc://", "local", "default"}
+                if (model_to_use or "").strip().lower() in invalid_model_tokens:
+                    model_to_use = ""
+                if not provider_ref.capabilities.hot_swap:
+                    allow_hot_swap_load = False
+                    if model_to_use:
+                        self.model_name = model_to_use
+                # Для всех провайдеров кроме llm-svc — делегируем напрямую
+                # через provider_ref.chat() / stream_chat(), минуя LLMClient,
+                # который намертво привязан к urls.llm_service_port.
+                if provider_ref.kind != "llm-svc":
+                    eff_model = model_to_use
+                    if not eff_model:
+                        # Модель не задана — берём первую доступную у этого провайдера
+                        try:
+                            mlist = await provider_ref.list_models()
+                            if mlist:
+                                eff_model = mlist[0].model_id
+                                logger.info(
+                                    "[generate_response] model_path пустой → автовыбор %r"
+                                    " у провайдера %r",
+                                    eff_model, provider_ref.id,
+                                )
+                        except Exception as _le:
+                            logger.warning(
+                                "[generate_response] auto-select first model failed: %s", _le
+                            )
+                    if eff_model:
+                        logger.info(
+                            "[generate_response] non-llm-svc provider %r (%s), model=%r — "
+                            "делегирую через ProviderRegistry",
+                            provider_ref.id, provider_ref.kind, eff_model,
+                        )
+                        print(
+                            f"[generate_response] DELEGATE provider_id={provider_ref.id!r} kind={provider_ref.kind!r} "
+                            f"model={eff_model!r} streaming={streaming!r} enable_thinking={enable_thinking!r} "
+                            f"req_extra={req_extra!r}",
+                            flush=True,
+                        )
+                        if streaming and stream_callback:
+                            return await provider_ref.stream_chat(
+                                messages=messages,
+                                model=eff_model,
+                                callback=stream_callback,
+                                temperature=temperature,
+                                max_tokens=max_tokens,
+                                request_extra=req_extra,
+                            )
+                        else:
+                            return await provider_ref.chat(
+                                messages=messages,
+                                model=eff_model,
+                                temperature=temperature,
+                                max_tokens=max_tokens,
+                                request_extra=req_extra,
+                            )
+                    logger.warning(
+                        "[generate_response] provider %r: не удалось определить модель,"
+                        " fallback на LLMClient",
+                        provider_ref.id,
+                    )
+            except Exception as e:
+                logger.debug(f"[generate_response] provider resolve skipped: {e}")
+            health = await self.client.health_check(host_id=hid)
+            llm_ready = health.get("status") == "healthy"
             if str(model_path or "").strip():
                 logger.info(
-                    "[generate_response] model_path=%r → provider=%r model=%r",
-                    model_path, provider.id, model_to_use,
+                    f"[generate_response] model_path={model_path!r} → host={hid!r} model={model_to_use!r} "
+                    f"(llm-svc RAM ok: {llm_ready}, кэш имени: {self.model_name!r})"
                 )
-
-            # ensure_model_loaded сам делает всю работу:
-            # - llm-svc: POST /v1/models/load при необходимости (с внутренним _switch_lock);
-            # - vLLM/Ollama/OpenAI: проверка, что модель доступна (без сетевых побочных эффектов).
-            if model_to_use:
-                ok = await provider.ensure_model_loaded(model_to_use)
-                if ok:
-                    self.model_name = model_to_use
-                else:
-                    logger.warning(
-                        "[generate_response] provider=%s не готов выдать модель %r; "
-                        "используем текущее имя модели %r",
-                        provider.id, model_to_use, self.model_name,
-                    )
-                    model_to_use = self.model_name
-
+            in_pool = pool_contains_model(health, model_to_use)
+            if model_to_use and in_pool:
+                self.model_name = model_to_use
+            elif (
+                allow_hot_swap_load
+                and model_to_use
+                and (not llm_ready or not same_llm_svc_model_id(self.model_name, model_to_use))
+            ):
+                async with self._model_switch_lock:
+                    health2 = await self.client.health_check(host_id=hid)
+                    llm_ready2 = health2.get("status") == "healthy"
+                    if pool_contains_model(health2, model_to_use):
+                        self.model_name = model_to_use
+                    elif not llm_ready2 or not same_llm_svc_model_id(self.model_name, model_to_use):
+                        logger.info(
+                            f"[generate_response] Загрузка/переключение llm-svc на модель: {model_to_use!r} host={hid!r} "
+                            f"(было в RAM: {llm_ready2})"
+                        )
+                        ok = await self.client.load_model_if_needed(model_to_use, host_id=hid)
+                        if ok:
+                            self.model_name = model_to_use
+                            logger.info(f"[generate_response] llm-svc модель активна: {self.model_name!r}")
+                        else:
+                            logger.warning(
+                                f"[generate_response] Не удалось загрузить llm-svc {model_to_use!r}; "
+                                f"кэш имени: {self.model_name!r}"
+                            )
+                            model_to_use = self.model_name
             if streaming and stream_callback:
-                logger.info(
-                    "[generate_response] stream → provider=%s model=%r",
-                    provider.id, model_to_use,
-                )
-                return await provider.stream_chat(
-                    messages=messages,
+                log_cef_int003_llm_request(
+                    base_url=self.client._url_for_llm_host(hid),
+                    provider_id=str(hid),
                     model=model_to_use,
-                    callback=stream_callback,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
+                    request_uuid=cef_llm_rid,
+                )
+                return await self._stream_generation(
+                    messages,
+                    temperature,
+                    max_tokens,
+                    stream_callback,
+                    model_to_use,
+                    host_id=hid,
+                    request_extra=req_extra,
+                    cef_correlation_id=cef_llm_rid,
+                    cef_service_name=f"llm-svc-{hid}",
                 )
             else:
-                logger.info(
-                    "[generate_response] chat → provider=%s model=%r",
-                    provider.id, model_to_use,
-                )
-                content = await provider.chat(
-                    messages=messages,
+                logger.info(f"[generate_response] Запрос к LLM микросервису (host={hid!r})...")
+                log_cef_int003_llm_request(
+                    base_url=self.client._url_for_llm_host(hid),
+                    provider_id=str(hid),
                     model=model_to_use,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
+                    request_uuid=cef_llm_rid,
                 )
+                try:
+                    response = await self.client.chat_completion(
+                        messages=messages,
+                        model=model_to_use,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        stream=False,
+                        host_id=hid,
+                        request_extra=req_extra,
+                    )
+                except httpx.HTTPStatusError as he:
+                    log_cef_obj002_llm_api_failure(
+                        request_uuid=cef_llm_rid,
+                        code_status=he.response.status_code,
+                        text_status=(he.response.text or "")[:512],
+                        service_name=f"llm-svc-{hid}",
+                        status_code=he.response.status_code,
+                    )
+                    raise
+                if "choices" in response and len(response["choices"]) > 0:
+                    message = response["choices"][0].get("message") or {}
+                    logger.info(
+                        "[generate_response] non-stream message keys=%s has_reasoning_content=%s has_reasoning=%s",
+                        sorted(list(message.keys())),
+                        "reasoning_content" in message,
+                        "reasoning" in message,
+                    )
+                    content = _clean_llm_response(_normalize_content_payload(message.get("content")))
+                    reasoning = _normalize_reasoning_payload(
+                        message.get("reasoning_content") or message.get("reasoning")
+                    ).strip()
+                    thinking_requested = bool((req_extra or {}).get("enable_thinking"))
+                    if thinking_requested and reasoning and "<think>" not in content:
+                        content = f"<think>{reasoning}</think>\n\n{content}"
+                    # Быстрый режим: если модель встроила <think> в content — убираем.
+                    elif not thinking_requested and "<think>" in content.lower():
+                        content = _strip_think_tags(content)
+                    logger.info(f"[generate_response] Ответ получен ({len(content)} симв.)")
+                    return content
+                else:
+                    logger.error(f"[generate_response] Ошибка формата: {response}")
+                    log_cef_obj002_llm_api_failure(
+                        request_uuid=cef_llm_rid,
+                        code_status="FORMAT",
+                        text_status=str(response)[:512],
+                        service_name=f"llm-svc-{hid}",
+                        status_code=200,
+                    )
+                    return "Ошибка генерации ответа"
+        except httpx.HTTPStatusError:
+            raise
         except Exception as e:
             logger.error(f"Ошибка generate_response: {e}")
+            log_cef_obj002_llm_api_failure(
+                request_uuid=cef_llm_rid,
+                code_status="EXCEPTION",
+                text_status=str(e)[:512],
+                service_name="llm-svc",
+            )
             return f"Извините, произошла ошибка: {str(e)}"
-
     async def _stream_generation(
         self,
         messages: List[Dict[str, str]],
         temperature: float,
         max_tokens: int,
-        stream_callback: Callable[[str, str], bool],
+        stream_callback: Callable[..., bool],
         model_name: Optional[str] = None,
         host_id: Optional[str] = None,
+        request_extra: Optional[Dict[str, Any]] = None,
+        cef_correlation_id: Optional[str] = None,
+        cef_service_name: Optional[str] = None,
     ) -> str:
-        """
-        Legacy-совместимая обёртка: делегирует в ``provider.stream_chat``.
-        Новый код должен использовать ``provider.stream_chat`` напрямую.
-        """
+        """Потоковая генерация с парсингом SSE"""
+        accumulated_text = ""
+        reasoning_accumulated = ""
+        logged_delta_shape = False
         try:
-            provider = await self.client._get_provider(host_id)
-            return await provider.stream_chat(
-                messages=messages,
-                model=model_name or self.model_name,
-                callback=stream_callback,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
+            base = self.client._url_for_llm_host(host_id)
+            logger.info(f"[_stream_generation] Старт потока... host={host_id or self.client.default_llm_host!r}")
+            payload: Dict[str, Any] = {
+                "model": model_name or self.model_name,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "stream": True,
+            }
+            if request_extra:
+                for k, v in request_extra.items():
+                    if v is not None:
+                        payload[k] = v
+            thinking_requested = bool(payload.get("enable_thinking"))
+            if "enable_thinking" in payload:
+                print(
+                    f"[_stream_generation] POST /v1/chat/completions host={host_id!r} "
+                    f"model={payload.get('model')!r} enable_thinking={payload.get('enable_thinking')!r}",
+                    flush=True,
+                )
+            headers = {**self.client._get_headers(), "Accept": "text/event-stream"}
+            stream_read_timeout = 300.0
+            request_timeout = httpx.Timeout(stream_read_timeout, connect=10.0, read=stream_read_timeout, write=10.0)
+            async with httpx.AsyncClient(verify=self.client._verify, timeout=request_timeout) as client:
+                async with client.stream(
+                    "POST",
+                    f"{base}/v1/chat/completions",
+                    headers=headers,
+                    json=payload,
+                ) as response:
+                    try:
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as he:
+                        if cef_correlation_id:
+                            r = he.response
+                            _ts = (getattr(r, "reason_phrase", None) or str(r.status_code))[:512]
+                            log_cef_obj002_llm_api_failure(
+                                request_uuid=cef_correlation_id,
+                                code_status=r.status_code,
+                                text_status=_ts,
+                                service_name=cef_service_name or "llm-svc",
+                                status_code=r.status_code,
+                            )
+                        raise
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: "):
+                            data_str = line[6:]
+                            if data_str.strip() == "[DONE]":
+                                break
+                            try:
+                                data = json.loads(data_str)
+                                if "choices" in data and len(data["choices"]) > 0:
+                                    delta = data["choices"][0].get("delta", {})
+                                    if not logged_delta_shape:
+                                        logged_delta_shape = True
+                                        logger.info(
+                                            "[_stream_generation] first delta keys=%s has_reasoning_fields=%s has_content_fields=%s",
+                                            sorted(list(delta.keys())),
+                                            any(k in delta for k in ("reasoning_content", "reasoning", "reasoning_text", "thinking", "thought")),
+                                            any(k in delta for k in ("content", "text", "output_text", "message")),
+                                        )
+                                    reasoning_source = delta.get("reasoning_content")
+                                    if reasoning_source is None:
+                                        reasoning_source = delta.get("reasoning")
+                                    if reasoning_source is None:
+                                        reasoning_source = delta.get("reasoning_text")
+                                    if reasoning_source is None:
+                                        reasoning_source = delta.get("thinking")
+                                    if reasoning_source is None:
+                                        reasoning_source = delta.get("thought")
+                                    reasoning_chunk = _normalize_reasoning_payload(reasoning_source)
+                                    if thinking_requested and reasoning_chunk:
+                                        reasoning_accumulated += reasoning_chunk
+                                        if _invoke_stream_callback_safe(
+                                            stream_callback, reasoning_chunk, reasoning_accumulated, "reasoning"
+                                        ) is False:
+                                            logger.info("[_stream_generation] Прервано колбэком (reasoning)")
+                                            return _clean_llm_response(accumulated_text) if accumulated_text else ""
+                                    chunk = _normalize_content_payload(
+                                        delta.get("content")
+                                        or delta.get("text")
+                                        or delta.get("output_text")
+                                        or delta.get("message")
+                                    )
+                                    if not chunk:
+                                        continue
+                                    accumulated_text += chunk
+                                    if "<|im_start|>" in accumulated_text or "<|im_end|>" in accumulated_text:
+                                        logger.info("[_stream_generation] Обнаружен im_start/im_end тег, обрезаем")
+                                        break
+                                    if _invoke_stream_callback_safe(stream_callback, chunk, accumulated_text, "content") is False:
+                                        logger.info("[_stream_generation] Прервано колбэком")
+                                        return _clean_llm_response(accumulated_text) if accumulated_text else ""
+                            except json.JSONDecodeError:
+                                continue
+            cleaned = _clean_llm_response(accumulated_text)
+            if thinking_requested:
+                return cleaned
+            # Быстрый режим: если модель встроила <think> в content — убираем.
+            if "<think>" in cleaned.lower():
+                return _strip_think_tags(cleaned)
+            if reasoning_accumulated.strip() and "<think>" not in cleaned:
+                return f"<think>{reasoning_accumulated.strip()}</think>\n\n{cleaned}"
+            return cleaned
+        except httpx.HTTPStatusError:
+            raise
         except Exception as e:
             logger.error(f"Ошибка _stream_generation: {e}")
             import traceback
             logger.error(traceback.format_exc())
+            if cef_correlation_id:
+                log_cef_obj002_llm_api_failure(
+                    request_uuid=cef_correlation_id,
+                    code_status="STREAM",
+                    text_status=str(e)[:512],
+                    service_name=cef_service_name or "llm-svc",
+                )
             return f"Ошибка потока: {str(e)}"
-
-    # Прокси-методы (для поддержки старых вызовов через LLMService)
-    async def synthesize_speech(self, *args, **kwargs): return await self.client.synthesize_speech(*args, **kwargs)
-    async def transcribe_audio_whisperx(self, *args, **kwargs): return await self.client.transcribe_audio_whisperx(*args, **kwargs)
-    async def diarize_audio(self, *args, **kwargs): return await self.client.diarize_audio(*args, **kwargs)
-    async def transcribe_with_diarization(self, *args, **kwargs): return await self.client.transcribe_with_diarization(*args, **kwargs)
-    async def recognize_text_from_image(self, *args, **kwargs): return await self.client.recognize_text_from_image(*args, **kwargs)
-
+    # Прокси-методы для совместимости со старыми вызовами через LLMService
+    async def synthesize_speech(self, *args, **kwargs):
+        return await self.client.synthesize_speech(*args, **kwargs)
+    async def transcribe_audio_whisperx(self, *args, **kwargs):
+        return await self.client.transcribe_audio_whisperx(*args, **kwargs)
+    async def diarize_audio(self, *args, **kwargs):
+        return await self.client.diarize_audio(*args, **kwargs)
+    async def transcribe_with_diarization(self, *args, **kwargs):
+        return await self.client.transcribe_with_diarization(*args, **kwargs)
+    async def recognize_text_from_image(self, *args, **kwargs):
+        return await self.client.recognize_text_from_image(*args, **kwargs)
     async def get_audio_services_health(self) -> Dict[str, Any]:
-        """Сборное здоровье аудио-сервисов """
+        """Сборное здоровье аудио-сервисов"""
         try:
             v_h = await self.client.get_transcription_health()
             t_h = await self.client.get_tts_health()
             return {
-                "transcription": v_h, "tts": t_h,
-                "overall": "healthy" if (v_h.get("status")=="healthy" and t_h.get("status")=="healthy") else "unhealthy"
+                "transcription": v_h,
+                "tts": t_h,
+                "overall": "healthy" if (
+                    v_h.get("status") == "healthy" and t_h.get("status") == "healthy"
+                ) else "unhealthy",
             }
-        except: return {"overall": "unhealthy"}
-
+        except Exception:
+            return {"overall": "unhealthy"}
 # ==============================================================================
-# ГЛОБАЛЬНЫЙ ДОСТУП И СИНХРОННЫЕ ОБЕРТКИ 
+# ГЛОБАЛЬНЫЙ ДОСТУП И СИНХРОННЫЕ ОБЕРТКИ
 # ==============================================================================
-
 llm_service = None
-
 async def get_llm_service() -> LLMService:
     global llm_service
     if llm_service is None:
         llm_service = LLMService()
         await llm_service.initialize()
     return llm_service
-
-def ask_agent_llm_svc(prompt: str, history: Optional[List[Dict[str, str]]] = None, 
-                     max_tokens: Optional[int] = None, streaming: bool = False,
-                     stream_callback: Optional[Callable[[str, str], bool]] = None,
-                     model_path: Optional[str] = None, custom_prompt_id: Optional[str] = None,
-                     images: Optional[List[str]] = None,
-                     system_prompt: Optional[str] = None,
-                     temperature: Optional[float] = None) -> str:
-    """Синхронная обертка с защитой event loop """
+def ask_agent_llm_svc(
+    prompt: str,
+    history: Optional[List[Dict[str, str]]] = None,
+    max_tokens: Optional[int] = None,
+    streaming: bool = False,
+    stream_callback: Optional[Callable[..., bool]] = None,
+    model_path: Optional[str] = None,
+    custom_prompt_id: Optional[str] = None,
+    images: Optional[List[str]] = None,
+    system_prompt: Optional[str] = None,
+    temperature: Optional[float] = None,
+    enable_thinking: Optional[bool] = None,
+) -> str:
+    """Синхронная обертка с защитой event loop"""
     logger.info(f"[ask_agent_llm_svc] Called with prompt len: {len(prompt)}, streaming: {streaming}")
-    
     async def _async_generate():
         logger.info("[ask_agent_llm_svc] _async_generate started")
         try:
             service = await get_llm_service()
             logger.info("[ask_agent_llm_svc] Service obtained")
             result = await service.generate_response(
-                prompt=prompt, history=history, max_tokens=max_tokens or 1024,
-                streaming=streaming, stream_callback=stream_callback,
-                images=images, model_path=model_path,
+                prompt=prompt,
+                history=history,
+                max_tokens=max_tokens or 1024,
+                streaming=streaming,
+                stream_callback=stream_callback,
+                images=images,
+                model_path=model_path,
                 system_prompt=system_prompt,
+                enable_thinking=enable_thinking,
                 temperature=temperature if temperature is not None else 0.7,
             )
             logger.info("[ask_agent_llm_svc] generate_response completed")
@@ -976,29 +1505,25 @@ def ask_agent_llm_svc(prompt: str, history: Optional[List[Dict[str, str]]] = Non
         except Exception as e:
             logger.error(f"[ask_agent_llm_svc] Error in _async_generate: {e}")
             raise
-
-    def _run_async_generate_sync() -> str:
-        """Отдельный sync-вход для asyncio.run (в т.ч. из пула потоков)."""
-        return asyncio.run(_async_generate())
-
-    # Не используем try/except вокруг get_running_loop так, чтобы вложенные ошибки не цеплялись к RuntimeError в логах.
     try:
-        asyncio.get_running_loop()
+        loop = asyncio.get_running_loop()
+        # Уже внутри запущенного event loop — выполняем в потоке
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(lambda: asyncio.run(_async_generate()))
+            try:
+                return future.result(timeout=120)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 503:
+                    return "Сервис модели занят или перезагружается. Повторите запрос через несколько секунд."
+                raise
+            except Exception as e:
+                logger.error(f"[ask_agent_llm_svc] Error in executor: {e}")
+                return "Ошибка при обращении к модели."
     except RuntimeError:
-        return _run_async_generate_sync()
-
-    import concurrent.futures
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(_run_async_generate_sync)
-        try:
-            return future.result(timeout=120)
-        except Exception as e:
-            logger.error(f"[ask_agent_llm_svc] Error in executor: {e}")
-            return "Ошибка при обращении к модели."
-
+        # Нет running loop — запускаем свой цикл
+        return asyncio.run(_async_generate())
 # --- Обертки для аудио и OCR ---
-
 def _wrap_sync(coro):
     """Универсальный синхронный запуск"""
     try:
@@ -1009,31 +1534,30 @@ def _wrap_sync(coro):
                 return ex.submit(asyncio.run, coro).result()
         return loop.run_until_complete(coro)
     except RuntimeError:
-        # Только RuntimeError (нет event loop) - пробуем asyncio.run
         return asyncio.run(coro)
-
 def synthesize_speech_llm_svc(text: str, **kwargs) -> bytes:
     async def _call():
-        s = await get_llm_service(); return await s.synthesize_speech(text, **kwargs)
+        s = await get_llm_service()
+        return await s.synthesize_speech(text, **kwargs)
     return _wrap_sync(_call())
-
 def transcribe_audio_whisperx_llm_svc(audio_file: bytes, **kwargs) -> str:
     async def _call():
-        s = await get_llm_service(); r = await s.transcribe_audio_whisperx(audio_file, **kwargs)
+        s = await get_llm_service()
+        r = await s.transcribe_audio_whisperx(audio_file, **kwargs)
         return r.get("text", "") if isinstance(r, dict) else ""
     return _wrap_sync(_call())
-
 def diarize_audio_llm_svc(audio_file: bytes, **kwargs) -> Dict[str, Any]:
     async def _call():
-        s = await get_llm_service(); return await s.diarize_audio(audio_file, **kwargs)
+        s = await get_llm_service()
+        return await s.diarize_audio(audio_file, **kwargs)
     return _wrap_sync(_call())
-
 def transcribe_with_diarization_llm_svc(audio_file: bytes, **kwargs) -> Dict[str, Any]:
     async def _call():
-        s = await get_llm_service(); return await s.transcribe_with_diarization(audio_file, **kwargs)
+        s = await get_llm_service()
+        return await s.transcribe_with_diarization(audio_file, **kwargs)
     return _wrap_sync(_call())
-
 def recognize_text_from_image_llm_svc(image_file: bytes, **kwargs) -> Dict[str, Any]:
     async def _call():
-        s = await get_llm_service(); return await s.recognize_text_from_image(image_file, **kwargs)
+        s = await get_llm_service()
+        return await s.recognize_text_from_image(image_file, **kwargs)
     return _wrap_sync(_call())

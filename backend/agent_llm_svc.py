@@ -207,6 +207,48 @@ def reload_model_by_path(model_path):
     global _selected_model_name
     
     if USE_LLM_SVC:
+        # Новый multi-provider путь: для non-hot-swap провайдеров (vLLM/OpenAI-compat)
+        # не вызываем /v1/models/load, просто валидируем model_id через provider API.
+        try:
+            async def _ensure_for_provider_path():
+                from backend.llm_providers import get_registry
+                registry = await get_registry()
+                provider, model_id = registry.resolve(model_path)
+                raw_path = str(model_path or "").strip()
+                if not model_id:
+                    # Если пришел только provider id (например "CORSUR"), попробуем
+                    # выбрать первую доступную модель этого провайдера.
+                    if raw_path and registry.contains(raw_path):
+                        provider = registry.get(raw_path)
+                        candidates = await provider.list_models()
+                        if not candidates:
+                            return False
+                        model_id = str(candidates[0].model_id or "").strip()
+                        if not model_id:
+                            return False
+                    else:
+                        return False
+                ok = await provider.ensure_model_loaded(model_id)
+                if ok:
+                    global _selected_model_name
+                    _selected_model_name = f"{provider.id}/{model_id}"
+                return ok
+
+            if isinstance(model_path, str) and model_path.strip() and not model_path.startswith("llm-svc://"):
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                if loop.is_running():
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(asyncio.run, _ensure_for_provider_path())
+                        return future.result()
+                return loop.run_until_complete(_ensure_for_provider_path())
+        except Exception as e:
+            logger.debug(f"provider-path reload fallback to llm-svc logic: {e}")
+
         # Проверяем, что путь не является директорией
         if os.path.isdir(model_path):
             logger.warning(f"Передан путь к директории вместо файла модели: {model_path}. Пропускаем загрузку.")
@@ -429,6 +471,7 @@ def ask_agent(
     images=None,
     system_prompt=None,
     temperature=None,
+    enable_thinking=None,
 ):
     """Основная функция для работы с AI агентом через llm-svc"""
     
@@ -455,6 +498,7 @@ def ask_agent(
                 images=images,
                 system_prompt=system_prompt,
                 temperature=temperature,
+                enable_thinking=enable_thinking,
             )
             
             # Проверяем, не была ли генерация отменена

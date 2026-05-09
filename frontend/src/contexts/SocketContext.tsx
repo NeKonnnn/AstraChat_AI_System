@@ -1,9 +1,15 @@
-import React, { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, ReactNode } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { useAppActions } from './AppContext';
 import type { Chat, Message, MultiLLMResponseSlot } from './AppContext';
 import { useAuth } from './AuthContext';
-import { getSettings } from '../settings';
+import { getSettings, initSettings } from '../settings';
+import {
+  LAST_SELECTED_MODEL_PATH_STORAGE_KEY,
+  MODEL_THINKING_MODE_STORAGE_KEY,
+  ModelThinkingMode,
+  resolveEnableThinkingByMode,
+} from '../utils/modelThinking';
 import { 
   showBrowserNotification, 
   areNotificationsEnabled, 
@@ -39,6 +45,14 @@ interface SocketContextType {
   offMultiLLMEvent?: (event: string, handler: (data: any) => void) => void;
 }
 
+type PendingSendPayload = {
+  message: string;
+  chatId: string;
+  streaming?: boolean;
+  overrideProjectId?: string | null;
+  expectMultiLlm?: boolean;
+};
+
 const SocketContext = createContext<SocketContextType | null>(null);
 
 export function SocketProvider({ children }: { children: ReactNode }) {
@@ -53,8 +67,13 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   const socketAuthTokenRef = useRef<string | null>(null);
   const activeRequestIdRef = useRef<string | null>(null);
   const connectingRef = useRef<boolean>(false);
+  const pendingSendRef = useRef<PendingSendPayload | null>(null);
+  const hasEverConnectedRef = useRef<boolean>(false);
   // Флаг: генерация была остановлена — блокирует создание дублей из in-flight событий
   const isStoppedRef = useRef<boolean>(false);
+  const thinkingTraceRef = useRef<string>('');
+  // Накопленный текст ответа (без thinking) для корректного совмещения при стриминге
+  const responseAccumulatedRef = useRef<string>('');
 
   const normalizeRagStrategy = (raw: string | null): string => {
     const s = (raw || 'auto').trim().toLowerCase();
@@ -63,6 +82,21 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       return s;
     }
     return 'auto';
+  };
+
+  /** Собирает итоговое содержимое сообщения из thinking + response для отображения. */
+  const buildCombinedContent = (thinking: string, response: string): string => {
+    if (!thinking.trim()) return response;
+    if (!response.trim()) return `<think>${thinking}</think>`;
+    return `<think>${thinking}</think>\n\n${response}`;
+  };
+
+  const resolveEnableThinking = (): boolean => {
+    const rawMode = (localStorage.getItem(MODEL_THINKING_MODE_STORAGE_KEY) || 'fast') as ModelThinkingMode;
+    const mode: ModelThinkingMode =
+      rawMode === 'thinking' || rawMode === 'auto' || rawMode === 'fast' ? rawMode : 'fast';
+    const modelPath = localStorage.getItem(LAST_SELECTED_MODEL_PATH_STORAGE_KEY);
+    return resolveEnableThinkingByMode(mode, modelPath);
   };
   
   // Ref для отслеживания режима перегенерации
@@ -79,6 +113,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     isStoppedRef.current = true;
     expectMultiLlmResponseRef.current = false;
     regenerationStateRef.current = null;
+    thinkingTraceRef.current = '';
+    responseAccumulatedRef.current = '';
 
     if (currentChatIdRef.current && currentMessageRef.current) {
       updateMessage(currentChatIdRef.current, currentMessageRef.current, undefined, false);
@@ -103,34 +139,22 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     // Устанавливаем флаг подключения
     setIsConnecting(true);
     
-    // Ждем инициализации настроек, если они еще не загружены
+    // Гарантируем инициализацию конфигурации перед использованием getSettings().
+    // Иначе при первом логине можно попасть в гонку: сокет стартует раньше загрузки config.yml.
     let settings;
-    const maxRetries = 50; // Максимум 5 секунд (50 * 100мс)
-    let retries = 0;
-    
-    while (retries < maxRetries) {
-      try {
-        // Пробуем получить настройки
-        settings = getSettings();
-        break; // Успешно загружены
-      } catch (error) {
-        retries++;
-        if (retries >= maxRetries) {
-          console.error('Не удалось загрузить настройки для WebSocket после всех попыток:', error);
-          setIsConnecting(false);
-          connectingRef.current = false;
-          return;
-        }
-        // Ждем перед следующей попыткой
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
-    }
-    
-    // Проверяем, что settings загружены (TypeScript guard)
-    if (!settings) {
-      console.error('Настройки не загружены после всех попыток');
+    try {
+      await initSettings();
+      settings = getSettings();
+    } catch (error) {
+      console.error('Не удалось загрузить настройки для WebSocket:', error);
       setIsConnecting(false);
       connectingRef.current = false;
+      // Повторяем подключение автоматически, чтобы не требовать ручной перезагрузки страницы.
+      window.setTimeout(() => {
+        connectSocket().catch((connectError) => {
+          console.error('Повторная попытка подключения WebSocket завершилась ошибкой:', connectError);
+        });
+      }, 1000);
       return;
     }
     
@@ -180,24 +204,53 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       setIsConnected(true);
       setIsConnecting(false);
       connectingRef.current = false;
+      hasEverConnectedRef.current = true;
       showNotification('success', 'Соединение с сервером установлено');
     });
 
     // Отключение
     newSocket.on('disconnect', (reason) => {
       setIsConnected(false);
-      showNotification('warning', 'Соединение с сервером потеряно');
+      const isIntentionalClientDisconnect = reason === 'io client disconnect';
+      const shouldNotifyDisconnect = hasEverConnectedRef.current && !isIntentionalClientDisconnect;
+      setIsConnecting(Boolean(token) && !isIntentionalClientDisconnect);
+      if (shouldNotifyDisconnect) {
+        showNotification('warning', 'Соединение с сервером потеряно');
+      }
+      // Страхуемся от зависшего состояния: вручную инициируем reconnect.
+      window.setTimeout(() => {
+        if (token && !newSocket.connected) {
+          try {
+            newSocket.connect();
+          } catch {
+            // ignore reconnect errors
+          }
+        }
+      }, 800);
     });
 
     // Ошибки подключения
     newSocket.on('connect_error', (error: any) => {
       
       setIsConnected(false);
-      setIsConnecting(false);
+      setIsConnecting(Boolean(token));
       connectingRef.current = false;
       // Не показываем уведомление при каждой ошибке - только при критических
-      if (error.message && !error.message.includes('xhr poll error')) {
+      if (hasEverConnectedRef.current && error.message && !error.message.includes('xhr poll error')) {
         showNotification('error', `Ошибка подключения: ${error.message || 'Неизвестная ошибка'}`);
+      }
+      // При первом логине бэкенд может ещё не успеть принять соединение с новым токеном.
+      // Socket.IO делает ретраи сам, но на случай если он "завис" — даём явный толчок.
+      if (!hasEverConnectedRef.current) {
+        window.setTimeout(() => {
+          if (token && !newSocket.connected && !hasEverConnectedRef.current) {
+            try {
+              newSocket.connect();
+            } catch {
+              // ignore
+            }
+          }
+        }, 1500);
       }
     });
 
@@ -209,6 +262,19 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 
     newSocket.on('reconnect_error', (error) => {
       
+    });
+
+    // Когда Socket.IO исчерпывает все попытки и сдаётся — сбрасываем сокет,
+    // чтобы useEffect создал новый и попробовал снова (особенно важно при первом
+    // логине, когда бэкенд мог ещё не успеть принять соединение с новым токеном).
+    newSocket.on('reconnect_failed', () => {
+      connectingRef.current = false;
+      setIsConnected(false);
+      window.setTimeout(() => {
+        if (token && !connectingRef.current) {
+          setSocket(null);
+        }
+      }, 3000);
     });
 
     // Обработка событий Socket.IO
@@ -326,8 +392,38 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 
     switch (data.type) {
       case 'thinking':
-        // Обработка heartbeat сообщения о статусе обработки
-        // Не создаем сообщение, так как это промежуточный статус
+        {
+          const accumulated = typeof data?.accumulated === 'string' ? data.accumulated : '';
+          const chunk = typeof data?.chunk === 'string' ? data.chunk : '';
+          const thought = typeof data?.thinking === 'string' ? data.thinking : '';
+          if (accumulated) {
+            thinkingTraceRef.current = accumulated;
+          } else if (thought || chunk) {
+            thinkingTraceRef.current += thought || chunk;
+          }
+
+          // Обновляем сообщение в реальном времени, чтобы блок рассуждений
+          // отображался по мере поступления, а не только после chat_complete
+          if (!currentChatIdRef.current || isStoppedRef.current || expectMultiLlmResponseRef.current) {
+            break;
+          }
+          const thinkingCombined = buildCombinedContent(
+            thinkingTraceRef.current,
+            responseAccumulatedRef.current,
+          );
+          if (currentMessageRef.current) {
+            updateMessage(currentChatIdRef.current, currentMessageRef.current, thinkingCombined, true);
+          } else {
+            // Создаём сообщение заранее, чтобы thinking был виден до первого chunk
+            const messageId = addMessage(currentChatIdRef.current, {
+              role: 'assistant',
+              content: thinkingCombined,
+              timestamp: new Date().toISOString(),
+              isStreaming: true,
+            });
+            currentMessageRef.current = messageId;
+          }
+        }
         break;
 
       case 'multi_llm_start':
@@ -481,19 +577,26 @@ export function SocketProvider({ children }: { children: ReactNode }) {
           return;
         }
         
+        // Накапливаем чистый текст ответа (без thinking) отдельно
+        responseAccumulatedRef.current = data.accumulated || data.chunk;
+        // Итоговый контент = thinking (если есть) + ответ
+        const chunkCombined = buildCombinedContent(
+          thinkingTraceRef.current,
+          responseAccumulatedRef.current,
+        );
+
         if (currentMessageRef.current) {
           // Проверяем, находимся ли мы в режиме перегенерации (используем ref вместо getCurrentChat)
           if (regenerationStateRef.current && regenerationStateRef.current.isRegenerating) {
             // Это перегенерация - используем данные из ref
             const updatedAlternatives = [...regenerationStateRef.current.alternativeResponses];
             const currentIndex = regenerationStateRef.current.currentIndex;
-            const newContent = data.accumulated || data.chunk;
             
             // Обновляем ответ по текущему индексу
             if (currentIndex < updatedAlternatives.length) {
-              updatedAlternatives[currentIndex] = newContent;
+              updatedAlternatives[currentIndex] = chunkCombined;
             } else {
-              updatedAlternatives.push(newContent);
+              updatedAlternatives.push(chunkCombined);
             }
             
             // Обновляем ref с новым содержимым
@@ -502,7 +605,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
             updateMessage(
               currentChatIdRef.current,
               currentMessageRef.current,
-              newContent, // Обновляем message.content, чтобы он соответствовал текущему индексу
+              chunkCombined,
               true,
               undefined,
               updatedAlternatives,
@@ -510,13 +613,13 @@ export function SocketProvider({ children }: { children: ReactNode }) {
             );
           } else {
             // Обычное обновление
-            updateMessage(currentChatIdRef.current, currentMessageRef.current, data.accumulated || data.chunk, true);
+            updateMessage(currentChatIdRef.current, currentMessageRef.current, chunkCombined, true);
           }
         } else if (!isStoppedRef.current) {
           // Создаем новое сообщение для стриминга (только если генерация не была остановлена)
           const messageId = addMessage(currentChatIdRef.current, {
             role: 'assistant',
-            content: data.accumulated || data.chunk,
+            content: chunkCombined,
             timestamp: new Date().toISOString(),
             isStreaming: true,
           });
@@ -602,6 +705,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         }
         
         const response = data.response || '';
+        const responseWithReasoning =
+          thinkingTraceRef.current.trim() && !response.includes('<think>')
+            ? `<think>${thinkingTraceRef.current.trim()}</think>\n\n${response}`
+            : response;
         const wasStreaming = Boolean(data.was_streaming);
 
         if (currentMessageRef.current) {
@@ -613,16 +720,25 @@ export function SocketProvider({ children }: { children: ReactNode }) {
             const regen = regenerationStateRef.current;
             const updatedAlts = [...regen.alternativeResponses];
             if (regen.currentIndex < updatedAlts.length) {
-              updatedAlts[regen.currentIndex] = response;
+              updatedAlts[regen.currentIndex] = responseWithReasoning;
             } else {
-              updatedAlts.push(response);
+              updatedAlts.push(responseWithReasoning);
             }
-            updateMessage(chatId, trackedId, response, false, undefined, updatedAlts, regen.currentIndex, docSearch);
+            updateMessage(chatId, trackedId, responseWithReasoning, false, undefined, updatedAlts, regen.currentIndex, docSearch);
             regenerationStateRef.current = null;
           } else {
             // В потоковом режиме контент уже накоплен через chunk-и,
             // поэтому принудительно перезаписываем только если НЕ был стриминг
-            updateMessage(chatId, trackedId, wasStreaming ? undefined : response, false, undefined, undefined, undefined, docSearch);
+            updateMessage(
+              chatId,
+              trackedId,
+              wasStreaming ? responseWithReasoning : responseWithReasoning,
+              false,
+              undefined,
+              undefined,
+              undefined,
+              docSearch,
+            );
           }
         } else {
           // Путь 2: ref не установлен — ищем любое незавершённое сообщение
@@ -633,7 +749,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 
           if (streamingMsgs.length > 0) {
             const last = streamingMsgs[streamingMsgs.length - 1];
-            updateMessage(chatId, last.id, wasStreaming ? last.content : response, false, undefined, undefined, undefined, docSearch);
+            updateMessage(chatId, last.id, responseWithReasoning, false, undefined, undefined, undefined, docSearch);
           } else if (!isStoppedRef.current && response) {
             // Непотоковый режим: создаём сообщение только если его ещё нет
             const alreadyExists = currentChat?.messages.some(
@@ -642,7 +758,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
             if (!alreadyExists) {
               addMessage(chatId, {
                 role: 'assistant',
-                content: response,
+                content: responseWithReasoning,
                 timestamp: data.timestamp || new Date().toISOString(),
                 isStreaming: false,
                 ...(docSearch ? { documentSearch: docSearch } : {}),
@@ -651,6 +767,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
           }
         }
 
+        thinkingTraceRef.current = '';
+        responseAccumulatedRef.current = '';
         activeRequestIdRef.current = null;
         break;
       }
@@ -688,6 +806,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         // currentChatIdRef.current = null; // УДАЛЕНО
         multiLLMMessageRef.current = null;
         multiLLMResponsesRef.current.clear();
+        thinkingTraceRef.current = '';
+        responseAccumulatedRef.current = '';
         activeRequestIdRef.current = null;
         break;
         
@@ -735,6 +855,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         multiLLMMessageRef.current = null;
         multiLLMResponsesRef.current.clear();
         expectedModelsCountRef.current = 0;
+        thinkingTraceRef.current = '';
+        responseAccumulatedRef.current = '';
         activeRequestIdRef.current = null;
         break;
 
@@ -751,7 +873,15 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     expectMultiLlm?: boolean,
   ) => {
     if (!socket || !isConnected) {
-      showNotification('error', 'Нет соединения с сервером');
+      // При первом входе сокет может быть в фазе коннекта.
+      // Сохраняем одно ожидающее сообщение и отправляем его после connect.
+      pendingSendRef.current = { message, chatId, streaming, overrideProjectId, expectMultiLlm };
+      // Не прерываем активную попытку подключения — connect-обработчик сам отправит
+      // отложенное сообщение. Reconnect нужен только если сокет не подключается прямо сейчас.
+      if (!connectingRef.current) {
+        reconnect();
+      }
+      showNotification('info', 'Подключаемся к серверу, сообщение будет отправлено автоматически');
       return;
     }
     
@@ -769,6 +899,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     multiLLMMessageRef.current = null;
     multiLLMResponsesRef.current.clear();
     expectedModelsCountRef.current = 0;
+    thinkingTraceRef.current = '';
+    responseAccumulatedRef.current = '';
     
     // Добавляем сообщение пользователя
     const userMessageId = addMessage(chatId, {
@@ -811,6 +943,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       project_id: projectId,
       project_memory: project?.memory || null,
       project_instructions: project?.instructions || null,
+      model_comparison_enabled: Boolean(expectMultiLlm),
+      enable_thinking: resolveEnableThinking(),
       request_id: requestId,
     };
 
@@ -839,6 +973,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     multiLLMMessageRef.current = assistantMessageId;
     multiLLMResponsesRef.current.clear();
     expectedModelsCountRef.current = 0;
+    thinkingTraceRef.current = '';
+    responseAccumulatedRef.current = '';
     const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
     activeRequestIdRef.current = requestId;
 
@@ -883,6 +1019,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       project_id: projectId,
       project_memory: project?.memory || null,
       project_instructions: project?.instructions || null,
+      model_comparison_enabled: true,
+      enable_thinking: resolveEnableThinking(),
       request_id: requestId,
     });
   };
@@ -919,6 +1057,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     multiLLMResponsesRef.current.clear();
     expectedModelsCountRef.current = 0;
     expectMultiLlmResponseRef.current = false;
+    thinkingTraceRef.current = '';
+    responseAccumulatedRef.current = '';
     const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
     activeRequestIdRef.current = requestId;
     
@@ -941,6 +1081,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       conversation_id: chatId,
       agent_id: agentIdForChat,
       rag_strategy: ragStrategy,
+      enable_thinking: resolveEnableThinking(),
       request_id: requestId,
     };
 
@@ -998,18 +1139,35 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     multiLLMMessageRef.current = null;
     multiLLMResponsesRef.current.clear();
     expectedModelsCountRef.current = 0;
+    thinkingTraceRef.current = '';
+    responseAccumulatedRef.current = '';
     activeRequestIdRef.current = null;
     
     showNotification('info', 'Генерация остановлена');
   };
 
   const reconnect = () => {
+    // Сбрасываем флаг подключения, чтобы connectSocket() мог запуститься заново.
+    // Без этого, если reconnect вызывается пока сокет ещё устанавливал соединение,
+    // connectingRef.current остаётся true и новый сокет никогда не создаётся.
+    connectingRef.current = false;
     if (socket) {
       socket.disconnect();
       setSocket(null);
     }
     setTimeout(connectSocket, 1000);
   };
+
+  // До первого paint с токеном, но без сокета, isConnecting ещё false — чат показывал «нет соединения».
+  useLayoutEffect(() => {
+    if (!token) {
+      setIsConnecting(false);
+      return;
+    }
+    if (!isConnected) {
+      setIsConnecting(true);
+    }
+  }, [token, isConnected]);
 
   useEffect(() => {
     if (!token) {
@@ -1033,8 +1191,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     }
 
     if (!socket) {
+      setIsConnecting(true);
       connectSocket().catch((error) => {
         console.error('Ошибка подключения WebSocket:', error);
+        setIsConnecting(false);
       });
     }
 
@@ -1044,6 +1204,13 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       }
     };
   }, [token, socket]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!isConnected || !socket || !pendingSendRef.current) return;
+    const pending = pendingSendRef.current;
+    pendingSendRef.current = null;
+    sendMessage(pending.message, pending.chatId, pending.streaming, pending.overrideProjectId, pending.expectMultiLlm);
+  }, [isConnected]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onMultiLLMEvent = (event: string, handler: (data: any) => void) => {
     if (socket) {

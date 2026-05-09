@@ -104,6 +104,10 @@ class ChatCompletionRequest(BaseModel):
     stream: Optional[bool] = False
     tools: Optional[List[ToolDefinition]] = None
     tool_choice: Optional[Union[str, Dict[str, Any]]] = None
+    enable_thinking: Optional[bool] = Field(
+        None,
+        description="Включить режим рассуждений (Qwen/DeepSeek и др.), если поддерживает бэкенд llama.cpp/vLLM",
+    )
 class ChatCompletionResponseChoice(BaseModel):
     index: int
     message: AssistantMessage  # В ответе всегда assistant!

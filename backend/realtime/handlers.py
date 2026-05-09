@@ -1,28 +1,25 @@
 """
 socket_handlers.py - все @sio.event обработчики Socket.IO
-
 Регистрируется в main.py:
     from backend.socket_handlers import register_handlers
     register_handlers(sio)
 """
-
 import asyncio
 import concurrent.futures
 import logging
 import os
 from datetime import datetime
-
+from typing import Any, Dict, Optional
 import backend.app_state as state
-from backend.auth.jwt_handler import decode_token
 from backend.app_state import (
     ask_agent, save_dialog_entry, get_recent_dialog_history,
     rag_client, get_agent_orchestrator,
-    reload_model_by_path,
     stop_generation_flags, stop_transcription_flags,
     get_current_model_path,
     get_rag_chat_top_k,
+    get_model_comparison_models,
 )
-from backend.llm_providers import get_registry
+from backend.llm_providers import split_model_path
 from backend.realtime.helpers import (
     _is_structure_query,
     _terminal_chat_inference_banner,
@@ -32,19 +29,49 @@ from backend.realtime.helpers import (
 from backend.realtime.rag_evidence import (
     build_rag_id_to_filename,
     filter_rag_hits_by_score,
-    format_rag_fragments,
     maybe_rag_no_evidence_message,
     rag_document_label,
     rag_guard_env,
 )
 from backend.rag_query.post_generation import maybe_replace_ungrounded
 from backend.rag_query.prompts import RAG_STRICT_NOT_FOUND_MESSAGE, merge_strict_rag_system_prompt
-
+from backend.auth.jwt_handler import decode_token
 logger = logging.getLogger(__name__)
 _VALID_RAG_STRATEGIES = {"auto", "hierarchical", "hybrid", "standard", "graph"}
 
 
-async def _get_conversation_project_id(conversation_id: str) -> "Optional[str]":
+def _extract_socket_token(auth: Any, environ: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Извлекает bearer-токен из Socket.IO handshake auth/environ."""
+    token: Optional[str] = None
+
+    if isinstance(auth, dict):
+        raw = auth.get("token") or auth.get("access_token")
+        if isinstance(raw, str) and raw.strip():
+            token = raw.strip()
+
+    if not token and isinstance(environ, dict):
+        auth_header = environ.get("HTTP_AUTHORIZATION")
+        if isinstance(auth_header, str) and auth_header.lower().startswith("bearer "):
+            token = auth_header[7:].strip()
+
+    return token if token else None
+
+
+async def _get_socket_user_context(sio, sid: str) -> Optional[Dict[str, Any]]:
+    """Возвращает user context, сохранённый в Socket.IO сессии."""
+    try:
+        session = await sio.get_session(sid)
+    except Exception:
+        return None
+    if not isinstance(session, dict):
+        return None
+    user_ctx = session.get("user")
+    return user_ctx if isinstance(user_ctx, dict) else None
+def _multi_llm_llm_svc_pool_style_path(model_path: str) -> bool:
+    """Пути multi-LLM через llm-svc: не держим глобальный model_load_lock — пул и load на стороне llm-svc."""
+    provider_id, _model_id = split_model_path(model_path or "")
+    return bool(provider_id)
+async def get_conversation_project_id(conversation_id: str) -> "Optional[str]":
     """Возвращает project_id диалога из MongoDB, или None если диалог не привязан к проекту."""
     if not conversation_id:
         return None
@@ -56,37 +83,43 @@ async def _get_conversation_project_id(conversation_id: str) -> "Optional[str]":
     except Exception as e:
         logger.debug(f"_get_conversation_project_id({conversation_id}): {e}")
         return None
-
-
 def register_handlers(sio):
     """Регистрирует все Socket.IO обработчики на переданный sio-сервер"""
-    sid_tokens: dict[str, str] = {}
-
     @sio.event
-    async def connect(sid, environ, auth):
-        token = None
-        if isinstance(auth, dict):
-            token = auth.get("token")
+    async def connect(sid, environ, auth = None):
+        token = _extract_socket_token(auth, environ)
         if not token:
-            logger.warning(f"Socket.IO auth failed: token missing sid={sid}")
-            return False
+            logger.warning("Socket.IO connect rejected: отсутствует токен sid=%s", sid)
+            raise ConnectionRefusedError("Не авторизован")
         try:
-            decode_token(token)
+            user_data = decode_token(token)
         except Exception as e:
-            logger.warning(f"Socket.IO auth failed: sid={sid} error={e}")
-            return False
+            logger.warning("Socket.IO connect rejected: невалидный токен sid=%s reason=%s", sid, e)
+            raise ConnectionRefusedError("Сессия завершена: выполнен вход с другого устройства/окна")
 
-        sid_tokens[sid] = token
-        logger.info(f"Socket.IO client connected: {sid}")
+        await sio.save_session(
+            sid,
+            {
+                "user": {
+                    "username": user_data["username"],
+                    "user_id": user_data["user_id"],
+                    "session_id": user_data.get("session_id"),
+                    "token": token,
+                }
+            },
+        )
+        logger.info(
+            "Socket.IO client connected: sid=%s user_id=%s session_id=%s",
+            sid,
+            user_data.get("user_id"),
+            user_data.get("session_id"),
+        )
         stop_generation_flags[sid] = False
         await sio.emit("connected", {"data": "Connected to astrachat"}, room=sid)
-
     @sio.event
     async def disconnect(sid):
         logger.info(f"Socket.IO client disconnected: {sid}")
         stop_generation_flags.pop(sid, None)
-        sid_tokens.pop(sid, None)
-
     @sio.event
     async def ping(sid, data):
         try:
@@ -97,7 +130,6 @@ def register_handlers(sio):
             )
         except Exception as e:
             logger.error(f"Ошибка обработки ping: {e}")
-
     @sio.event
     async def stop_generation(sid, data):
         logger.info(f"Socket.IO: команда остановки генерации от {sid}")
@@ -107,7 +139,6 @@ def register_handlers(sio):
             {"content": "Генерация остановлена", "timestamp": datetime.now().isoformat()},
             room=sid,
         )
-
     @sio.event
     async def stop_transcription(sid, data):
         logger.info(f"Socket.IO: команда остановки транскрибации от {sid}")
@@ -117,42 +148,41 @@ def register_handlers(sio):
             {"message": "Транскрибация остановлена", "timestamp": datetime.now().isoformat()},
             room=sid,
         )
-
     # -- chat_message
     @sio.event
     async def chat_message(sid, data):
         if not ask_agent or not save_dialog_entry:
             await sio.emit("chat_error", {"error": "AI services not available"}, room=sid)
             return
-
-        token = sid_tokens.get(sid)
-        if not token:
-            await sio.emit("chat_error", {"error": "Не авторизован. Выполните вход снова."}, room=sid)
-            return
         try:
-            user_data = decode_token(token)
-        except Exception:
-            await sio.emit(
-                "chat_error",
-                {"error": "Сессия завершена: выполнен вход в другом окне. Обновите страницу и войдите снова."},
-                room=sid,
-            )
-            return
-
-        def session_still_valid() -> bool:
-            current_token = sid_tokens.get(sid)
-            if not current_token:
-                return False
+            user_ctx = await _get_socket_user_context(sio, sid)
+            if not user_ctx:
+                await sio.emit("chat_error", {"error": "Не авторизован"}, room=sid)
+                await sio.disconnect(sid)
+                return
             try:
-                decode_token(current_token)
-                return True
-            except Exception:
-                return False
+                validated_user = decode_token(user_ctx.get("token", ""))
+            except Exception as e:
+                logger.warning("Socket.IO chat rejected: session invalid sid=%s reason=%s", sid, e)
+                await sio.emit(
+                    "chat_error",
+                    {"error": "Сессия завершена: выполнен вход с другого устройства/окна"},
+                    room=sid,
+                )
+                await sio.disconnect(sid)
+                return
 
-        try:
-            current_user_id = user_data.get("user_id")
             user_message = data.get("message", "")
             streaming = data.get("streaming", True)
+            _et = data.get("enable_thinking", False)
+            if isinstance(_et, bool):
+                enable_thinking = _et
+            elif isinstance(_et, (int, float)) and _et == 0:
+                enable_thinking = False
+            elif isinstance(_et, str) and _et.strip().lower() in ("0", "false", "no", "off", ""):
+                enable_thinking = False
+            else:
+                enable_thinking = bool(_et)
             stop_generation_flags[sid] = False
             user_message_id = data.get("message_id", None)
             conversation_id = data.get("conversation_id", None)
@@ -172,30 +202,30 @@ def register_handlers(sio):
                 and isinstance(agent_kb_doc_ids, list)
                 and len(agent_kb_doc_ids) > 0
             )
-
-            orchestrator_early = get_agent_orchestrator()
-            use_multi_llm_early = orchestrator_early and orchestrator_early.get_mode() == "multi-llm"
+            use_multi_llm_early = bool(data.get("model_comparison_enabled", False))
             multi_slot_regen = str(data.get("multi_llm_slot_regenerate") or "").strip()
             skip_user_save = bool(data.get("regenerate")) and use_multi_llm_early and bool(multi_slot_regen)
-
             if conversation_id:
                 import backend.database.memory_service as mem_mod
                 mem_mod.current_conversation_id = conversation_id
+            try:
+                from backend.settings.cef_logger.cef_audit_context import cef_audit_set
 
-            # Получаем project_id из payload (фронтенд знает это немедленно),
-            # если не пришёл — fallback на поиск в MongoDB
+                cef_audit_set(user=validated_user, conversation_id=conversation_id)
+            except Exception:
+                pass
+            # Получаем project_id из payload
+            # если не пришёл - fallback на поиск в MongoDB
             project_id = data.get("project_id") or None
             if project_id:
                 logger.debug(f"[chat_message] project_id из payload: {project_id}")
             else:
-                project_id = await _get_conversation_project_id(conversation_id)
+                project_id = await get_conversation_project_id(conversation_id)
                 if project_id:
                     logger.debug(f"[chat_message] project_id из MongoDB: {project_id}")
-
             project_memory = data.get("project_memory") or "default"       # 'default' | 'project-only'
             project_instructions = data.get("project_instructions") or ""  # строка инструкций проекта
-
-            # История: project-only — только диалоги внутри проекта, иначе — текущий диалог
+            # История: project-only - только диалоги внутри проекта, иначе - текущий диалог
             if project_id and project_memory == "project-only":
                 from backend.database.memory_service import get_project_memory_history
                 history = await get_project_memory_history(
@@ -206,30 +236,39 @@ def register_handlers(sio):
                 history = await get_recent_dialog_history(
                     max_entries=state.memory_max_messages, conversation_id=conversation_id
                 )
-
-            # Сохраняем сообщение пользователя (с привязкой к проекту, если нужно).
-            # Перегенерация одного столбца multi-LLM — без дубля user в истории.
+            # Сохраняем сообщение пользователя 
+            # Перегенерация одного столбца multi-LLM 
             if not skip_user_save:
                 try:
                     if project_id:
                         from backend.database.memory_service import save_dialog_entry_to_project
                         await save_dialog_entry_to_project(
-                            "user", user_message, project_id, conversation_id, user_message_id, current_user_id
+                            "user",
+                            user_message,
+                            project_id,
+                            conversation_id,
+                            user_message_id,
+                            user_id=validated_user["user_id"],
                         )
                     else:
-                        await save_dialog_entry("user", user_message, None, user_message_id, conversation_id, current_user_id)
+                        await save_dialog_entry(
+                            "user",
+                            user_message,
+                            None,
+                            user_message_id,
+                            conversation_id,
+                            user_id=validated_user["user_id"],
+                        )
                 except RuntimeError as e:
                     if "MongoDB" in str(e):
                         await sio.emit("chat_error", {"error": "MongoDB недоступен."}, room=sid)
                         return
                     raise
-
             orchestrator = get_agent_orchestrator()
             use_agent_mode = orchestrator and orchestrator.get_mode() == "agent"
-            use_multi_llm_mode = orchestrator and orchestrator.get_mode() == "multi-llm"
-            chat_mode = "multi-llm" if use_multi_llm_mode else ("agent" if use_agent_mode else "direct")
-            logger.info(
-                "[RAG] chat_message mode=%s effective_strategy=%s payload_rag_strategy=%r "
+            use_multi_llm_mode = bool(data.get("model_comparison_enabled", False))
+            chat_mode = "model-comparison" if use_multi_llm_mode else ("agent" if use_agent_mode else "direct")
+            logger.info("[RAG] chat_message mode=%s effective_strategy=%s payload_rag_strategy=%r "
                 "settings_rag_strategy=%s agentic_rag_enabled=%s "
                 "use_kb_rag=%s use_memory_library_rag=%s use_agent_scoped_kb=%s project_id=%s",
                 chat_mode,
@@ -242,22 +281,25 @@ def register_handlers(sio):
                 use_agent_scoped_kb,
                 project_id,
             )
-
             # -- stream helpers
-            async def async_stream_cb(chunk, acc):
+            async def async_stream_cb(chunk, acc, stream_role="content"):
                 try:
-                    await sio.emit("chat_chunk", {"chunk": chunk, "accumulated": acc}, room=sid)
+                    if stream_role == "reasoning":
+                        await sio.emit(
+                            "chat_thinking",
+                            {"chunk": chunk, "accumulated": acc, "thinking": chunk, "stream_role": "reasoning"},
+                            room=sid,
+                        )
+                    else:
+                        await sio.emit("chat_chunk", {"chunk": chunk, "accumulated": acc}, room=sid)
                 except Exception:
                     pass
-
             loop = asyncio.get_event_loop()
-
-            def sync_stream_cb(chunk, acc):
-                if stop_generation_flags.get(sid, False) or not session_still_valid():
+            def sync_stream_cb(chunk, acc, stream_role="content"):
+                if stop_generation_flags.get(sid, False):
                     return False
-                asyncio.run_coroutine_threadsafe(async_stream_cb(chunk, acc), loop)
+                asyncio.run_coroutine_threadsafe(async_stream_cb(chunk, acc, stream_role), loop)
                 return True
-
             # -- MULTI-LLM mode
             if use_multi_llm_mode:
                 slot = str(data.get("multi_llm_slot_regenerate") or "").strip()
@@ -270,10 +312,9 @@ def register_handlers(sio):
                     project_instructions=project_instructions,
                     rag_strategy=effective_rag_strategy,
                     models_subset=models_subset,
-                    session_still_valid=session_still_valid,
+                    enable_thinking=enable_thinking,
                 )
                 return
-
             # -- AGENT mode
             if use_agent_mode:
                 await _handle_agent_mode(
@@ -284,11 +325,10 @@ def register_handlers(sio):
                     project_id=project_id,
                     project_instructions=project_instructions,
                     rag_strategy=effective_rag_strategy,
-                    session_still_valid=session_still_valid,
-                    user_id=current_user_id,
+                    current_user=validated_user,
+                    enable_thinking=enable_thinking,
                 )
                 return
-
             # -- DIRECT mode
             await _handle_direct(
                 sio, sid, data, user_message, streaming, conversation_id,
@@ -298,10 +338,9 @@ def register_handlers(sio):
                 project_id=project_id,
                 project_instructions=project_instructions,
                 rag_strategy=effective_rag_strategy,
-                session_still_valid=session_still_valid,
-                user_id=current_user_id,
+                current_user=validated_user,
+                enable_thinking=enable_thinking,
             )
-
         except Exception as e:
             logger.error(f"Socket.IO chat error: {e}", exc_info=True)
             try:
@@ -310,10 +349,7 @@ def register_handlers(sio):
                 pass
         finally:
             stop_generation_flags[sid] = False
-
-
 # -- внутренние обработчики режимов
-
 async def _handle_multi_llm(
     sio, sid, data, user_message, streaming, conversation_id,
     use_kb_rag, use_memory_library_rag, loop,
@@ -323,10 +359,9 @@ async def _handle_multi_llm(
     project_instructions=None,
     rag_strategy="auto",
     models_subset=None,
-    session_still_valid=lambda: True,
+    enable_thinking=False,
 ):
-    orchestrator = get_agent_orchestrator()
-    multi_llm_models = orchestrator.get_multi_llm_models()
+    multi_llm_models = get_model_comparison_models()
     if not multi_llm_models:
         await sio.emit("chat_error", {"error": "Модели не выбраны"}, room=sid)
         return
@@ -340,19 +375,17 @@ async def _handle_multi_llm(
                 room=sid,
             )
             return
-
     _terminal_chat_inference_banner(
         sid=sid, conversation_id=conversation_id, user_preview=user_message,
         mode_label=f"MULTI-LLM - модели: {', '.join(multi_llm_models)}",
         extra_line="Ниже для каждой модели - отдельный блок перед вызовом LLM.",
+        enable_thinking=enable_thinking,
     )
-
     min_sim, rag_block = rag_guard_env()
     context_added = False
     global_attempted = False
     final_user_message = user_message
-
-    # RAG из документов проекта (приоритет — специфичен для текущего проекта)
+    # RAG из документов проекта (приоритет - специфичен для текущего проекта)
     if rag_client and project_id:
         try:
             proj_rows = list(await rag_client.project_rag_list_documents(project_id) or [])
@@ -362,12 +395,16 @@ async def _handle_multi_llm(
             )
             proj_hits = filter_rag_hits_by_score(proj_hits, min_sim)
             if proj_hits:
-                parts, _ = format_rag_fragments(
-                    proj_hits,
-                    proj_id_name,
-                    max_chars=12000,
-                    store_label=f"project({project_id})/multi-llm",
-                )
+                parts, total = [], 0
+                for i, (content, score, doc_id, chunk_idx) in enumerate(proj_hits, 1):
+                    title = rag_document_label(doc_id, proj_id_name)
+                    frag = f"Фрагмент {i} (документ «{title}», чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
+                    if total + len(frag) > 12000:
+                        frag = frag[:max(0, 12000 - total - 80)] + "\n... [обрезано]\n"
+                        parts.append(frag)
+                        break
+                    parts.append(frag)
+                    total += len(frag)
                 final_user_message = (
                     f"Документы проекта (RAG):\n{chr(10).join(parts)}\n"
                     f"Вопрос: {user_message}"
@@ -376,7 +413,6 @@ async def _handle_multi_llm(
                 logger.info(f"[multi-llm project_rag] {len(proj_hits)} фрагментов, project={project_id}")
         except Exception as e:
             logger.error(f"multi-llm project RAG error: {e}")
-
     # Глобальный RAG контекст (если нет контекста из проекта)
     if rag_client and final_user_message == user_message:
         global_attempted = True
@@ -386,17 +422,20 @@ async def _handle_multi_llm(
             hits = await rag_client.search(user_message, k=get_rag_chat_top_k(), strategy=rag_strategy)
             hits = filter_rag_hits_by_score(hits, min_sim)
             if hits:
-                parts, _ = format_rag_fragments(
-                    hits,
-                    glob_id_name,
-                    max_chars=12000,
-                    store_label="global/multi-llm",
-                )
+                parts, total = [], 0
+                for i, (content, score, doc_id, chunk_idx) in enumerate(hits, 1):
+                    title = rag_document_label(doc_id, glob_id_name)
+                    frag = f"Фрагмент {i} (документ «{title}», чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
+                    if total + len(frag) > 12000:
+                        frag = frag[:max(0, 12000 - total - 80)] + "\n... [обрезано]\n"
+                        parts.append(frag)
+                        break
+                    parts.append(frag)
+                    total += len(frag)
                 final_user_message = f"Контекст: {chr(10).join(parts)}\nВопрос: {user_message}"
                 context_added = True
         except Exception as e:
             logger.error(f"multi-llm RAG error: {e}")
-
     # KB (глобальная БЗ или только документы выбранного агента) / memory_rag
     if rag_client and (use_kb_rag or use_agent_scoped_kb):
         prefix = "База Знаний (постоянные документы)"
@@ -412,19 +451,19 @@ async def _handle_multi_llm(
                 hits = await rag_client.kb_search(user_message, k=get_rag_chat_top_k(), strategy=rag_strategy)
             hits = filter_rag_hits_by_score(list(hits or []), min_sim)
             if hits:
-                parts, _ = format_rag_fragments(
-                    hits,
-                    kb_id_name,
-                    max_chars=10000,
-                    store_label="kb/multi-llm",
-                    include_chunk_meta=False,
-                    truncate_marker="\n...\n",
-                )
+                parts, total = [], 0
+                for i, (content, score, doc_id, chunk_idx) in enumerate(hits, 1):
+                    title = rag_document_label(doc_id, kb_id_name)
+                    frag = f"Фрагмент {i} (документ «{title}»): {content}\n"
+                    if total + len(frag) > 10000:
+                        parts.append(frag[:max(0, 10000 - total - 60)] + "\n...\n")
+                        break
+                    parts.append(frag)
+                    total += len(frag)
                 final_user_message = f"{prefix}:\n{''.join(parts)}\n\n{final_user_message}"
                 context_added = True
         except Exception as e:
             logger.error(f"multi-llm kb_search: {e}")
-
     if use_memory_library_rag and rag_client:
         try:
             mem_id_name = build_rag_id_to_filename(
@@ -434,23 +473,22 @@ async def _handle_multi_llm(
             hits = filter_rag_hits_by_score(list(hits or []), min_sim)
             prefix = "Документы из настроек (библиотека памяти)"
             if hits:
-                parts, _ = format_rag_fragments(
-                    hits,
-                    mem_id_name,
-                    max_chars=10000,
-                    store_label="memory/multi-llm",
-                    include_chunk_meta=False,
-                    truncate_marker="\n...\n",
-                )
+                parts, total = [], 0
+                for i, (content, score, doc_id, chunk_idx) in enumerate(hits, 1):
+                    title = rag_document_label(doc_id, mem_id_name)
+                    frag = f"Фрагмент {i} (документ «{title}»): {content}\n"
+                    if total + len(frag) > 10000:
+                        parts.append(frag[:max(0, 10000 - total - 60)] + "\n...\n")
+                        break
+                    parts.append(frag)
+                    total += len(frag)
                 final_user_message = f"{prefix}:\n{''.join(parts)}\n\n{final_user_message}"
                 context_added = True
         except Exception as e:
             logger.error(f"multi-llm memory_rag_search: {e}")
-
     eff_system_prompt = project_instructions.strip() if project_instructions else None
     if context_added:
         eff_system_prompt = merge_strict_rag_system_prompt(eff_system_prompt)
-
     canned = await maybe_rag_no_evidence_message(
         rag_client,
         block_when_no_evidence=rag_block,
@@ -488,12 +526,9 @@ async def _handle_multi_llm(
                 room=sid,
             )
         return
-
     n_models = len(multi_llm_models)
-
     async def _gen_one(model_name: str):
         idx = multi_llm_models.index(model_name)
-
         async def _emit_complete(res: dict) -> dict:
             # Сразу после готовности этой модели — иначе фронт ждёт gather по всем и «вечно генерирует»
             await sio.emit(
@@ -508,7 +543,6 @@ async def _handle_multi_llm(
                 room=sid,
             )
             return res
-
         try:
             await sio.emit(
                 "multi_llm_start",
@@ -519,80 +553,25 @@ async def _handle_multi_llm(
                 },
                 room=sid,
             )
-
-            # Разрешаем модель через ProviderRegistry. Путь может быть:
-            #   - новый формат: <provider_id>/<model_id>
-            #   - legacy: llm-svc://host/model, llm-svc://model, models/<name>
-            registry = await get_registry()
-            provider, model_id = registry.resolve(model_name)
-            if not model_id:
-                return await _emit_complete(
-                    {"model": model_name, "response": f"Некорректный путь модели: {model_name!r}", "error": True}
-                )
-
-            # Гарантируем, что модель доступна. Для llm-svc это может вызвать
-            # POST /v1/models/load, сериализованный внутренним _switch_lock
-            # провайдера (параллельные gather-слоты не мешают друг другу).
-            # Для vLLM/Ollama/OpenAI это no-op проверка наличия модели.
-            ok = await provider.ensure_model_loaded(model_id)
-            if not ok:
-                return await _emit_complete(
-                    {
-                        "model": model_name,
-                        "response": (
-                            f"Модель {model_id!r} недоступна на провайдере "
-                            f"{provider.id!r} (kind={provider.kind}). "
-                            f"Проверьте, что модель запущена на стороне сервера."
-                        ),
-                        "error": True,
-                    }
-                )
-
-            # Собираем сообщения через LLMService.prepare_messages (там учтены
-            # системный промпт и история; история здесь пустая — по дизайну
-            # multi-LLM без контекста предыдущих ответов).
-            from backend.llm_client import get_llm_service
-            service = await get_llm_service()
-            messages = service.prepare_messages(
-                prompt=final_user_message,
-                history=None,
-                system_prompt=eff_system_prompt,
-            )
-
-            # stream-callback: emit в socket без блокировки текущей корутины
-            # (create_task ставит emit в очередь loop'а; loop обслуживает её
-            # между чанками stream_chat).
-            def _model_stream_cb(chunk: str, acc: str) -> bool:
-                if stop_generation_flags.get(sid, False) or not session_still_valid():
+            model_path = model_name
+            def _model_stream_cb(chunk, acc):
+                if stop_generation_flags.get(sid, False):
                     return False
-                loop.call_soon_threadsafe(
-                    lambda: asyncio.ensure_future(
-                        sio.emit(
-                            "multi_llm_chunk",
-                            {"model": model_name, "chunk": chunk, "accumulated": acc},
-                            room=sid,
-                        ),
-                        loop=loop,
-                    )
+                asyncio.run_coroutine_threadsafe(
+                    sio.emit("multi_llm_chunk", {"model": model_name, "chunk": chunk, "accumulated": acc}, room=sid),
+                    loop,
                 )
                 return True
-
-            if streaming:
-                resp = await provider.stream_chat(
-                    messages=messages,
-                    model=model_id,
-                    callback=_model_stream_cb,
-                    temperature=0.7,
-                    max_tokens=1024,
+            with concurrent.futures.ThreadPoolExecutor() as ex:
+                resp = await asyncio.get_event_loop().run_in_executor(
+                    ex,
+                    lambda: ask_agent(
+                        final_user_message, [], None, streaming,
+                        _model_stream_cb if streaming else None, model_path, None,
+                        system_prompt=eff_system_prompt,
+                        enable_thinking=enable_thinking,
+                    ),
                 )
-            else:
-                resp = await provider.chat(
-                    messages=messages,
-                    model=model_id,
-                    temperature=0.7,
-                    max_tokens=1024,
-                )
-
             if context_added and isinstance(resp, str) and resp.strip():
                 resp = await maybe_replace_ungrounded(
                     final_user_message[:20000], resp, RAG_STRICT_NOT_FOUND_MESSAGE
@@ -605,15 +584,11 @@ async def _handle_multi_llm(
                 }
             )
         except Exception as e:
-            logger.exception("multi-llm: ошибка для модели %s", model_name)
             return await _emit_complete(
                 {"model": model_name, "response": f"Ошибка: {e}", "error": True}
             )
-
-    # Параллельные запросы: провайдеры сами сериализуют load-операции внутри
-    # себя (LlmSvcProvider._switch_lock). Никаких глобальных локов.
+    # llm-svc с пулом слотов: параллельные _gen_one без глобального model_load_lock.
     results: list = await asyncio.gather(*[_gen_one(m) for m in multi_llm_models], return_exceptions=True)
-
     # Успешные пути уже вызвали multi_llm_complete внутри _gen_one; здесь только сбой gather
     for i, result in enumerate(results):
         if isinstance(result, dict):
@@ -629,8 +604,6 @@ async def _handle_multi_llm(
             },
             room=sid,
         )
-
-
 async def _handle_agent_mode(
     sio, sid, data, user_message, streaming, conversation_id,
     history, use_kb_rag, use_memory_library_rag, orchestrator,
@@ -640,26 +613,29 @@ async def _handle_agent_mode(
     project_id=None,
     project_instructions=None,
     rag_strategy="auto",
-    session_still_valid=lambda: True,
-    user_id: str = "default_user",
+    current_user=None,
+    enable_thinking=False,
 ):
     await sio.emit("chat_thinking", {"status": "processing", "message": "Обрабатываю запрос через агентную архитектуру..."}, room=sid)
     agentic_rag_enabled = bool(getattr(state, "agentic_rag_enabled", True))
-
     ap = agent_profile or {}
     eff_model_path = ap.get("model_path") or get_current_model_path()
-
-    async def agent_stream_cb(chunk, acc):
-        if stop_generation_flags.get(sid, False) or not session_still_valid():
+    async def agent_stream_cb(chunk, acc, stream_role="content"):
+        if stop_generation_flags.get(sid, False):
             return False
-        await sio.emit("chat_chunk", {"chunk": chunk, "accumulated": acc}, room=sid)
+        if stream_role == "reasoning":
+            await sio.emit(
+                "chat_thinking",
+                {"chunk": chunk, "accumulated": acc, "thinking": chunk, "stream_role": "reasoning"},
+                room=sid,
+            )
+        else:
+            await sio.emit("chat_chunk", {"chunk": chunk, "accumulated": acc}, room=sid)
         return True
-
     try:
         from backend.tools.prompt_tools import set_tool_context
     except ModuleNotFoundError:
         from tools.prompt_tools import set_tool_context
-
     context = {
         "history": history, "user_message": user_message,
         "selected_model": eff_model_path, "socket_id": sid, "streaming": streaming,
@@ -670,14 +646,14 @@ async def _handle_agent_mode(
         "rag_strategy": rag_strategy,
         "agentic_rag_enabled": agentic_rag_enabled,
         "agentic_max_iterations": int(getattr(state, "agentic_max_iterations", 2)),
+        "enable_thinking": enable_thinking,
     }
     set_tool_context(context)
-
     effective_message = user_message
+
     # Инструкции проекта добавляются как системный префикс к сообщению пользователя
     if project_instructions and project_instructions.strip():
         effective_message = f"[Инструкции проекта: {project_instructions.strip()}]\n\n{user_message}"
-
     # Legacy pre-retrieval (fallback, если Agentic RAG отключен)
     if (not agentic_rag_enabled) and rag_client and project_id:
         try:
@@ -696,7 +672,6 @@ async def _handle_agent_mode(
                 logger.info(f"[agent project_rag] {len(proj_hits)} фрагментов, project={project_id}")
         except Exception as e:
             logger.error(f"Agent project RAG error: {e}")
-
     if (not agentic_rag_enabled) and rag_client and (use_kb_rag or use_agent_scoped_kb):
         prefix = "База Знаний (документы)"
         try:
@@ -717,11 +692,12 @@ async def _handle_agent_mode(
                 effective_message = f"{prefix}:\n{''.join(parts)}\n\n{effective_message}"
         except Exception as e:
             logger.error(f"Agent kb_search: {e}")
-
     if (not agentic_rag_enabled) and use_memory_library_rag and rag_client:
         prefix = "Документы из настроек (библиотека памяти)"
         try:
-            hits = await rag_client.memory_rag_search(user_message, k=get_rag_chat_top_k(), strategy=rag_strategy) or []
+            hits = await rag_client.memory_rag_search(
+                user_message, k=get_rag_chat_top_k(), strategy=rag_strategy
+            ) or []
             if hits:
                 parts, tl = [], 0
                 for i, (c, s, did, ch) in enumerate(hits, 1):
@@ -733,26 +709,22 @@ async def _handle_agent_mode(
                 effective_message = f"{prefix}:\n{''.join(parts)}\n\n{effective_message}"
         except Exception as e:
             logger.error(f"Agent memory_rag_search: {e}")
-
     _terminal_chat_inference_banner(
         sid=sid, conversation_id=conversation_id, user_preview=user_message,
         mode_label="Оркестратор агентов (agent architecture)",
         model_path_for_call=eff_model_path,
         extra_line="Базовая модель на сервере - та, что ниже; оркестратор может дергать LLM несколько раз.",
+        enable_thinking=enable_thinking,
     )
-
     try:
         response = await orchestrator.process_message(effective_message, history=history, context=context)
-
-        if stop_generation_flags.get(sid, False) or not session_still_valid():
+        if stop_generation_flags.get(sid, False):
             stop_generation_flags[sid] = False
             await sio.emit("generation_stopped", {"message": "Генерация остановлена"}, room=sid)
             return
-
         if response is None:
             await sio.emit("chat_error", {"error": "Не удалось получить ответ от агента"}, room=sid)
             return
-
         await sio.emit("chat_complete", {
             "response": response, "timestamp": datetime.now().isoformat(), "was_streaming": streaming,
         }, room=sid)
@@ -761,17 +733,27 @@ async def _handle_agent_mode(
         await sio.emit("chat_error", {"error": str(e)}, room=sid)
         stop_generation_flags[sid] = False
         return
-
     try:
         if project_id:
             from backend.database.memory_service import save_dialog_entry_to_project
-            await save_dialog_entry_to_project("assistant", response, project_id, conversation_id, None, user_id)
+            await save_dialog_entry_to_project(
+                "assistant",
+                response,
+                project_id,
+                conversation_id,
+                user_id=(current_user or {}).get("user_id"),
+            )
         else:
-            await save_dialog_entry("assistant", response, None, None, conversation_id, user_id)
+            await save_dialog_entry(
+                "assistant",
+                response,
+                None,
+                None,
+                conversation_id,
+                user_id=(current_user or {}).get("user_id"),
+            )
     except Exception as e:
         logger.warning(f"Не удалось сохранить ответ агента: {e}")
-
-
 async def _handle_direct(
     sio, sid, data, user_message, streaming, conversation_id,
     history, use_kb_rag, use_memory_library_rag,
@@ -781,8 +763,8 @@ async def _handle_direct(
     project_id=None,
     project_instructions=None,
     rag_strategy="auto",
-    session_still_valid=lambda: True,
-    user_id: str = "default_user",
+    current_user=None,
+    enable_thinking=False,
 ):
     min_sim, rag_block = rag_guard_env()
     context_added = False
@@ -791,7 +773,6 @@ async def _handle_direct(
     images = None
     proj_hits_for_trace = []  # сохраняем для document_search_trace
     global_hits_for_trace: list = []  # глобальная библиотека (не project/kb/memory) — для трейса в UI
-
     proj_id_name: dict = {}
     glob_id_name: dict = {}
     if rag_client and project_id:
@@ -800,7 +781,6 @@ async def _handle_direct(
             proj_id_name = build_rag_id_to_filename(proj_rows)
         except Exception:
             pass
-
     # RAG из документов проекта (приоритет — специфичен для текущего проекта)
     if rag_client and project_id:
         try:
@@ -819,12 +799,15 @@ async def _handle_direct(
                                     seen.add((did, idx))
                         except Exception:
                             pass
-                parts, _ = format_rag_fragments(
-                    proj_hits,
-                    proj_id_name,
-                    max_chars=12000,
-                    store_label=f"project({project_id})/direct",
-                )
+                parts, total = [], 0
+                for i, (content, score, doc_id, chunk_idx) in enumerate(proj_hits, 1):
+                    title = rag_document_label(doc_id, proj_id_name)
+                    frag = f"Фрагмент {i} (документ «{title}», чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
+                    if total + len(frag) > 12000:
+                        parts.append(frag[:max(0, 12000 - total - 80)] + "\n... [обрезано]\n")
+                        break
+                    parts.append(frag)
+                    total += len(frag)
                 proj_context = "\n".join(parts)
                 final_message = (
                     f"Документы проекта (RAG):\n{proj_context}\n"
@@ -836,7 +819,6 @@ async def _handle_direct(
                 logger.info(f"[direct project_rag] {len(proj_hits)} фрагментов, project={project_id}")
         except Exception as e:
             logger.error(f"Direct project RAG error: {e}")
-
     # Глобальный RAG из загруженных документов (если нет контекста из проекта)
     if rag_client and final_message == user_message:
         global_attempted = True
@@ -860,12 +842,15 @@ async def _handle_direct(
                         except Exception:
                             pass
                 global_hits_for_trace = list(hits)
-                parts, _ = format_rag_fragments(
-                    hits,
-                    glob_id_name,
-                    max_chars=12000,
-                    store_label="global/direct",
-                )
+                parts, total = [], 0
+                for i, (content, score, doc_id, chunk_idx) in enumerate(hits, 1):
+                    title = rag_document_label(doc_id, glob_id_name)
+                    frag = f"Фрагмент {i} (документ «{title}», чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
+                    if total + len(frag) > 12000:
+                        parts.append(frag[:max(0, 12000 - total - 80)] + "\n... [обрезано]\n")
+                        break
+                    parts.append(frag)
+                    total += len(frag)
                 doc_context = "\n".join(parts)
                 final_message = (
                     f"Документы (RAG):\n{doc_context}\n"
@@ -875,13 +860,11 @@ async def _handle_direct(
                 context_added = True
         except Exception as e:
             logger.error(f"Direct RAG error: {e}")
-
     # KB / memory / project-RAG trace
     document_search_trace = None
     kb_hits, mem_hits = [], []
     kb_id_name: dict = {}
     mem_id_name: dict = {}
-
     # Трейс project-RAG (всегда строим, если были хиты — вне зависимости от KB-флагов)
     if proj_hits_for_trace and rag_client:
         trace_proj_map = proj_id_name
@@ -913,7 +896,6 @@ async def _handle_direct(
                 "sourceFiles": sorted(files_used),
                 "hits": hits_out,
             }
-
     if rag_client and (use_kb_rag or use_agent_scoped_kb or use_memory_library_rag):
         kb_rows: list = []
         mem_rows: list = []
@@ -929,7 +911,6 @@ async def _handle_direct(
                 mem_rows = list(await rag_client.memory_rag_list_documents() or [])
             except Exception:
                 mem_rows = []
-
         if use_kb_rag or use_agent_scoped_kb:
             try:
                 if use_agent_scoped_kb:
@@ -950,10 +931,8 @@ async def _handle_direct(
             except Exception as e:
                 logger.error(f"memory_rag: {e}")
             mem_hits = filter_rag_hits_by_score(mem_hits, min_sim)
-
         kb_id_name = build_rag_id_to_filename(kb_rows)
         mem_id_name = build_rag_id_to_filename(mem_rows)
-
         # Если project-trace уже создан — дополняем его, иначе создаём новый
         hits_out = document_search_trace["hits"] if document_search_trace else []
         files_used = set(document_search_trace["sourceFiles"]) if document_search_trace else set()
@@ -989,7 +968,6 @@ async def _handle_direct(
             "sourceFiles": sorted(files_used),
             "hits": hits_out,
         }
-
     # Глобальный RAG (загрузки в /api/documents) — раньше не попадал в трейс → в UI не было PDF/файлов из глобального корпуса
     if global_hits_for_trace and rag_client:
         trace_glob_map = glob_id_name if glob_id_name else {}
@@ -1030,25 +1008,23 @@ async def _handle_direct(
                 "sourceFiles": sorted(files_used),
                 "hits": hits_out,
             }
-
-    for hits_list, prefix, idnm, label in [
-        (kb_hits, "База Знаний (постоянные документы)", kb_id_name, "kb/direct"),
-        (mem_hits, "Документы из настроек (библиотека памяти)", mem_id_name, "memory/direct"),
+    for hits_list, prefix, idnm in [
+        (kb_hits, "База Знаний (постоянные документы)", kb_id_name),
+        (mem_hits, "Документы из настроек (библиотека памяти)", mem_id_name),
     ]:
         if hits_list:
-            parts, _ = format_rag_fragments(
-                hits_list,
-                idnm,
-                max_chars=10000,
-                store_label=label,
-                include_chunk_meta=False,
-                truncate_marker="\n...\n",
-            )
+            parts, total = [], 0
+            for i, (content, score, doc_id, chunk_idx) in enumerate(hits_list, 1):
+                title = rag_document_label(doc_id, idnm)
+                frag = f"Фрагмент {i} (документ «{title}»): {content}\n"
+                if total + len(frag) > 10000:
+                    parts.append(frag[:max(0, 10000 - total - 60)] + "\n...\n")
+                    break
+                parts.append(frag)
+                total += len(frag)
             final_message = f"{prefix}:\n{''.join(parts)}\n\n{final_message}"
             context_added = True
-
     eff_model_path = agent_profile["model_path"] or get_current_model_path()
-
     # Формируем итоговый системный промпт: инструкции проекта + промпт агента
     base_system_prompt = agent_profile["system_prompt"] or ""
     if project_instructions and project_instructions.strip():
@@ -1059,10 +1035,8 @@ async def _handle_direct(
         logger.debug(f"[direct] project_instructions применены к system_prompt (project={project_id})")
     else:
         eff_system_prompt = base_system_prompt or None
-
     if context_added:
         eff_system_prompt = merge_strict_rag_system_prompt(eff_system_prompt)
-
     canned = await maybe_rag_no_evidence_message(
         rag_client,
         block_when_no_evidence=rag_block,
@@ -1075,24 +1049,23 @@ async def _handle_direct(
         agent_kb_doc_ids=agent_kb_doc_ids,
         implicit_global_corpus=False,
     )
-
     _terminal_chat_inference_banner(
         sid=sid, conversation_id=conversation_id, user_preview=final_message,
         mode_label="Прямой чат с LLM (одна модель)"
         + (" - параметры из выбранного агента" if agent_profile["model_path"] else ""),
-        model_path_for_call=eff_model_path,
+model_path_for_call=eff_model_path,
         extra_line="RAG/KB уже учтены в final_message при необходимости."
         + (" [RAG: ответ без LLM — нет релевантных фрагментов]" if canned else ""),
+        enable_thinking=enable_thinking,
     )
-
     def _run_ask(stream, cb):
         return ask_agent(
             final_message, history=history,
             max_tokens=agent_profile["max_tokens"], streaming=stream, stream_callback=cb,
             model_path=eff_model_path, custom_prompt_id=None, images=images,
             system_prompt=eff_system_prompt, temperature=agent_profile["temperature"],
+            enable_thinking=enable_thinking,
         )
-
     if canned:
         response = canned
         if streaming:
@@ -1107,27 +1080,36 @@ async def _handle_direct(
     else:
         with concurrent.futures.ThreadPoolExecutor() as ex:
             response = await asyncio.get_event_loop().run_in_executor(ex, lambda: _run_ask(False, None))
-
     if context_added and not canned and response:
         response = await maybe_replace_ungrounded(
             final_message[:20000], response, RAG_STRICT_NOT_FOUND_MESSAGE
         )
-
-    if stop_generation_flags.get(sid, False) or not session_still_valid():
+    if stop_generation_flags.get(sid, False):
         stop_generation_flags[sid] = False
         await sio.emit("generation_stopped", {"message": "Генерация остановлена"}, room=sid)
         return
-
     try:
         meta = {"document_search": document_search_trace} if document_search_trace else None
         if project_id:
             from backend.database.memory_service import save_dialog_entry_to_project
-            await save_dialog_entry_to_project("assistant", response, project_id, conversation_id, None, user_id)
+            await save_dialog_entry_to_project(
+                "assistant",
+                response,
+                project_id,
+                conversation_id,
+                user_id=(current_user or {}).get("user_id"),
+            )
         else:
-            await save_dialog_entry("assistant", response, meta, None, conversation_id, user_id)
+            await save_dialog_entry(
+                "assistant",
+                response,
+                meta,
+                None,
+                conversation_id,
+                user_id=(current_user or {}).get("user_id"),
+            )
     except RuntimeError as e:
         logger.warning(f"Не удалось сохранить ответ: {e}")
-
     stop_generation_flags[sid] = False
     payload = {"response": response, "timestamp": datetime.now().isoformat(), "was_streaming": streaming}
     if document_search_trace:

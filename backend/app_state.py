@@ -168,6 +168,10 @@ except ValueError:
     _rk = 12
 rag_chat_top_k: int = max(1, min(_rk, 64))
 
+# -- model comparison (independent from orchestrator/agents)
+_model_comparison_models: list[str] = []
+_model_comparison_models_lock = threading.Lock()
+
 
 def get_rag_chat_top_k() -> int:
     """Сколько чанков запрашивать у SVC-RAG (чат, агент, API с документами).
@@ -182,6 +186,28 @@ def get_rag_chat_top_k() -> int:
     except (TypeError, ValueError):
         v = 12
     return max(1, min(v, 64))
+
+
+def set_model_comparison_models(models: list[str]) -> list[str]:
+    """Сохраняет список моделей для сравнения (глобально для backend процесса)."""
+    normalized = []
+    seen = set()
+    for raw in models or []:
+        name = str(raw or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        normalized.append(name)
+    with _model_comparison_models_lock:
+        _model_comparison_models.clear()
+        _model_comparison_models.extend(normalized)
+        return list(_model_comparison_models)
+
+
+def get_model_comparison_models() -> list[str]:
+    """Возвращает сохранённый список моделей для сравнения."""
+    with _model_comparison_models_lock:
+        return list(_model_comparison_models)
 
 # -- путь к файлу настроек
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))

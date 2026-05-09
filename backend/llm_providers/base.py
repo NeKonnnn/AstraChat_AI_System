@@ -115,6 +115,8 @@ class LLMProviderConfig(BaseModel):
     #: Для провайдеров без свапа (vLLM): имя единственной обслуживаемой модели.
     #: Если задано — провайдер будет считать пул пустым, кроме этой модели.
     static_model: Optional[str] = None
+    #: Явно заданные модели провайдера (ручной override в конфиге).
+    models: List[str] = Field(default_factory=list)
     #: Таймаут HTTP-запроса к этому провайдеру в секундах.
     timeout: float = 120.0
     #: Если False, провайдер регистрируется, но скрыт из /api/models и multi-LLM.
@@ -139,7 +141,9 @@ class LLMProviderConfig(BaseModel):
             )
 
 
-StreamCallback = Callable[[str, str], bool]
+# (chunk, accumulated, stream_role) — третий аргумент опционален для обратной совместимости:
+# "content" | "reasoning" (рассуждения в отдельном канале chat_thinking).
+StreamCallback = Callable[..., bool]
 """
 Коллбэк потоковой генерации: ``cb(chunk, accumulated) -> continue``.
 Возврат ``False`` прерывает стрим (используется кнопкой «стоп» на фронте).
@@ -245,6 +249,8 @@ class LLMProvider(abc.ABC):
         model: str,
         temperature: float = 0.7,
         max_tokens: int = 1024,
+        *,
+        request_extra: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Синхронная (non-streaming) генерация. Возвращает текст ответа."""
 
@@ -256,6 +262,8 @@ class LLMProvider(abc.ABC):
         callback: StreamCallback,
         temperature: float = 0.7,
         max_tokens: int = 1024,
+        *,
+        request_extra: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         Потоковая генерация. ``callback(chunk, accumulated) -> bool``

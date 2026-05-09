@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, startTransition } from 'react';
 import {
   Box,
   TextField,
@@ -59,6 +59,9 @@ import {
   Check as CheckIcon,
   YouTube as YouTubeIcon,
   ExpandMore as ExpandMoreIcon,
+  Psychology as ThinkingModeIcon,
+  Bolt as FastModeIcon,
+  AutoAwesome as AutoModeIcon,
 } from '@mui/icons-material';
 import type { SxProps, Theme } from '@mui/material/styles';
 import { useTheme, alpha } from '@mui/material/styles';
@@ -94,7 +97,6 @@ import {
   ASTRA_OPEN_AGENT_CONSTRUCTOR,
   ASTRA_OPEN_TRANSCRIPTION_SIDEBAR,
 } from '../constants/hotkeys';
-import { MESSAGE_BUBBLE_GLASS_EFFECT_KEY } from '../constants/messageBubbleGlass';
 import {
   getDropdownPanelSx,
   getDropdownItemSx,
@@ -123,6 +125,10 @@ import {
   SIDEBAR_HIDE_SCROLLBAR_SX,
   getSidebarRailCollapsedListItemButtonSx,
 } from '../constants/menuStyles';
+import {
+  MODEL_THINKING_MODE_STORAGE_KEY,
+  ModelThinkingMode,
+} from '../utils/modelThinking';
 import SidebarRailMenuGlyph from '../components/SidebarRailMenuGlyph';
 import {
   SidebarRailTranscribeIcon,
@@ -190,6 +196,46 @@ function getMultiLlmColumnDisplayText(slot: MultiLLMResponseSlot): string {
   return slot.content;
 }
 
+function extractReasoningBlock(
+  rawText: string,
+  isStreaming?: boolean,
+): { visibleContent: string; reasoningContent: string | null; isThinkingStreaming: boolean } {
+  if (!rawText) return { visibleContent: rawText, reasoningContent: null, isThinkingStreaming: false };
+  const reasoningParts: string[] = [];
+  let visible = rawText;
+  let isThinkingStreaming = false;
+
+  const strip = (re: RegExp) => {
+    visible = visible.replace(re, (_, inner: string) => {
+      const normalized = (inner || '').trim();
+      if (normalized) reasoningParts.push(normalized);
+      return '';
+    });
+  };
+
+  // Полные закрытые блоки reasoning
+  strip(/<think>([\s\S]*?)<\/redacted_thinking>/gi);
+  strip(/<think>([\s\S]*?)<\/think>/gi);
+
+  // Незакрытый <think> (модель ещё думает — стриминг в процессе)
+  const unclosedMatch = visible.match(/<think>([\s\S]*)$/i);
+  if (unclosedMatch) {
+    const thinkContent = (unclosedMatch[1] || '').trim();
+    if (thinkContent) reasoningParts.push(thinkContent);
+    visible = visible.slice(0, unclosedMatch.index ?? visible.length).trim();
+    if (isStreaming) isThinkingStreaming = true;
+  }
+
+  // Одиночный открывающий тег без содержимого (только тег в конце)
+  visible = visible.replace(/<think>\s*$/gi, '').trim();
+
+  return {
+    visibleContent: visible || (reasoningParts.length > 0 ? '' : rawText),
+    reasoningContent: reasoningParts.length > 0 ? reasoningParts.join('\n\n') : null,
+    isThinkingStreaming,
+  };
+}
+
 interface AgentStatus {
   is_initialized: boolean;
   mode: string;
@@ -216,21 +262,6 @@ function dataTransferHasFiles(dt: DataTransfer | null): boolean {
     return domTypes.contains('Files');
   }
   return Array.from(types).includes('Files');
-}
-
-/** Стиль «стекла» для карточки сообщения (нужен непрозрачный фон за карточкой — blur). */
-function getMessageBubbleGlassCardSx(theme: Theme, isDarkMode: boolean, isUser: boolean): SxProps<Theme> {
-  return {
-    backdropFilter: 'saturate(180%) blur(14px)',
-    WebkitBackdropFilter: 'saturate(180%) blur(14px)',
-    backgroundColor: isUser
-      ? alpha(theme.palette.primary.main, 0.4)
-      : isDarkMode
-        ? alpha(theme.palette.background.paper, 0.42)
-        : alpha('#f8f9fa', 0.55),
-    border: `1px solid ${alpha(theme.palette.common.white, isUser ? 0.32 : isDarkMode ? 0.12 : 0.65)}`,
-    boxShadow: isDarkMode ? '0 4px 22px rgba(0,0,0,0.22)' : '0 4px 22px rgba(0,0,0,0.07)',
-  };
 }
 
 // ================================
@@ -275,20 +306,245 @@ interface MessageCardProps {
     assistantNoBorder: boolean;
     leftAlignMessages: boolean;
     showUserName: boolean;
-    messageBubbleGlass: boolean;
   };
   username: string | undefined;
   dataRef: React.MutableRefObject<MessageCardData>;
 }
 
+// ===========================
+// КОМПОНЕНТ БЛОКА РАССУЖДЕНИЙ — дизайн в стиле Qwen Studio / LibreChat
+// ===========================
+interface ReasoningBlockProps {
+  reasoningContent: string;
+  isThinkingStreaming: boolean;
+  isExpanded: boolean;
+  onToggle: () => void;
+  durationSec: number | null;
+  isDarkMode: boolean;
+}
+
+const ReasoningBlock = React.memo(({
+  reasoningContent,
+  isThinkingStreaming,
+  isExpanded,
+  onToggle,
+  durationSec,
+  isDarkMode,
+}: ReasoningBlockProps) => {
+  const theme = useTheme();
+  const pauseAutoScrollForInteraction = () => {
+    window.dispatchEvent(new CustomEvent('astra_pause_chat_autoscroll'));
+  };
+  const accentColor = theme.palette.mode === 'dark' ? '#a78bfa' : '#7c3aed';
+  const accentAlpha = theme.palette.mode === 'dark'
+    ? alpha('#a78bfa', 0.12)
+    : alpha('#7c3aed', 0.06);
+  const borderAlpha = theme.palette.mode === 'dark'
+    ? alpha('#a78bfa', 0.35)
+    : alpha('#7c3aed', 0.3);
+
+  return (
+    <Box sx={{ mb: 1.5 }}>
+      {/* Заголовок */}
+      <Box
+        onMouseDown={pauseAutoScrollForInteraction}
+        onTouchStart={pauseAutoScrollForInteraction}
+        onClick={() => {
+          pauseAutoScrollForInteraction();
+          onToggle();
+        }}
+        sx={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 0.75,
+          cursor: 'pointer',
+          userSelect: 'none',
+          px: 1,
+          py: 0.4,
+          borderRadius: '20px',
+          border: '1px solid',
+          borderColor: borderAlpha,
+          bgcolor: accentAlpha,
+          transition: 'all 0.18s ease',
+          '&:hover': {
+            bgcolor: theme.palette.mode === 'dark'
+              ? alpha('#a78bfa', 0.2)
+              : alpha('#7c3aed', 0.1),
+            borderColor: accentColor,
+          },
+        }}
+      >
+        {/* Иконка с пульсацией во время стриминга */}
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            color: accentColor,
+            '@keyframes pulse': {
+              '0%, 100%': { opacity: 1 },
+              '50%': { opacity: 0.4 },
+            },
+            animation: isThinkingStreaming ? 'pulse 1.4s ease-in-out infinite' : 'none',
+          }}
+        >
+          <ThinkingModeIcon sx={{ fontSize: 15 }} />
+        </Box>
+
+        {/* Текст статуса */}
+        <Typography
+          variant="caption"
+          sx={{
+            fontWeight: 500,
+            fontSize: '0.75rem',
+            color: accentColor,
+            letterSpacing: '0.01em',
+          }}
+        >
+          {isThinkingStreaming
+            ? 'Рассуждение\u2009\u00B7\u00B7\u00B7'
+            : durationSec !== null
+              ? `Думал\u00A0${durationSec}\u00A0сек`
+              : 'Цепочка рассуждений'}
+        </Typography>
+
+        {/* Шеврон */}
+        <ExpandMoreIcon
+          sx={{
+            fontSize: 15,
+            color: accentColor,
+            opacity: 0.8,
+            transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+            transition: 'transform 0.22s ease',
+          }}
+        />
+      </Box>
+
+      {/* Контент рассуждений */}
+      <Collapse in={isExpanded} timeout={220}>
+        <Box
+          sx={{
+            mt: 1,
+            borderLeft: `3px solid ${accentColor}`,
+            borderRadius: '0 6px 6px 0',
+            bgcolor: accentAlpha,
+            px: 1.5,
+            py: 1,
+            position: 'relative',
+            overflow: 'hidden',
+            '&::before': isThinkingStreaming ? {
+              content: '""',
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              height: '2px',
+              background: `linear-gradient(90deg, transparent, ${accentColor}, transparent)`,
+              '@keyframes scan': {
+                '0%': { transform: 'translateX(-100%)' },
+                '100%': { transform: 'translateX(100%)' },
+              },
+              animation: 'scan 1.8s linear infinite',
+            } : {},
+          }}
+        >
+          <Box
+            sx={{
+              fontSize: '0.82rem',
+              lineHeight: 1.65,
+              color: isDarkMode
+                ? alpha('#e2d9f3', 0.75)
+                : alpha('#3b1e6e', 0.68),
+              // Немного уменьшаем шрифт для контента рассуждений
+              '& p, & li, & span': { fontSize: 'inherit', lineHeight: 'inherit' },
+              '& p:first-of-type': { mt: 0 },
+              '& p:last-of-type': { mb: 0 },
+            }}
+          >
+            <MessageRenderer
+              content={reasoningContent}
+              isStreaming={isThinkingStreaming}
+            />
+          </Box>
+        </Box>
+      </Collapse>
+    </Box>
+  );
+});
+
 const MessageCardComponent = ({
   message, index, isPairStart, isSelected, nextMessageId,
   shareMode, isSpeaking, isDarkMode, interfaceSettings, username, dataRef,
 }: MessageCardProps): React.ReactElement => {
-  const theme = useTheme();
   const isUser = message.role === 'user';
   const [isHovered, setIsHovered] = useState(false);
   const [hoveredMultiLlmCol, setHoveredMultiLlmCol] = useState<number | null>(null);
+  const [reasoningExpanded, setReasoningExpanded] = useState(false);
+  const [multiReasoningExpanded, setMultiReasoningExpanded] = useState<Record<number, boolean>>({});
+  const thinkingStartRef = useRef<number | null>(null);
+  const [thinkingDurationSec, setThinkingDurationSec] = useState<number | null>(null);
+  const prevThinkingStreamingRef = useRef(false);
+
+  // Вычисляем тело сообщения и парсим reasoning на уровне компонента (не внутри JSX)
+  const visibleBody = useMemo(() => {
+    if (
+      message.alternativeResponses &&
+      message.alternativeResponses.length > 0 &&
+      message.currentResponseIndex !== undefined
+    ) {
+      const ci = message.currentResponseIndex;
+      if (ci >= 0 && ci < message.alternativeResponses.length) {
+        const alt = message.alternativeResponses[ci];
+        if (alt !== undefined)
+          return message.isStreaming ? alt : alt.trimEnd();
+      }
+    }
+    return message.isStreaming ? message.content : message.content.trimEnd();
+  }, [message.content, message.isStreaming, message.alternativeResponses, message.currentResponseIndex]);
+
+  const parsedMessage = useMemo(
+    () => extractReasoningBlock(visibleBody, message.isStreaming),
+    [visibleBody, message.isStreaming],
+  );
+
+  // Отслеживаем длительность рассуждения
+  useEffect(() => {
+    const isNowThinking = parsedMessage.isThinkingStreaming;
+    const wasThinking = prevThinkingStreamingRef.current;
+    if (isNowThinking && !wasThinking) {
+      thinkingStartRef.current = Date.now();
+      setThinkingDurationSec(null);
+    } else if (!isNowThinking && wasThinking && thinkingStartRef.current) {
+      const secs = Math.round((Date.now() - thinkingStartRef.current) / 1000);
+      setThinkingDurationSec(secs > 0 ? secs : 1);
+      thinkingStartRef.current = null;
+    }
+    prevThinkingStreamingRef.current = isNowThinking;
+  }, [parsedMessage.isThinkingStreaming]);
+
+  // Сбрасываем таймер при старте новой генерации этого сообщения
+  useEffect(() => {
+    if (message.isStreaming) {
+      setThinkingDurationSec(null);
+      thinkingStartRef.current = null;
+      prevThinkingStreamingRef.current = false;
+    }
+  }, [message.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Автораскрытие блока рассуждений — только ОДИН РАЗ при старте рассуждения.
+  // Ref-флаг гарантирует, что после ручного сворачивания последующие чанки
+  // блок НЕ переоткрывают.
+  const hasAutoExpandedRef = useRef(false);
+  useEffect(() => {
+    if (message.isStreaming && message.content.includes('<think>') && !hasAutoExpandedRef.current) {
+      hasAutoExpandedRef.current = true;
+      setReasoningExpanded(true);
+    }
+    // При завершении генерации сбрасываем флаг для следующей генерации
+    if (!message.isStreaming) {
+      hasAutoExpandedRef.current = false;
+    }
+  }, [message.isStreaming, message.content]);
+
   const hideOuterActionBar = !isUser && (message.multiLLMResponses?.length ?? 0) > 0;
   const multiLlmActionIconSx = {
     opacity: 0.7,
@@ -304,13 +560,6 @@ const MessageCardComponent = ({
   const shouldShowBorder = isUser
     ? !interfaceSettings.userNoBorder
     : !interfaceSettings.assistantNoBorder;
-  const hasMultiLlmColumns = !isUser && (message.multiLLMResponses?.length ?? 0) > 0;
-  const glassOnOuterBubble =
-    interfaceSettings.messageBubbleGlass &&
-    shouldShowBorder &&
-    !hasMultiLlmColumns;
-  const glassOnMultiLlmColumns =
-    interfaceSettings.messageBubbleGlass && !interfaceSettings.assistantNoBorder;
 
   const messageContent = (
     <>
@@ -355,6 +604,7 @@ const MessageCardComponent = ({
                 }
                 return response.isStreaming ? response.content : response.content.trimEnd();
               })();
+              const parsedResponse = extractReasoningBlock(displayBody, response.isStreaming);
               return (
                 <Card
                   key={`${response.model}-${respIndex}`}
@@ -363,11 +613,9 @@ const MessageCardComponent = ({
                   sx={{
                     border: '1px solid',
                     borderColor: response.error ? 'error.main' : 'divider',
+                    bgcolor: response.error ? 'error.light' : 'background.paper',
                     display: 'flex',
                     flexDirection: 'column',
-                    ...(glassOnMultiLlmColumns && !response.error
-                      ? getMessageBubbleGlassCardSx(theme, isDarkMode, false)
-                      : { bgcolor: response.error ? 'error.light' : 'background.paper' }),
                   }}
                 >
                   <CardContent sx={{ flex: 1, display: 'flex', flexDirection: 'column', pb: 1 }}>
@@ -383,11 +631,25 @@ const MessageCardComponent = ({
                         <Typography variant="body2">{response.content}</Typography>
                       </Alert>
                     ) : (
-                      <MessageRenderer
-                        content={displayBody}
-                        isStreaming={response.isStreaming}
-                        onSendMessage={dataRef.current.handleSendMessageFromRenderer}
-                      />
+                      <>
+                        {parsedResponse.reasoningContent ? (
+                          <ReasoningBlock
+                            reasoningContent={parsedResponse.reasoningContent}
+                            isThinkingStreaming={parsedResponse.isThinkingStreaming}
+                            isExpanded={Boolean(multiReasoningExpanded[respIndex])}
+                            onToggle={() =>
+                              setMultiReasoningExpanded((prev) => ({ ...prev, [respIndex]: !prev[respIndex] }))
+                            }
+                            durationSec={null}
+                            isDarkMode={isDarkMode}
+                          />
+                        ) : null}
+                        <MessageRenderer
+                          content={parsedResponse.visibleContent}
+                          isStreaming={response.isStreaming}
+                          onSendMessage={dataRef.current.handleSendMessageFromRenderer}
+                        />
+                      </>
                     )}
                   </CardContent>
                   {!isUser && !response.error ? (
@@ -545,22 +807,23 @@ const MessageCardComponent = ({
             })}
           </Box>
         ) : (
-          <MessageRenderer
-            content={(() => {
-              if (message.alternativeResponses && message.alternativeResponses.length > 0 && message.currentResponseIndex !== undefined) {
-                const currentIndex = message.currentResponseIndex;
-                if (currentIndex >= 0 && currentIndex < message.alternativeResponses.length) {
-                  const alt = message.alternativeResponses[currentIndex];
-                  return alt !== undefined
-                    ? (message.isStreaming ? alt : alt.trimEnd())
-                    : message.content;
-                }
-              }
-              return message.isStreaming ? message.content : message.content.trimEnd();
-            })()}
-            isStreaming={message.isStreaming}
-            onSendMessage={dataRef.current.handleSendMessageFromRenderer}
-          />
+          <>
+            {parsedMessage.reasoningContent ? (
+              <ReasoningBlock
+                reasoningContent={parsedMessage.reasoningContent}
+                isThinkingStreaming={parsedMessage.isThinkingStreaming}
+                isExpanded={reasoningExpanded}
+                onToggle={() => setReasoningExpanded((p) => !p)}
+                durationSec={thinkingDurationSec}
+                isDarkMode={isDarkMode}
+              />
+            ) : null}
+            <MessageRenderer
+              content={parsedMessage.visibleContent}
+              isStreaming={message.isStreaming && !parsedMessage.isThinkingStreaming}
+              onSendMessage={dataRef.current.handleSendMessageFromRenderer}
+            />
+          </>
         )}
       </Box>
     </>
@@ -598,13 +861,9 @@ const MessageCardComponent = ({
               maxWidth: interfaceSettings.leftAlignMessages ? '100%' : (isUser ? '75%' : '100%'),
               minWidth: '180px',
               width: interfaceSettings.leftAlignMessages ? '100%' : (isUser ? undefined : '100%'),
+              backgroundColor: isUser ? 'primary.main' : isDarkMode ? 'background.paper' : '#f8f9fa',
               color: isUser ? 'primary.contrastText' : isDarkMode ? 'text.primary' : '#333',
-              ...(glassOnOuterBubble
-                ? getMessageBubbleGlassCardSx(theme, isDarkMode, isUser)
-                : {
-                    backgroundColor: isUser ? 'primary.main' : isDarkMode ? 'background.paper' : '#f8f9fa',
-                    boxShadow: isDarkMode ? '0 2px 8px rgba(0,0,0,0.15)' : '0 2px 8px rgba(0,0,0,0.1)',
-                  }),
+              boxShadow: isDarkMode ? '0 2px 8px rgba(0,0,0,0.15)' : '0 2px 8px rgba(0,0,0,0.1)',
             }}
           >
             <CardContent sx={{ p: 1.2, '&:last-child': { pb: 1.2 } }}>
@@ -896,7 +1155,11 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   const [showDocumentDialog, setShowDocumentDialog] = useState(false);
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   /** Раскрытый подпункт меню «Инструменты» (колонка справа, как в LeChat). */
-  const [gearToolsPanel, setGearToolsPanel] = useState<'main' | 'agents'>('main');
+  const [gearToolsPanel, setGearToolsPanel] = useState<'main' | 'agents' | 'model-mode'>('main');
+  const [modelThinkingMode, setModelThinkingMode] = useState<ModelThinkingMode>(() => {
+    const saved = (localStorage.getItem(MODEL_THINKING_MODE_STORAGE_KEY) || 'fast') as ModelThinkingMode;
+    return saved === 'auto' || saved === 'thinking' || saved === 'fast' ? saved : 'fast';
+  });
   const gearToolsPopoverActionRef = useRef<PopoverActions | null>(null);
   /** Якорь меню «Инструменты» — верх всей пилюли ввода (кнопка виджетов съезжает при многострочном тексте). */
   const chatInputToolsAnchorRef = useRef<HTMLDivElement>(null);
@@ -948,6 +1211,10 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     });
   }, []);
 
+  useEffect(() => {
+    localStorage.setItem(MODEL_THINKING_MODE_STORAGE_KEY, modelThinkingMode);
+  }, [modelThinkingMode]);
+
   const myAgentSelection = useMyAgentSelection();
 
   // Состояние для режима "Поделиться"
@@ -958,9 +1225,16 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messageRefs = useRef<(HTMLDivElement | null)[]>([]);
+  // Флаг: пользователь находится у нижнего края → автоскролл разрешён
+  const isAtBottomRef = useRef(true);
+  // Флаг: мы сами инициировали прокрутку (чтобы не ловить её в scroll-listener)
+  const isProgrammaticScrollRef = useRef(false);
+  // Временная пауза автоскролла при взаимодействии с UI (например, сворачивание reasoning)
+  const autoScrollPauseUntilRef = useRef(0);
 
   useEffect(() => {
     const onAttach = () => fileInputRef.current?.click();
@@ -969,15 +1243,28 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   }, []);
 
   useEffect(() => {
+    const onPauseAutoScroll = () => {
+      autoScrollPauseUntilRef.current = Date.now() + 5000;
+      isAtBottomRef.current = false;
+    };
+    window.addEventListener('astra_pause_chat_autoscroll', onPauseAutoScroll);
+    return () => window.removeEventListener('astra_pause_chat_autoscroll', onPauseAutoScroll);
+  }, []);
+
+  useEffect(() => {
     const onAgent = () => {
-      setRightSidebarHidden(false);
-      setRightSidebarOpen(true);
-      setAgentConstructorOpen(true);
+      startTransition(() => {
+        setRightSidebarHidden(false);
+        setRightSidebarOpen(true);
+        setAgentConstructorOpen(true);
+      });
     };
     const onTranscription = () => {
-      setRightSidebarHidden(false);
-      setRightSidebarOpen(true);
-      setTranscriptionMenuOpen(true);
+      startTransition(() => {
+        setRightSidebarHidden(false);
+        setRightSidebarOpen(true);
+        setTranscriptionMenuOpen(true);
+      });
     };
     window.addEventListener(ASTRA_OPEN_AGENT_CONSTRUCTOR, onAgent);
     window.addEventListener(ASTRA_OPEN_TRANSCRIPTION_SIDEBAR, onTranscription);
@@ -990,6 +1277,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   const messageCardDataRef = useRef<MessageCardData>({} as MessageCardData);
 
   // Context и Socket
+  const { user, token } = useAuth();
   const { state } = useAppContext();
   const { 
     clearMessages, 
@@ -1123,18 +1411,31 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   >([]);
   const [modelWindows, setModelWindows] = useState<ModelWindow[]>([{ id: '1', selectedModel: '' }]);
   const [multiLlmModelMenu, setMultiLlmModelMenu] = useState<{ windowId: string; anchorEl: HTMLElement } | null>(null);
-  const isMultiLlmMode = agentStatus?.mode === 'multi-llm';
+  const [isMultiLlmMode, setIsMultiLlmMode] = useState<boolean>(
+    () => localStorage.getItem('model_comparison_enabled') === 'true',
+  );
   const multiLlmHasSelection = useMemo(
     () => modelWindows.some((w) => Boolean(w.selectedModel)),
     [modelWindows],
   );
   const multiLlmInputBlocked = isMultiLlmMode && !multiLlmHasSelection;
   const chatAwaitingTokens = currentChatLoading && !hasActiveChatStreaming;
+  /** Плейсхолдер поля ввода: без dev-текста про порт 8000; при активной генерации — обычная подсказка (кнопка стоп и так видна). */
+  const chatMainPlaceholder = useMemo(() => {
+    if (!isConnected) {
+      if (isConnecting) return 'Подключение к серверу...';
+      return 'Нет соединения с сервером';
+    }
+    if (isMultiLlmMode && !multiLlmHasSelection) {
+      return 'Выберите модели для сравнения (до 4, хотя бы одну)';
+    }
+    if (chatAwaitingTokens) return 'astrachat думает...';
+    return 'Чем я могу помочь вам сегодня?';
+  }, [isConnected, isConnecting, isMultiLlmMode, multiLlmHasSelection, chatAwaitingTokens]);
+  const socketBlocksChatInput = !isConnected && !isConnecting && !token;
   const prevAgentModeRef = useRef<string | undefined>(undefined);
   const skipNextMultiLlmChatResetRef = useRef(false);
   const lastMultiLlmPostedKeyRef = useRef<string>('');
-  /** Режим до входа в multi-llm с рабочей области — для возврата по кнопке. */
-  const modeBeforeMultiLlmRef = useRef<string>('direct');
 
   const loadAgentStatus = useCallback(async () => {
     try {
@@ -1167,49 +1468,18 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   );
 
   const handleToggleMultiLlmMode = useCallback(async () => {
-    if (!agentStatus?.is_initialized) {
-      showNotification(
-        'warning',
-        'Агентная архитектура не инициализирована. Настройки → Агенты → инициализация.',
-      );
-      return;
-    }
     if (currentChatLoading || hasActiveChatStreaming) {
       showNotification('warning', 'Дождитесь окончания генерации перед сменой режима');
       return;
     }
-    try {
-      if (agentStatus.mode === 'multi-llm') {
-        const restore =
-          modeBeforeMultiLlmRef.current === 'multi-llm' ? 'direct' : modeBeforeMultiLlmRef.current;
-        const response = await fetch(getApiUrl('/api/agent/mode'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode: restore }),
-        });
-        if (!response.ok) throw new Error('mode');
-        await loadAgentStatus();
-        window.dispatchEvent(new CustomEvent('astrachatAgentStatusChanged'));
-        showNotification(
-          'info',
-          restore === 'agent' ? 'Включён агентный режим' : 'Включён прямой режим чата',
-        );
-        return;
-      }
-      modeBeforeMultiLlmRef.current = agentStatus.mode;
-      const response = await fetch(getApiUrl('/api/agent/mode'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'multi-llm' }),
-      });
-      if (!response.ok) throw new Error('mode');
-      await loadAgentStatus();
-      window.dispatchEvent(new CustomEvent('astrachatAgentStatusChanged'));
-      showNotification('info', 'Режим: сравнение моделей');
-    } catch {
-      showNotification('error', 'Не удалось переключить режим');
+    const next = !isMultiLlmMode;
+    setIsMultiLlmMode(next);
+    localStorage.setItem('model_comparison_enabled', next ? 'true' : 'false');
+    if (!next) {
+      lastMultiLlmPostedKeyRef.current = '';
     }
-  }, [agentStatus, loadAgentStatus, showNotification, currentChatLoading, hasActiveChatStreaming]);
+    showNotification('info', next ? 'Режим: сравнение моделей' : 'Режим: обычный чат');
+  }, [isMultiLlmMode, showNotification, currentChatLoading, hasActiveChatStreaming]);
 
   /** Кнопка multi-LLM в поле ввода, когда селектор модели/агента спрятан в настройках. */
   const multiLlmSettingsExtraAction = useMemo(
@@ -1222,8 +1492,6 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                 void handleToggleMultiLlmMode();
               }}
               disabled={
-                !agentStatus?.is_initialized ||
-                !isConnected ||
                 currentChatLoading ||
                 hasActiveChatStreaming
               }
@@ -1237,7 +1505,6 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     [
       modelSelectorMode,
       handleToggleMultiLlmMode,
-      agentStatus?.is_initialized,
       isConnected,
       currentChatLoading,
       hasActiveChatStreaming,
@@ -1254,7 +1521,6 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     const savedLargeTextAsFile = localStorage.getItem('large_text_as_file');
     const savedUserNoBorder = localStorage.getItem('user_no_border');
     const savedAssistantNoBorder = localStorage.getItem('assistant_no_border');
-    const savedMessageBubbleGlass = localStorage.getItem(MESSAGE_BUBBLE_GLASS_EFFECT_KEY);
     const savedLeftAlignMessages = localStorage.getItem('left_align_messages');
     const savedWidescreenMode = localStorage.getItem('widescreen_mode');
     const savedShowUserName = localStorage.getItem('show_user_name');
@@ -1265,7 +1531,6 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
       userNoBorder: savedUserNoBorder !== null ? savedUserNoBorder === 'true' : false,
       assistantNoBorder: savedAssistantNoBorder !== null ? savedAssistantNoBorder === 'true' : false,
-      messageBubbleGlass: savedMessageBubbleGlass === 'true',
       leftAlignMessages: savedLeftAlignMessages !== null ? savedLeftAlignMessages === 'true' : false,
       widescreenMode: savedWidescreenMode !== null ? savedWidescreenMode === 'true' : false,
       showUserName: savedShowUserName !== null ? savedShowUserName === 'true' : false,
@@ -1281,7 +1546,6 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       const savedLargeTextAsFile = localStorage.getItem('large_text_as_file');
       const savedUserNoBorder = localStorage.getItem('user_no_border');
       const savedAssistantNoBorder = localStorage.getItem('assistant_no_border');
-      const savedMessageBubbleGlass = localStorage.getItem(MESSAGE_BUBBLE_GLASS_EFFECT_KEY);
       const savedLeftAlignMessages = localStorage.getItem('left_align_messages');
       const savedWidescreenMode = localStorage.getItem('widescreen_mode');
       const savedShowUserName = localStorage.getItem('show_user_name');
@@ -1292,7 +1556,6 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
         userNoBorder: savedUserNoBorder !== null ? savedUserNoBorder === 'true' : false,
         assistantNoBorder: savedAssistantNoBorder !== null ? savedAssistantNoBorder === 'true' : false,
-        messageBubbleGlass: savedMessageBubbleGlass === 'true',
         leftAlignMessages: savedLeftAlignMessages !== null ? savedLeftAlignMessages === 'true' : false,
         widescreenMode: savedWidescreenMode !== null ? savedWidescreenMode === 'true' : false,
         showUserName: savedShowUserName !== null ? savedShowUserName === 'true' : false,
@@ -1336,9 +1599,45 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     voice_speaker: localStorage.getItem('voice_speaker') || 'baya',
   }));
 
-  // Автоскролл к последнему сообщению
+  // Слушаем ручной скролл пользователя: если он поднялся — отключаем автоскролл
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    const handleScroll = () => {
+      // Если скролл был вызван программно — игнорируем
+      if (isProgrammaticScrollRef.current) return;
+      const distanceFromBottom =
+        container.scrollHeight - container.scrollTop - container.clientHeight;
+      // Считаем «у дна», если отступ менее 120px
+      isAtBottomRef.current = distanceFromBottom < 120;
+    };
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  // Сбрасываем «у дна» при новом отправленном сообщении (пользователь ждёт ответа)
+  const prevMessagesLengthRef = useRef(0);
+  useEffect(() => {
+    const len = messages.length;
+    if (len > prevMessagesLengthRef.current) {
+      // Новое сообщение добавлено — восстанавливаем автоскролл и прокручиваем
+      isAtBottomRef.current = true;
+    }
+    prevMessagesLengthRef.current = len;
+  }, [messages.length]);
+
+  // Автоскролл к последнему сообщению — только когда пользователь у дна
+  useEffect(() => {
+    if (Date.now() < autoScrollPauseUntilRef.current) return;
+    if (!isAtBottomRef.current) return;
+    const container = messagesContainerRef.current;
+    const end = messagesEndRef.current;
+    if (!container || !end) return;
+    isProgrammaticScrollRef.current = true;
+    end.scrollIntoView({ behavior: 'smooth' });
+    // Снимаем флаг программного скролла после завершения анимации
+    const timer = setTimeout(() => { isProgrammaticScrollRef.current = false; }, 600);
+    return () => clearTimeout(timer);
   }, [messages]);
 
   // Автоматический фокус на поле ввода при загрузке
@@ -1390,8 +1689,10 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     }
   }, [interfaceSettings.enableNotification]);
 
-  // Отслеживаем завершение генерации сообщений для воспроизведения звука
+  // Отслеживаем завершение генерации сообщений для воспроизведения звука и фокуса в поле ввода
   const prevStreamingRef = useRef<boolean>(false);
+  const prevChatBusyRef = useRef(false);
+  const chatInputBusy = currentChatLoading || hasActiveChatStreaming;
   useEffect(() => {
     const isCurrentlyStreaming = hasActiveChatStreaming;
 
@@ -1401,6 +1702,13 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
 
     prevStreamingRef.current = isCurrentlyStreaming;
   }, [hasActiveChatStreaming, playNotificationSound]);
+
+  useEffect(() => {
+    if (prevChatBusyRef.current && !chatInputBusy) {
+      queueMicrotask(() => inputRef.current?.focus());
+    }
+    prevChatBusyRef.current = chatInputBusy;
+  }, [chatInputBusy]);
 
   // Фокус на поле ввода при загрузке
   useEffect(() => {
@@ -1475,21 +1783,13 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     setModelWindows((prev) => (prev.length === 0 ? [{ id: '1', selectedModel: '' }] : prev));
   }, [state.currentChatId]);
 
-  // После переключения режима с multi-llm на другой — убираем многоколоночный layout со страницы чата
   useEffect(() => {
-    const mode = agentStatus?.mode;
     const prev = prevAgentModeRef.current;
-    if (prev === 'multi-llm' && mode && mode !== 'multi-llm') {
+    if (prev === 'multi-llm' && !isMultiLlmMode) {
       setModelWindows([{ id: '1', selectedModel: '' }]);
     }
-    prevAgentModeRef.current = mode;
-  }, [agentStatus?.mode]);
-
-  useEffect(() => {
-    if (agentStatus?.mode !== 'multi-llm') {
-      lastMultiLlmPostedKeyRef.current = '';
-    }
-  }, [agentStatus?.mode]);
+    prevAgentModeRef.current = isMultiLlmMode ? 'multi-llm' : 'default';
+  }, [isMultiLlmMode]);
 
   // Загружаем список документов при инициализации
   useEffect(() => {
@@ -1574,7 +1874,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   }, [modelWindows]);
 
   const handleSendMessageMultiLLM = async (): Promise<void> => {
-    if (!inputMessage.trim() || !isConnected) {
+    if (!inputMessage.trim() || (!isConnected && !isConnecting && !token)) {
       return;
     }
 
@@ -1601,7 +1901,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
 
     try {
       if (lastMultiLlmPostedKeyRef.current !== modelsKey) {
-        const response = await fetch(`${getApiUrl('/api/agent/multi-llm/models')}`, {
+        const response = await fetch(`${getApiUrl('/api/model-comparison/models')}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ models: selectedModels }),
@@ -1628,16 +1928,20 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
 
   const handleSendMessage = (): void => {
     // Если режим multi-llm, используем специальную функцию
-    if (agentStatus?.mode === 'multi-llm') {
+    if (isMultiLlmMode) {
       handleSendMessageMultiLLM();
       return;
     }
 
-    if (!inputMessage.trim() || !isConnected || currentChatLoading) {
-      if (!isConnected) {
-        showNotification('error', 'Нет соединения с сервером. Попробуйте переподключиться.');
-      }
+    if (!inputMessage.trim() || currentChatLoading) {
       return;
+    }
+    if (!isConnected && !isConnecting) {
+      if (!token) {
+        showNotification('error', 'Нет соединения с сервером. Попробуйте переподключиться.');
+        return;
+      }
+      // Токен есть, сокет ещё догоняет — sendMessage поставит отправку в очередь после connect
     }
     
     // Автоматически создаем новый чат, если его нет
@@ -1725,7 +2029,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
 
   const handleRegenerateMultiLlmColumn = useCallback(
     (message: Message, slotIndex: number): void => {
-      if (!currentChat || !isConnected) {
+      if (!currentChat || (!isConnected && !isConnecting)) {
         showNotification('error', 'Нет соединения с сервером');
         return;
       }
@@ -1775,7 +2079,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   );
 
   const handleRegenerate = (message: Message, customUserMessage?: string): void => {
-    if (!currentChat || !isConnected) {
+    if (!currentChat || (!isConnected && !isConnecting)) {
       showNotification('error', 'Нет соединения с сервером');
       return;
     }
@@ -1927,8 +2231,8 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
 
   // Функция для сохранения и отправки на повторную генерацию (только для сообщений пользователя)
   const handleSaveAndSend = async (): Promise<void> => {
-    if (!editingMessage || !currentChat || !editText.trim() || !isConnected) {
-      if (!isConnected) {
+    if (!editingMessage || !currentChat || !editText.trim() || (!isConnected && !isConnecting)) {
+      if (!isConnected && !isConnecting) {
         showNotification('error', 'Нет соединения с сервером');
       }
       return;
@@ -1998,9 +2302,6 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     });
   };
 
-  // Получаем данные пользователя
-  const { user } = useAuth();
-  
   // Функция для определения приветствия по времени суток (Московское время)
   const getGreeting = (): string => {
     const now = new Date();
@@ -2478,10 +2779,13 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   const scrollToMessage = useCallback((index: number) => {
     const messageElement = messageRefs.current[index];
     if (messageElement) {
+      // Навигация по сообщениям — временно снимаем lock автоскролла
+      isProgrammaticScrollRef.current = true;
       messageElement.scrollIntoView({
         behavior: 'smooth',
         block: 'center',
       });
+      setTimeout(() => { isProgrammaticScrollRef.current = false; }, 600);
     }
   }, []);
 
@@ -2998,8 +3302,6 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                     void handleToggleMultiLlmMode();
                   }}
                   disabled={
-                    !agentStatus?.is_initialized ||
-                    !isConnected ||
                     currentChatLoading ||
                     hasActiveChatStreaming
                   }
@@ -3049,8 +3351,6 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                     void handleToggleMultiLlmMode();
                   }}
                   disabled={
-                    !agentStatus?.is_initialized ||
-                    !isConnected ||
                     currentChatLoading ||
                     hasActiveChatStreaming
                   }
@@ -3067,6 +3367,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
 
       {/* Область сообщений */}
       <Box
+        ref={messagesContainerRef}
         className="chat-messages-area"
                  sx={{
            border: isDragging ? '2px dashed' : 'none',
@@ -3183,16 +3484,12 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                   >
                     <Card
                       sx={{
-                        width: '100%',
+                        backgroundColor: isDarkMode ? 'background.paper' : '#f8f9fa',
                         color: isDarkMode ? 'text.primary' : '#333',
-                        ...(interfaceSettings.messageBubbleGlass && !interfaceSettings.assistantNoBorder
-                          ? getMessageBubbleGlassCardSx(theme, isDarkMode, false)
-                          : {
-                              backgroundColor: isDarkMode ? 'background.paper' : '#f8f9fa',
-                              boxShadow: isDarkMode
-                                ? '0 2px 8px rgba(0, 0, 0, 0.15)'
-                                : '0 2px 8px rgba(0, 0, 0, 0.1)',
-                            }),
+                        boxShadow: isDarkMode
+                          ? '0 2px 8px rgba(0, 0, 0, 0.15)'
+                          : '0 2px 8px rgba(0, 0, 0, 0.1)',
+                        width: '100%',
                       }}
                     >
                       <CardContent sx={{ p: 1.2, pb: 0.8 }}>
@@ -3397,22 +3694,8 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                            onChange={setInputMessage}
                            onKeyPress={handleKeyPress}
                            onPaste={(e) => handlePaste(e as React.ClipboardEvent<HTMLDivElement>)}
-                           placeholder={
-                             !isConnected && !isConnecting
-                               ? 'Нет соединения с сервером. Запустите backend на порту 8000'
-                               : isConnecting
-                                 ? 'Подключение к серверу...'
-                                 : isMultiLlmMode && !multiLlmHasSelection
-                                   ? 'Выберите модели для сравнения (до 4, хотя бы одну)'
-                                   : chatAwaitingTokens
-                                     ? 'astrachat думает...'
-                                     : currentChatLoading && hasActiveChatStreaming
-                                       ? isMultiLlmMode
-                                         ? 'Модели генерируют ответ... Нажмите ⏹️ чтобы остановить'
-                                         : 'astrachat генерирует ответ... Нажмите ⏹️ чтобы остановить'
-                                       : 'Чем я могу помочь вам сегодня?'
-                           }
-                           inputDisabled={!isConnected || multiLlmInputBlocked || chatAwaitingTokens}
+                           placeholder={chatMainPlaceholder}
+                          inputDisabled={socketBlocksChatInput || multiLlmInputBlocked || chatAwaitingTokens}
                            inputRef={inputRef}
                            isDarkMode={isDarkMode}
                            solidWorkZoneBackground={workZoneAnimated}
@@ -3441,7 +3724,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                            showStopButton={currentChatLoading || hasActiveChatStreaming}
                            onStopClick={handleStopGeneration}
                            onSendClick={handleSendMessage}
-                           sendDisabled={!inputMessage.trim() || !isConnected || multiLlmInputBlocked || chatAwaitingTokens}
+                          sendDisabled={!inputMessage.trim() || socketBlocksChatInput || multiLlmInputBlocked || chatAwaitingTokens}
                            onVoiceClick={() => setShowVoiceDialog(true)}
                            voiceDisabled={multiLlmInputBlocked || chatAwaitingTokens}
                            voiceTooltip="Голосовой ввод"
@@ -3461,22 +3744,8 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                onChange={setInputMessage}
                onKeyPress={handleKeyPress}
                onPaste={(e) => handlePaste(e as React.ClipboardEvent<HTMLDivElement>)}
-               placeholder={
-                 !isConnected && !isConnecting
-                   ? 'Нет соединения с сервером. Запустите backend на порту 8000'
-                   : isConnecting
-                     ? 'Подключение к серверу...'
-                     : isMultiLlmMode && !multiLlmHasSelection
-                       ? 'Выберите модели для сравнения (до 4, хотя бы одну)'
-                       : chatAwaitingTokens
-                         ? 'astrachat думает...'
-                        : currentChatLoading && hasActiveChatStreaming
-                           ? isMultiLlmMode
-                             ? 'Модели генерируют ответ... Нажмите ⏹️ чтобы остановить'
-                             : 'astrachat генерирует ответ... Нажмите ⏹️ чтобы остановить'
-                           : 'Чем я могу помочь вам сегодня?'
-               }
-               inputDisabled={!isConnected || multiLlmInputBlocked || chatAwaitingTokens}
+               placeholder={chatMainPlaceholder}
+               inputDisabled={socketBlocksChatInput || multiLlmInputBlocked || chatAwaitingTokens}
                inputRef={inputRef}
                isDarkMode={isDarkMode}
                solidWorkZoneBackground={workZoneAnimated}
@@ -3505,7 +3774,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                showStopButton={currentChatLoading || hasActiveChatStreaming}
                onStopClick={handleStopGeneration}
                onSendClick={handleSendMessage}
-               sendDisabled={!inputMessage.trim() || !isConnected || multiLlmInputBlocked || chatAwaitingTokens}
+               sendDisabled={!inputMessage.trim() || socketBlocksChatInput || multiLlmInputBlocked || chatAwaitingTokens}
                onVoiceClick={() => setShowVoiceDialog(true)}
                voiceDisabled={multiLlmInputBlocked || chatAwaitingTokens}
                voiceTooltip="Голосовой ввод"
@@ -3551,7 +3820,9 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                        gearToolsPaperHeightPx < CHAT_GEAR_MENU_PAPER_MAX_HEIGHT_PX ? 'auto' : 'hidden',
                    }
                  : { maxHeight: CHAT_GEAR_MENU_PAPER_MAX_HEIGHT, overflowY: 'auto' }),
-               ...(gearToolsPanel === 'agents' ? CHAT_GEAR_SCROLL_AREA_NO_VISIBLE_SCROLLBAR_SX : {}),
+              ...((gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode')
+                ? CHAT_GEAR_SCROLL_AREA_NO_VISIBLE_SCROLLBAR_SX
+                : {}),
              },
            },
          }}
@@ -3561,15 +3832,15 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
              display: 'flex',
              flexDirection: 'row',
              alignItems: 'stretch',
-             gap: gearToolsPanel === 'agents' ? `${CHAT_GEAR_MENU_PANELS_GAP_PX}px` : 0,
+            gap: gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode' ? `${CHAT_GEAR_MENU_PANELS_GAP_PX}px` : 0,
              width:
-               gearToolsPanel === 'agents' && gearToolsMenuWidthPx != null
+              (gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode') && gearToolsMenuWidthPx != null
                  ? `${gearToolsMenuWidthPx}px`
-                 : gearToolsPanel === 'agents'
+                : gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode'
                    ? CHAT_GEAR_MENU_EXPANDED_WIDTH_PX
                    : CHAT_GEAR_MENU_PANEL_WIDTH_PX,
              maxWidth:
-               gearToolsPanel === 'agents' && gearToolsMenuWidthPx != null
+              (gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode') && gearToolsMenuWidthPx != null
                  ? `${gearToolsMenuWidthPx}px`
                  : 'min(96vw, 580px)',
              minHeight: gearToolsPaperHeightPx != null ? `${gearToolsPaperHeightPx}px` : undefined,
@@ -3583,7 +3854,9 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
              sx={{
                ...dropdownPanelSx,
                width:
-                 gearToolsPanel === 'agents' ? CHAT_GEAR_MENU_LEFT_RAIL_WIDTH_PX : '100%',
+                gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode'
+                  ? CHAT_GEAR_MENU_LEFT_RAIL_WIDTH_PX
+                  : '100%',
                flexShrink: 0,
                boxSizing: 'border-box',
                py: 0.5,
@@ -3626,6 +3899,36 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                  }}
                />
              </Box>
+            <Box
+              onClick={() => setGearToolsPanel((p) => (p === 'model-mode' ? 'main' : 'model-mode'))}
+              sx={{
+                ...dropdownItemSx,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1,
+                color: isDarkMode ? 'white' : '#333',
+                bgcolor:
+                  gearToolsPanel === 'model-mode'
+                    ? isDarkMode
+                      ? DROPDOWN_ITEM_HOVER_BG_DARK
+                      : DROPDOWN_ITEM_HOVER_BG_LIGHT
+                    : 'transparent',
+              }}
+            >
+              <ThinkingModeIcon
+                sx={{ fontSize: 18, color: isDarkMode ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.6)', flexShrink: 0 }}
+              />
+              <Typography sx={{ flex: 1, minWidth: 0, fontSize: MENU_ACTION_TEXT_SIZE, whiteSpace: 'nowrap' }}>
+                Режим модели
+              </Typography>
+              <ChevronRightIcon
+                sx={{
+                  ...DROPDOWN_CHEVRON_SX,
+                  flexShrink: 0,
+                  transform: gearToolsPanel === 'model-mode' ? 'rotate(90deg)' : 'none',
+                }}
+              />
+            </Box>
              <Box
                onClick={() => {
                  toggleKbRag();
@@ -3663,7 +3966,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                </Typography>
              </Box>
            </Box>
-           {gearToolsPanel === 'agents' ? (
+          {gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode' ? (
              <Box
                sx={{
                  ...dropdownPanelSx,
@@ -3676,10 +3979,49 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                  overflow: 'hidden',
                }}
              >
-               <ChatGearAgentsPanel
-                 isDarkMode={isDarkMode}
-                 canUseAgents={Boolean(agentStatus?.is_initialized)}
-               />
+              {gearToolsPanel === 'agents' ? (
+                <ChatGearAgentsPanel
+                  isDarkMode={isDarkMode}
+                  canUseAgents={Boolean(agentStatus?.is_initialized)}
+                />
+              ) : (
+                <Box sx={{ p: 1, display: 'flex', flexDirection: 'column', gap: 0.5, overflowY: 'auto' }}>
+                  {([
+                    { id: 'auto', label: 'Автоматический', icon: <AutoModeIcon sx={{ fontSize: 16 }} /> },
+                    { id: 'thinking', label: 'Мышление', icon: <ThinkingModeIcon sx={{ fontSize: 16 }} /> },
+                    { id: 'fast', label: 'Быстрый', icon: <FastModeIcon sx={{ fontSize: 16 }} /> },
+                  ] as const).map((mode) => (
+                    <Box
+                      key={mode.id}
+                      onClick={() => {
+                        setModelThinkingMode(mode.id);
+                        showNotification('info', `Режим модели: ${mode.label}`);
+                      }}
+                      sx={{
+                        ...dropdownItemSx,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 1,
+                        color: isDarkMode ? 'white' : '#333',
+                        bgcolor:
+                          modelThinkingMode === mode.id
+                            ? isDarkMode
+                              ? DROPDOWN_ITEM_HOVER_BG_DARK
+                              : DROPDOWN_ITEM_HOVER_BG_LIGHT
+                            : 'transparent',
+                      }}
+                    >
+                      <Box sx={{ display: 'inline-flex', opacity: 0.9 }}>{mode.icon}</Box>
+                      <Typography sx={{ flex: 1, minWidth: 0, fontSize: MENU_ACTION_TEXT_SIZE }}>
+                        {mode.label}
+                      </Typography>
+                      {modelThinkingMode === mode.id ? (
+                        <CheckIcon sx={{ fontSize: 16, color: 'primary.main', flexShrink: 0 }} />
+                      ) : null}
+                    </Box>
+                  ))}
+                </Box>
+              )}
              </Box>
            ) : null}
          </Box>
@@ -3870,7 +4212,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
             }}>
               <Tooltip title="Скрыть панель" placement="left">
                 <IconButton
-                  onClick={() => setRightSidebarHidden(true)}
+                  onClick={() => startTransition(() => setRightSidebarHidden(true))}
                   sx={{
                     color: 'white',
                     opacity: 1,
@@ -4174,8 +4516,10 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
           <Tooltip title="Показать панель" placement="left">
             <IconButton
               onClick={() => {
-                setRightSidebarHidden(false);
-                setRightSidebarOpen(false);
+                startTransition(() => {
+                  setRightSidebarHidden(false);
+                  setRightSidebarOpen(false);
+                });
               }}
               sx={{
                 bgcolor: 'transparent',
