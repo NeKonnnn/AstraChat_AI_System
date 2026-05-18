@@ -14,14 +14,14 @@ cors:
   allow_headers: ["*"]
 
 urls:
-  frontend_port_1: "http://localhost:3000"
-  frontend_port_1_ipv4: "http://127.0.0.1:3000"
+  frontend_port: "http://localhost:3000"
+  frontend_port_ipv4: "http://127.0.0.1:3000"
   frontend_port_2: "http://localhost:3001"
   frontend_port_2_ipv4: "http://127.0.0.1:3001"
   frontend_port_3: "http://localhost:5173"
   frontend_port_3_ipv4: "http://127.0.0.1:5173"
-  backend_port_1: "http://localhost:8000"
-  backend_port_1_ipv4: "http://127.0.0.1:8000"
+  backend_port: "http://localhost:8000"
+  backend_port_ipv4: "http://127.0.0.1:8000"
   backend_port_2: "http://localhost:8080"
   backend_port_2_ipv4: "http://127.0.0.1:8080"
 
@@ -48,3 +48,5 @@ rag_models:
   reranker_model: "ms-marco-MiniLM-L-6-v2"
   offline: true   # только локальные модели, без запросов к HuggingFace
   device: "cpu"
+  # На CPU большие батчи → OOM и долгий encode; при GPU увеличьте до 32–64
+  embed_batch_size: 16

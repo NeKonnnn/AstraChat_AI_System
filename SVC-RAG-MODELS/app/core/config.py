@@ -7,14 +7,14 @@ from pathlib import Path
 _settings = None
 
 _URLS_CORS_KEYS: Tuple[str, ...] = (
-    "frontend_port_1",
-    "frontend_port_1_ipv4",
+    "frontend_port",
+    "frontend_port_ipv4",
     "frontend_port_2",
     "frontend_port_2_ipv4",
     "frontend_port_3",
     "frontend_port_3_ipv4",
-    "backend_port_1",
-    "backend_port_1_ipv4",
+    "backend_port",
+    "backend_port_ipv4",
     "backend_port_2",
     "backend_port_2_ipv4",
 )
@@ -78,6 +78,8 @@ class RagModelsConfig(BaseModel):
     embedding_model_default: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     reranker_model_default: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     embedding_dim: int = 384  # у MiniLM-L12 вектор такой длины
+    # Размер батча encode(); на CPU держите 8–16, на GPU можно 32–64
+    embed_batch_size: int = int(os.environ.get("RAG_MODELS_EMBED_BATCH_SIZE", "16"))
 
 
 class Settings(BaseModel):

@@ -3,9 +3,24 @@ import os
 import yaml
 from pathlib import Path
 from typing import List, Optional, Tuple
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 _settings = None
+
+
+def _env_str(name: str) -> Optional[str]:
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    value = str(value).strip()
+    return value or None
+
+
+def _env_int(name: str) -> Optional[int]:
+    value = _env_str(name)
+    if value is None:
+        return None
+    return int(value)
 
 
 def _docker_runtime() -> bool:
@@ -24,14 +39,14 @@ def _pick_service_url(urls: dict, docker_key: str, port_key: str) -> str:
 
 
 _URLS_CORS_KEYS: Tuple[str, ...] = (
-    "frontend_port_1",
-    "frontend_port_1_ipv4",
+    "frontend_port",
+    "frontend_port_ipv4",
     "frontend_port_2",
     "frontend_port_2_ipv4",
     "frontend_port_3",
     "frontend_port_3_ipv4",
-    "backend_port_1",
-    "backend_port_1_ipv4",
+    "backend_port",
+    "backend_port_ipv4",
     "backend_port_2",
     "backend_port_2_ipv4",
 )
@@ -74,6 +89,35 @@ def _apply_urls_section(data: dict) -> dict:
     return out
 
 
+def _apply_postgres_env_overrides(data: dict) -> dict:
+    """Приоритет подключения к PostgreSQL: env -> config.yml -> defaults."""
+    out = dict(data)
+    pg = dict(out.get("postgresql") or {})
+
+    host = _env_str("POSTGRES_HOST")
+    port = _env_int("POSTGRES_PORT")
+    db = _env_str("POSTGRES_DB")
+    user = _env_str("POSTGRES_USER")
+    password = _env_str("POSTGRES_PASSWORD")
+    embedding_dim = _env_int("RAG_EMBEDDING_DIM")
+
+    if host is not None:
+        pg["host"] = host
+    if port is not None:
+        pg["port"] = port
+    if db is not None:
+        pg["database"] = db
+    if user is not None:
+        pg["user"] = user
+    if password is not None:
+        pg["password"] = password
+    if embedding_dim is not None:
+        pg["embedding_dim"] = embedding_dim
+
+    out["postgresql"] = pg
+    return out
+
+
 class ServerConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8000
@@ -101,22 +145,34 @@ class LoggingConfig(BaseModel):
 
 
 class RagModelsClientConfig(BaseModel):
-    base_url: str = ""
-    timeout: float = 60.0
+    base_url: str = Field(...)
+    timeout: float = Field(...)
+    # Сколько чанков отправлять за один POST /v1/embed (меньше → меньше пик RAM на svc-rag-models)
+    embed_batch_size: int = int(os.environ.get("RAG_MODELS_CLIENT_EMBED_BATCH_SIZE", "24"))
 
 
 class PostgreSQLConfig(BaseModel):
-    host: str = os.environ.get("POSTGRES_HOST", "localhost")
-    port: int = int(os.environ.get("POSTGRES_PORT", "5432"))
-    database: str = os.environ.get("POSTGRES_DB", "astrachat")
-    user: str = os.environ.get("POSTGRES_USER", "postgres")
-    password: str = os.environ.get("POSTGRES_PASSWORD", "postgres")
-    embedding_dim: int = int(os.environ.get("RAG_EMBEDDING_DIM", "384"))
+    host: str = Field(...)
+    port: int = Field(...)
+    database: str = Field(...)
+    user: str = Field(...)
+    password: str = Field(...)
+    embedding_dim: int = Field(...)
+
+
+class MinioConfig(BaseModel):
+    endpoint: str = Field(...)
+    port: int = Field(...)
+    access_key: str = Field(...)
+    secret_key: str = Field(...)
+    use_ssl: bool = Field(...)
+    bucket_name: str = Field(...)
+    documents_bucket_name: str = Field(...)
 
 
 class OcrConfig(BaseModel):
-    url: str = ""
-    timeout: float = 300.0
+    url: str = Field(...)
+    timeout: float = Field(...)
 
 
 class RagServiceConfig(BaseModel):
@@ -154,9 +210,9 @@ class RagServiceConfig(BaseModel):
 
 
 class LLMServiceConfig(BaseModel):
-    base_url: str = ""
-    timeout: float = 120.0
-    default_model: str = "default"
+    base_url: str = Field(...)
+    timeout: float = Field(...)
+    default_model: str = Field(...)
 
 
 class Settings(BaseModel):
@@ -166,6 +222,7 @@ class Settings(BaseModel):
     logging: LoggingConfig = LoggingConfig()
     rag_models_client: RagModelsClientConfig = RagModelsClientConfig()
     postgresql: PostgreSQLConfig = PostgreSQLConfig()
+    minio: MinioConfig = MinioConfig()
     ocr: OcrConfig = OcrConfig()
     rag: RagServiceConfig = RagServiceConfig()
     llm_service: LLMServiceConfig = LLMServiceConfig()
@@ -183,11 +240,14 @@ class Settings(BaseModel):
                     config_path = p
                     break
             else:
-                return cls()
+                raise ValueError(
+                    "Файл config.yml не найден: настройки должны приходить из env Kubernetes или config.yml"
+                )
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
             data = _apply_urls_section(data)
+            data = _apply_postgres_env_overrides(data)
             return cls(**data)
         except Exception as e:
             raise ValueError(f"Ошибка загрузки конфига {config_path}: {e}")

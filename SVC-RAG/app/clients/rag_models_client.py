@@ -16,19 +16,35 @@ class RagModelsClient:
         cfg = get_settings().rag_models_client
         self.base_url = (base_url or cfg.base_url).rstrip("/")
         self.timeout = timeout if timeout is not None else cfg.timeout
+        self.embed_batch_size = max(1, int(getattr(cfg, "embed_batch_size", 24) or 24))
 
     async def embed(self, texts: List[str]) -> List[List[float]]:
         """Получить эмбеддинги для списка текстов. Один текст — один вектор."""
         if not texts:
             return []
         url = f"{self.base_url}/v1/embed"
-        payload = {"texts": texts}
+        all_embeddings: List[List[float]] = []
+        batch_size = self.embed_batch_size
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.post(url, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-        embeddings = data.get("embeddings", [])
-        return embeddings
+            for start in range(0, len(texts), batch_size):
+                batch = texts[start : start + batch_size]
+                if len(texts) > batch_size:
+                    logger.info(
+                        "RAG-MODELS embed: батч %s–%s из %s",
+                        start + 1,
+                        start + len(batch),
+                        len(texts),
+                    )
+                resp = await client.post(url, json={"texts": batch})
+                resp.raise_for_status()
+                data = resp.json()
+                part = data.get("embeddings", [])
+                if len(part) != len(batch):
+                    raise ValueError(
+                        f"Число эмбеддингов ({len(part)}) не совпадает с размером батча ({len(batch)})"
+                    )
+                all_embeddings.extend(part)
+        return all_embeddings
 
     async def embed_single(self, text: str) -> List[float]:
         """Один текст — один вектор."""
