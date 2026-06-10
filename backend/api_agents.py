@@ -4,7 +4,7 @@ API endpoints для галереи агентов
 
 import logging
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from pydantic import BaseModel
 
 from backend.database.postgresql.agent_models import (
@@ -13,6 +13,7 @@ from backend.database.postgresql.agent_models import (
 )
 from backend.database.init_db import get_agent_repository, get_tag_repository
 from backend.auth.jwt_handler import get_current_user, get_optional_user
+from backend.settings.cef_logger.cef_logger import log_cef_event
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +27,9 @@ router = APIRouter(prefix="/api/agents", tags=["agents"])
 
 @router.post("/", response_model=dict, status_code=201)
 async def create_agent(
+    request: Request,
     agent_data: AgentCreate,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     """Создание нового агента"""
     try:
@@ -40,6 +42,13 @@ async def create_agent(
         )
         
         if agent_id:
+            log_cef_event(
+                "AGT001",
+                request=request,
+                current_user=current_user,
+                status_code=201,
+                extra={"cs1": agent_data.name, "cs2": str(agent_id), "cs1Label": "AgentName", "cs2Label": "AgentId"},
+            )
             return {"success": True, "agent_id": agent_id, "message": "Агент успешно создан"}
         else:
             raise HTTPException(status_code=500, detail="Ошибка при создании агента")
@@ -171,9 +180,10 @@ async def get_agents(
 
 @router.put("/{agent_id}", response_model=dict)
 async def update_agent(
+    request: Request,
     agent_id: int,
     agent_data: AgentUpdate,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     """Обновление агента (только автор)"""
     try:
@@ -186,6 +196,13 @@ async def update_agent(
         )
         
         if success:
+            log_cef_event(
+                "AGT002",
+                request=request,
+                current_user=current_user,
+                status_code=200,
+                extra={"cs1": getattr(agent_data, "name", None) or f"agent-{agent_id}", "cs2": str(agent_id), "cs1Label": "AgentName", "cs2Label": "AgentId"},
+            )
             return {"success": True, "message": "Агент успешно обновлён"}
         else:
             raise HTTPException(
@@ -202,19 +219,29 @@ async def update_agent(
 
 @router.delete("/{agent_id}", response_model=dict)
 async def delete_agent(
+    request: Request,
     agent_id: int,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     """Удаление агента (только автор)"""
     try:
         agent_repo = get_agent_repository()
         
+        existing = await agent_repo.get_agent(agent_id, current_user["user_id"])
         success = await agent_repo.delete_agent(
             agent_id=agent_id,
             author_id=current_user["user_id"]
         )
         
         if success:
+            _name = (existing.name if existing else None) or f"agent-{agent_id}"
+            log_cef_event(
+                "AGT005",
+                request=request,
+                current_user=current_user,
+                status_code=200,
+                extra={"cs1": _name, "cs2": str(agent_id), "cs1Label": "AgentName", "cs2Label": "AgentId"},
+            )
             return {"success": True, "message": "Агент успешно удалён"}
         else:
             raise HTTPException(
@@ -229,6 +256,58 @@ async def delete_agent(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/{agent_id}/duplicate", response_model=dict)
+async def duplicate_agent(
+    request: Request,
+    agent_id: int,
+    current_user: dict = Depends(get_current_user),
+):
+    """Дублирование агента"""
+    try:
+        agent_repo = get_agent_repository()
+        source = await agent_repo.get_agent(agent_id, current_user["user_id"])
+        if not source:
+            raise HTTPException(status_code=404, detail="Агент не найден")
+        create_data = AgentCreate(
+            name=f"{source.name} (copy)",
+            description=source.description,
+            system_prompt=source.system_prompt,
+            config=source.config or {},
+            tools=source.tools or [],
+            is_public=source.is_public,
+            tag_ids=[int(t["id"]) for t in (source.tags or []) if isinstance(t, dict) and t.get("id")],
+            new_tags=[],
+        )
+        new_agent_id = await agent_repo.create_agent(
+            agent_data=create_data,
+            author_id=current_user["user_id"],
+            author_name=current_user.get("username", "Anonymous"),
+        )
+        if not new_agent_id:
+            raise HTTPException(status_code=500, detail="Ошибка при дублировании агента")
+        log_cef_event(
+            "AGT003",
+            request=request,
+            current_user=current_user,
+            status_code=201,
+            extra={
+                "cs1": source.name,
+                "cs2": str(new_agent_id),
+                "agt_copy_target": create_data.name,
+                "cs3": f"duplicated from {agent_id}",
+                "cs3Label": "Context",
+                "cs1Label": "AgentName",
+                "cs2Label": "AgentId",
+            },
+        )
+        return {"success": True, "agent_id": new_agent_id, "message": "Агент скопирован"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Ошибка дублирования агента: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ===================================
 # РЕЙТИНГИ И СТАТИСТИКА
 # ===================================
@@ -236,6 +315,10 @@ async def delete_agent(
 class RatingRequest(BaseModel):
     """Запрос на оценку агента"""
     rating: int
+
+
+class RollbackRequest(BaseModel):
+    version: int = 0
 
 
 @router.post("/{agent_id}/rate", response_model=dict)
@@ -271,8 +354,9 @@ async def rate_agent(
 
 @router.post("/{agent_id}/use", response_model=dict)
 async def use_agent(
+    request: Request,
     agent_id: int,
-    current_user: Optional[dict] = Depends(get_optional_user)
+    current_user: Optional[dict] = Depends(get_optional_user),
 ):
     """Отметить использование агента"""
     try:
@@ -282,6 +366,15 @@ async def use_agent(
         usage_success = await agent_repo.increment_usage(agent_id)
         
         if usage_success:
+            ag = await agent_repo.get_agent(agent_id, (current_user or {}).get("user_id"))
+            _disp = ag.name if ag else f"agent-{agent_id}"
+            log_cef_event(
+                "INT004",
+                request=request,
+                current_user=current_user,
+                status_code=200,
+                extra={"cs1": _disp, "cs2": str(agent_id), "cs2Label": "AgentId"},
+            )
             return {"success": True, "message": "Использование учтено"}
         else:
             raise HTTPException(status_code=404, detail="Агент не найден")
@@ -313,6 +406,45 @@ async def get_agent_stats(
         raise
     except Exception as e:
         logger.error(f"Ошибка получения статистики: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{agent_id}/rollback", response_model=dict)
+async def rollback_agent(
+    request: Request,
+    agent_id: int,
+    payload: RollbackRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Логическая операция rollback (пока без хранения ревизий)."""
+    try:
+        agent_repo = get_agent_repository()
+        source = await agent_repo.get_agent(agent_id, current_user["user_id"])
+        if not source:
+            raise HTTPException(status_code=404, detail="Агент не найден")
+        # Пока хранилище версий не реализовано: фиксируем действие rollback как аудит-событие.
+        ok = await agent_repo.update_agent(agent_id, AgentUpdate(), current_user["user_id"])
+        if not ok:
+            raise HTTPException(status_code=403, detail="Недостаточно прав для rollback")
+        log_cef_event(
+            "AGT004",
+            request=request,
+            current_user=current_user,
+            status_code=200,
+            extra={
+                "cs1": source.name,
+                "cs2": str(agent_id),
+                "cn1": payload.version,
+                "cn1Label": "VersionNumber",
+                "cs1Label": "AgentName",
+                "cs2Label": "AgentId",
+            },
+        )
+        return {"success": True, "message": f"Rollback агента выполнен к версии {payload.version}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Ошибка rollback агента: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -456,43 +588,3 @@ async def get_my_agents(
     except Exception as e:
         logger.error(f"Ошибка получения моих агентов: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

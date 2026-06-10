@@ -6,6 +6,7 @@ socket_handlers.py - все @sio.event обработчики Socket.IO
 """
 import asyncio
 import concurrent.futures
+import contextvars
 import logging
 import os
 from datetime import datetime
@@ -35,8 +36,29 @@ from backend.realtime.rag_evidence import (
 )
 from backend.rag_query.post_generation import maybe_replace_ungrounded
 from backend.rag_query.prompts import RAG_STRICT_NOT_FOUND_MESSAGE, merge_strict_rag_system_prompt
-from backend.auth.jwt_handler import decode_token
+from backend.auth.jwt_handler import decode_token, decode_token_signature_only
+from backend.settings.cef_logger.cef_audit_context import cef_socket_remote_from_environ
 logger = logging.getLogger(__name__)
+
+
+def _run_sync_preserving_cef_audit(factory):
+    """Устаревший вариант: copy_context() вызывался внутри потока (там контекст пустой).
+    Оставлен для совместимости; для новых вызовов используй _make_ctx_runner."""
+    return contextvars.copy_context().run(factory)
+
+
+def _make_ctx_runner(factory):
+    """Захватывает текущий contextvars.Context прямо здесь (в asyncio-задаче)
+    и возвращает нуль-аргументный callable для передачи в run_in_executor.
+
+    Правило: вызывать СТРОГО в asyncio-задаче, до передачи в executor:
+        runner = _make_ctx_runner(lambda: ask_agent(...))
+        await loop.run_in_executor(ex, runner)
+    """
+    _ctx = contextvars.copy_context()
+    def _runner():
+        return _ctx.run(factory)
+    return _runner
 _VALID_RAG_STRATEGIES = {"auto", "hierarchical", "hybrid", "standard", "graph"}
 
 
@@ -58,7 +80,13 @@ def _extract_socket_token(auth: Any, environ: Optional[Dict[str, Any]]) -> Optio
 
 
 async def _get_socket_user_context(sio, sid: str) -> Optional[Dict[str, Any]]:
-    """Возвращает user context, сохранённый в Socket.IO сессии."""
+    """Возвращает user context, сохранённый в Socket.IO сессии.
+
+    Проверяет, что сессия всё ещё активна (не была вытеснена новым логином
+    с другого устройства/браузера). При ревоцированной сессии возвращает None
+    — вызывающий код эмитирует ошибку «Сессия завершена» и фронтенд
+    перенаправит пользователя на страницу входа.
+    """
     try:
         session = await sio.get_session(sid)
     except Exception:
@@ -66,7 +94,24 @@ async def _get_socket_user_context(sio, sid: str) -> Optional[Dict[str, Any]]:
     if not isinstance(session, dict):
         return None
     user_ctx = session.get("user")
-    return user_ctx if isinstance(user_ctx, dict) else None
+    if not isinstance(user_ctx, dict):
+        return None
+
+    # Перепроверяем токен с полной валидацией (включая _is_active_session).
+    # Это обнаружит ревокацию сессии, даже если WS-соединение было принято
+    # по сигнатуре JWT без проверки сессии (после рестарта пода).
+    token = user_ctx.get("token")
+    if token:
+        try:
+            decode_token(token)
+        except Exception:
+            logger.warning(
+                "Socket.IO msg rejected: сессия ревоцирована sid=%s user_id=%s",
+                sid, user_ctx.get("user_id"),
+            )
+            return None
+
+    return user_ctx
 def _multi_llm_llm_svc_pool_style_path(model_path: str) -> bool:
     """Пути multi-LLM через llm-svc: не держим глобальный model_load_lock — пул и load на стороне llm-svc."""
     provider_id, _model_id = split_model_path(model_path or "")
@@ -83,6 +128,140 @@ async def get_conversation_project_id(conversation_id: str) -> "Optional[str]":
     except Exception as e:
         logger.debug(f"_get_conversation_project_id({conversation_id}): {e}")
         return None
+
+
+def _build_user_inline_attachments_metadata(raw: Any) -> Optional[Dict[str, Any]]:
+    """Метаданные вложений для MongoDB (без base64 — только MinIO-ссылки и имена)."""
+    if not isinstance(raw, list) or not raw:
+        return None
+    items: list = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "file").strip() or "file"
+        ct = entry.get("contentType") or entry.get("content_type")
+        if ct not in ("text", "image"):
+            continue
+        item: Dict[str, Any] = {"name": name, "contentType": ct}
+        mo = entry.get("minio_object")
+        mb = entry.get("minio_bucket")
+        if mo:
+            item["minio_object"] = str(mo)
+        if mb:
+            item["minio_bucket"] = str(mb)
+        sz = entry.get("size")
+        if isinstance(sz, (int, float)) and sz > 0:
+            item["size"] = int(sz)
+        items.append(item)
+    return {"inline_attachments": items} if items else None
+
+
+async def _handle_chat_image_generation_request(
+    sio,
+    sid: str,
+    *,
+    user_message: str,
+    conversation_id: Optional[str],
+    project_id: Optional[str],
+    current_user: Optional[dict],
+    streaming: bool,
+):
+    """Генерация изображения по фразе «нарисуй …» без вызова LLM."""
+    from backend.services.comfyui_image_generation import ComfyImageGenError
+    from backend.services.image_generation_service import (
+        handle_chat_image_generation,
+        is_image_generation_chat_request,
+    )
+
+    if not is_image_generation_chat_request(user_message):
+        return False
+
+    await sio.emit(
+        "chat_thinking",
+        {
+            "status": "processing",
+            "message": "Генерирую изображение в ComfyUI…",
+            "image_generation": True,
+        },
+        room=sid,
+    )
+
+    try:
+        result = await handle_chat_image_generation(user_message)
+    except ComfyImageGenError as exc:
+        err_text = f"Не удалось сгенерировать изображение: {exc}"
+        logger.warning("Chat image generation failed: %s", exc)
+        await sio.emit("chat_complete", {
+            "response": err_text,
+            "timestamp": datetime.now().isoformat(),
+            "was_streaming": streaming,
+            "image_generation_error": True,
+        }, room=sid)
+        try:
+            meta = {"image_generation_error": True}
+            if project_id:
+                from backend.database.memory_service import save_dialog_entry_to_project
+                await save_dialog_entry_to_project(
+                    "assistant",
+                    err_text,
+                    project_id,
+                    conversation_id,
+                    metadata=meta,
+                    user_id=(current_user or {}).get("user_id"),
+                )
+            else:
+                await save_dialog_entry(
+                    "assistant",
+                    err_text,
+                    meta,
+                    None,
+                    conversation_id,
+                    user_id=(current_user or {}).get("user_id"),
+                )
+        except Exception as save_exc:
+            logger.warning("Не удалось сохранить ошибку image gen: %s", save_exc)
+        stop_generation_flags[sid] = False
+        return True
+
+    response = result.get("response") or ""
+    meta = result.get("metadata") or {}
+    inline_attachments = result.get("inline_attachments") or []
+
+    try:
+        if project_id:
+            from backend.database.memory_service import save_dialog_entry_to_project
+            await save_dialog_entry_to_project(
+                "assistant",
+                response,
+                project_id,
+                conversation_id,
+                metadata=meta,
+                user_id=(current_user or {}).get("user_id"),
+            )
+        else:
+            await save_dialog_entry(
+                "assistant",
+                response,
+                meta,
+                None,
+                conversation_id,
+                user_id=(current_user or {}).get("user_id"),
+            )
+    except Exception as save_exc:
+        logger.warning("Не удалось сохранить ответ image gen: %s", save_exc)
+
+    stop_generation_flags[sid] = False
+    payload = {
+        "response": response,
+        "timestamp": datetime.now().isoformat(),
+        "was_streaming": streaming,
+        "inline_attachments": inline_attachments,
+        "image_generation": True,
+    }
+    await sio.emit("chat_complete", payload, room=sid)
+    return True
+
+
 def register_handlers(sio):
     """Регистрирует все Socket.IO обработчики на переданный sio-сервер"""
     @sio.event
@@ -92,22 +271,27 @@ def register_handlers(sio):
             logger.warning("Socket.IO connect rejected: отсутствует токен sid=%s", sid)
             raise ConnectionRefusedError("Не авторизован")
         try:
-            user_data = decode_token(token)
+            # Проверяем ТОЛЬКО подпись и срок действия JWT, без _is_active_session.
+            # Это позволяет переподключиться после рестарта пода (когда in-memory словарь
+            # сессий пуст, но JWT ещё валиден). Проверка активности сессии выполняется
+            # при обработке каждого сообщения (_get_socket_user_context).
+            user_data = decode_token_signature_only(token)
         except Exception as e:
-            logger.warning("Socket.IO connect rejected: невалидный токен sid=%s reason=%s", sid, e)
-            raise ConnectionRefusedError("Сессия завершена: выполнен вход с другого устройства/окна")
+            logger.warning("Socket.IO connect rejected: невалидный JWT sid=%s reason=%s", sid, e)
+            raise ConnectionRefusedError("Неверный или просроченный токен")
 
-        await sio.save_session(
-            sid,
-            {
-                "user": {
-                    "username": user_data["username"],
-                    "user_id": user_data["user_id"],
-                    "session_id": user_data.get("session_id"),
-                    "token": token,
-                }
-            },
-        )
+        _cef_remote = cef_socket_remote_from_environ(environ if isinstance(environ, dict) else None)
+        _sess: Dict[str, Any] = {
+            "user": {
+                "username": user_data["username"],
+                "user_id": user_data["user_id"],
+                "session_id": user_data.get("session_id"),
+                "token": token,
+            }
+        }
+        if _cef_remote:
+            _sess["cef_remote"] = _cef_remote
+        await sio.save_session(sid, _sess)
         logger.info(
             "Socket.IO client connected: sid=%s user_id=%s session_id=%s",
             sid,
@@ -188,6 +372,17 @@ def register_handlers(sio):
             conversation_id = data.get("conversation_id", None)
             use_kb_rag = bool(data.get("use_kb_rag", False))
             use_memory_library_rag = bool(data.get("use_memory_library_rag", False))
+            # Inline-вложения: текст/изображения, переданные напрямую без RAG
+            _raw_inline_ctx = data.get("inline_context") or ""
+            inline_context = str(_raw_inline_ctx).strip() if _raw_inline_ctx else ""
+            _raw_inline_imgs = data.get("inline_images")
+            inline_images: list = (
+                [str(x) for x in _raw_inline_imgs if x]
+                if isinstance(_raw_inline_imgs, list) else []
+            )
+            user_message_metadata = _build_user_inline_attachments_metadata(
+                data.get("inline_attachments")
+            )
             requested_rag_strategy = str(data.get("rag_strategy") or "").strip().lower()
             effective_rag_strategy = (
                 requested_rag_strategy
@@ -211,7 +406,20 @@ def register_handlers(sio):
             try:
                 from backend.settings.cef_logger.cef_audit_context import cef_audit_set
 
-                cef_audit_set(user=validated_user, conversation_id=conversation_id)
+                cef_rem = None
+                try:
+                    _sess = await sio.get_session(sid)
+                    if isinstance(_sess, dict):
+                        _cr = _sess.get("cef_remote")
+                        if isinstance(_cr, dict) and _cr.get("src"):
+                            cef_rem = _cr
+                except Exception:
+                    pass
+                cef_audit_set(
+                    user=validated_user,
+                    conversation_id=conversation_id,
+                    socket_remote=cef_rem,
+                )
             except Exception:
                 pass
             # Получаем project_id из payload
@@ -248,13 +456,14 @@ def register_handlers(sio):
                             project_id,
                             conversation_id,
                             user_message_id,
+                            metadata=user_message_metadata,
                             user_id=validated_user["user_id"],
                         )
                     else:
                         await save_dialog_entry(
                             "user",
                             user_message,
-                            None,
+                            user_message_metadata,
                             user_message_id,
                             conversation_id,
                             user_id=validated_user["user_id"],
@@ -264,6 +473,19 @@ def register_handlers(sio):
                         await sio.emit("chat_error", {"error": "MongoDB недоступен."}, room=sid)
                         return
                     raise
+
+            handled_image = await _handle_chat_image_generation_request(
+                sio,
+                sid,
+                user_message=user_message,
+                conversation_id=conversation_id,
+                project_id=project_id,
+                current_user=validated_user,
+                streaming=streaming,
+            )
+            if handled_image:
+                return
+
             orchestrator = get_agent_orchestrator()
             use_agent_mode = orchestrator and orchestrator.get_mode() == "agent"
             use_multi_llm_mode = bool(data.get("model_comparison_enabled", False))
@@ -313,6 +535,9 @@ def register_handlers(sio):
                     rag_strategy=effective_rag_strategy,
                     models_subset=models_subset,
                     enable_thinking=enable_thinking,
+                    inline_context=inline_context,
+                    inline_images=inline_images,
+                    current_user=validated_user,
                 )
                 return
             # -- AGENT mode
@@ -327,6 +552,8 @@ def register_handlers(sio):
                     rag_strategy=effective_rag_strategy,
                     current_user=validated_user,
                     enable_thinking=enable_thinking,
+                    inline_context=inline_context,
+                    inline_images=inline_images,
                 )
                 return
             # -- DIRECT mode
@@ -340,6 +567,8 @@ def register_handlers(sio):
                 rag_strategy=effective_rag_strategy,
                 current_user=validated_user,
                 enable_thinking=enable_thinking,
+                inline_context=inline_context,
+                inline_images=inline_images,
             )
         except Exception as e:
             logger.error(f"Socket.IO chat error: {e}", exc_info=True)
@@ -360,6 +589,9 @@ async def _handle_multi_llm(
     rag_strategy="auto",
     models_subset=None,
     enable_thinking=False,
+    inline_context: str = "",
+    inline_images: list = None,
+    current_user=None,
 ):
     multi_llm_models = get_model_comparison_models()
     if not multi_llm_models:
@@ -486,6 +718,20 @@ async def _handle_multi_llm(
                 context_added = True
         except Exception as e:
             logger.error(f"multi-llm memory_rag_search: {e}")
+    # Inline-контекст (прикреплённый документ без RAG/эмбединга)
+    # Добавляем поверх уже существующего RAG-контекста — не перезаписываем его
+    if inline_context:
+        inline_block = f"[Прикреплённый документ]\n{inline_context}"
+        if final_user_message != user_message:
+            # RAG уже добавил контекст — встраиваем inline поверх, вопрос остаётся в конце
+            final_user_message = f"{inline_block}\n\n{final_user_message}"
+        else:
+            # RAG не дал контекста — inline становится единственным контекстом
+            final_user_message = f"{inline_block}\n\n[Вопрос пользователя]\n{user_message}"
+        context_added = True
+        logger.info(f"[multi-llm inline_context] {len(inline_context)} символов, RAG-контекст {'совмещён' if final_user_message != inline_block else 'не применялся'}")
+    # Inline-изображения (base64 data URL для мультимодальной модели)
+    inline_imgs = list(inline_images) if inline_images else None
     eff_system_prompt = project_instructions.strip() if project_instructions else None
     if context_added:
         eff_system_prompt = merge_strict_rag_system_prompt(eff_system_prompt)
@@ -527,6 +773,11 @@ async def _handle_multi_llm(
             )
         return
     n_models = len(multi_llm_models)
+    tool_ids = data.get("tool_ids") or data.get("mcp_tool_ids") or []
+    mcp_enabled = bool(tool_ids and current_user and not inline_imgs)
+    mcp_temperature = float(data.get("temperature") or 0.7)
+    mcp_max_tokens = int(data.get("max_tokens") or 1024)
+
     async def _gen_one(model_name: str):
         idx = multi_llm_models.index(model_name)
         async def _emit_complete(res: dict) -> dict:
@@ -539,6 +790,8 @@ async def _handle_multi_llm(
                     "error": bool(res.get("error", False)),
                     "index": idx,
                     "total": n_models,
+                    "mcp_mode": res.get("mcp_mode"),
+                    "mcp_tool_calls": res.get("mcp_tool_calls"),
                 },
                 room=sid,
             )
@@ -550,9 +803,64 @@ async def _handle_multi_llm(
                     "model": model_name,
                     "models": multi_llm_models,
                     "total_models": n_models,
+                    "mcp_enabled": mcp_enabled,
                 },
                 room=sid,
             )
+
+            if mcp_enabled:
+                try:
+                    from backend.mcp.chat_integration import run_mcp_for_chat
+
+                    async def _mcp_event_cb(payload):
+                        event = dict(payload)
+                        event["model"] = model_name
+                        await sio.emit("chat_mcp_event", event, room=sid)
+
+                    mcp_result = await run_mcp_for_chat(
+                        tool_ids=tool_ids,
+                        user_message=final_user_message,
+                        history=[],
+                        system_prompt=eff_system_prompt,
+                        model_path=model_name,
+                        user=current_user,
+                        chat_id=conversation_id,
+                        message_id=data.get("message_id"),
+                        temperature=mcp_temperature,
+                        max_tokens=mcp_max_tokens,
+                        enable_thinking=enable_thinking,
+                        emit_event=_mcp_event_cb,
+                    )
+                    if mcp_result is not None:
+                        resp = mcp_result.content or ""
+                        if streaming and resp:
+                            await sio.emit(
+                                "multi_llm_chunk",
+                                {"model": model_name, "chunk": resp, "accumulated": resp},
+                                room=sid,
+                            )
+                        if context_added and resp.strip():
+                            resp = await maybe_replace_ungrounded(
+                                final_user_message[:20000], resp, RAG_STRICT_NOT_FOUND_MESSAGE
+                            )
+                        logger.info(
+                            "Multi-LLM MCP: model=%s mode=%s tools=%s",
+                            model_name,
+                            mcp_result.mode,
+                            mcp_result.tool_calls_executed,
+                        )
+                        return await _emit_complete(
+                            {
+                                "model": model_name,
+                                "response": resp,
+                                "error": False,
+                                "mcp_mode": mcp_result.mode,
+                                "mcp_tool_calls": mcp_result.tool_calls_executed,
+                            }
+                        )
+                except Exception as mcp_exc:
+                    logger.error("Multi-LLM MCP error model=%s: %s", model_name, mcp_exc, exc_info=True)
+
             model_path = model_name
             def _model_stream_cb(chunk, acc):
                 if stop_generation_flags.get(sid, False):
@@ -563,15 +871,14 @@ async def _handle_multi_llm(
                 )
                 return True
             with concurrent.futures.ThreadPoolExecutor() as ex:
-                resp = await asyncio.get_event_loop().run_in_executor(
-                    ex,
-                    lambda: ask_agent(
-                        final_user_message, [], None, streaming,
-                        _model_stream_cb if streaming else None, model_path, None,
-                        system_prompt=eff_system_prompt,
-                        enable_thinking=enable_thinking,
-                    ),
-                )
+                _runner = _make_ctx_runner(lambda: ask_agent(
+                    final_user_message, [], None, streaming,
+                    _model_stream_cb if streaming else None, model_path, None,
+                    images=inline_imgs,
+                    system_prompt=eff_system_prompt,
+                    enable_thinking=enable_thinking,
+                ))
+                resp = await asyncio.get_event_loop().run_in_executor(ex, _runner)
             if context_added and isinstance(resp, str) and resp.strip():
                 resp = await maybe_replace_ungrounded(
                     final_user_message[:20000], resp, RAG_STRICT_NOT_FOUND_MESSAGE
@@ -615,15 +922,24 @@ async def _handle_agent_mode(
     rag_strategy="auto",
     current_user=None,
     enable_thinking=False,
+    inline_context: str = "",
+    inline_images: list = None,
 ):
     await sio.emit("chat_thinking", {"status": "processing", "message": "Обрабатываю запрос через агентную архитектуру..."}, room=sid)
     agentic_rag_enabled = bool(getattr(state, "agentic_rag_enabled", True))
     ap = agent_profile or {}
     eff_model_path = ap.get("model_path") or get_current_model_path()
+    reasoning_trace_accumulated = ""
+
     async def agent_stream_cb(chunk, acc, stream_role="content"):
+        nonlocal reasoning_trace_accumulated
         if stop_generation_flags.get(sid, False):
             return False
         if stream_role == "reasoning":
+            if isinstance(acc, str) and acc:
+                reasoning_trace_accumulated = acc
+            elif isinstance(chunk, str) and chunk:
+                reasoning_trace_accumulated += chunk
             await sio.emit(
                 "chat_thinking",
                 {"chunk": chunk, "accumulated": acc, "thinking": chunk, "stream_role": "reasoning"},
@@ -647,6 +963,10 @@ async def _handle_agent_mode(
         "agentic_rag_enabled": agentic_rag_enabled,
         "agentic_max_iterations": int(getattr(state, "agentic_max_iterations", 2)),
         "enable_thinking": enable_thinking,
+        "tool_ids": data.get("tool_ids") or data.get("mcp_tool_ids") or [],
+        "current_user": current_user,
+        "conversation_id": conversation_id,
+        "message_id": data.get("message_id"),
     }
     set_tool_context(context)
     effective_message = user_message
@@ -709,6 +1029,14 @@ async def _handle_agent_mode(
                 effective_message = f"{prefix}:\n{''.join(parts)}\n\n{effective_message}"
         except Exception as e:
             logger.error(f"Agent memory_rag_search: {e}")
+    # Inline-контекст (прикреплённый документ без RAG/эмбединга)
+    if inline_context:
+        inline_block = f"[Прикреплённый документ]\n{inline_context}"
+        if effective_message != user_message:
+            effective_message = f"{inline_block}\n\n{effective_message}"
+        else:
+            effective_message = f"{inline_block}\n\n[Вопрос пользователя]\n{user_message}"
+        logger.info(f"[agent inline_context] {len(inline_context)} символов")
     _terminal_chat_inference_banner(
         sid=sid, conversation_id=conversation_id, user_preview=user_message,
         mode_label="Оркестратор агентов (agent architecture)",
@@ -716,6 +1044,7 @@ async def _handle_agent_mode(
         extra_line="Базовая модель на сервере - та, что ниже; оркестратор может дергать LLM несколько раз.",
         enable_thinking=enable_thinking,
     )
+
     try:
         response = await orchestrator.process_message(effective_message, history=history, context=context)
         if stop_generation_flags.get(sid, False):
@@ -734,6 +1063,11 @@ async def _handle_agent_mode(
         stop_generation_flags[sid] = False
         return
     try:
+        assistant_meta = (
+            {"reasoning_content": reasoning_trace_accumulated.strip()}
+            if reasoning_trace_accumulated.strip()
+            else None
+        )
         if project_id:
             from backend.database.memory_service import save_dialog_entry_to_project
             await save_dialog_entry_to_project(
@@ -741,13 +1075,14 @@ async def _handle_agent_mode(
                 response,
                 project_id,
                 conversation_id,
+                metadata=assistant_meta,
                 user_id=(current_user or {}).get("user_id"),
             )
         else:
             await save_dialog_entry(
                 "assistant",
                 response,
-                None,
+                assistant_meta,
                 None,
                 conversation_id,
                 user_id=(current_user or {}).get("user_id"),
@@ -765,12 +1100,15 @@ async def _handle_direct(
     rag_strategy="auto",
     current_user=None,
     enable_thinking=False,
+    inline_context: str = "",
+    inline_images: list = None,
 ):
     min_sim, rag_block = rag_guard_env()
     context_added = False
     global_attempted = False
     final_message = user_message
-    images = None
+    # Inline-изображения от пользователя (base64 data URL, без RAG)
+    images = list(inline_images) if inline_images else None
     proj_hits_for_trace = []  # сохраняем для document_search_trace
     global_hits_for_trace: list = []  # глобальная библиотека (не project/kb/memory) — для трейса в UI
     proj_id_name: dict = {}
@@ -1024,6 +1362,18 @@ async def _handle_direct(
                 total += len(frag)
             final_message = f"{prefix}:\n{''.join(parts)}\n\n{final_message}"
             context_added = True
+    # Inline-контекст (текст из прикреплённого документа, без эмбединга)
+    # Добавляем поверх уже существующего RAG-контекста — не перезаписываем его
+    if inline_context:
+        inline_block = f"[Прикреплённый документ]\n{inline_context}"
+        if final_message != user_message:
+            # RAG уже добавил контекст — встраиваем inline поверх, вопрос остаётся в конце
+            final_message = f"{inline_block}\n\n{final_message}"
+        else:
+            # RAG не дал контекста — inline становится единственным контекстом
+            final_message = f"{inline_block}\n\n[Вопрос пользователя]\n{user_message}"
+        context_added = True
+        logger.info(f"[direct inline_context] {len(inline_context)} символов, RAG-контекст {'совмещён' if final_message != inline_block else 'не применялся'}")
     eff_model_path = agent_profile["model_path"] or get_current_model_path()
     # Формируем итоговый системный промпт: инструкции проекта + промпт агента
     base_system_prompt = agent_profile["system_prompt"] or ""
@@ -1058,6 +1408,44 @@ model_path_for_call=eff_model_path,
         + (" [RAG: ответ без LLM — нет релевантных фрагментов]" if canned else ""),
         enable_thinking=enable_thinking,
     )
+
+    tool_ids = data.get("tool_ids") or data.get("mcp_tool_ids") or []
+    mcp_result = None
+    if not canned and tool_ids and current_user:
+        try:
+            from backend.mcp.chat_integration import run_mcp_for_chat
+
+            async def _mcp_event_cb(payload):
+                await sio.emit("chat_mcp_event", payload, room=sid)
+
+            mcp_result = await run_mcp_for_chat(
+                tool_ids=tool_ids,
+                user_message=final_message,
+                history=history,
+                system_prompt=eff_system_prompt,
+                model_path=eff_model_path,
+                user=current_user,
+                chat_id=conversation_id,
+                message_id=data.get("message_id"),
+                temperature=agent_profile.get("temperature") or 0.7,
+                max_tokens=agent_profile.get("max_tokens") or 1024,
+                enable_thinking=enable_thinking,
+                emit_event=_mcp_event_cb,
+            )
+        except Exception as mcp_exc:
+            logger.error("MCP agent loop error: %s", mcp_exc, exc_info=True)
+
+    reasoning_trace_accumulated = ""
+
+    def _direct_stream_cb(chunk, acc, stream_role="content"):
+        nonlocal reasoning_trace_accumulated
+        if stream_role == "reasoning":
+            if isinstance(acc, str) and acc:
+                reasoning_trace_accumulated = acc
+            elif isinstance(chunk, str) and chunk:
+                reasoning_trace_accumulated += chunk
+        return sync_stream_cb(chunk, acc, stream_role)
+
     def _run_ask(stream, cb):
         return ask_agent(
             final_message, history=history,
@@ -1070,16 +1458,30 @@ model_path_for_call=eff_model_path,
         response = canned
         if streaming:
             await sio.emit("chat_chunk", {"chunk": canned, "accumulated": canned}, room=sid)
+    elif mcp_result is not None:
+        response = mcp_result.content
+        if streaming and response:
+            await sio.emit("chat_chunk", {"chunk": response, "accumulated": response}, room=sid)
+        logger.info(
+            "MCP agent loop: mode=%s tools=%s iterations=%s",
+            mcp_result.mode,
+            mcp_result.tool_calls_executed,
+            mcp_result.iterations,
+        )
     elif streaming:
         with concurrent.futures.ThreadPoolExecutor() as ex:
-            response = await asyncio.get_event_loop().run_in_executor(ex, lambda: _run_ask(True, sync_stream_cb))
+            response = await asyncio.get_event_loop().run_in_executor(
+                ex, _make_ctx_runner(lambda: _run_ask(True, _direct_stream_cb))
+            )
         if response is None or stop_generation_flags.get(sid, False):
             stop_generation_flags[sid] = False
             await sio.emit("generation_stopped", {"message": "Генерация остановлена"}, room=sid)
             return
     else:
         with concurrent.futures.ThreadPoolExecutor() as ex:
-            response = await asyncio.get_event_loop().run_in_executor(ex, lambda: _run_ask(False, None))
+            response = await asyncio.get_event_loop().run_in_executor(
+                ex, _make_ctx_runner(lambda: _run_ask(False, None))
+            )
     if context_added and not canned and response:
         response = await maybe_replace_ungrounded(
             final_message[:20000], response, RAG_STRICT_NOT_FOUND_MESSAGE
@@ -1090,6 +1492,9 @@ model_path_for_call=eff_model_path,
         return
     try:
         meta = {"document_search": document_search_trace} if document_search_trace else None
+        if reasoning_trace_accumulated.strip():
+            meta = dict(meta or {})
+            meta["reasoning_content"] = reasoning_trace_accumulated.strip()
         if project_id:
             from backend.database.memory_service import save_dialog_entry_to_project
             await save_dialog_entry_to_project(
@@ -1097,6 +1502,7 @@ model_path_for_call=eff_model_path,
                 response,
                 project_id,
                 conversation_id,
+                metadata=meta,
                 user_id=(current_user or {}).get("user_id"),
             )
         else:

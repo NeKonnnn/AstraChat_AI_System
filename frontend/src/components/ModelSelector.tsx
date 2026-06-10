@@ -14,6 +14,10 @@ import {
 import { useAppActions } from '../contexts/AppContext';
 import { getApiUrl } from '../config/api';
 import { MENU_BORDER_RADIUS_PX } from '../constants/menuStyles';
+import {
+  isValidSelectedModelPath,
+  LAST_SELECTED_MODEL_PATH_STORAGE_KEY,
+} from '../utils/modelThinking';
 
 
 interface Model {
@@ -97,7 +101,14 @@ export default function ModelSelector({ isDarkMode, onModelSelect }: ModelSelect
         const data = await response.json();
         
         setCurrentModel(data);
-        setSelectedModelPath(data.path || '');
+        const path = typeof data.path === 'string' ? data.path : '';
+        if (isValidSelectedModelPath(path)) {
+          setSelectedModelPath(path);
+          localStorage.setItem(LAST_SELECTED_MODEL_PATH_STORAGE_KEY, path);
+        } else {
+          setSelectedModelPath('');
+          localStorage.removeItem(LAST_SELECTED_MODEL_PATH_STORAGE_KEY);
+        }
       }
     } catch (err) {
       
@@ -145,6 +156,7 @@ export default function ModelSelector({ isDarkMode, onModelSelect }: ModelSelect
         const data = await response.json();
         if (data.success) {
           setSelectedModelPath(modelPath);
+          localStorage.setItem(LAST_SELECTED_MODEL_PATH_STORAGE_KEY, modelPath);
           await loadCurrentModel();
           showNotification('success', 'Модель успешно загружена!');
           handleClose();
@@ -165,6 +177,11 @@ export default function ModelSelector({ isDarkMode, onModelSelect }: ModelSelect
   };
 
   const getCurrentModelName = () => {
+    const modelPath = currentModel?.path || selectedModelPath;
+    if (!isValidSelectedModelPath(modelPath)) {
+      return 'Выберите модель';
+    }
+
     // Сначала проверяем, есть ли название модели напрямую в ответе API
     if (currentModel?.name && currentModel.name !== 'Неизвестно' && currentModel.name !== 'Unknown') {
       return currentModel.name;
@@ -177,7 +194,6 @@ export default function ModelSelector({ isDarkMode, onModelSelect }: ModelSelect
     }
     
     // Если есть путь к модели, пытаемся найти её в списке доступных моделей
-    const modelPath = currentModel?.path || selectedModelPath;
     if (modelPath) {
       const model = availableModels.find(m => m.path === modelPath);
       if (model) {

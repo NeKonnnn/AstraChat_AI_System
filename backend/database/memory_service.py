@@ -6,10 +6,20 @@
 import logging
 import os
 import uuid
+import re
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _strip_reasoning_from_history_content(text: str) -> str:
+    """Удаляет reasoning-блоки из исторического контента перед подачей в LLM-контекст."""
+    if not text:
+        return text
+    cleaned = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE)
+    cleaned = re.sub(r"<think>[\s\S]*$", "", cleaned, flags=re.IGNORECASE)
+    return cleaned.strip()
 
 # Флаг доступности MongoDB
 mongodb_available = False
@@ -36,13 +46,13 @@ except ImportError as e:
 def _check_mongodb_available() -> bool:
     """Проверка реальной доступности MongoDB (не только импорт модулей)"""
     global conversation_repo, mongodb_available
-    
+
     if get_conversation_repository is None:
         logger.warning("get_conversation_repository is None - MongoDB модули не импортированы")
         logger.warning("  Убедитесь, что motor и pymongo установлены в виртуальном окружении")
         mongodb_available = False
         return False
-    
+
     try:
         # Пытаемся получить репозиторий - это проверит реальную инициализацию
         conversation_repo = get_conversation_repository()
@@ -84,36 +94,36 @@ def reset_conversation():
 async def save_dialog_entry_mongodb(role: str, content: str, metadata: Optional[Dict[str, Any]] = None, message_id: Optional[str] = None, conversation_id: Optional[str] = None, user_id: Optional[str] = None) -> bool:
     """
     Сохранение сообщения в MongoDB
-    
+
     Args:
         role: Роль отправителя (user, assistant, system)
         content: Содержание сообщения
         metadata: Дополнительные метаданные
         message_id: ID сообщения (если не указан, генерируется автоматически)
         conversation_id: ID диалога (если не указан, используется текущий или создается новый)
-        
+
     Returns:
         True если успешно, False в случае ошибки
     """
     try:
         global conversation_repo
-        
+
         # Проверяем доступность MongoDB
         if not _check_mongodb_available():
             logger.error("MongoDB не инициализирован. Не удалось сохранить сообщение.")
             return False
-        
+
         if conversation_repo is None:
             conversation_repo = get_conversation_repository()
-        
+
         # Используем переданный conversation_id или получаем/создаем новый
         if conversation_id is None:
             conversation_id = get_or_create_conversation_id()
-        
+
         # Используем переданный message_id или генерируем новый
         if message_id is None:
             message_id = f"msg_{uuid.uuid4().hex[:12]}"
-        
+
         # Создаем сообщение
         message = Message(
             message_id=message_id,
@@ -122,15 +132,15 @@ async def save_dialog_entry_mongodb(role: str, content: str, metadata: Optional[
             timestamp=datetime.utcnow(),
             metadata=metadata or {}
         )
-        
+
         # Проверяем, существует ли диалог
         existing_conversation = await conversation_repo.get_conversation(conversation_id)
-        
+
         if existing_conversation is None:
             # Создаем новый диалог
             conversation = Conversation(
                 conversation_id=conversation_id,
-                user_id=user_id or "default_user",
+                user_id=user_id or "default_user",  # TODO: добавить поддержку пользователей
                 title=content[:60],
                 messages=[message],
                 created_at=datetime.utcnow(),
@@ -138,13 +148,34 @@ async def save_dialog_entry_mongodb(role: str, content: str, metadata: Optional[
             )
             await conversation_repo.create_conversation(conversation)
             logger.debug(f"Создан новый диалог: {conversation_id}")
+            try:
+                from backend.settings.cef_logger.cef_audit_context import cef_audit_peek
+                from backend.settings.cef_logger.cef_logger import log_cef_event
+
+                _req, _user, _ = cef_audit_peek()
+                _cu = _user
+                if not _cu and user_id:
+                    _cu = {"username": str(user_id), "user_id": str(user_id)}
+                log_cef_event(
+                    "INT005",
+                    request=_req,
+                    current_user=_cu,
+                    status_code=200,
+                    extra={
+                        "methodName": "MongoDB.insertOne(conversations)",
+                        "serviceName": "AstraChat-MongoDB",
+                        "requestUuid": conversation_id,
+                    },
+                )
+            except Exception:
+                pass
         else:
             # Добавляем сообщение в существующий диалог
             await conversation_repo.add_message(conversation_id, message)
             logger.debug(f"Добавлено сообщение в диалог: {conversation_id}")
-        
+
         return True
-        
+
     except RuntimeError as e:
         # MongoDB не инициализирован
         logger.error(f"MongoDB не инициализирован: {e}")
@@ -191,43 +222,44 @@ async def save_dialog_entry(role: str, content: str, metadata: Optional[Dict[str
 async def load_dialog_history_mongodb(conversation_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Загрузка истории диалога из MongoDB
-    
+
     Args:
         conversation_id: ID диалога (если None, используется текущий)
-        
+
     Returns:
         Список сообщений в формате словарей
     """
     try:
         global conversation_repo
-        
+
         # Проверяем доступность MongoDB
         if not _check_mongodb_available():
             logger.warning("MongoDB не инициализирован. Не удалось загрузить историю.")
             return []
-        
+
         if conversation_repo is None:
             conversation_repo = get_conversation_repository()
-        
+
         if conversation_id is None:
             conversation_id = get_or_create_conversation_id()
-        
+
         conversation = await conversation_repo.get_conversation(conversation_id)
         
         if conversation is None:
             return []
-        
+
         # Конвертируем в формат словарей
         history = []
         for message in conversation.messages:
+            cleaned_content = _strip_reasoning_from_history_content(message.content)
             history.append({
                 "role": message.role,
-                "content": message.content,
+                "content": cleaned_content,
                 "timestamp": message.timestamp.isoformat() if message.timestamp else None
             })
-        
+
         return history
-        
+
     except RuntimeError as e:
         logger.warning(f"MongoDB не инициализирован: {e}")
         mongodb_available = False
@@ -245,7 +277,7 @@ async def load_dialog_history() -> List[Dict[str, Any]]:
     if not _check_mongodb_available():
         logger.warning("MongoDB недоступен! Возвращаем пустую историю.")
         return []
-    
+
     try:
         return await load_dialog_history_mongodb()
     except Exception as e:
@@ -256,24 +288,24 @@ async def load_dialog_history() -> List[Dict[str, Any]]:
 async def get_recent_dialog_history_mongodb(max_entries: Optional[int] = None, conversation_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Получение последних N сообщений из MongoDB
-    
+
     Args:
         max_entries: Максимальное количество сообщений. Если None, возвращает всю историю (неограниченная память)
         conversation_id: ID диалога (если None, используется текущий)
-        
+
     Returns:
         Список последних сообщений
     """
     try:
         history = await load_dialog_history_mongodb(conversation_id)
-        
+
         # Если max_entries не указан, возвращаем всю историю (неограниченная память)
         if max_entries is None:
             return history
-        
+
         # Ограничиваем количество сообщений
         return history[-max_entries:] if len(history) > max_entries else history
-        
+
     except Exception as e:
         logger.error(f"Ошибка при получении последних сообщений из MongoDB: {e}")
         return []
@@ -282,7 +314,7 @@ async def get_recent_dialog_history_mongodb(max_entries: Optional[int] = None, c
 async def get_recent_dialog_history(max_entries: Optional[int] = None, conversation_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Получение последних сообщений из MongoDB (файловый режим отключен)
-    
+
     Args:
         max_entries: Максимальное количество сообщений
         conversation_id: ID диалога (если None, используется текущий)
@@ -318,26 +350,26 @@ async def clear_dialog_history_mongodb() -> str:
     """Очистка истории диалога в MongoDB"""
     try:
         global conversation_repo
-        
+
         # Проверяем доступность MongoDB
         if not _check_mongodb_available():
             logger.error("MongoDB не инициализирован. Не удалось очистить историю.")
             return "Ошибка: MongoDB не инициализирован"
-        
+
         if conversation_repo is None:
             conversation_repo = get_conversation_repository()
-        
+
         conversation_id = get_or_create_conversation_id()
-        
+
         # Удаляем текущий диалог
         await conversation_repo.delete_conversation(conversation_id)
-        
+
         # Сбрасываем ID диалога
         reset_conversation()
-        
+
         logger.info(f"История диалога {conversation_id} очищена")
         return "История диалога очищена"
-        
+
     except RuntimeError as e:
         logger.error(f"MongoDB не инициализирован: {e}")
         mongodb_available = False
@@ -355,7 +387,7 @@ async def clear_dialog_history() -> str:
     if not _check_mongodb_available():
         logger.error("MongoDB недоступен! Невозможно очистить историю.")
         return "Ошибка: MongoDB недоступен"
-    
+
     try:
         return await clear_dialog_history_mongodb()
     except Exception as e:
@@ -366,12 +398,12 @@ async def clear_dialog_history() -> str:
 async def search_conversations(query: str, user_id: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
     """
     Поиск диалогов по тексту (только MongoDB)
-    
+
     Args:
         query: Поисковый запрос
         user_id: Опциональный фильтр по пользователю
         limit: Максимальное количество результатов
-        
+
     Returns:
         Список найденных диалогов
     """
@@ -379,14 +411,14 @@ async def search_conversations(query: str, user_id: Optional[str] = None, limit:
     if not _check_mongodb_available():
         logger.warning("Поиск доступен только с MongoDB")
         return []
-    
+
     try:
         global conversation_repo
         if conversation_repo is None:
             conversation_repo = get_conversation_repository()
-        
+
         conversations = await conversation_repo.search_conversations(query, user_id, limit)
-        
+
         # Конвертируем в формат словарей
         results = []
         for conv in conversations:
@@ -397,9 +429,9 @@ async def search_conversations(query: str, user_id: Optional[str] = None, limit:
                 "updated_at": conv.updated_at.isoformat() if conv.updated_at else None,
                 "message_count": len(conv.messages)
             })
-        
+
         return results
-        
+
     except RuntimeError as e:
         logger.warning(f"MongoDB не инициализирован: {e}")
         mongodb_available = False
@@ -413,10 +445,10 @@ async def remove_last_user_message(conversation_id: Optional[str] = None) -> boo
     """
     Удаление последнего сообщения пользователя из диалога
     Используется при остановке генерации в обычном (не streaming) режиме
-    
+
     Args:
         conversation_id: ID диалога (если None, используется текущий)
-        
+
     Returns:
         True если успешно, False в случае ошибки
     """
@@ -424,20 +456,20 @@ async def remove_last_user_message(conversation_id: Optional[str] = None) -> boo
     if not _check_mongodb_available():
         logger.warning("MongoDB недоступен! Невозможно удалить сообщение.")
         return False
-    
+
     try:
         global conversation_repo
         if conversation_repo is None:
             conversation_repo = get_conversation_repository()
-        
+
         if conversation_id is None:
             conversation_id = get_or_create_conversation_id()
-        
+
         success = await conversation_repo.remove_last_message(conversation_id, role="user")
         if success:
             logger.info(f"Последнее сообщение пользователя удалено из диалога {conversation_id}")
         return success
-        
+
     except RuntimeError as e:
         logger.warning(f"MongoDB не инициализирован: {e}")
         return False
@@ -455,6 +487,7 @@ async def save_dialog_entry_to_project(
     project_id: str,
     conversation_id: Optional[str] = None,
     message_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
     user_id: Optional[str] = None,
 ) -> bool:
     """
@@ -482,7 +515,7 @@ async def save_dialog_entry_to_project(
             role=role,
             content=content,
             timestamp=datetime.utcnow(),
-            metadata={},
+            metadata=metadata or {},
         )
 
         existing = await conversation_repo.get_conversation(conversation_id)
@@ -497,6 +530,27 @@ async def save_dialog_entry_to_project(
                 project_id=project_id,
             )
             await conversation_repo.create_conversation(conversation)
+            try:
+                from backend.settings.cef_logger.cef_audit_context import cef_audit_peek
+                from backend.settings.cef_logger.cef_logger import log_cef_event
+
+                _req, _user, _ = cef_audit_peek()
+                _cu = _user
+                if not _cu and user_id:
+                    _cu = {"username": str(user_id), "user_id": str(user_id)}
+                log_cef_event(
+                    "INT005",
+                    request=_req,
+                    current_user=_cu,
+                    status_code=200,
+                    extra={
+                        "methodName": "MongoDB.insertOne(conversations)",
+                        "serviceName": "AstraChat-MongoDB",
+                        "requestUuid": conversation_id,
+                    },
+                )
+            except Exception:
+                pass
         else:
             await conversation_repo.add_message(conversation_id, message)
             # При необходимости синхронизируем project_id
@@ -527,9 +581,10 @@ async def get_project_memory_history(
         history: List[Dict[str, Any]] = []
         for conv in conversations:
             for msg in conv.messages:
+                cleaned_content = _strip_reasoning_from_history_content(msg.content)
                 history.append({
                     "role": msg.role,
-                    "content": msg.content,
+                    "content": cleaned_content,
                     "timestamp": msg.timestamp.isoformat() if msg.timestamp else None,
                 })
         if max_entries and len(history) > max_entries:
@@ -558,9 +613,10 @@ async def get_default_memory_history(
         history: List[Dict[str, Any]] = []
         for conv in conversations:
             for msg in conv.messages:
+                cleaned_content = _strip_reasoning_from_history_content(msg.content)
                 history.append({
                     "role": msg.role,
-                    "content": msg.content,
+                    "content": cleaned_content,
                     "timestamp": msg.timestamp.isoformat() if msg.timestamp else None,
                 })
         if max_entries and len(history) > max_entries:
@@ -605,7 +661,7 @@ async def save_to_memory(role: str, message: str):
         role_normalized = "assistant"
     else:
         role_normalized = "system"
-    
+
     # Сохраняем через стандартную функцию
     try:
         await save_dialog_entry(role_normalized, message)

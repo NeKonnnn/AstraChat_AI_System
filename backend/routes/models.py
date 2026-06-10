@@ -2,9 +2,11 @@
 routes/models.py - управление моделями
 """
 
+import asyncio
 import logging
 import os
 from datetime import datetime
+from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException
 
@@ -64,19 +66,19 @@ async def get_available_models():
         from backend.llm_providers import get_registry
 
         registry = await get_registry()
-        result_models = []
-        warnings = []
-        for provider in registry.all():
+        default_id = registry.default_id
+
+        async def _rows_for_provider(provider) -> Tuple[List[dict], Optional[str]]:
             try:
                 models = await provider.list_models()
             except Exception as he:
                 logger.warning("provider=%s list_models error: %s", provider.id, he)
-                warnings.append(f"{provider.id}: {he}")
-                continue
-            is_default = provider.id == registry.default_id
+                return [], f"{provider.id}: {he}"
+            is_default = provider.id == default_id
+            rows: List[dict] = []
             for m in models:
                 extra = dict(m.extra or {})
-                result_models.append({
+                rows.append({
                     "name": m.model_id,
                     "display_name": m.display_name or m.model_id,
                     "path": m.path,  # "<provider_id>/<model_id>"
@@ -98,6 +100,15 @@ async def get_available_models():
                     "llm_host_id": provider.id,
                     "extra": extra,
                 })
+            return rows, None
+
+        pairs = await asyncio.gather(*(_rows_for_provider(p) for p in registry.all()))
+        result_models: List[dict] = []
+        warnings: List[str] = []
+        for rows, warn in pairs:
+            result_models.extend(rows)
+            if warn:
+                warnings.append(warn)
         response = {"models": result_models}
         if warnings:
             response["warning"] = "; ".join(warnings)

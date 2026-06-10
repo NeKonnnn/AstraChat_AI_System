@@ -34,7 +34,7 @@ export default function ChatPage() {
   const [showCopyAlert, setShowCopyAlert] = useState(false);
   const { state } = useAppContext();
   const { clearMessages, showNotification, getCurrentMessages, getCurrentChat } = useAppActions();
-  const { sendMessage, isConnected, reconnect, stopGeneration } = useSocket();
+  const { sendMessage, isConnected, isConnecting, reconnect, stopGeneration } = useSocket();
   
   // Получаем текущий чат и сообщения
   const currentChat = getCurrentChat();
@@ -53,7 +53,7 @@ export default function ChatPage() {
   }, []);
 
   const handleSendMessage = () => {
-    if (!inputMessage.trim() || !isConnected || state.isLoading || !currentChat) {
+    if (!inputMessage.trim() || (!isConnected && !isConnecting) || state.isLoading || !currentChat) {
       return;
     }
 
@@ -159,7 +159,7 @@ export default function ChatPage() {
                 content={message.content} 
                 isStreaming={message.isStreaming || false}
                 onSendMessage={(prompt) => {
-                  if (currentChat && isConnected && !state.isLoading) {
+                  if (currentChat && (isConnected || isConnecting) && !state.isLoading) {
                     sendMessage(prompt, currentChat.id);
                   }
                 }}
@@ -283,14 +283,14 @@ export default function ChatPage() {
               />
               
               {/* Дополнительная информация о соединении */}
-              {!isConnected && (
+              {!isConnected && !isConnecting && (
                 <Typography variant="caption" color="error.main" sx={{ ml: 1 }}>
                   Переподключение...
                 </Typography>
               )}
               
               {/* Кнопка переподключения */}
-              {!isConnected && (
+              {!isConnected && !isConnecting && (
                 <Tooltip title="Принудительно переподключиться">
                   <IconButton
                     size="small"
@@ -409,7 +409,7 @@ export default function ChatPage() {
               onChange={(e) => setInputMessage(e.target.value)}
               onKeyPress={handleKeyPress}
               placeholder="Введите сообщение..."
-              disabled={!isConnected || state.isLoading}
+              disabled={(!isConnected && !isConnecting) || state.isLoading}
               sx={{
                 '& .MuiOutlinedInput-root': {
                   borderRadius: 3,
@@ -437,11 +437,11 @@ export default function ChatPage() {
                   </IconButton>
                 </Tooltip>
               )}
-                              <Tooltip title={(!inputMessage.trim() || !isConnected || state.isLoading) ? 'Недоступно' : 'Отправить сообщение'}>
+                              <Tooltip title={(!inputMessage.trim() || (!isConnected && !isConnecting) || state.isLoading) ? 'Недоступно' : 'Отправить сообщение'}>
                   <span>
                     <IconButton
                       onClick={handleSendMessage}
-                      disabled={!inputMessage.trim() || !isConnected || state.isLoading}
+                      disabled={!inputMessage.trim() || (!isConnected && !isConnecting) || state.isLoading}
                       color="primary"
                       sx={{
                         backgroundColor: 'primary.main',

@@ -4,10 +4,11 @@ routes/documents.py - загрузка, удаление, запросы к до
 
 import logging
 import os
+import json
 from datetime import datetime
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Request, Query
+from fastapi.responses import FileResponse, Response
 
 from backend.app_state import ask_agent, rag_client, minio_client, settings, get_rag_chat_top_k
 from backend.schemas import DocumentQueryRequest
@@ -23,13 +24,324 @@ from backend.realtime.rag_evidence import (
 from backend.rag_query.post_generation import maybe_replace_ungrounded
 from backend.rag_query.prompts import RAG_STRICT_NOT_FOUND_MESSAGE, merge_strict_rag_system_prompt
 from backend.rag_query.semantic_cache import bump_rag_semantic_cache
+from backend.settings.cef_logger.cef_logger import log_cef_event
+from backend.auth.jwt_handler import get_current_user
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 logger = logging.getLogger(__name__)
 
+INLINE_ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024
+_INLINE_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+_INLINE_DOC_EXTS = {".pdf", ".docx", ".xlsx", ".xls", ".txt"}
+_INLINE_ATTACH_SUPPORTED_EXTENSIONS = sorted(_INLINE_IMAGE_EXTS | _INLINE_DOC_EXTS)
+
+_CONTENT_TYPE_BY_EXT = {
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".doc": "application/msword",
+    ".txt": "text/plain",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".xls": "application/vnd.ms-excel",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+}
+
+
+def _inline_attach_supported_extensions_label() -> str:
+    return ", ".join(_INLINE_ATTACH_SUPPORTED_EXTENSIONS)
+
+
+def _unsupported_inline_attach_extension_detail(filename: str) -> str:
+    ext = os.path.splitext(filename or "")[1].lower()
+    supported = _inline_attach_supported_extensions_label()
+    if ext:
+        return f"{ext} файлы не поддерживаются, поддерживаются только следующие расширения файлов: {supported}"
+    return (
+        "файлы без расширения не поддерживаются, "
+        f"поддерживаются только следующие расширения файлов: {supported}"
+    )
+
+
+def _emit_attach_info(message: str) -> None:
+    logger.info(message)
+
+
+def _log_inline_attach_upload_success(filename: str) -> None:
+    logger.info("файл %s загружен успешно", filename)
+
+
+def _log_inline_attach_upload_failure(filename: str, detail: str) -> None:
+    logger.info("файл %s загружен не успешно. %s", filename, detail)
+
+
+def _resolve_content_type(filename: str, content_type: str) -> str:
+    ext = os.path.splitext(filename or "")[1].lower()
+    if content_type:
+        return content_type.lower()
+    return _CONTENT_TYPE_BY_EXT.get(ext, "application/octet-stream")
+
+
+def _detect_inline_attachment_kind(filename: str, content_type: str) -> str:
+    ext = os.path.splitext(filename or "")[1].lower()
+    ct = (content_type or "").lower()
+    if ct.startswith("image/") or ext in _INLINE_IMAGE_EXTS:
+        return "image"
+    if ext in _INLINE_DOC_EXTS:
+        return "document"
+    doc_mimes = {
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel",
+        "text/plain",
+    }
+    if ct in doc_mimes:
+        return "document"
+    return "unsupported"
+
+
+async def _analyze_inline_attachment_for_model(
+    filename: str,
+    content_type: str,
+    file_size: int,
+) -> dict:
+    from backend.app_state import get_current_model_path
+
+    kind = _detect_inline_attachment_kind(filename, content_type)
+    format_allowed = kind != "unsupported"
+    size_allowed = file_size <= INLINE_ATTACHMENT_MAX_BYTES
+
+    model_path = get_current_model_path()
+    provider_id = None
+    model_vision = None
+    model_compatible = True
+    incompatibility_reason = None
+
+    if model_path:
+        try:
+            from backend.llm_providers import get_registry
+
+            registry = await get_registry()
+            provider, _model_id = registry.resolve(model_path)
+            provider_id = provider.id
+            model_vision = bool(provider.capabilities.vision)
+            if kind == "image" and not model_vision:
+                model_compatible = False
+                incompatibility_reason = "модель не поддерживает vision (изображения)"
+        except Exception as exc:
+            logger.debug("[ChatAttach] не удалось определить capabilities модели: %s", exc)
+    elif kind == "image":
+        model_compatible = False
+        incompatibility_reason = "модель не выбрана — изображение может не обработаться"
+
+    allowed = format_allowed and size_allowed
+    reject_reason = None
+    if not format_allowed:
+        reject_reason = "Неподдерживаемый формат (PDF, DOCX, XLSX, TXT, JPEG, PNG, WEBP, GIF)"
+    elif not size_allowed:
+        reject_reason = f"Размер превышает {INLINE_ATTACHMENT_MAX_BYTES // (1024 * 1024)}MB"
+
+    return {
+        "filename": filename,
+        "content_type": content_type,
+        "size": file_size,
+        "kind": kind,
+        "format_allowed": format_allowed,
+        "size_allowed": size_allowed,
+        "allowed": allowed,
+        "model_path": model_path,
+        "provider_id": provider_id,
+        "model_vision": model_vision,
+        "model_compatible": model_compatible,
+        **({"reject_reason": reject_reason} if reject_reason else {}),
+        **({"incompatibility_reason": incompatibility_reason} if incompatibility_reason else {}),
+    }
+
+
+def _log_inline_attachment_debug(stage: str, analysis: dict, **extra) -> None:
+    payload = {"stage": stage, **analysis, **extra}
+    logger.info("[ChatAttach] %s", json.dumps(payload, ensure_ascii=False, default=str))
+
+
+def _log_chat_attach_request(request: Request, **extra) -> None:
+    logger.info(
+        "[ChatAttach] %s",
+        json.dumps(
+            {
+                "stage": "request-start",
+                "content_length_header": request.headers.get("content-length"),
+                "content_type_header": request.headers.get("content-type"),
+                "client_host": getattr(request.client, "host", None) if request.client else None,
+                **extra,
+            },
+            ensure_ascii=False,
+            default=str,
+        ),
+    )
+
+
+def _extract_inline_payload(content: bytes, filename: str, content_type: str) -> dict:
+    """
+    Извлекает содержимое для inline-передачи в модель (без RAG).
+    Возвращает: { type: 'text'|'image', content: str, cs1: str }
+    """
+    import base64
+    import io
+
+    ext = os.path.splitext(filename)[1].lower()
+    ct = (content_type or "").lower()
+
+    if ct.startswith("image/") or ext in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+        mime = ct if ct.startswith("image/") else _CONTENT_TYPE_BY_EXT.get(ext, "image/jpeg")
+        b64 = base64.b64encode(content).decode("ascii")
+        return {"type": "image", "content": f"data:{mime};base64,{b64}", "cs1": "image"}
+
+    if ext == ".pdf":
+        from PyPDF2 import PdfReader
+        reader = PdfReader(io.BytesIO(content))
+        pages_text = []
+        for i, page in enumerate(reader.pages, 1):
+            page_text = page.extract_text() or ""
+            if page_text.strip():
+                pages_text.append(f"[Страница {i}]\n{page_text}")
+        text = "\n\n".join(pages_text) if pages_text else "(PDF не содержит извлекаемого текста)"
+        return {"type": "text", "content": text, "cs1": "pdf"}
+
+    if ext == ".docx":
+        import docx as docx_lib
+        doc = docx_lib.Document(io.BytesIO(content))
+        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        text = "\n".join(paragraphs) if paragraphs else "(Документ не содержит текста)"
+        return {"type": "text", "content": text, "cs1": "docx"}
+
+    if ext in (".xlsx", ".xls"):
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
+        lines = []
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            lines.append(f"=== Лист: {sheet_name} ===")
+            for row in ws.iter_rows(values_only=True):
+                row_str = "\t".join("" if c is None else str(c) for c in row)
+                if row_str.strip():
+                    lines.append(row_str)
+        text = "\n".join(lines) if lines else "(Таблица не содержит данных)"
+        return {"type": "text", "content": text, "cs1": "xlsx"}
+
+    text = content.decode("utf-8", errors="replace")
+    return {"type": "text", "content": text, "cs1": "text"}
+
+
+async def _ocr_image_payload_if_needed(
+    content: bytes,
+    filename: str,
+    payload: dict,
+    model_path: str | None,
+) -> tuple[dict, str | None]:
+    """
+    llm-svc + GGUF — text-only: вместо base64 vision прогоняем OCR (Surya).
+    """
+    if payload.get("type") != "image":
+        return payload, None
+
+    use_ocr = True
+    if model_path:
+        try:
+            from backend.llm_providers import get_registry
+
+            registry = await get_registry()
+            provider, _ = registry.resolve(model_path)
+            if provider.capabilities.vision and getattr(provider, "kind", None) != "llm-svc":
+                use_ocr = False
+        except Exception as exc:
+            logger.debug("[ChatAttach] OCR routing: %s", exc)
+
+    if not use_ocr:
+        return payload, None
+
+    try:
+        from backend.agent_llm_svc import get_llm_service
+
+        svc = await get_llm_service()
+        if not svc.client.ocr_url:
+            return payload, "OCR-сервис не настроен — текстовая модель не распознает изображение"
+
+        ocr = await svc.client.recognize_text_from_image(content, filename)
+        text = (ocr.get("text") or "").strip()
+        if not text:
+            return {
+                "type": "text",
+                "content": f"[Изображение «{filename}»: OCR не нашёл текста на изображении]",
+                "cs1": "image-ocr-empty",
+            }, "На изображении не обнаружен текст (OCR)"
+        return {
+            "type": "text",
+            "content": f"[Текст с изображения «{filename}» (OCR)]:\n{text}",
+            "cs1": "image-ocr",
+        }, None
+    except Exception as exc:
+        logger.warning("[ChatAttach] OCR failed for %s: %s", filename, exc)
+        return payload, f"OCR не удался: {exc}. Текстовая модель не «видит» картинку напрямую."
+
+
+def _try_upload_bytes_to_minio(
+    request: Request,
+    content: bytes,
+    filename: str,
+    content_type: str,
+) -> tuple[str | None, str | None]:
+    """
+    Пытается загрузить байты в MinIO. При недоступности MinIO возвращает (None, None)
+    — прикрепление к сообщению всё равно работает (inline в модель).
+    """
+    if not minio_client:
+        logger.warning("MinIO недоступен — файл %s не сохранён в объектное хранилище", filename)
+        return None, None
+
+    documents_bucket = os.getenv("MINIO_DOCUMENTS_BUCKET_NAME", "astrachat-documents")
+    ext = os.path.splitext(filename)[1].lower()
+    is_image = ext in (".jpg", ".jpeg", ".png", ".webp", ".gif") or content_type.startswith("image/")
+    file_object_name = minio_client.generate_object_name(
+        prefix="img_" if is_image else "doc_",
+        extension=ext or ".bin",
+    )
+    try:
+        minio_client.upload_file(
+            content, file_object_name, content_type=content_type, bucket_name=documents_bucket
+        )
+        log_cef_event(
+            "FS003",
+            request=request,
+            status_code=200,
+            extra={
+                "file": filename,
+                "bucket": f"minio://{documents_bucket}/{file_object_name}",
+            },
+        )
+        return file_object_name, documents_bucket
+    except Exception as e:
+        logger.warning("MinIO attach upload error (%s): %s", filename, e)
+        try:
+            log_cef_event(
+                "FS004",
+                request=request,
+                status_code=500,
+                extra={
+                    "file": filename,
+                    "bucket": f"minio://{documents_bucket}",
+                    "reason": str(e)[:300],
+                },
+            )
+        except Exception:
+            pass
+        return None, None
+
 
 @router.post("/upload")
-async def upload_document(file: UploadFile = File(...)):
+async def upload_document(request: Request, file: UploadFile = File(...)):
     if not rag_client:
         raise HTTPException(status_code=503, detail="RAG service недоступен")
 
@@ -55,8 +367,29 @@ async def upload_document(file: UploadFile = File(...)):
                     prefix="img_" if is_image else "doc_", extension=file_extension
                 )
                 minio_client.upload_file(content, file_object_name, content_type=content_type, bucket_name=documents_bucket)
+                _fs_file = file.filename or file_object_name or "unknown"
+                _fs_bucket = f"minio://{documents_bucket}/{file_object_name}"
+                log_cef_event(
+                    "FS003",
+                    request=request,
+                    status_code=200,
+                    extra={"file": _fs_file, "bucket": _fs_bucket},
+                )
             except Exception as e:
                 logger.warning(f"MinIO upload: {e}")
+                try:
+                    log_cef_event(
+                        "FS004",
+                        request=request,
+                        status_code=500,
+                        extra={
+                            "file": file.filename or "unknown",
+                            "bucket": f"minio://{documents_bucket}",
+                            "reason": str(e)[:300],
+                        },
+                    )
+                except Exception:
+                    pass
                 file_object_name = None
 
         try:
@@ -87,6 +420,17 @@ async def upload_document(file: UploadFile = File(...)):
 
         result = {"message": "Документ успешно загружен", "filename": file.filename,
                   "success": True, "rag_document_id": rag_result.get("document_id")}
+        _doc_id = rag_result.get("document_id")
+        _ex: dict = {"fname": file.filename or "unknown", "fsize": len(content)}
+        if _doc_id:
+            _ex["cs2"] = str(_doc_id)
+            _ex["cs2Label"] = "ObjectId"
+        log_cef_event(
+            "FS005",
+            request=request,
+            status_code=200,
+            extra=_ex,
+        )
         if is_image and minio_client and file_object_name:
             result["minio_object"] = file_object_name
             result["minio_bucket"] = documents_bucket
@@ -162,7 +506,7 @@ async def get_documents():
 
 
 @router.delete("/{filename}")
-async def delete_document(filename: str):
+async def delete_document(filename: str, request: Request):
     if not rag_client:
         raise HTTPException(status_code=503, detail="RAG service недоступен")
     try:
@@ -188,6 +532,18 @@ async def delete_document(filename: str):
         bump_rag_semantic_cache()
 
         new_docs = await rag_client.list_documents()
+        _fsize = 0
+        _oid = None
+        for d in docs or []:
+            if d.get("filename") == filename:
+                _fsize = int(d.get("size") or d.get("bytes") or d.get("file_size") or 0)
+                _oid = d.get("document_id") or d.get("id")
+                break
+        _ex2: dict = {"fname": filename, "fsize": _fsize}
+        if _oid:
+            _ex2["cs2"] = str(_oid)
+            _ex2["cs2Label"] = "ObjectId"
+        log_cef_event("FS006", request=request, status_code=200, extra=_ex2)
         return {"message": f"Документ {filename} удален", "success": True,
                 "remaining_documents": [d.get("filename") for d in new_docs]}
     except HTTPException:
@@ -531,3 +887,198 @@ async def download_confidence_report():
     except Exception as e:
         logger.error(f"Ошибка при генерации Excel: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/extract")
+async def extract_document_inline(request: Request, file: UploadFile = File(...)):
+    """
+    Устаревший путь: только извлечение в памяти без MinIO.
+    Предпочтительно: POST /attach (MinIO + inline для модели).
+    """
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Файл пустой")
+
+    filename = file.filename or "unknown"
+    content_type = _resolve_content_type(filename, file.content_type or "")
+    file_size = len(content)
+
+    try:
+        payload = _extract_inline_payload(content, filename, content_type)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Inline extract error ({filename}): {e}")
+        raise HTTPException(status_code=500, detail=f"Не удалось обработать файл: {e}") from e
+
+    log_cef_event(
+        "FS007",
+        request=request,
+        status_code=200,
+        extra={"fname": filename, "fsize": file_size, "cs1": payload["cs1"]},
+    )
+    return {
+        "type": payload["type"],
+        "content": payload["content"],
+        "filename": filename,
+        "success": True,
+    }
+
+
+@router.post("/attach")
+async def attach_document_for_message(request: Request, file: UploadFile = File(...)):
+    """
+    Прикрепление к сообщению: сохранение в MinIO + извлечение содержимого для модели.
+    Без RAG, эмбеддингов и PostgreSQL — только объектное хранилище и inline-контент.
+    """
+    _log_chat_attach_request(
+        request,
+        upload_filename=file.filename,
+        upload_content_type=file.content_type,
+    )
+
+    filename = file.filename or "unknown"
+
+    try:
+        content = await file.read()
+    except Exception as exc:
+        logger.exception("[ChatAttach] read-upload-failed filename=%s", file.filename)
+        _log_inline_attach_upload_failure(filename, f"Не удалось прочитать файл: {exc}")
+        raise HTTPException(status_code=400, detail=f"Не удалось прочитать файл: {exc}") from exc
+
+    if not content:
+        _log_inline_attachment_debug("rejected-empty", {"filename": filename})
+        _log_inline_attach_upload_failure(filename, "Файл пустой")
+        raise HTTPException(status_code=400, detail="Файл пустой")
+    content_type = _resolve_content_type(filename, file.content_type or "")
+    file_size = len(content)
+
+    _log_inline_attachment_debug(
+        "read-complete",
+        {
+            "filename": filename,
+            "content_type": content_type,
+            "size": file_size,
+            "size_mb": round(file_size / (1024 * 1024), 3),
+            "header_content_length": request.headers.get("content-length"),
+        },
+    )
+
+    analysis = await _analyze_inline_attachment_for_model(filename, content_type, file_size)
+    _log_inline_attachment_debug("validate", analysis)
+
+    if not analysis["allowed"]:
+        _log_inline_attachment_debug("rejected", analysis)
+        if not analysis["format_allowed"]:
+            failure_detail = _unsupported_inline_attach_extension_detail(filename)
+        else:
+            max_mb = INLINE_ATTACHMENT_MAX_BYTES // (1024 * 1024)
+            failure_detail = (
+                f"размер файла превышает допустимый лимит {max_mb} МБ, "
+                f"поддерживается максимальный размер до {max_mb} МБ"
+            )
+        _log_inline_attach_upload_failure(filename, failure_detail)
+        raise HTTPException(status_code=400, detail=analysis.get("reject_reason") or "Файл не может быть прикреплён")
+
+    if not analysis["model_compatible"]:
+        _log_inline_attachment_debug("model-incompatible", analysis)
+
+    _log_inline_attach_upload_success(filename)
+
+    minio_object, minio_bucket = _try_upload_bytes_to_minio(
+        request, content, filename, content_type
+    )
+    _log_inline_attachment_debug(
+        "minio-upload",
+        analysis,
+        minio_saved=bool(minio_object),
+        minio_object=minio_object,
+        minio_bucket=minio_bucket,
+    )
+
+    try:
+        payload = _extract_inline_payload(content, filename, content_type)
+        ocr_warning = None
+        if payload.get("type") == "image":
+            payload, ocr_warning = await _ocr_image_payload_if_needed(
+                content, filename, payload, analysis.get("model_path")
+            )
+    except Exception as e:
+        logger.exception("[ChatAttach] extract-error filename=%s size=%s", filename, file_size)
+        _log_inline_attachment_debug("extract-error", analysis, error=str(e), error_type=type(e).__name__)
+        _log_inline_attach_upload_failure(filename, f"Не удалось извлечь содержимое: {e}")
+        if minio_object and minio_bucket and minio_client:
+            try:
+                minio_client.delete_file(minio_object, bucket_name=minio_bucket)
+            except Exception:
+                pass
+        raise HTTPException(status_code=500, detail=f"Не удалось извлечь содержимое: {e}") from e
+
+    inline_content = payload.get("content") or ""
+    inline_content_chars = len(inline_content)
+    _log_inline_attachment_debug(
+        "extract-complete",
+        analysis,
+        extracted_type=payload["type"],
+        extracted_cs1=payload.get("cs1"),
+        inline_content_chars=inline_content_chars,
+        minio_saved=bool(minio_object),
+    )
+
+    _cef_extra: dict = {
+        "fname": filename,
+        "fsize": file_size,
+        "cs1": payload["cs1"],
+    }
+    if minio_object:
+        _cef_extra["cs2"] = minio_object
+        _cef_extra["cs2Label"] = "MinioObject"
+    log_cef_event("FS007", request=request, status_code=200, extra=_cef_extra)
+
+    _log_inline_attachment_debug(
+        "success",
+        analysis,
+        extracted_type=payload["type"],
+        minio_saved=bool(minio_object),
+        response_content_chars=inline_content_chars,
+    )
+
+    result = {
+        "success": True,
+        "type": payload["type"],
+        "content": payload["content"],
+        "filename": filename,
+        "minio_saved": bool(minio_object),
+    }
+    if minio_object:
+        result["minio_object"] = minio_object
+        result["minio_bucket"] = minio_bucket
+    if not minio_object:
+        result["warning"] = "MinIO недоступен — файл прикреплён к сообщению, но не сохранён в хранилище"
+    if ocr_warning:
+        result["warning"] = (
+            f"{result['warning']} {ocr_warning}".strip()
+            if result.get("warning")
+            else ocr_warning
+        )
+    return result
+
+
+@router.get("/inline-file")
+async def get_inline_attachment_file(
+    bucket: str = Query(..., min_length=1),
+    object_name: str = Query(..., min_length=1, alias="object"),
+    _current_user: dict = Depends(get_current_user),
+):
+    """Отдаёт файл вложения из MinIO для превью в UI (после перезагрузки страницы)."""
+    if not minio_client:
+        raise HTTPException(status_code=503, detail="MinIO недоступен")
+    try:
+        data = minio_client.download_file(object_name, bucket_name=bucket)
+    except Exception as e:
+        logger.error("inline-file download %s/%s: %s", bucket, object_name, e)
+        raise HTTPException(status_code=404, detail="Файл не найден") from e
+
+    ext = os.path.splitext(object_name)[1].lower()
+    mime = _CONTENT_TYPE_BY_EXT.get(ext, "application/octet-stream")
+    return Response(content=data, media_type=mime)

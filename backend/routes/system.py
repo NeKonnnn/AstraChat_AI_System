@@ -34,8 +34,8 @@ async def socket_test():
         "socketio_status": "active",
         "endpoint": "/socket.io/",
         "cors_origins": [
-            getattr(_urls, "frontend_port_1", None),
-            getattr(_urls, "frontend_port_1_ipv4", None),
+            getattr(_urls, "frontend_port", None),
+            getattr(_urls, "frontend_port_ipv4", None),
             getattr(_urls, "frontend_port_2", None),
             getattr(_urls, "frontend_port_3", None),
         ],
@@ -58,6 +58,31 @@ async def health_check():
             except Exception:
                 pass
 
+        mcp_status = {"enabled": False, "initialized": False}
+        try:
+            from backend.mcp.platform import get_mcp_platform
+            from backend.mcp.types import McpCallContext
+
+            platform = get_mcp_platform()
+            mcp_status = {
+                "enabled": platform.enabled,
+                "initialized": platform.initialized,
+            }
+            if platform.initialized and platform.enabled:
+                agg = await platform.get_aggregate_status(
+                    McpCallContext(user_id="system", username="system", is_admin=True)
+                )
+                mcp_status.update(
+                    {
+                        "servers_total": agg.servers_total,
+                        "servers_connected": agg.servers_connected,
+                        "tools_total": agg.tools_total,
+                        "pool": platform.get_pool_metrics(),
+                    }
+                )
+        except Exception:
+            pass
+
         return {
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
@@ -66,6 +91,7 @@ async def health_check():
                 "stt_whisperx": stt_status,
                 "rag_service": rag_available,
                 "transcriber": UniversalTranscriber is not None,
+                "mcp": mcp_status,
             },
         }
     except Exception as e:
@@ -109,6 +135,23 @@ async def get_system_status():
         },
         "rag_service": {"available": rag_client is not None},
     }
+    try:
+        from backend.mcp.platform import get_mcp_platform
+
+        platform = get_mcp_platform()
+        module_status["mcp"] = {
+            "available": True,
+            "enabled": platform.enabled,
+            "initialized": platform.initialized,
+        }
+        try:
+            from backend.llm_providers.routing import describe_llm_routes
+
+            module_status["llm_routing"] = await describe_llm_routes()
+        except Exception:
+            pass
+    except Exception:
+        module_status["mcp"] = {"available": False}
 
     services_health = {}
     try:

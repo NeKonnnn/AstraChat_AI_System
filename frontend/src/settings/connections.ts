@@ -53,7 +53,7 @@ export class APIConnectionConfigImpl implements APIConnectionConfig {
     if (config.retryDelay === undefined || config.retryDelay === null) {
       throw new Error('retryDelay не задан в конфигурации. Проверьте YAML или ENV переменные.');
     }
-    
+
     this.baseUrl = config.baseUrl;
     this.timeout = config.timeout;
     this.retryEnabled = config.retryEnabled ?? true;
@@ -103,14 +103,28 @@ export class WebSocketConnectionConfigImpl implements WebSocketConnectionConfig 
     if (config.reconnectionDelayMax === undefined || config.reconnectionDelayMax === null) {
       throw new Error('reconnectionDelayMax не задан в конфигурации. Проверьте YAML или ENV переменные.');
     }
-    
-    // Преобразуем http/https в ws/wss
+
+// Преобразуем http/https в ws/wss
     let wsBaseUrl = config.baseUrl;
+    const originalUrl = wsBaseUrl;
     if (!wsBaseUrl.startsWith('ws://') && !wsBaseUrl.startsWith('wss://')) {
+      const beforeReplace = wsBaseUrl;
       wsBaseUrl = wsBaseUrl.replace('http://', 'ws://').replace('https://', 'wss://');
+      console.log('[WebSocketConnectionConfig] Преобразование URL:', {
+        original: originalUrl,
+        beforeReplace: beforeReplace,
+        afterReplace: wsBaseUrl,
+        protocolChange: beforeReplace !== wsBaseUrl
+      });
+    } else {
+      console.log('[WebSocketConnectionConfig] URL уже в формате ws/wss:', {
+        original: originalUrl,
+        unchanged: true
+      });
     }
-    
+
     this.baseUrl = wsBaseUrl;
+    console.log('[WebSocketConnectionConfig] Финальный baseUrl установлен:', this.baseUrl);
     this.timeout = config.timeout;
     this.pingInterval = config.pingInterval;
     this.pingTimeout = config.pingTimeout;
@@ -125,7 +139,13 @@ export class WebSocketConnectionConfigImpl implements WebSocketConnectionConfig 
   getWsUrl(endpoint: string): string {
     const base = this.baseUrl.endsWith('/') ? this.baseUrl.slice(0, -1) : this.baseUrl;
     const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-    return `${base}${path}`;
+    const fullUrl = `${base}${path}`;
+
+    console.log('[WebSocketConnectionConfig.getWsUrl]', {
+      baseUrl: this.baseUrl,
+      endpoint: endpoint,
+      fullUrl: fullUrl
+    });
+    return fullUrl;
   }
 }
-

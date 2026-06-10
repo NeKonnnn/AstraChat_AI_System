@@ -27,13 +27,11 @@ import {
 } from '@mui/material';
 import {
   SmartToyOutlined as AgentIcon,
-  ComputerOutlined as DirectIcon,
   Refresh as RefreshIcon,
   CheckCircle as CheckIcon,
   Error as ErrorIcon,
   ExpandMore as ExpandMoreIcon,
   ExpandLess as ExpandLessIcon,
-  ViewModuleOutlined as MultiLLMIcon,
   HelpOutline as HelpOutlineIcon,
 } from '@mui/icons-material';
 import { getApiUrl } from '../../config/api';
@@ -74,9 +72,25 @@ interface Agent {
 }
 
 interface MCPStatus {
+  initialized?: boolean;
+  enabled?: boolean;
   servers_connected?: number;
   total_servers?: number;
+  tools?: number;
+  tools_total?: number;
+  servers?: Array<{
+    id: string;
+    display_name?: string;
+    enabled?: boolean;
+    connected?: boolean;
+    transport?: string;
+    tools?: number;
+  }>;
   active_servers?: string[];
+}
+
+interface AgentsSettingsProps {
+  onOpenMcpSettings?: () => void;
 }
 
 interface LangGraphStatus {
@@ -86,14 +100,7 @@ interface LangGraphStatus {
   orchestrator_active?: boolean;
 }
 
-interface Model {
-  name: string;
-  path: string;
-  size?: number;
-  size_mb?: number;
-}
-
-export default function AgentsSettings() {
+export default function AgentsSettings({ onOpenMcpSettings }: AgentsSettingsProps) {
   const theme = useTheme();
   const dropdownItemSx = useMemo(() => getDropdownItemSx(theme.palette.mode === 'dark'), [theme.palette.mode]);
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
@@ -107,10 +114,6 @@ export default function AgentsSettings() {
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
   const [modePopoverAnchor, setModePopoverAnchor] = useState<HTMLElement | null>(null);
   const [pendingOrchestratorAction, setPendingOrchestratorAction] = useState<boolean | null>(null);
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const [, setAvailableModels] = useState<Model[]>([]);
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const [, setSelectedMultiLLMModels] = useState<string[]>([]);
 
   useEffect(() => {
     loadAgentStatus();
@@ -122,9 +125,6 @@ export default function AgentsSettings() {
   useEffect(() => {
     if (agentStatus?.mode === 'agent') {
       loadAgents();
-    } else if (agentStatus?.mode === 'multi-llm') {
-      loadAvailableModels();
-      loadMultiLLMModels();
     }
   }, [agentStatus?.mode]);
 
@@ -199,12 +199,11 @@ export default function AgentsSettings() {
     }
   };
 
-  type AgentMode = 'direct' | 'agent' | 'multi-llm';
+  type AgentMode = 'direct' | 'agent';
   const getModeLabel = (mode: AgentMode): string => {
     switch (mode) {
       case 'direct': return 'Прямой режим';
       case 'agent': return 'Агентный режим';
-      case 'multi-llm': return 'Прямой режим с несколькими LLM';
       default: return 'Прямой режим';
     }
   };
@@ -212,7 +211,6 @@ export default function AgentsSettings() {
     switch (mode) {
       case 'direct': return 'Общение с моделью напрямую без использования агентов. Подходит для простых диалогов и задач.';
       case 'agent': return 'Использование специализированных агентов для решения задач. Каждый агент отвечает за свою область.';
-      case 'multi-llm': return 'Параллельная генерация ответов от нескольких моделей одновременно. Сравнивайте результаты разных LLM.';
       default: return '';
     }
   };
@@ -220,7 +218,6 @@ export default function AgentsSettings() {
     switch (mode) {
       case 'direct': return 'Используйте для обычных диалогов, когда не нужны специализированные агенты.';
       case 'agent': return 'Используйте когда нужны агенты с разными возможностями (поиск, расчёты, код и т.д.).';
-      case 'multi-llm': return 'Используйте для сравнения ответов разных моделей или ансамблевых сценариев.';
       default: return '';
     }
   };
@@ -356,33 +353,7 @@ export default function AgentsSettings() {
     }
   };
 
-  const loadAvailableModels = async () => {
-    try {
-      const response = await fetch(getApiUrl('/api/models/available'));
-      if (response.ok) {
-        const data = await response.json();
-        setAvailableModels(data.models || []);
-      } else {
-        setError('Не удалось загрузить список моделей');
-      }
-    } catch (err) {
-      setError(`Ошибка загрузки моделей: ${err}`);
-    }
-  };
-
-  const loadMultiLLMModels = async () => {
-    try {
-      const response = await fetch(getApiUrl('/api/agent/multi-llm/models'));
-      if (response.ok) {
-        const data = await response.json();
-        setSelectedMultiLLMModels(data.models || []);
-      }
-    } catch (err) {
-      // Ошибка загрузки выбранных моделей
-    }
-  };
-
-  const switchMode = async (mode: 'direct' | 'agent' | 'multi-llm') => {
+  const switchMode = async (mode: 'direct' | 'agent') => {
     try {
       const response = await fetch(getApiUrl('/api/agent/mode'), {
         method: 'POST',
@@ -400,12 +371,7 @@ export default function AgentsSettings() {
           
           // Принудительно обновляем статус LangGraph
           await loadLanggraphStatus();
-        } else if (mode === 'multi-llm') {
-          // Загружаем список моделей
-          await loadAvailableModels();
-          await loadMultiLLMModels();
         }
-        
         // Перезагружаем статус для обновления данных
         await loadAgentStatus();
         await loadLanggraphStatus();
@@ -902,17 +868,32 @@ export default function AgentsSettings() {
                 </IconButton>
               </Tooltip>
             </Typography>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1, flexWrap: 'wrap' }}>
               {(mcpStatus.servers_connected || 0) > 0 ? (
                 <CheckIcon color="success" />
               ) : (
                 <ErrorIcon color="error" />
               )}
               <Typography variant="body1">
-                Подключено: {mcpStatus.servers_connected || 0} из {mcpStatus.total_servers || 0}
+                MCP: {mcpStatus.servers_connected || 0} из {mcpStatus.total_servers || mcpStatus.servers?.length || 0}{' '}
+                серверов · {mcpStatus.tools_total ?? mcpStatus.tools ?? 0} инструментов
               </Typography>
+              {onOpenMcpSettings ? (
+                <Button size="small" variant="text" onClick={onOpenMcpSettings}>
+                  Настройки MCP →
+                </Button>
+              ) : null}
             </Box>
-            {mcpStatus.active_servers && mcpStatus.active_servers.length > 0 && (
+            {(mcpStatus.servers?.length ? mcpStatus.servers.filter((s) => s.connected) : []).map((server) => (
+              <Chip
+                key={server.id}
+                label={server.display_name || server.id}
+                size="small"
+                sx={{ mr: 1, mb: 1 }}
+                color={server.connected ? 'success' : 'default'}
+              />
+            ))}
+            {!mcpStatus.servers?.length && mcpStatus.active_servers && mcpStatus.active_servers.length > 0 && (
               <Box>
                 <Typography variant="subtitle2" color="text.secondary" gutterBottom>
                   Активные серверы:

@@ -31,15 +31,58 @@ logger = logging.getLogger(__name__)
 
 def _get_ask_agent():
     """
-    Получить ask_agent_llm_svc для работы через llm-svc без загрузки модели
+    LLM для planner/aggregator.
+    B-27: ProviderRegistry (CORSUR/Phoenix/…), fallback — agent_llm_svc.
     """
     try:
+        from backend.mcp.orchestrator_bridge import sync_chat_via_registry
+
+        def registry_ask(
+            prompt,
+            history=None,
+            streaming=False,
+            stream_callback=None,
+            max_tokens=500,
+            model_path=None,
+            **kwargs,
+        ):
+            result = sync_chat_via_registry(
+                prompt,
+                history=history,
+                model_path=model_path,
+                streaming=streaming,
+                stream_callback=stream_callback,
+                max_tokens=max_tokens or 1024,
+                temperature=float(kwargs.get("temperature") or 0.7),
+                system_prompt=kwargs.get("system_prompt"),
+                enable_thinking=bool(kwargs.get("enable_thinking")),
+            )
+            if result is not None:
+                return result
+            return _get_ask_agent_legacy()(
+                prompt,
+                history=history,
+                streaming=streaming,
+                stream_callback=stream_callback,
+                max_tokens=max_tokens,
+                model_path=model_path,
+                **kwargs,
+            )
+
+        return registry_ask
+    except Exception as exc:
+        logger.warning("ProviderRegistry ask unavailable, fallback llm-svc: %s", exc)
+        return _get_ask_agent_legacy()
+
+
+def _get_ask_agent_legacy():
+    try:
         from backend.agent_llm_svc import ask_agent
-        logger.debug("[LangGraph] Используется ask_agent из agent_llm_svc")
+        logger.debug("[LangGraph] fallback ask_agent from agent_llm_svc")
         return ask_agent
     except ModuleNotFoundError:
         from agent_llm_svc import ask_agent
-        logger.debug("[LangGraph] Используется ask_agent_llm_svc (относительный импорт)")
+        logger.debug("[LangGraph] fallback ask_agent (relative import)")
         return ask_agent
 
 # ============================================================================
@@ -88,6 +131,7 @@ class LangGraphOrchestrator:
         
         # Статус активности инструментов: по умолчанию всё выкл — включает пользователь в UI
         self.tool_status = {tool.name: False for tool in self.tools}
+        self._dynamic_mcp_tool_names: set[str] = set()
         
         # Статус активности оркестратора (по умолчанию включен)
         self.orchestrator_active = True
@@ -531,10 +575,9 @@ class LangGraphOrchestrator:
                     logger.info(f"[EXECUTOR] Heartbeat: Выполняю инструмент {tool_name} ({i}/{len(plan)})...")
                     # События отправляются из async контекста в main.py через chat_thinking
                 
-                # Проверяем что инструмент активен
-                logger.debug(f"[EXECUTOR] Проверка статуса инструмента '{tool_name}'...")
-                is_active = self.tool_status.get(tool_name, False)
-                logger.debug(f"[EXECUTOR] Статус инструмента '{tool_name}': {'активен' if is_active else 'неактивен'}")
+                # MCP tools из tool_ids всегда активны (per-chat selection)
+                is_mcp_tool = tool_name in getattr(self, "_dynamic_mcp_tool_names", set())
+                is_active = is_mcp_tool or self.tool_status.get(tool_name, False)
                 
                 if not is_active:
                     logger.warning(f"[EXECUTOR] Инструмент '{tool_name}' неактивен, пропускаем")
@@ -909,6 +952,16 @@ class LangGraphOrchestrator:
                 logger.info("[process_message] Граф скомпилирован успешно")
             else:
                 logger.info("[process_message] Граф уже скомпилирован, используем существующий")
+
+            ctx = context or {}
+            try:
+                from backend.mcp.orchestrator_bridge import attach_mcp_tools_to_orchestrator
+
+                attached = await attach_mcp_tools_to_orchestrator(self, ctx)
+                if attached:
+                    logger.info("[process_message] MCP tools attached: %s", attached)
+            except Exception as mcp_attach_exc:
+                logger.warning("[process_message] MCP attach skipped: %s", mcp_attach_exc)
             
             # Начальное состояние
             initial_state = {

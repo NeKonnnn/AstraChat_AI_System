@@ -7,14 +7,14 @@ from pathlib import Path
 _settings = None
 
 _URLS_CORS_KEYS: Tuple[str, ...] = (
-    "frontend_port_1",
-    "frontend_port_1_ipv4",
+    "frontend_port",
+    "frontend_port_ipv4",
     "frontend_port_2",
     "frontend_port_2_ipv4",
     "frontend_port_3",
     "frontend_port_3_ipv4",
-    "backend_port_1",
-    "backend_port_1_ipv4",
+    "backend_port",
+    "backend_port_ipv4",
     "backend_port_2",
     "backend_port_2_ipv4",
 )
@@ -169,7 +169,7 @@ class NexusConfig(BaseModel):
         if 'password' not in data or data['password'] is None:
             data['password'] = os.environ.get('NEXUS_PASSWORD')
         if 'cert_path' not in data or data['cert_path'] is None:
-            data['cert_path'] = os.environ.get('NEXUS_CERT_PATH')
+            data['cert_path'] = os.environ.get('TLS_CERT_PATH')
         super().__init__(**data)
 
 

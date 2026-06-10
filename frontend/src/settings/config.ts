@@ -7,16 +7,10 @@ import yaml from 'js-yaml';
 import { APIConnectionConfigImpl, WebSocketConnectionConfigImpl } from './connections';
 
 export interface UrlsConfig {
-  frontend_port_1: string;
-  frontend_port_1_ipv4: string;
-  frontend_port_2: string;
-  frontend_port_2_ipv4: string;
-  frontend_port_3: string;
-  frontend_port_3_ipv4: string;
-  backend_port_1: string;
-  backend_port_1_ipv4: string;
-  backend_port_2: string;
-  backend_port_2_ipv4: string;
+  frontend_port: string;
+  backend_port: string;
+  ingress_port: string;
+  llm_service_port: string;
 }
 
 export interface AppConfig {
@@ -33,20 +27,15 @@ export interface SettingsConfig {
   websocket: WebSocketConnectionConfigImpl;
 }
 
-// Глобальный экземпляр настроек
 let _settings: SettingsConfig | null = null;
 let _loadPromise: Promise<SettingsConfig> | null = null;
 
-/**
- * Загрузка конфигурации из YAML файла
- */
 const loadConfig = async (): Promise<SettingsConfig> => {
   if (_settings) return _settings;
   if (_loadPromise) return _loadPromise;
 
   _loadPromise = (async () => {
     try {
-      // Загружаем config.yml из public/config
       const response = await fetch('/config/config.yml');
       if (!response.ok) {
         throw new Error(
@@ -54,15 +43,14 @@ const loadConfig = async (): Promise<SettingsConfig> => {
           `Проверьте наличие файла public/config/config.yml`
         );
       }
-      
+
       const yamlText = await response.text();
       const configData: any = yaml.load(yamlText) || {};
-      
+
       if (!configData.urls) {
         throw new Error('В config.yml отсутствует секция urls. Проверьте формат файла.');
       }
 
-      // Создаем конфигурацию приложения
       const appConfig: AppConfig = {
         name: configData.app?.name || 'astrachat Frontend',
         version: configData.app?.version || '1.0.0',
@@ -70,18 +58,14 @@ const loadConfig = async (): Promise<SettingsConfig> => {
         debug: configData.app?.debug ?? false,
       };
 
-      // Создаем конфигурацию URL (приоритет: YAML > ENV, без дефолтов)
       const getUrlValue = (yamlKey: string, envKey: string): string => {
-        // Сначала пробуем из YAML
         if (configData.urls && configData.urls[yamlKey]) {
           return configData.urls[yamlKey];
         }
-        // Затем из ENV
         const envValue = process.env[envKey];
         if (envValue) {
           return envValue;
         }
-        // Если нет ни в YAML, ни в ENV - ошибка
         throw new Error(
           `${yamlKey} не задан в YAML (urls.${yamlKey}) или ENV (${envKey}). ` +
           `Проверьте файл public/config/config.yml или переменные окружения.`
@@ -89,31 +73,21 @@ const loadConfig = async (): Promise<SettingsConfig> => {
       };
 
       const urlsConfig: UrlsConfig = {
-        frontend_port_1: getUrlValue('frontend_port_1', 'REACT_APP_FRONTEND_PORT_1'),
-        frontend_port_1_ipv4: getUrlValue('frontend_port_1_ipv4', 'REACT_APP_FRONTEND_PORT_1_IPV4'),
-        frontend_port_2: getUrlValue('frontend_port_2', 'REACT_APP_FRONTEND_PORT_2'),
-        frontend_port_2_ipv4: getUrlValue('frontend_port_2_ipv4', 'REACT_APP_FRONTEND_PORT_2_IPV4'),
-        frontend_port_3: getUrlValue('frontend_port_3', 'REACT_APP_FRONTEND_PORT_3'),
-        frontend_port_3_ipv4: getUrlValue('frontend_port_3_ipv4', 'REACT_APP_FRONTEND_PORT_3_IPV4'),
-        backend_port_1: getUrlValue('backend_port_1', 'REACT_APP_BACKEND_PORT_1'),
-        backend_port_1_ipv4: getUrlValue('backend_port_1_ipv4', 'REACT_APP_BACKEND_PORT_1_IPV4'),
-        backend_port_2: getUrlValue('backend_port_2', 'REACT_APP_BACKEND_PORT_2'),
-        backend_port_2_ipv4: getUrlValue('backend_port_2_ipv4', 'REACT_APP_BACKEND_PORT_2_IPV4'),
+        frontend_port: getUrlValue('frontend_port', 'REACT_APP_FRONTEND_PORT'),
+        backend_port: getUrlValue('backend_port', 'REACT_APP_BACKEND_PORT'),
+        ingress_port: getUrlValue('ingress_port', 'REACT_APP_INGRESS_PORT'),
+        llm_service_port: getUrlValue('llm_service_port', 'REACT_APP_LLM_SERVICE_PORT'),
       };
 
-      // Определяем базовый URL для API (приоритет: env > config.yml)
-      // Если REACT_APP_API_URL задан в ENV, используем его, иначе берем из config.yml
-      const apiBaseUrl = process.env.REACT_APP_API_URL || urlsConfig.backend_port_1;
-      // Для WebSocket: если REACT_APP_WS_URL задан в ENV, используем его, иначе берем из config.yml и преобразуем
-      const wsBaseUrlRaw = process.env.REACT_APP_WS_URL || urlsConfig.backend_port_1;
-      // Преобразуем http/https в ws/wss, если нужно
-      const wsBaseUrl = wsBaseUrlRaw.startsWith('ws://') || wsBaseUrlRaw.startsWith('wss://') 
-        ? wsBaseUrlRaw 
-        : wsBaseUrlRaw.replace('http://', 'ws://').replace('https://', 'wss://');
+      const apiBaseUrl = process.env.REACT_APP_API_URL || urlsConfig.ingress_port;
 
-      // Создаем конфигурацию подключений (приоритет: YAML > ENV, без дефолтов)
+      const wsBaseUrlRaw = process.env.REACT_APP_WS_URL || urlsConfig.ingress_port;
+      const wsBaseUrl =
+        wsBaseUrlRaw.startsWith('ws://') || wsBaseUrlRaw.startsWith('wss://')
+          ? wsBaseUrlRaw
+          : wsBaseUrlRaw.replace('http://', 'ws://').replace('https://', 'wss://');
+
       const getConfigValue = <T>(yamlPath: string[], envKey: string, defaultValue: T | null = null): T => {
-        // Сначала пробуем из YAML
         let value: any = configData;
         for (const key of yamlPath) {
           value = value?.[key];
@@ -122,10 +96,8 @@ const loadConfig = async (): Promise<SettingsConfig> => {
         if (value !== undefined) {
           return value;
         }
-        // Затем из ENV
         const envValue = process.env[envKey];
         if (envValue !== undefined) {
-          // Преобразуем строку в нужный тип
           if (typeof defaultValue === 'number') {
             return parseInt(envValue, 10) as T;
           }
@@ -134,11 +106,9 @@ const loadConfig = async (): Promise<SettingsConfig> => {
           }
           return envValue as T;
         }
-        // Если есть дефолт, используем его
         if (defaultValue !== null) {
           return defaultValue;
         }
-        // Иначе ошибка
         throw new Error(
           `Значение не задано в YAML (${yamlPath.join('.')}) или ENV (${envKey}). ` +
           `Проверьте файл public/config/config.yml или переменные окружения.`
@@ -158,9 +128,21 @@ const loadConfig = async (): Promise<SettingsConfig> => {
         timeout: getConfigValue(['websocket', 'timeout'], 'REACT_APP_WS_TIMEOUT', 10000),
         pingInterval: getConfigValue(['websocket', 'pingInterval'], 'REACT_APP_WS_PING_INTERVAL', 30000),
         pingTimeout: getConfigValue(['websocket', 'pingTimeout'], 'REACT_APP_WS_PING_TIMEOUT', 10000),
-        reconnectionAttempts: getConfigValue(['websocket', 'reconnectionAttempts'], 'REACT_APP_WS_RECONNECTION_ATTEMPTS', 10),
-        reconnectionDelay: getConfigValue(['websocket', 'reconnectionDelay'], 'REACT_APP_WS_RECONNECTION_DELAY', 1000),
-        reconnectionDelayMax: getConfigValue(['websocket', 'reconnectionDelayMax'], 'REACT_APP_WS_RECONNECTION_DELAY_MAX', 5000),
+        reconnectionAttempts: getConfigValue(
+          ['websocket', 'reconnectionAttempts'],
+          'REACT_APP_WS_RECONNECTION_ATTEMPTS',
+          10,
+        ),
+        reconnectionDelay: getConfigValue(
+          ['websocket', 'reconnectionDelay'],
+          'REACT_APP_WS_RECONNECTION_DELAY',
+          1000,
+        ),
+        reconnectionDelayMax: getConfigValue(
+          ['websocket', 'reconnectionDelayMax'],
+          'REACT_APP_WS_RECONNECTION_DELAY_MAX',
+          5000,
+        ),
       });
 
       _settings = {
@@ -182,9 +164,6 @@ const loadConfig = async (): Promise<SettingsConfig> => {
   return _loadPromise;
 };
 
-/**
- * Получение глобального экземпляра настроек (singleton)
- */
 export const getSettings = (): SettingsConfig => {
   if (!_settings) {
     throw new Error(
@@ -194,26 +173,16 @@ export const getSettings = (): SettingsConfig => {
   return _settings;
 };
 
-/**
- * Инициализация настроек (загружает конфиг заранее при старте приложения)
- * ОБЯЗАТЕЛЬНО вызвать при старте приложения!
- */
-export const initSettings = async (): Promise<SettingsConfig> => {
-  return await loadConfig();
-};
+export const initSettings = async (): Promise<SettingsConfig> => loadConfig();
 
-/**
- * Сброс и принудительная перезагрузка настроек
- */
+export const initConfig = initSettings;
+
 export const resetSettings = async (): Promise<SettingsConfig> => {
   _settings = null;
   _loadPromise = null;
-  return await loadConfig();
+  return loadConfig();
 };
 
-/**
- * Получение URL из конфигурации (синхронно, использует кэш)
- */
 export const getUrl = (key: keyof UrlsConfig): string => {
   const settings = getSettings();
   const url = settings.urls[key];
@@ -224,6 +193,3 @@ export const getUrl = (key: keyof UrlsConfig): string => {
   }
   return url;
 };
-
-// Типы уже экспортированы выше через export interface
-

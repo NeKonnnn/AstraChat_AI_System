@@ -1,0 +1,68 @@
+{
+  "presentation_id": "31ebe921-5321-4c1b-b02b-079aacd8cf49",
+  "outline": {
+    "title": "Generated Presentation",
+    "slides": [
+      {
+        "index": 1,
+        "topic": "Slide 1"
+      },
+      {
+        "index": 2,
+        "topic": "Slide 2"
+      }
+    ],
+    "source_excerpt": "AI roadmap"
+  },
+  "structure": {
+    "template": "general",
+    "style_template_priority": false,
+    "slides": [
+      {
+        "index": 1,
+        "layout": "title_content",
+        "slide_type": "title"
+      },
+      {
+        "index": 2,
+        "layout": "title_content",
+        "slide_type": "summary"
+      }
+    ]
+  },
+  "slides": [
+    {
+      "index": 1,
+      "title": "Slide 1",
+      "body": "Контент слайда 1 (Russian)"
+    },
+    {
+      "index": 2,
+      "title": "Slide 2",
+      "body": "Контент слайда 2 (Russian)"
+    }
+  ],
+  "language": "Russian",
+  "template": "general",
+  "style_id": null,
+  "template_pptx_id": null,
+  "style": null,
+  "effective_style": {
+    "name": "General",
+    "colors": {
+      "bg": "#0F172A",
+      "title": "#F8FAFC",
+      "body": "#CBD5E1",
+      "accent": "#38BDF8"
+    },
+    "fonts": {
+      "heading": "Calibri",
+      "body": "Calibri"
+    }
+  },
+  "prefer_style_layouts": true,
+  "model_path": null,
+  "use_llm_generation": false,
+  "include_images": false,
+  "image_provider": "local-disabled"
+}

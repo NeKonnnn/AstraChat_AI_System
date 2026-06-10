@@ -1,6 +1,17 @@
 """CEF-аудит: события и контекст запроса для LLM/памяти."""
 
-from backend.settings.cef_logger.cef_audit_context import cef_audit_peek, cef_audit_reset, cef_audit_set
+from backend.settings.cef_logger.cef_audit_context import (
+    cef_audit_peek,
+    cef_audit_reset,
+    cef_audit_set,
+    cef_socket_remote_from_environ,
+    log_request_context_shost,
+    resolve_client_shost,
+    resolve_client_src,
+    resolve_client_src_from_request,
+    reverse_dns,
+    shost_override_from_headers,
+)
 from backend.settings.cef_logger.cef_logger import (
     CEFEventSpec,
     EVENTS,
@@ -10,8 +21,10 @@ from backend.settings.cef_logger.cef_logger import (
     ldap_reason_suffix,
     log_cef_event,
     log_cef_int003_llm_request,
-    log_cef_obj002_llm_api_failure,
+    log_cef_int006_llm_api_failure,
     request_context,
+    resolve_cef_device_version,
+    resolve_cef_dvchost,
 )
 
 __all__ = [
@@ -20,12 +33,21 @@ __all__ = [
     "cef_audit_peek",
     "cef_audit_reset",
     "cef_audit_set",
+    "cef_socket_remote_from_environ",
+    "log_request_context_shost",
+    "resolve_client_src",
+    "resolve_client_src_from_request",
+    "resolve_client_shost",
+    "reverse_dns",
+    "shost_override_from_headers",
     "cef_llm_int003_extra",
     "domain_from_ldap_base_dn",
     "ldap_audit_cs_fields",
     "ldap_reason_suffix",
     "log_cef_event",
     "log_cef_int003_llm_request",
-    "log_cef_obj002_llm_api_failure",
+    "log_cef_int006_llm_api_failure",
     "request_context",
+    "resolve_cef_device_version",
+    "resolve_cef_dvchost",
 ]

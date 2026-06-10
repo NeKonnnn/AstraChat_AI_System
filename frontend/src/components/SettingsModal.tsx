@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Dialog,
   DialogTitle,
@@ -25,6 +25,7 @@ import {
   ChatOutlined as ChatIcon,
   ComputerOutlined as ComputerIcon,
   SearchOutlined as SearchIcon,
+  HubOutlined as HubIcon,
 } from '@mui/icons-material';
 import { MENU_ICON_MIN_WIDTH, MENU_ICON_TO_TEXT_GAP_PX, MENU_ICON_FONT_SIZE_PX } from '../constants/menuStyles';
 import {
@@ -32,21 +33,24 @@ import {
   ProfileSettings,
   ModelsSettings,
   AgentsSettings,
+  McpSettings,
   RAGSettings,
   TranscriptionSettings,
   AboutSettings,
   ChatSettings,
   InterfaceSettings
 } from './settings';
+import { ASTRA_OPEN_SETTINGS_SECTION } from '../constants/hotkeys';
 
 interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
   isDarkMode: boolean;
   onToggleTheme: () => void;
+  initialSection?: SettingsSection;
 }
 
-type SettingsSection = 'general' | 'profile' | 'interface' | 'models' | 'agents' | 'rag' | 'transcription' | 'chats' | 'about';
+type SettingsSection = 'general' | 'profile' | 'interface' | 'models' | 'agents' | 'mcp' | 'rag' | 'transcription' | 'chats' | 'about';
 
 const settingsSections = [
   {
@@ -86,6 +90,12 @@ const settingsSections = [
     description: 'Агентная архитектура'
   },
   {
+    id: 'mcp' as SettingsSection,
+    title: 'MCP',
+    icon: <HubIcon />,
+    description: 'Model Context Protocol серверы'
+  },
+  {
     id: 'rag' as SettingsSection,
     title: 'RAG',
     icon: <SearchIcon />,
@@ -105,10 +115,25 @@ const settingsSections = [
   }
 ];
 
-export default function SettingsModal({ open, onClose, isDarkMode, onToggleTheme }: SettingsModalProps) {
+export default function SettingsModal({ open, onClose, isDarkMode, onToggleTheme, initialSection }: SettingsModalProps) {
   const [activeSection, setActiveSection] = useState<SettingsSection>('general');
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+
+  useEffect(() => {
+    if (open && initialSection) {
+      setActiveSection(initialSection);
+    }
+  }, [open, initialSection]);
+
+  useEffect(() => {
+    const onSection = (e: Event) => {
+      const section = (e as CustomEvent<{ section?: SettingsSection }>).detail?.section;
+      if (section) setActiveSection(section);
+    };
+    window.addEventListener(ASTRA_OPEN_SETTINGS_SECTION, onSection);
+    return () => window.removeEventListener(ASTRA_OPEN_SETTINGS_SECTION, onSection);
+  }, []);
 
   const handleSectionChange = (section: SettingsSection) => {
     setActiveSection(section);
@@ -125,7 +150,9 @@ export default function SettingsModal({ open, onClose, isDarkMode, onToggleTheme
       case 'models':
         return <ModelsSettings />;
       case 'agents':
-        return <AgentsSettings />;
+        return <AgentsSettings onOpenMcpSettings={() => setActiveSection('mcp')} />;
+      case 'mcp':
+        return <McpSettings isDarkMode={isDarkMode} />;
       case 'rag':
         return <RAGSettings />;
       case 'transcription':

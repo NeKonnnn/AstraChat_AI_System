@@ -220,12 +220,12 @@ class Settings(BaseModel):
     cors: CorsConfig = CorsConfig()
     app: AppConfig = AppConfig()
     logging: LoggingConfig = LoggingConfig()
-    rag_models_client: RagModelsClientConfig = RagModelsClientConfig()
-    postgresql: PostgreSQLConfig = PostgreSQLConfig()
-    minio: MinioConfig = MinioConfig()
-    ocr: OcrConfig = OcrConfig()
+    rag_models_client: RagModelsClientConfig
+    postgresql: PostgreSQLConfig
+    minio: MinioConfig
+    ocr: OcrConfig
     rag: RagServiceConfig = RagServiceConfig()
-    llm_service: LLMServiceConfig = LLMServiceConfig()
+    llm_service: LLMServiceConfig
 
     @classmethod
     def from_yaml(cls, config_path: Optional[str] = None):

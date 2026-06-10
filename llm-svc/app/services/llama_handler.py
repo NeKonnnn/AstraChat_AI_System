@@ -1,13 +1,14 @@
 from llama_cpp import Llama
 from typing import List, Dict, Any, Optional, Callable, AsyncGenerator, Union
 from collections import OrderedDict
+import inspect
 import os
 import json
 import asyncio
 import time
 import logging
 
-from app.models.schemas import ChatResponse, ChatChoice, Message, AssistantMessage, UsageInfo
+from app.models.schemas import ChatResponse, ChatChoice, Message, AssistantMessage, UsageInfo, SystemMessage, UserMessage
 from app.utils import convert_to_dict_messages, format_messages_for_llama, estimate_tokens
 from app.core.config import settings
 from app.services.base_llm_handler import BaseLLMHandler
@@ -189,21 +190,97 @@ class LlamaHandler(BaseLLMHandler):
             )
         return clamped
 
+    def _count_prompt_tokens(self, llama: Llama, dict_msgs: List[Dict[str, Any]]) -> int:
+        formatted = format_messages_for_llama(dict_msgs)
+        try:
+            return len(llama.tokenize(formatted.encode("utf-8"), add_bos=True))
+        except Exception as e:
+            logger.debug("tokenize failed: %s", e)
+            return max(estimate_tokens(formatted), 1)
+
+    def _dict_to_message(self, d: Dict[str, Any]) -> Message:
+        role = str(d.get("role") or "user")
+        content = d.get("content", "")
+        if role == "system":
+            return SystemMessage(content=str(content or ""))
+        if role == "assistant":
+            return AssistantMessage(content=str(content) if content is not None else None)
+        return UserMessage(content=content if content is not None else "")
+
+    def _fit_messages_to_context(
+        self,
+        llama: Llama,
+        messages: List[Message],
+        max_tokens: int,
+        slot_id: str,
+    ) -> List[Message]:
+        """Обрезает историю/контент, чтобы prompt + max_tokens поместились в n_ctx."""
+        n_ctx = self._get_llama_n_ctx(llama)
+        reserved = 32
+        budget = max(256, n_ctx - max_tokens - reserved)
+
+        dict_msgs = convert_to_dict_messages(messages)
+        original_tokens = self._count_prompt_tokens(llama, dict_msgs)
+        if original_tokens <= budget:
+            return messages
+
+        system = [m for m in dict_msgs if m.get("role") == "system"]
+        rest = [m for m in dict_msgs if m.get("role") != "system"]
+
+        while self._count_prompt_tokens(llama, system + rest) > budget and rest:
+            if len(rest) > 1:
+                rest.pop(0)
+                continue
+            m = dict(rest[0])
+            content = m.get("content", "")
+            if not isinstance(content, str):
+                content = str(content or "")
+            while content and self._count_prompt_tokens(
+                llama, system + [{**m, "content": content}]
+            ) > budget:
+                if len(content) <= 200:
+                    content = content[:100]
+                    break
+                content = content[: max(200, len(content) * 3 // 4)]
+            m["content"] = content
+            rest = [m]
+            break
+
+        trimmed = system + rest
+        new_tokens = self._count_prompt_tokens(llama, trimmed)
+        logger.warning(
+            "Context trim slot=%s n_ctx=%s budget=%s tokens %s -> %s (messages %s -> %s)",
+            slot_id,
+            n_ctx,
+            budget,
+            original_tokens,
+            new_tokens,
+            len(dict_msgs),
+            len(trimmed),
+        )
+        if new_tokens > budget:
+            raise ValueError(
+                f"Prompt too long for context window ({new_tokens} tokens, n_ctx={n_ctx})"
+            )
+        return [self._dict_to_message(d) for d in trimmed]
+
     async def initialize(self):
         if self._model_slots:
             self.is_initialized = True
             return
+        # Модель не грузим при старте — иначе долгий I/O и риск падения контейнера.
+        # Список файлов: GET /v1/models, загрузка: POST /v1/models/load
         if not os.path.isfile(self._config_model_path):
             logger.warning(
-                f"Model file not found at {self._config_model_path}. "
-                "Service starts without LLM until POST /v1/models/load."
+                f"Default model file not found: {self._config_model_path}. "
+                "Use POST /v1/models/load."
             )
-            self.is_initialized = False
-            return
-        ok = await self.load_model_by_name(self._config_model_name)
-        self.is_initialized = ok
-        if ok and self._primary_model_id is None:
-            self._primary_model_id = self.normalize_model_id(self._config_model_name)
+        else:
+            logger.info(
+                f"LLM handler ready. Default model '{self._config_model_name}' — "
+                "load via POST /v1/models/load or from chat."
+            )
+        self.is_initialized = False
 
     async def _try_create_completion(
         self,
@@ -224,36 +301,18 @@ class LlamaHandler(BaseLLMHandler):
                 "stream": stream,
             }
             if enable_thinking is not None:
-                # Для Qwen3.x thinking в llama.cpp это, как правило, параметр
-                # шаблона, а не прямой аргумент create_chat_completion.
-                kwargs["chat_template_kwargs"] = {"enable_thinking": bool(enable_thinking)}
-            try:
-                return llama.create_chat_completion(**kwargs)
-            except TypeError as e:
-                msg = str(e)
-                # Совместимость с разными версиями llama-cpp-python:
-                # часть версий не понимает chat_template_kwargs/enable_thinking.
-                if "chat_template_kwargs" in msg or "enable_thinking" in msg:
-                    if enable_thinking:
-                        logger.warning(
-                            "llama-cpp does not support thinking kwargs; fallback to manual prompt completion"
+                try:
+                    params = inspect.signature(llama.create_chat_completion).parameters
+                    if "enable_thinking" in params:
+                        kwargs["enable_thinking"] = bool(enable_thinking)
+                    else:
+                        logger.debug(
+                            "enable_thinking=%r ignored: llama-cpp-python does not support this kwarg",
+                            enable_thinking,
                         )
-                        prompt = self._build_qwen_prompt(formatted_messages, enable_thinking=True)
-                        return llama.create_completion(
-                            prompt=prompt,
-                            temperature=temperature,
-                            max_tokens=max_tokens,
-                            stream=stream,
-                            stop=["<|im_end|>"],
-                        )
-                    safe_kwargs = dict(kwargs)
-                    safe_kwargs.pop("chat_template_kwargs", None)
-                    safe_kwargs.pop("enable_thinking", None)
-                    logger.warning(
-                        "llama-cpp does not support thinking kwargs; fallback to plain chat completion"
-                    )
-                    return llama.create_chat_completion(**safe_kwargs)
-                raise
+                except (TypeError, ValueError):
+                    pass
+            return llama.create_chat_completion(**kwargs)
 
         return await self._run_in_executor(lambda: create_completion(convert_to_dict_messages))
 
@@ -280,6 +339,7 @@ class LlamaHandler(BaseLLMHandler):
         slot = self._model_slots[slot_id]
         temperature = temperature or settings.generation.default_temperature
         max_tokens = max_tokens or settings.generation.default_max_tokens
+        messages = self._fit_messages_to_context(slot.llama, messages, max_tokens, slot_id)
         max_tokens = self._clamp_max_tokens_for_request(
             slot.llama, messages, max_tokens, slot_id
         )
@@ -302,11 +362,18 @@ class LlamaHandler(BaseLLMHandler):
                             chunk = await self._run_in_executor(lambda: next(stream_result, None))
                             if chunk is None:
                                 break
-                            normalized_chunk = self._normalize_stream_chunk(chunk, slot_id)
-                            if normalized_chunk is not None:
-                                yield f"data: {json.dumps(normalized_chunk)}\n\n"
+                            yield f"data: {json.dumps(chunk)}\n\n"
                     except StopIteration:
                         pass
+                    except ValueError as e:
+                        logger.error("Stream error [%s]: %s", slot_id, e)
+                        err_payload = {
+                            "error": {
+                                "message": str(e),
+                                "type": "context_length_exceeded",
+                            }
+                        }
+                        yield f"data: {json.dumps(err_payload)}\n\n"
                     finally:
                         yield "data: [DONE]\n\n"
 
@@ -323,57 +390,9 @@ class LlamaHandler(BaseLLMHandler):
             logger.info(f"Response [{slot_id}] in {time.time() - start_time:.2f}s")
             return self._format_response(response, slot_id)
 
-    def _build_qwen_prompt(self, messages: List[Dict[str, Any]], enable_thinking: bool) -> str:
-        parts: List[str] = []
-        for msg in messages:
-            role = str(msg.get("role", "user"))
-            content = str(msg.get("content") or "")
-            parts.append(f"<|im_start|>{role}\n{content}<|im_end|>\n")
-        parts.append("<|im_start|>assistant\n")
-        if enable_thinking:
-            parts.append("<think>\n")
-        else:
-            parts.append("<think>\n\n</think>\n\n")
-        return "".join(parts)
-
-    def _normalize_stream_chunk(
-        self, chunk: Dict[str, Any], response_model_id: str
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Нормализует stream-чанки из create_completion в chat.completion.chunk.
-        Если chunk уже chat-формата — возвращает как есть.
-        """
-        choices = chunk.get("choices") or []
-        if not choices:
-            return None
-        first_choice = choices[0]
-        if "delta" in first_choice:
-            return chunk
-        text_delta = first_choice.get("text")
-        finish_reason = first_choice.get("finish_reason")
-        return {
-            "id": chunk.get("id", f"chatcmpl-{int(time.time())}"),
-            "object": "chat.completion.chunk",
-            "created": chunk.get("created", int(time.time())),
-            "model": response_model_id,
-            "choices": [
-                {
-                    "index": first_choice.get("index", 0),
-                    "delta": {"content": text_delta} if text_delta else {},
-                    "finish_reason": finish_reason,
-                }
-            ],
-        }
-
     def _format_response(self, raw_response: Dict[str, Any], response_model_id: str) -> ChatResponse:
         choice = raw_response["choices"][0]
-        message_obj = choice.get("message")
-        if isinstance(message_obj, dict):
-            role = message_obj.get("role", "assistant")
-            content = message_obj.get("content")
-        else:
-            role = "assistant"
-            content = choice.get("text", "")
+        message = choice["message"]
         return ChatResponse(
             id=f"chatcmpl-{int(time.time())}",
             created=int(time.time()),
@@ -382,8 +401,8 @@ class LlamaHandler(BaseLLMHandler):
                 ChatChoice(
                     index=0,
                     message=AssistantMessage(
-                        role=role,
-                        content=content,
+                        role=message["role"],
+                        content=message["content"],
                     ),
                     finish_reason=choice.get("finish_reason", "stop"),
                 )

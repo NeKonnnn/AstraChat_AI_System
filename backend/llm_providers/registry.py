@@ -15,7 +15,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from .anthropic import AnthropicProvider
@@ -33,6 +36,66 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # Factory: kind -> class
 # =============================================================================
+
+
+def _normalize_provider_item(raw_item: Any) -> Any:
+    """
+    Нормализует dict-запись провайдера к формату LLMProviderConfig.
+
+    Backward compatibility:
+    - api_key_env (новое поле)
+    - llm_key (legacy)
+    - llm_key_<provider_id> (legacy, например llm_key_phoenix)
+    """
+    if not isinstance(raw_item, dict):
+        return raw_item
+
+    item = dict(raw_item)
+    # Нормализуем models:
+    # - models: ["a", "b"]
+    # - models: {name: ["a", "b"]}  # совместимость с ранними вариантами
+    models_raw = item.get("models")
+    if isinstance(models_raw, dict):
+        names_raw = models_raw.get("name")
+        if isinstance(names_raw, list):
+            item["models"] = [str(x).strip() for x in names_raw if str(x or "").strip()]
+        elif isinstance(names_raw, str) and names_raw.strip():
+            item["models"] = [names_raw.strip()]
+        else:
+            item["models"] = []
+    elif isinstance(models_raw, list):
+        item["models"] = [str(x).strip() for x in models_raw if str(x or "").strip()]
+    elif isinstance(models_raw, str) and models_raw.strip():
+        item["models"] = [models_raw.strip()]
+
+    if str(item.get("api_key_env") or "").strip():
+        return item
+
+    # 1) Базовый legacy-ключ.
+    legacy_plain = str(item.get("llm_key") or "").strip()
+    if legacy_plain:
+        item["api_key_env"] = legacy_plain
+        return item
+
+    # 2) Provider-scoped legacy-ключ: llm_key_<provider_id>.
+    provider_id = str(item.get("id") or "").strip().lower()
+    if provider_id:
+        preferred_key = f"llm_key_{provider_id}"
+        preferred_val = str(item.get(preferred_key) or "").strip()
+        if preferred_val:
+            item["api_key_env"] = preferred_val
+            return item
+
+    # 3) Fallback: любой первый непустой llm_key_*.
+    for key, value in item.items():
+        if not re.fullmatch(r"llm_key(?:_[a-zA-Z0-9_-]+)?", str(key)):
+            continue
+        vv = str(value or "").strip()
+        if vv:
+            item["api_key_env"] = vv
+            return item
+
+    return item
 
 
 def _build_provider(config: LLMProviderConfig) -> LLMProvider:
@@ -58,6 +121,83 @@ def _build_provider(config: LLMProviderConfig) -> LLMProvider:
     return OpenAICompatProvider(config)
 
 
+def _parse_bool_env(value: str, default: bool = True) -> bool:
+    v = (value or "").strip().lower()
+    if not v:
+        return default
+    return v in ("1", "true", "yes", "on")
+
+
+def _parse_float_env(value: str, default: float) -> float:
+    try:
+        return float((value or "").strip())
+    except Exception:
+        return default
+
+
+def _parse_provider_configs_from_prefixed_env() -> List[LLMProviderConfig]:
+    """
+    Формат:
+      LLM_PROVIDER_<ID>_KIND=openai-compat
+      LLM_PROVIDER_<ID>_BASE_URL=https://...
+      LLM_PROVIDER_<ID>_ENABLED=true
+      LLM_PROVIDER_<ID>_TIMEOUT=300
+      LLM_PROVIDER_<ID>_API_KEY_ENV=LLM_API_KEY
+      LLM_PROVIDER_<ID>_STATIC_MODEL=...
+    """
+    grouped: Dict[str, Dict[str, str]] = {}
+    prefix = "LLM_PROVIDER_"
+    supported_fields = (
+        "KIND",
+        "BASE_URL",
+        "ENABLED",
+        "TIMEOUT",
+        "API_KEY_ENV",
+        "STATIC_MODEL",
+    )
+
+    for key, raw_value in os.environ.items():
+        if not key.startswith(prefix):
+            continue
+        rest = key[len(prefix):]
+        matched_field = None
+        provider_id = None
+        for field_name in supported_fields:
+            suffix = f"_{field_name}"
+            if rest.endswith(suffix):
+                provider_id = rest[: -len(suffix)]
+                matched_field = field_name
+                break
+        provider_id = (provider_id or "").strip()
+        if not provider_id or not matched_field:
+            continue
+        grouped.setdefault(provider_id, {})[matched_field] = raw_value
+
+    configs: List[LLMProviderConfig] = []
+    for provider_id, fields in grouped.items():
+        kind = (fields.get("KIND") or "").strip()
+        base_url = (fields.get("BASE_URL") or "").strip()
+        if not kind:
+            logger.warning(
+                "LLM_PROVIDER_%s_* пропущен: не задан KIND", provider_id
+            )
+            continue
+        try:
+            cfg = LLMProviderConfig(
+                id=provider_id,
+                kind=kind,  # type: ignore[arg-type]
+                base_url=base_url,
+                enabled=_parse_bool_env(fields.get("ENABLED", "true"), default=True),
+                timeout=_parse_float_env(fields.get("TIMEOUT", "120"), default=120.0),
+                api_key_env=(fields.get("API_KEY_ENV") or "").strip() or None,
+                static_model=(fields.get("STATIC_MODEL") or "").strip() or None,
+            )
+            configs.append(cfg)
+        except Exception as e:
+            logger.error("Некорректная запись LLM_PROVIDER_%s_*: %s", provider_id, e)
+    return configs
+
+
 # =============================================================================
 # Registry
 # =============================================================================
@@ -70,9 +210,22 @@ class ProviderRegistry:
         self,
         providers: Dict[str, LLMProvider],
         default_provider_id: str,
+        configured_models_by_provider: Optional[Dict[str, List[str]]] = None,
     ) -> None:
         self._providers = providers
         self._default_id = default_provider_id
+        self._configured_models_by_provider = configured_models_by_provider or {}
+        self._provider_ids_by_model_name: Dict[str, List[str]] = {}
+        for pid, model_names in self._configured_models_by_provider.items():
+            if pid not in self._providers:
+                continue
+            for model_name in model_names:
+                mid = str(model_name or "").strip()
+                if not mid:
+                    continue
+                self._provider_ids_by_model_name.setdefault(mid, [])
+                if pid not in self._provider_ids_by_model_name[mid]:
+                    self._provider_ids_by_model_name[mid].append(pid)
 
     # ---- accessors --------------------------------------------------------
 
@@ -124,8 +277,26 @@ class ProviderRegistry:
         провайдера).
         """
         head, tail = split_model_path(path or "")
+        raw = str(path or "").strip()
         if head and self.contains(head):
             return self._providers[head], tail
+        # Плоское имя модели без provider_id: пытаемся определить провайдера
+        # по конфигу (llm_providers[].models). Выбираем только при уникальном
+        # совпадении, иначе fallback на текущую логику (default provider).
+        if (not head) and raw:
+            matched_provider_ids = self._provider_ids_by_model_name.get(raw, [])
+            if len(matched_provider_ids) == 1:
+                pid = matched_provider_ids[0]
+                logger.info(
+                    "resolve(%r): уникальное совпадение по конфигу models -> provider=%r",
+                    path, pid,
+                )
+                return self._providers[pid], raw
+            if len(matched_provider_ids) > 1:
+                logger.warning(
+                    "resolve(%r): модель неоднозначна в конфиге models (%s), используется default %r",
+                    path, matched_provider_ids, self._default_id,
+                )
         # Нет head, или head не существует → default-провайдер.
         # При этом tail уже содержит «хвост» без провайдера.
         if head and not self.contains(head):
@@ -180,10 +351,12 @@ def _parse_configs_from_settings(settings: Any) -> Tuple[List[LLMProviderConfig]
     Достаёт список конфигов провайдеров из объекта Settings.
 
     Приоритет:
-      1. ``settings.llm_providers`` — новая секция, как есть.
-      2. ``settings.llm_service.hosts`` — автомиграция: каждый host становится
+      1. ``LLM_PROVIDER_<ID>_*`` из ENV.
+      2. ``LLM_PROVIDERS_JSON`` из ENV.
+      3. ``settings.llm_providers`` — новая секция, как есть.
+      4. ``settings.llm_service.hosts`` — автомиграция: каждый host становится
          llm-svc-провайдером с id = host.id, base_url = host.base_url.
-      3. Единственный URL ``settings.llm_service.base_url`` → один llm-svc
+      5. Единственный URL ``settings.llm_service.base_url`` → один llm-svc
          с id="local-llmsvc".
 
     Возвращает (configs, default_provider_id_or_None).
@@ -191,7 +364,50 @@ def _parse_configs_from_settings(settings: Any) -> Tuple[List[LLMProviderConfig]
     configs: List[LLMProviderConfig] = []
     default_id: Optional[str] = None
 
+    # DEFAULT_LLM_PROVIDER из ENV имеет приоритет в любом сценарии.
+    env_default = (os.getenv("DEFAULT_LLM_PROVIDER", "") or "").strip()
+    if env_default:
+        default_id = env_default
+
+    # 0.1. Плоский ENV-формат с префиксами (наивысший приоритет):
+    # LLM_PROVIDER_CORSUR_KIND=openai-compat
+    # LLM_PROVIDER_CORSUR_BASE_URL=https://...
+    # LLM_PROVIDER_CORSUR_ENABLED=true
+    # LLM_PROVIDER_CORSUR_TIMEOUT=300
+    # LLM_PROVIDER_CORSUR_API_KEY_ENV=LLM_API_KEY
+    prefixed_env_configs = _parse_provider_configs_from_prefixed_env()
+    if prefixed_env_configs:
+        configs.extend(prefixed_env_configs)
+
+    # 0.2. JSON-формат ENV (fallback, если префиксный формат не задан):
+    # LLM_PROVIDERS_JSON='[{"id":"CORSUR","kind":"openai-compat","base_url":"https://...","enabled":true}]'
+    # DEFAULT_LLM_PROVIDER='CORSUR'
+    providers_json = (os.getenv("LLM_PROVIDERS_JSON", "") or "").strip()
+    if not configs and providers_json:
+        try:
+            raw_items = json.loads(providers_json)
+            if not isinstance(raw_items, list):
+                raise ValueError("LLM_PROVIDERS_JSON должен быть JSON-массивом")
+            for item in raw_items:
+                try:
+                    if isinstance(item, LLMProviderConfig):
+                        configs.append(item)
+                    elif isinstance(item, dict):
+                        configs.append(LLMProviderConfig(**_normalize_provider_item(item)))
+                    elif hasattr(item, "model_dump"):
+                        configs.append(
+                            LLMProviderConfig(**_normalize_provider_item(item.model_dump()))
+                        )
+                    else:
+                        raise ValueError(f"Неподдерживаемый тип записи: {type(item)!r}")
+                except Exception as e:
+                    logger.error("Некорректная запись LLM_PROVIDERS_JSON: %s (%s)", item, e)
+        except Exception as e:
+            logger.error("Ошибка парсинга LLM_PROVIDERS_JSON: %s", e)
+
     # 1. Новая секция llm_providers (будет добавлена в Settings на этом шаге).
+    # Читаем YAML всегда: ENV-провайдеры остаются приоритетными для одинакового id
+    # (см. блок уникальности ниже, где сохраняется первая запись).
     new_section = getattr(settings, "llm_providers", None)
     if new_section:
         items = list(new_section) if isinstance(new_section, list) else []
@@ -200,12 +416,15 @@ def _parse_configs_from_settings(settings: Any) -> Tuple[List[LLMProviderConfig]
                 if isinstance(item, LLMProviderConfig):
                     configs.append(item)
                 elif isinstance(item, dict):
-                    configs.append(LLMProviderConfig(**item))
+                    configs.append(LLMProviderConfig(**_normalize_provider_item(item)))
                 elif hasattr(item, "model_dump"):
-                    configs.append(LLMProviderConfig(**item.model_dump()))
+                    configs.append(
+                        LLMProviderConfig(**_normalize_provider_item(item.model_dump()))
+                    )
             except Exception as e:
                 logger.error("Некорректная запись llm_providers: %s (%s)", item, e)
-        default_id = getattr(settings, "default_llm_provider", None) or None
+        # DEFAULT_LLM_PROVIDER из ENV имеет приоритет над YAML.
+        default_id = default_id or (getattr(settings, "default_llm_provider", None) or None)
 
     # 2. Автомиграция из llm_service.hosts.
     if not configs:
@@ -323,7 +542,15 @@ async def _build_from_settings() -> ProviderRegistry:
         raise RuntimeError("Ни один провайдер не инициализирован.")
     if not default_id or default_id not in providers:
         default_id = next(iter(providers.keys()))
-    registry = ProviderRegistry(providers, default_id)
+    configured_models_by_provider = {
+        c.id: [str(m).strip() for m in (c.models or []) if str(m or "").strip()]
+        for c in configs
+    }
+    registry = ProviderRegistry(
+        providers,
+        default_id,
+        configured_models_by_provider=configured_models_by_provider,
+    )
     await registry.initialize()
     logger.info(
         "ProviderRegistry готов: %d провайдеров, default=%s", len(providers), default_id,
@@ -348,3 +575,77 @@ async def reload_registry() -> ProviderRegistry:
                 pass
         _registry = None
     return await get_registry()
+
+
+def build_registry_debug_snapshot() -> Dict[str, Any]:
+    """
+    Диагностика источников конфигурации провайдеров.
+
+    Не содержит секретов (только имена ENV и агрегированные признаки).
+    """
+    try:
+        from backend.settings import get_settings  # type: ignore
+    except Exception:
+        from settings import get_settings  # type: ignore
+
+    settings = get_settings()
+    prefixed_cfgs = _parse_provider_configs_from_prefixed_env()
+    prefixed_ids = [c.id for c in prefixed_cfgs]
+    providers_json = (os.getenv("LLM_PROVIDERS_JSON", "") or "").strip()
+    env_default = (os.getenv("DEFAULT_LLM_PROVIDER", "") or "").strip()
+    raw_yaml = getattr(settings, "llm_providers", None)
+    yaml_ids: List[str] = []
+    if isinstance(raw_yaml, list):
+        for item in raw_yaml:
+            try:
+                if isinstance(item, dict):
+                    pid = str(item.get("id") or "").strip()
+                else:
+                    pid = str(getattr(item, "id", "") or "").strip()
+                if pid:
+                    yaml_ids.append(pid)
+            except Exception:
+                continue
+
+    parsed_cfgs, parsed_default_id = _parse_configs_from_settings(settings)
+    parsed_items = [
+        {
+            "id": c.id,
+            "kind": c.kind,
+            "enabled": c.enabled,
+            "base_url": c.base_url,
+            "api_key_env": c.api_key_env,
+        }
+        for c in parsed_cfgs
+    ]
+
+    existing_registry = get_registry_sync_or_none()
+    runtime_registry = None
+    if existing_registry is not None:
+        runtime_registry = {
+            "default_provider_id": existing_registry.default_id,
+            "provider_ids": existing_registry.ids(include_disabled=True),
+        }
+
+    env_provider_keys = sorted(
+        [k for k in os.environ.keys() if k.startswith("LLM_PROVIDER_")]
+    )
+
+    return {
+        "env": {
+            "default_llm_provider": env_default or None,
+            "has_llm_providers_json": bool(providers_json),
+            "prefixed_provider_ids": prefixed_ids,
+            "prefixed_keys": env_provider_keys,
+        },
+        "yaml": {
+            "default_llm_provider": getattr(settings, "default_llm_provider", None),
+            "provider_ids": yaml_ids,
+            "providers_count": len(yaml_ids),
+        },
+        "parsed": {
+            "default_provider_id": parsed_default_id,
+            "providers": parsed_items,
+        },
+        "runtime_registry": runtime_registry,
+    }

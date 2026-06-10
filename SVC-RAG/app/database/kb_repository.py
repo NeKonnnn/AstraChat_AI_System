@@ -1,5 +1,5 @@
-# Репозитории для постоянной Базы Знаний (knowledge_base)
-# Таблицы kb_documents, kb_vectors — хранятся постоянно, не зависят от чата
+# Репозитории для постоянной базы знаний.
+# Таблицы kb_documents и kb_vectors хранятся постоянно и не зависят от чата.
 import json
 import logging
 from typing import Any, Dict, List, Optional, Tuple
@@ -128,7 +128,7 @@ class KbDocumentRepository:
         return True
 
     async def find_document_ids_by_filename(self, name_or_stem: str, limit: int = 10) -> List[int]:
-        """ILIKE-поиск document_id по имени файла. См. project_rag_repository."""
+        """Поиск document_id по имени файла через ILIKE. См. project_rag_repository."""
         needle = (name_or_stem or "").strip()
         if not needle:
             return []
@@ -269,9 +269,9 @@ class KbVectorRepository:
     ) -> List[Tuple[DocumentVector, float]]:
         """FTS-поиск через OR-``to_tsquery`` (russian + simple). См. ``app.database.fts``.
 
-        Важно: сейчас используется OR-семантика вместо AND. Это повышает recall
+        Важно: используется OR-семантика вместо AND. Это повышает recall
         для перечислительных/meta-запросов («в каких документах упоминается X»),
-        где AND выдавал 0 хитов и ломал весь retrieval.
+        где AND часто давал 0 результатов и ухудшал retrieval.
         """
         q_text = (query_text or "").strip()
         if not query_has_searchable_content(q_text):
@@ -345,7 +345,7 @@ class KbVectorRepository:
         limit: int = 32,
         document_id: Optional[int] = None,
     ) -> List[Tuple[DocumentVector, float]]:
-        """ILIKE-fallback на случай, когда FTS не сработал. См. комментарий в project_rag_repository."""
+        """ILIKE-fallback на случай, когда FTS не сработал."""
         tokens = [t for t in (tokens or []) if t and isinstance(t, str)]
         if not tokens:
             return []

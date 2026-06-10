@@ -10,6 +10,8 @@ from typing import Dict, List, Any, Optional, AsyncGenerator
 from dataclasses import dataclass
 import subprocess
 import os
+import time
+from backend.settings.cef_logger.cef_logger import log_cef_event
 
 logger = logging.getLogger(__name__)
 
@@ -171,8 +173,33 @@ class MCPClient:
             logger.error(f"Ошибка получения инструментов от {server_name}: {e}")
             
         return []
+
+    def _cef_mcp_target_extra(self) -> Dict[str, Any]:
+        out: Dict[str, Any] = {}
+        dhost = os.getenv("CEF_MCP_DHOST")
+        if dhost:
+            out["dhost"] = dhost
+        if os.getenv("CEF_MCP_DPT"):
+            try:
+                out["dpt"] = int(os.getenv("CEF_MCP_DPT", "5432"))
+            except ValueError:
+                out["dpt"] = 5432
+        if os.getenv("CEF_MCP_DUSER"):
+            out["duser"] = os.getenv("CEF_MCP_DUSER")
+        if os.getenv("CEF_MCP_DNtdom"):
+            out["dntdom"] = os.getenv("CEF_MCP_DNtdom")
+        return out
     
-    async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
+    async def call_tool(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        *,
+        cef_request: Any = None,
+        cef_user: Optional[Dict[str, Any]] = None,
+        cef_conversation_id: Optional[str] = None,
+        cef_tail: str = "",
+    ) -> Any:
         """Вызов MCP инструмента"""
         if tool_name not in self.tools:
             logger.error(f"Инструмент {tool_name} не найден")
@@ -186,6 +213,26 @@ class MCPClient:
             return {"error": f"Сервер {server_name} не запущен"}
             
         try:
+            started = time.perf_counter()
+            server_part = tool_name.split(".", 1)[0] if "." in tool_name else server_name
+            tool_part = tool.name
+            _u = cef_user or {"username": "anonymous"}
+            log_cef_event(
+                "INT001",
+                request=cef_request,
+                current_user=_u,
+                status_code=200,
+                extra={
+                    **self._cef_mcp_target_extra(),
+                    "cs1": tool_part,
+                    "cs1Label": "MCPToolName",
+                    "cs2": cef_conversation_id or "-",
+                    "cs2Label": "ConversationId",
+                    "cs3": server_part,
+                    "cs3Label": "MCPServer",
+                    "cef_tail": cef_tail or "",
+                },
+            )
             process = self.processes[server_name]
             
             # Отправляем запрос на выполнение инструмента
@@ -207,8 +254,43 @@ class MCPClient:
             if response_line:
                 response = json.loads(response_line)
                 if "result" in response:
+                    duration_ms = int((time.perf_counter() - started) * 1000)
+                    log_cef_event(
+                        "INT002",
+                        request=cef_request,
+                        current_user=cef_user or {"username": "anonymous"},
+                        status_code=200,
+                        extra={
+                            **self._cef_mcp_target_extra(),
+                            "cs1": tool_part,
+                            "cs1Label": "MCPToolName",
+                            "cs3": server_part,
+                            "cs3Label": "MCPServer",
+                            "cn1": duration_ms,
+                            "cn1Label": "DurationMs",
+                            "cef_tail": cef_tail or "",
+                        },
+                    )
                     return response["result"]
                 elif "error" in response:
+                    duration_ms = int((time.perf_counter() - started) * 1000)
+                    log_cef_event(
+                        "INT002",
+                        request=cef_request,
+                        current_user=cef_user or {"username": "anonymous"},
+                        outcome="error",
+                        status_code=500,
+                        extra={
+                            **self._cef_mcp_target_extra(),
+                            "cs1": tool_part,
+                            "cs1Label": "MCPToolName",
+                            "cs3": server_part,
+                            "cs3Label": "MCPServer",
+                            "cn1": duration_ms,
+                            "cn1Label": "DurationMs",
+                            "cef_tail": cef_tail or "",
+                        },
+                    )
                     return {"error": response["error"]}
                     
         except Exception as e:
@@ -297,4 +379,3 @@ def create_mcp_tools_for_langchain() -> List:
             tools.append(create_tool_func(tool_name, mcp_tool))
     
     return tools
-

@@ -24,6 +24,102 @@ class ComfyImageGenError(Exception):
     pass
 
 
+def _format_comfy_execution_error(messages: Any) -> str:
+    raw = str(messages)
+    if "no kernel image is available for execution on the device" in raw:
+        return (
+            "GPU несовместим с PyTorch в контейнере ComfyUI (часто RTX 50xx / sm_120). "
+            "Пересоберите comfyui: docker compose build comfyui && docker compose up -d comfyui "
+            "(нужен образ PyTorch 2.7 + CUDA 12.8). Временно: COMFYUI_FORCE_CPU=1 в docker-compose."
+        )
+    if len(raw) > 1200:
+        return raw[:1200] + "…"
+    return raw
+
+
+_NO_CHECKPOINTS_HINT = (
+    "В ComfyUI нет checkpoint-моделей (список пуст). "
+    "Скачайте SD1.5 .safetensors в папку models/comfyui/checkpoints/ на хосте "
+    "(в контейнере: /app/ComfyUI/models/checkpoints/) и перезапустите comfyui. "
+    "Пример: v1-5-pruned-emaonly.safetensors с Hugging Face (runwayml/stable-diffusion-v1-5)."
+)
+
+
+async def fetch_comfyui_checkpoint_names(comfyui_base_url: str) -> List[str]:
+    """Список имён checkpoint из ComfyUI object_info (CheckpointLoaderSimple)."""
+    base = comfyui_base_url.rstrip("/")
+    timeout = httpx.Timeout(12.0, connect=5.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        r = await client.get(f"{base}/object_info/CheckpointLoaderSimple")
+        r.raise_for_status()
+        data = r.json()
+    node = data.get("CheckpointLoaderSimple") if isinstance(data, dict) else None
+    if not isinstance(node, dict):
+        return []
+    required = (node.get("input") or {}).get("required") or {}
+    ckpt_spec = required.get("ckpt_name")
+    if not isinstance(ckpt_spec, (list, tuple)) or not ckpt_spec:
+        return []
+    names = ckpt_spec[0]
+    if not isinstance(names, list):
+        return []
+    return [str(n) for n in names if n]
+
+
+def apply_checkpoint_to_workflow(
+    workflow: Dict[str, Any],
+    checkpoint_names: List[str],
+    *,
+    preferred: str = "",
+) -> str:
+    """
+    Подставляет ckpt_name во все CheckpointLoaderSimple.
+    Возвращает выбранное имя файла.
+    """
+    if not checkpoint_names:
+        raise ComfyImageGenError(_NO_CHECKPOINTS_HINT)
+
+    pref = (preferred or "").strip()
+    if not pref:
+        for node in workflow.values():
+            if isinstance(node, dict) and node.get("class_type") == "CheckpointLoaderSimple":
+                inputs = node.get("inputs") or {}
+                pref = str(inputs.get("ckpt_name") or "").strip()
+                if pref:
+                    break
+
+    if pref and pref in checkpoint_names:
+        chosen = pref
+    elif pref:
+        chosen = next(
+            (n for n in checkpoint_names if n == pref or n.endswith(f"/{pref}") or n.endswith(pref)),
+            checkpoint_names[0],
+        )
+        if chosen != pref:
+            logger.warning(
+                "Checkpoint %r недоступен в ComfyUI, используем %r (доступно: %s)",
+                pref,
+                chosen,
+                ", ".join(checkpoint_names[:5]),
+            )
+    else:
+        chosen = checkpoint_names[0]
+        logger.info("checkpoint_name не задан, используем первый из ComfyUI: %r", chosen)
+
+    for node in workflow.values():
+        if not isinstance(node, dict):
+            continue
+        if node.get("class_type") != "CheckpointLoaderSimple":
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            node["inputs"] = {"ckpt_name": chosen}
+        else:
+            inputs["ckpt_name"] = chosen
+
+    return chosen
+
+
 def resolve_workflow_file(workflow_path: str, project_root: Path) -> Path:
     p = Path(workflow_path)
     if p.is_absolute():
@@ -171,7 +267,9 @@ async def generate_images_via_comfyui(
             status = history_entry.get("status")
             if status and status.get("completed") is False and status.get("status_str") == "error":
                 messages = status.get("messages") or []
-                raise ComfyImageGenError(f"ComfyUI execution error: {messages}")
+                raise ComfyImageGenError(
+                    f"ComfyUI execution error: {_format_comfy_execution_error(messages)}"
+                )
             imgs = _collect_output_images(history_entry)
             if imgs:
                 results: List[Tuple[bytes, str]] = []

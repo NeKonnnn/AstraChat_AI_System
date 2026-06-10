@@ -70,12 +70,18 @@
       "path": "F:/astrachat/models/codellama-7b-instruct.Q8_0.gguf"
     }
   ],
-  "current_model": "F:/astrachat/models/deepseek-coder-6.7b-instruct.Q8_0.gguf",
+  "current_model": "",
   "voice_speaker": "baya",
   "theme": "dark",
-  "current_model_path": "models\\QVikhr-2.5-1.5B-Instruct-SMPO-Q8_0.gguf",
-  "current_model_name": "Unknown",
+  "current_model_path": "",
+  "current_model_name": "Модель не загружена",
   "current_model_status": "loaded",
   "transcription_engine": "whisperx",
-  "transcription_language": "ru"
+  "transcription_language": "ru",
+  "rag_strategy": "auto",
+  "agentic_rag_enabled": true,
+  "rag_query_fix_typos": false,
+  "rag_multi_query_enabled": false,
+  "rag_hyde_enabled": false,
+  "rag_chat_top_k": 12
 }

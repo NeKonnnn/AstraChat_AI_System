@@ -20,6 +20,7 @@ import {
   Tooltip,
 } from '@mui/material';
 import { getApiUrl, API_ENDPOINTS } from '../config/api';
+import { incrementTabNotification } from '../utils/tabNotifications';
 import {
   Close as CloseIcon,
   Upload as UploadIcon,
@@ -255,6 +256,7 @@ export default function TranscriptionModal({
         }
         setShowResult(true);
         showNotification('success', 'Транскрибация завершена');
+        incrementTabNotification();
         setTranscriptionId(null); // Сбрасываем ID после завершения
       } else {
         const errorMsg = result.message || 'Ошибка при транскрибации';
@@ -321,6 +323,7 @@ export default function TranscriptionModal({
         else setInternalTranscriptionResult(transcriptionText);
         setShowResult(true);
         showNotification('success', 'Транскрибация завершена');
+        incrementTabNotification();
         setTranscriptionId(null);
       } else {
         const errorMsg = result.message || 'Ошибка при транскрибации';
@@ -383,6 +386,7 @@ export default function TranscriptionModal({
         }
         setShowResult(true);
         showNotification('success', 'Транскрибация YouTube видео завершена');
+        incrementTabNotification();
       } else {
         const errorMsg = result.message || 'Ошибка при транскрибации YouTube';
         if (onTranscriptionError) {

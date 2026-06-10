@@ -90,7 +90,6 @@ def _terminal_chat_inference_banner(
     )
     lines.append("=" * 76)
     block = "\n".join(lines)
-    print(block, flush=True)
     logger.info(block)
 
 

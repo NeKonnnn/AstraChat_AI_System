@@ -1,6 +1,15 @@
 // Конфигурация API для astrachat Frontend
 // Использует новый модуль settings
+import axios from 'axios';
 import { getSettings } from '../settings';
+import {
+  mapApiPolicyToConfig,
+  type LoginLockoutConfig,
+} from '../settings/loginLockout';
+import {
+  mapApiSessionPolicyToConfig,
+  type SessionTimeoutConfig,
+} from '../settings/sessionTimeout';
 
 // API эндпоинты
 export const API_ENDPOINTS = {
@@ -20,6 +29,8 @@ export const API_ENDPOINTS = {
   
   // Документы
   DOCUMENTS_UPLOAD: '/api/documents/upload',
+  /** Прикрепление к сообщению: MinIO + inline без RAG */
+  DOCUMENTS_ATTACH: '/api/documents/attach',
   DOCUMENTS_QUERY: '/api/documents/query',
   DOCUMENTS_LIST: '/api/documents',
   DOCUMENTS_DELETE: '/api/documents',
@@ -54,6 +65,24 @@ export const API_ENDPOINTS = {
   
   // Сообщения
   UPDATE_MESSAGE: '/api/messages',
+
+  // Аутентификация (политики — источник правды на backend)
+  AUTH_LOGIN_LOCKOUT_POLICY: '/api/auth/login-lockout-policy',
+  AUTH_SESSION_POLICY: '/api/auth/session-policy',
+  AUTH_SERVER_INSTANCE: '/api/auth/server-instance',
+
+  // MCP (Model Context Protocol)
+  MCP_SERVERS: '/api/mcp/servers',
+  MCP_STATUS: '/api/mcp/status',
+  MCP_TOOLS: '/api/mcp/tools',
+  MCP_AGENT_STATUS: '/api/agent/mcp/status',
+  MCP_SERVER_STATUS: (id: string) => `/api/mcp/servers/${encodeURIComponent(id)}/status`,
+  MCP_SERVER_HEALTH: (id: string) => `/api/mcp/servers/${encodeURIComponent(id)}/health`,
+  MCP_SERVER_TOOLS: (id: string) => `/api/mcp/servers/${encodeURIComponent(id)}/tools`,
+  MCP_SERVER_VERIFY: (id: string) => `/api/mcp/servers/${encodeURIComponent(id)}/verify`,
+  MCP_SERVER_CREDENTIALS: (id: string) => `/api/mcp/servers/${encodeURIComponent(id)}/credentials`,
+  MCP_ATLASSIAN_CONFIG: '/api/mcp/servers/atlassian/config',
+  MCP_ATLASSIAN_CREDENTIALS: '/api/mcp/servers/atlassian/credentials',
 };
 
 // Для обратной совместимости (deprecated - используйте getSettings())
@@ -82,3 +111,15 @@ export const getWsUrl = (endpoint: string): string => {
   const settings = getSettings();
   return settings.websocket.getWsUrl(endpoint);
 };
+
+/** Политика блокировки входа с backend (без дублирования в поде frontend). */
+export async function fetchLoginLockoutPolicy(): Promise<LoginLockoutConfig> {
+  const { data } = await axios.get(getApiUrl(API_ENDPOINTS.AUTH_LOGIN_LOCKOUT_POLICY));
+  return mapApiPolicyToConfig(data);
+}
+
+/** Политика автовыхода при неактивности с backend. */
+export async function fetchSessionPolicy(): Promise<SessionTimeoutConfig> {
+  const { data } = await axios.get(getApiUrl(API_ENDPOINTS.AUTH_SESSION_POLICY));
+  return mapApiSessionPolicyToConfig(data);
+}

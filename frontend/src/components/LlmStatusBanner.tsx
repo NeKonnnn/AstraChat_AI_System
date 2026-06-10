@@ -3,6 +3,7 @@ import { Box, IconButton, Typography } from '@mui/material';
 import { Close as CloseIcon } from '@mui/icons-material';
 import { getApiUrl } from '../config/api';
 import { getSettings } from '../settings';
+import { TOP_ERROR_BANNER_AUTO_DISMISS_MS } from './TopErrorBanner';
 
 /**
  * Плашка сверху (как в Qwen UI), если бэкенд сообщает, что до LLM (llm-svc) достучаться нельзя.
@@ -49,6 +50,15 @@ export default function LlmStatusBanner() {
       if (interval) clearInterval(interval);
     };
   }, [dismissed]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const timer = window.setTimeout(() => {
+      setOpen(false);
+      setDismissed(true);
+    }, TOP_ERROR_BANNER_AUTO_DISMISS_MS);
+    return () => window.clearTimeout(timer);
+  }, [open, message]);
 
   if (!open) return null;
 

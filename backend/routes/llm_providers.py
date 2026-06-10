@@ -27,6 +27,7 @@ from backend.llm_providers import (
     get_registry,
     join_model_path,
 )
+from backend.llm_providers.registry import build_registry_debug_snapshot
 
 router = APIRouter(prefix="/api/llm-providers", tags=["llm-providers"])
 logger = logging.getLogger(__name__)
@@ -78,7 +79,7 @@ async def _serialize_provider(provider, *, include_health: bool) -> Dict[str, An
 
 
 @router.get("")
-async def list_providers(include_health: bool = True, include_disabled: bool = False):
+async def list_providers(include_health: bool = False, include_disabled: bool = False):
     """Полный список провайдеров + их health, capabilities, secret-status."""
     try:
         registry = await get_registry()
@@ -96,8 +97,21 @@ async def list_providers(include_health: bool = True, include_disabled: bool = F
     }
 
 
+@router.get("/debug")
+async def get_providers_debug_snapshot():
+    """
+    Техническая диагностика источников конфигурации провайдеров (без секретов).
+    Нужна для расследования случаев, когда в UI виден не тот набор provider-ов.
+    """
+    try:
+        return build_registry_debug_snapshot()
+    except Exception as e:
+        logger.exception("llm-providers debug error: %s", e)
+        raise HTTPException(status_code=500, detail=f"Debug snapshot error: {e}")
+
+
 @router.get("/{provider_id}")
-async def get_provider(provider_id: str, include_health: bool = True):
+async def get_provider(provider_id: str, include_health: bool = False):
     """Detail по одному провайдеру."""
     try:
         registry = await get_registry()

@@ -37,7 +37,7 @@ const apiConfig = settings.api;
 const websocketConfig = settings.websocket;
 
 // Получение URL
-const backendUrl = getUrl('backend_port_1');
+const backendUrl = getUrl('backend_port');
 ```
 
 ### Использование API подключения
@@ -94,10 +94,10 @@ const voiceWsUrl = settings.websocket.getWsUrl('/ws/voice');
 // config/api.ts
 export const API_CONFIG = {
   get BASE_URL(): string {
-    return process.env.REACT_APP_API_URL || getUrl('backend_port_1');
+    return process.env.REACT_APP_API_URL || getUrl('backend_port');
   },
   get WS_URL(): string {
-    const baseUrl = process.env.REACT_APP_WS_URL || getUrl('backend_port_1');
+    const baseUrl = process.env.REACT_APP_WS_URL || getUrl('backend_port');
     return baseUrl.replace('http://', 'ws://').replace('https://', 'wss://');
   },
 };

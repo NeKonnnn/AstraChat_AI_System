@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, startTransition } from 'react';
 import {
   Box,
   Container,
@@ -1427,7 +1427,7 @@ export default function PromptGalleryPage() {
           }}>
             <Tooltip title="Скрыть панель" placement="left">
               <IconButton
-                onClick={() => setRightSidebarHidden(true)}
+                onClick={() => startTransition(() => setRightSidebarHidden(true))}
                 sx={{
                 color: 'white',
                 opacity: 1,
@@ -1462,8 +1462,10 @@ export default function PromptGalleryPage() {
           <Tooltip title="Показать панель" placement="left">
             <IconButton
               onClick={() => {
-                setRightSidebarHidden(false);
-                setRightSidebarOpen(false);
+                startTransition(() => {
+                  setRightSidebarHidden(false);
+                  setRightSidebarOpen(false);
+                });
               }}
               sx={{
                 bgcolor: 'transparent',

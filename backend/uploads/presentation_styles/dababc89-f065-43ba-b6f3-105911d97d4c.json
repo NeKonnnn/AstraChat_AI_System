@@ -1,0 +1,29 @@
+{
+  "style_id": "dababc89-f065-43ba-b6f3-105911d97d4c",
+  "name": "From Test PPTX",
+  "source_file": "tmp0rdwufhh.pptx",
+  "colors": {
+    "accent1": "#FF0000"
+  },
+  "fonts": {
+    "major": "Arial",
+    "minor": "Calibri"
+  },
+  "slide_size": {
+    "cx": "12192000",
+    "cy": "6858000",
+    "type": "screen16x9"
+  },
+  "layout_patterns": [
+    {
+      "layout_id": "slideLayout1",
+      "layout_name": "Title and Content",
+      "placeholders": [
+        "title",
+        "body"
+      ],
+      "placeholder_count": 2
+    }
+  ],
+  "notes": "Auto-extracted from PPTX theme"
+}

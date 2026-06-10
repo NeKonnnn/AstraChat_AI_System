@@ -25,6 +25,47 @@ cors:
   allow_methods: ["*"]
   allow_headers: ["*"]
 
+# Аутентификация: блокировка после серии неверных паролей
+# AUTH_SESSION_TIMEOUT_SECONDS — в .env (0 = отключено, для локальной разработки)
+auth:
+  login_lockout:
+    enabled: true
+    max_failed_attempts: 5
+    lockout_duration_seconds: 900
+
+# ========================================================
+# MCP PLATFORM (универсальная интеграция MCP-серверов)
+# ========================================================
+mcp:
+  enabled: true
+  tools_cache_ttl_seconds: 60
+  pool:
+    max_size: 4
+    idle_ttl_seconds: 120
+    acquire_timeout_seconds: 5
+  servers:
+    - id: atlassian
+      display_name: "Jira / Confluence"
+      enabled: false
+      transport: streamable-http
+      base_url: ""
+      base_path: /mcp
+      health_path: /healthz
+      stateless: true
+      timeout_seconds: 120
+      credential_provider: atlassian
+      tool_name_prefix: mcp_atlassian_
+      auth_mode: service_account
+      auth_type: none
+  forward_headers:
+    enabled: true
+    user:
+      username: "X-GPB-Ldap-User"
+      user_id: "X-GPB-User-Id"
+      email: "X-GPB-User-Email"
+    chat_id_header: "X-OpenWebUI-Chat-Id"
+    message_id_header: "X-OpenWebUI-Message-Id"
+
 # ========================================================
 # НАСТРОЙКИ МИКРОСЕРВИСОВ (ML Services)
 # ========================================================
@@ -38,8 +79,8 @@ microservices:
         # base_url подставляется из urls.llm_service_docker / llm_service_port при загрузке, если пусто
         base_url: ""
     models:
-      default: "qwen2.5-7b-instruct-q3_k_m"
-      fallback: "qwen-coder-30b"
+      default: "Qwen3.5-4B-UD-Q8_K_XL"
+      fallback: "Qwen3-Coder-30B-A3B-Instruct-Q8_0"
 
   stt:
     enabled: true
@@ -72,7 +113,9 @@ memory:
 mongodb:
   host: "mongodb"
   port: 27017
-  database: "memoai"
+  database: "astrachat"
+  user: "admin"
+  password: "password"
 
 postgresql:
   host: "postgresql"
@@ -101,13 +144,34 @@ minio:
 # При необходимости задайте IMAGE_GEN_* в .env (см. ImageGenerationConfig в backend/settings/config.py).
 # ========================================================
 image_generation:
-  enabled: false
+  enabled: true
   comfyui_base_url: "http://127.0.0.1:8188"
-  # Путь от каталога backend/ (в Docker: /app): см. backend/config/comfy_workflows/
-  workflow_path: "config/comfy_workflows/qwen_image_api.json"
+  # Путь от каталога backend/ (в Docker: /app). Положите checkpoint в models/comfyui/checkpoints/
+  workflow_path: "config/comfy_workflows/sd15_txt2img_api.json"
   request_timeout_sec: 900
   poll_interval_sec: 1.0
-  node_map: {}
+  chat_triggers_enabled: true
+  default_width: 512
+  default_height: 512
+  default_steps: 20
+  # Пусто = имя из workflow или первый checkpoint, который видит ComfyUI
+  checkpoint_name: ""
+  node_map:
+    prompt:
+      node: "6"
+      input: "text"
+    width:
+      node: "5"
+      input: "width"
+    height:
+      node: "5"
+      input: "height"
+    steps:
+      node: "3"
+      input: "steps"
+    seed:
+      node: "3"
+      input: "seed"
 
 # ========================================================
 # ПУТИ И СИСТЕМНЫЕ НАСТРОЙКИ
@@ -127,6 +191,13 @@ logging:
 
 
 urls:
+  # Legacy aliases (для совместимости со старым кодом/интеграциями)
+  frontend_port: "http://localhost:3000"
+  frontend_port_ipv4: "http://127.0.0.1:3000"
+  backend_port: "http://localhost:8000"
+  backend_port_ipv4: "http://127.0.0.1:8000"
+  ingress_port: "http://localhost:8000"
+
   frontend_port_1: "http://localhost:3000"
   frontend_port_1_ipv4: "http://127.0.0.1:3000"
   frontend_port_2: "http://localhost:3001"
@@ -162,3 +233,7 @@ urls:
 
   rag_models_service_port: "http://localhost:8010"
   rag_models_service_docker: "http://rag-models:8000"
+
+  # MCP Atlassian (8012 — 8011 занят svc-rag)
+  mcp_atlassian_service_port: "http://localhost:8012"
+  mcp_atlassian_service_docker: "http://mcp-atlassian:8000"

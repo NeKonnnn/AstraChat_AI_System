@@ -1,0 +1,18 @@
+{
+  "style_id": "a9b7bd4a-1b91-4ad8-ba57-f479c15e75a8",
+  "name": "From Test PPTX",
+  "source_file": "tmpe2mfw_hf.pptx",
+  "colors": {
+    "accent1": "#FF0000"
+  },
+  "fonts": {
+    "major": "Arial",
+    "minor": "Calibri"
+  },
+  "slide_size": {
+    "cx": "12192000",
+    "cy": "6858000",
+    "type": "screen16x9"
+  },
+  "notes": "Auto-extracted from PPTX theme"
+}

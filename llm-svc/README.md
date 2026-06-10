@@ -1,6 +1,6 @@
 # Llama CPP API Service
 
-Этот сервис предоставляет API, совместимый с OpenAI, для работы с локальными LLM через llama-cpp-python, чтобы интегрировать их с LibreChat.
+Этот сервис предоставляет API, совместимый с OpenAI, для работы с локальными LLM через llama-cpp-python.
 
 ## API Endpoints
 * POST `/v1/chat/completions` - Генерация ответов чата
@@ -22,7 +22,7 @@ ReDoc: http://localhost:8000/redoc
 - Поддержка любых моделей в формате GGUF
 - Асинхронная обработка запросов
 - Поддержка GPU через CUDA
-- Интеграция с LibreChat через custom endpoints
+- Интеграция с клиентскими приложениями через custom endpoints
 - Подробное логирование и мониторинг здоровья
 
 ### Основные разделы конфигурации:
@@ -148,7 +148,7 @@ pytest test/ -v
 
 ```bash
 git clone <repository-url>
-cd librechat-llama-integration
+cd llm-svc
 ```
 
 Скачайте модель:
@@ -224,8 +224,8 @@ data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1677652288
 data: [DONE]
 ```
 
-## Настройка LibreChat
-В LibreChat перейдите в настройки (шестерёнка в левом нижнем углу)
+## Настройка клиента
+В клиентском приложении перейдите в настройки провайдера OpenAI-совместимого API
 
 * Выберите "OpenAI" как провайдера
 * В поле "OpenAI API Key" введите любой текст
@@ -238,7 +238,7 @@ data: [DONE]
 ```bash
 docker-compose up -d
 ```
-Откройте LibreChat в браузере: http://localhost:3080
+Откройте клиентское приложение в браузере.
 
 
 ### Различия между типами сообщений в Chat Completion API

@@ -1,4 +1,4 @@
-# Репозитории документов и векторов (таблицы documents, document_vectors)
+# Репозитории документов и векторов (таблицы documents, document_vectors).
 import json
 import logging
 from typing import Any, Dict, List, Optional, Tuple
@@ -36,7 +36,7 @@ class DocumentRepository:
                 )
             """)
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_documents_filename ON documents(filename)")
-        logger.info("Таблицы documents готовы")
+        logger.info("Таблица documents готова")
 
     async def create_document(self, document: Document) -> Optional[int]:
         meta = json.dumps(document.metadata) if document.metadata else "{}"
@@ -125,8 +125,8 @@ class DocumentRepository:
         return True
 
     async def find_document_ids_by_filename(self, name_or_stem: str, limit: int = 10) -> List[int]:
-        """ILIKE-поиск document_id по имени файла. Позволяет запросу вида
-        «саммари по report.pdf» зафиксировать нужный документ как anchor."""
+        """ILIKE-поиск document_id по имени файла.
+        Позволяет запросу вида «саммари по report.pdf» зафиксировать нужный документ как anchor."""
         needle = (name_or_stem or "").strip()
         if not needle:
             return []
@@ -166,7 +166,7 @@ class VectorRepository:
             """)
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_document_vectors_document_id ON document_vectors(document_id)")
             await ensure_fts_columns(conn, "document_vectors")
-        logger.info("Таблицы document_vectors готовы (dim=%s)", self.embedding_dim)
+        logger.info("Таблица document_vectors готова (dim=%s)", self.embedding_dim)
 
     async def create_vectors_batch(self, vectors: List[DocumentVector]) -> int:
         if not vectors:
@@ -337,7 +337,7 @@ class VectorRepository:
         limit: int = 32,
         document_id: Optional[int] = None,
     ) -> List[Tuple[DocumentVector, float]]:
-        """ILIKE-fallback на случай, когда FTS не сработал. См. project_rag_repository."""
+        """ILIKE-fallback на случай, когда FTS не сработал."""
         tokens = [t for t in (tokens or []) if t and isinstance(t, str)]
         if not tokens:
             return []
@@ -433,7 +433,7 @@ class VectorRepository:
         return True
 
     async def get_all_contents_for_bm25(self) -> List[Tuple[int, int, str]]:
-        """Возвращает (document_id, chunk_index, content) для всех чанков — для построения BM25."""
+        """Возвращает (document_id, chunk_index, content) для всех чанков - для построения BM25."""
         async with await self.db.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT document_id, chunk_index, content FROM document_vectors ORDER BY document_id, chunk_index"
@@ -451,7 +451,7 @@ class VectorRepository:
     async def get_vector_by_document_and_chunk(
         self, document_id: int, chunk_index: int
     ) -> Optional["DocumentVector"]:
-        """Точечный запрос одного вектора по (document_id, chunk_index) — для BM25-only хитов."""
+        """Точечный запрос одного вектора по (document_id, chunk_index) - для BM25-only хитов."""
         async with await self.db.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT id, document_id, chunk_index, embedding::text, content, metadata "

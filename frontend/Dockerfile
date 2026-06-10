@@ -13,6 +13,9 @@ ARG REACT_APP_WS_URL=ws://localhost:8000
 ENV REACT_APP_API_URL=$REACT_APP_API_URL
 ENV REACT_APP_WS_URL=$REACT_APP_WS_URL
 
+# Увеличиваем heap Node.js для сборки webpack + monaco-editor
+ENV NODE_OPTIONS=--max-old-space-size=4096
+
 # Копирование package.json
 COPY package.json ./
 

@@ -7,11 +7,13 @@ import os
 from datetime import datetime
 from typing import Dict, List
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel, Field
 
 from backend.app_state import get_agent_orchestrator
-from backend.schemas import AgentModeRequest, AgentStatusResponse, MultiLLMModelsRequest
+from backend.auth.jwt_handler import get_current_user
+from backend.schemas import AgentModeRequest, AgentStatusResponse
+from backend.settings.cef_logger.cef_logger import domain_from_ldap_base_dn, log_cef_event
 
 router = APIRouter(prefix="/api/agent", tags=["agents"])
 logger = logging.getLogger(__name__)
@@ -44,60 +46,8 @@ async def get_agent_status():
 async def set_agent_mode(request: AgentModeRequest):
     try:
         o = _get_orchestrator_or_503()
-        prev_mode = o.get_mode()
         o.set_mode(request.mode)
-        # При выходе из multi-LLM — очищаем пулы всех llm-svc провайдеров
-        # (у остальных провайдеров это no-op). Это освобождает RAM/GPU.
-        if prev_mode == "multi-llm" and request.mode != "multi-llm":
-            try:
-                from backend.llm_providers import get_registry
-                from backend.llm_providers.llm_svc import LlmSvcProvider
-
-                registry = await get_registry()
-                for provider in registry.all():
-                    if isinstance(provider, LlmSvcProvider):
-                        ok = await provider.unload_excess()
-                        logger.info(
-                            "Pool trim для провайдера %s (llm-svc) после выхода из multi-llm: success=%s",
-                            provider.id, ok,
-                        )
-                # Синхронизация кэша имени default-модели LLMService
-                try:
-                    from backend.llm_client import get_llm_service
-                    svc = await get_llm_service()
-                    await svc._sync_loaded_model_name_from_health()
-                except Exception as e:
-                    logger.debug(f"LLMService name resync skipped: {e}")
-            except Exception as e:
-                logger.warning(f"Pool trim после multi-llm: {e}")
         return {"message": f"Режим изменён на: {request.mode}", "success": True, "timestamp": datetime.now().isoformat()}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/multi-llm/models")
-async def set_multi_llm_models(request: MultiLLMModelsRequest):
-    try:
-        o = _get_orchestrator_or_503()
-        o.set_multi_llm_models(request.models)
-        # Без фонового POST /v1/models/load: он гонялся параллельно с первым multi-LLM чатом и
-        # давал двойную загрузку одной GGUF в llm-svc → обрыв соединения / падение процесса.
-        # Догрузка второй модели — только в realtime.handlers._gen_one (asyncio.to_thread).
-        return {"message": f"Модели установлены: {', '.join(request.models)}", "success": True,
-                "models": request.models, "timestamp": datetime.now().isoformat()}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/multi-llm/models")
-async def get_multi_llm_models():
-    try:
-        o = _get_orchestrator_or_503()
-        return {"models": o.get_multi_llm_models(), "success": True}
     except HTTPException:
         raise
     except Exception as e:
@@ -119,9 +69,38 @@ async def get_available_agents():
 @router.get("/mcp/status")
 async def get_mcp_status():
     try:
-        _get_orchestrator_or_503()
-        return {"mcp_status": {"initialized": False, "servers": 0, "tools": 0, "message": "MCP в разработке"},
-                "success": True, "timestamp": datetime.now().isoformat()}
+        from backend.mcp.platform import get_mcp_platform
+        from backend.mcp.types import McpCallContext
+
+        platform = get_mcp_platform()
+        if not platform.initialized:
+            return {
+                "mcp_status": {
+                    "initialized": False,
+                    "servers_connected": 0,
+                    "total_servers": 0,
+                    "tools": 0,
+                    "message": "MCP platform not initialized",
+                },
+                "success": True,
+                "timestamp": datetime.now().isoformat(),
+            }
+        ctx = McpCallContext(user_id="system", username="system", is_admin=True)
+        health = await platform.health(ctx)
+        return {
+            "mcp_status": {
+                "initialized": health.get("initialized", False),
+                "enabled": health.get("enabled", False),
+                "servers_connected": health.get("servers_connected", 0),
+                "total_servers": health.get("servers_total", 0),
+                "tools": health.get("tools_total", 0),
+                "servers": health.get("servers", []),
+                "pool": health.get("pool", {}),
+                "message": health.get("message"),
+            },
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -129,11 +108,33 @@ async def get_mcp_status():
 
 
 @router.post("/agents/{agent_id}/status")
-async def set_agent_status(agent_id: str, body: ToolToggleBody):
+async def set_agent_status(
+    request: Request,
+    agent_id: str,
+    body: ToolToggleBody,
+    current_user: dict = Depends(get_current_user),
+):
     try:
         o = _get_orchestrator_or_503()
         is_active = body.is_active
         o.set_agent_status(agent_id.strip(), is_active)
+        _dom = domain_from_ldap_base_dn(os.getenv("LDAP_USER_SEARCH_BASE", ""))
+        log_cef_event(
+            "SEC004",
+            request=request,
+            current_user=current_user,
+            status_code=200,
+            extra={
+                "cs1": agent_id.strip(),
+                "cs1Label": "AgentName",
+                "cs2": agent_id.strip(),
+                "cs2Label": "AgentId",
+                "duser": "all-users",
+                "dntdom": _dom or None,
+                "cs3": "agent_user" if is_active else "agent_disabled",
+                "cs3Label": "AccessRole",
+            },
+        )
         return {"agent_id": agent_id, "is_active": is_active, "success": True,
                 "message": f"Агент '{agent_id}' {'активирован' if is_active else 'деактивирован'}",
                 "timestamp": datetime.now().isoformat()}

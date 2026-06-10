@@ -1,19 +1,19 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Box, IconButton, Typography, Tooltip, Link, Paper, Table, TableBody, TableCell, TableContainer, TableHead, TableRow } from '@mui/material';
 import { ContentCopy as CopyIcon, Check as CheckIcon, Info as InfoIcon, Warning as WarningIcon, Error as ErrorIcon, CheckCircle as SuccessIcon, GetApp as DownloadIcon } from '@mui/icons-material';
-import Editor from '@monaco-editor/react';
-/*
 import Editor, { loader } from '@monaco-editor/react';
-*/
 import * as XLSX from 'xlsx';
 import CodeSelectionMenu from './CodeSelectionMenu';
 
-/*
-const monacoVsPath = `${process.env.PUBLIC_URL || ''}/monaco/vs`;
+// Monaco загружается как статические файлы (не через webpack-бандл).
+// Файлы копируются из node_modules в /app/public/monaco при docker-сборке.
 loader.config({
-  paths: { vs: monacoVsPath },
+  paths: { vs: `${process.env.PUBLIC_URL || ''}/monaco/vs` },
 });
-*/
+
+// Начинаем загрузку Monaco сразу при импорте модуля,
+// чтобы к моменту рендера редактора он уже был готов.
+loader.init();
 
 interface MessageRendererProps {
   content: string;
@@ -920,8 +920,24 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
                 keepCurrentModel
                 theme="memo-monaco-dark"
                 loading={
-                  <Box sx={{ px: 2, py: 1.5, color: '#c8c8c8', fontFamily: 'monospace', fontSize: '0.85rem' }}>
-                    Загрузка редактора кода...
+                  <Box
+                    component="pre"
+                    sx={{
+                      m: 0,
+                      px: 2,
+                      py: 1.5,
+                      color: '#c8c8c8',
+                      fontFamily: 'Consolas, "Courier New", monospace',
+                      fontSize: '0.85rem',
+                      lineHeight: 1.6,
+                      background: '#1e1e1e',
+                      overflow: 'hidden',
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-all',
+                      height: `${editorHeight}px`,
+                    }}
+                  >
+                    {code}
                   </Box>
                 }
                 beforeMount={(monaco) => {

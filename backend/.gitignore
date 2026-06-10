@@ -1,0 +1,8 @@
+Dockerfile
+
+# Локальная конфигурация (секреты, URL окружения)
+config/config.yml
+
+# Python bytecode cache (любая вложенность)
+__pycache__/
+**/__pycache__/

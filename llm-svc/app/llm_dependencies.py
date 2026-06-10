@@ -62,8 +62,12 @@ async def get_llm_handler() -> BaseLLMHandler:
                 logger.warning("vLLM initialization failed, falling back to llama.cpp")
                 _llm_handler = LlamaHandler.get_instance()
                 await _llm_handler.initialize()
-            else:
+            elif backend == "vllm":
                 raise
+            else:
+                logger.warning(
+                    "llama.cpp started without a loaded model; list/load via /v1/models"
+                )
     return _llm_handler
 
 # Обратная совместимость

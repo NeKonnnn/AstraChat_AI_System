@@ -25,12 +25,24 @@ import {
   Square as SquareIcon,
   Description as DocumentIcon,
   PictureAsPdf as PdfIcon,
-  TableChart as ExcelIcon,
 } from '@mui/icons-material';
+import { formatFileSize } from '../utils/inlineImage';
+import InlineAttachmentsList from './InlineAttachmentsList';
+import InlineDocAttachmentChip, { InlineDocThumb, INLINE_DOC_ICON_SIZE } from './InlineDocAttachmentChip';
 
 export interface UploadedFile {
   name: string;
   type: string;
+}
+
+/** Файл, прикреплённый напрямую (без RAG/эмбединга) */
+export interface InlineAttachment {
+  name: string;
+  contentType: 'text' | 'image';
+  content: string; // extracted text или base64 data URL
+  size?: number;
+  minioObject?: string;
+  minioBucket?: string;
 }
 
 export interface ChatInputBarProps {
@@ -52,9 +64,15 @@ export interface ChatInputBarProps {
   attachDisabled?: boolean;
   accept?: string;
 
+  /** Вложения к сообщению (MinIO + inline, без RAG) */
+  inlineFiles?: InlineAttachment[];
+  onInlineFileRemove?: (index: number) => void;
+
   uploadedFiles?: UploadedFile[];
   onFileRemove?: (file: UploadedFile, index: number) => void;
   isUploading?: boolean;
+  /** Метаданные файла во время прикрепления — для превью со спиннером в «иконке» */
+  uploadingFile?: { name: string; size: number; previewUrl?: string } | null;
 
   showReportButton?: boolean;
   onReportClick?: () => void;
@@ -77,6 +95,9 @@ export interface ChatInputBarProps {
 
   /** Между «вложения» и «инструменты»: например индикатор «Библиотека» при включённом RAG */
   libraryBadge?: React.ReactNode;
+
+  /** Подсказки над полем ввода (MCP chips и т.п.) */
+  inputSuggestions?: React.ReactNode;
 
   /** 'compact' — текущий пилюльный стиль (по умолчанию);
    *  'classic' — прямоугольник с тулбаром кнопок снизу */
@@ -118,10 +139,13 @@ export default function ChatInputBar({
   onAttachClick,
   onFileSelect,
   attachDisabled = false,
-  accept = '.pdf,.docx,.xlsx,.txt,.jpg,.jpeg,.png,.webp',
+  accept = '.pdf,.docx,.xlsx,.xls,.txt,.jpg,.jpeg,.png,.webp,.gif',
   uploadedFiles = [],
   onFileRemove,
   isUploading = false,
+  uploadingFile = null,
+  inlineFiles = [],
+  onInlineFileRemove,
   showReportButton = false,
   onReportClick,
   reportDisabled = false,
@@ -137,14 +161,86 @@ export default function ChatInputBar({
   voiceTooltip = 'Голосовой ввод',
   extraActions,
   libraryBadge,
+  inputSuggestions,
   styleVariant = 'compact',
   solidWorkZoneBackground = false,
   toolsMenuAnchorRef,
 }: ChatInputBarProps) {
   const getFileIcon = (file: UploadedFile) => {
     if (file.type?.includes('pdf')) return <PdfIcon fontSize="small" />;
-    if (file.type?.includes('sheet') || file.type?.includes('excel')) return <ExcelIcon fontSize="small" />;
+    if (file.type?.includes('sheet') || file.type?.includes('excel')) return <DocumentIcon fontSize="small" />;
     return <DocumentIcon fontSize="small" />;
+  };
+
+  const fileAttachmentChipSx = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 1,
+    p: 1,
+    borderRadius: 2.5,
+    minWidth: 0,
+    maxWidth: '280px',
+    bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
+    border: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.14)' : 'rgba(0, 0, 0, 0.12)'}`,
+  };
+
+  const fileAttachmentNameSx = {
+    fontWeight: 600,
+    display: 'block',
+    color: isDarkMode ? 'white' : '#333',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    fontSize: '0.8rem',
+    lineHeight: 1.25,
+  };
+
+  const fileAttachmentSizeSx = {
+    display: 'block',
+    mt: 0.25,
+    fontSize: '0.7rem',
+    lineHeight: 1.2,
+    color: isDarkMode ? 'rgba(255, 255, 255, 0.55)' : 'rgba(0, 0, 0, 0.55)',
+  };
+
+  const fileAttachmentRemoveSx = {
+    color: isDarkMode ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.7)',
+    '&:hover': {
+      color: '#ff6b6b',
+      bgcolor: isDarkMode ? 'rgba(255, 107, 107, 0.2)' : 'rgba(255, 107, 107, 0.1)',
+    },
+    p: 0.5,
+    borderRadius: 1,
+    flexShrink: 0,
+  };
+
+  const legacyFileAttachmentIconBoxSx = {
+    width: 32,
+    height: 32,
+    borderRadius: 1,
+    bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: isDarkMode ? 'white' : '#333',
+    flexShrink: 0,
+    border: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.3)' : 'rgba(0, 0, 0, 0.3)'}`,
+  };
+
+  const isImageFilename = (filename: string): boolean =>
+    /\.(jpe?g|png|webp|gif)$/i.test(filename);
+
+  const inlineImageRemoveSx = {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    p: 0.25,
+    minWidth: 0,
+    width: 22,
+    height: 22,
+    bgcolor: 'rgba(0, 0, 0, 0.55)',
+    color: 'white',
+    '&:hover': { bgcolor: 'rgba(0, 0, 0, 0.75)', color: 'white' },
   };
 
   const isClassic = styleVariant === 'classic';
@@ -437,16 +533,22 @@ export default function ChatInputBar({
   // ─── Переиспользуемые кнопки ────────────────────────────────────────────────
 
   const attachBtn = onAttachClick ? (
-    <Tooltip title="Добавить файлы">
+    <Tooltip title="Прикрепить файл к сообщению">
       <IconButton
         size="small"
         onClick={onAttachClick}
-        disabled={attachDisabled}
+        disabled={attachDisabled || isUploading}
         disableRipple
         sx={{
-          color: isDarkMode ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.7)',
-          bgcolor: 'transparent',
-          border: '1px solid transparent',
+          color: inlineFiles.length > 0
+            ? 'primary.main'
+            : isDarkMode ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.7)',
+          bgcolor: inlineFiles.length > 0
+            ? (isDarkMode ? 'rgba(91,105,255,0.15)' : 'rgba(91,105,255,0.08)')
+            : 'transparent',
+          border: inlineFiles.length > 0
+            ? `1px solid ${isDarkMode ? 'rgba(91,105,255,0.45)' : 'rgba(91,105,255,0.3)'}`
+            : '1px solid transparent',
           '&:hover:not(:disabled)': {
             bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.1)',
             border: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.18)' : 'rgba(0, 0, 0, 0.15)'}`,
@@ -684,6 +786,23 @@ export default function ChatInputBar({
     </Box>
   ) : null;
 
+  // ─── Inline-вложения (прямая передача в модель, без RAG) ───────────────────
+
+  const inlineFilesSection = inlineFiles.length > 0 ? (
+    <InlineAttachmentsList
+      files={inlineFiles.map((file) => ({
+        name: file.name,
+        contentType: file.contentType,
+        imageSrc: file.contentType === 'image' ? file.content : undefined,
+        size: file.size,
+      }))}
+      isDarkMode={isDarkMode}
+      variant="input"
+      onRemove={onInlineFileRemove}
+      sx={{ mb: isClassic ? 1.5 : 2 }}
+    />
+  ) : null;
+
   // ─── Вложения и индикатор загрузки (общие для обоих стилей) ─────────────────
 
   const filesSection = uploadedFiles.length > 0 && onFileRemove ? (
@@ -693,22 +812,17 @@ export default function ChatInputBar({
           <Box
             key={`${file.name}-${index}`}
             className="file-attachment"
-            sx={{
-              display: 'flex', alignItems: 'center', gap: 1, p: 1,
-              borderRadius: 2, maxWidth: '300px',
-              bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
-              border: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)'}`,
-            }}
+            sx={fileAttachmentChipSx}
           >
-            <Box sx={{ width: 32, height: 32, borderRadius: 1, bgcolor: isDarkMode ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: isDarkMode ? 'white' : '#333', flexShrink: 0, border: `1px solid ${isDarkMode ? 'rgba(255, 255, 255, 0.3)' : 'rgba(0, 0, 0, 0.3)'}` }}>
+            <Box sx={legacyFileAttachmentIconBoxSx}>
               {getFileIcon(file)}
             </Box>
             <Box sx={{ minWidth: 0, flex: 1 }}>
-              <Typography variant="caption" sx={{ fontWeight: 'medium', display: 'block', color: isDarkMode ? 'white' : '#333', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={file.name}>
+              <Typography variant="caption" sx={fileAttachmentNameSx} title={file.name}>
                 {file.name}
               </Typography>
             </Box>
-            <IconButton size="small" onClick={() => onFileRemove(file, index)} sx={{ color: isDarkMode ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.7)', '&:hover': { color: '#ff6b6b', bgcolor: isDarkMode ? 'rgba(255, 107, 107, 0.2)' : 'rgba(255, 107, 107, 0.1)' }, p: 0.5, borderRadius: 1, flexShrink: 0 }}>
+            <IconButton size="small" onClick={() => onFileRemove(file, index)} sx={fileAttachmentRemoveSx}>
               <CloseIcon fontSize="small" />
             </IconButton>
           </Box>
@@ -718,10 +832,73 @@ export default function ChatInputBar({
   ) : null;
 
   const uploadingSection = isUploading ? (
-    <Box sx={{ mb: isClassic ? 1 : 2, p: 1 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-        <CircularProgress size={16} sx={{ color: isDarkMode ? 'white' : '#333' }} />
-        <Typography variant="caption" sx={{ color: isDarkMode ? 'white' : '#333' }}>Загрузка документа...</Typography>
+    <Box sx={{ mb: isClassic ? 1.5 : 2, maxWidth: 560, width: '100%' }}>
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+        {uploadingFile?.previewUrl ? (
+          <Box sx={{ position: 'relative', width: 72, height: 72, flexShrink: 0 }}>
+            <Box
+              component="img"
+              src={uploadingFile.previewUrl}
+              alt={uploadingFile.name}
+              sx={{
+                width: '100%',
+                height: '100%',
+                borderRadius: 1.5,
+                objectFit: 'cover',
+                display: 'block',
+                border: `1px solid ${isDarkMode ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.15)'}`,
+              }}
+            />
+            <Box
+              sx={{
+                position: 'absolute',
+                inset: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: 1.5,
+                bgcolor: 'rgba(0, 0, 0, 0.35)',
+              }}
+            >
+              <CircularProgress size={22} sx={{ color: 'rgba(255, 255, 255, 0.92)' }} />
+            </Box>
+            <IconButton size="small" disabled sx={{ ...inlineImageRemoveSx, opacity: 0.45 }}>
+              <CloseIcon sx={{ fontSize: '0.85rem' }} />
+            </IconButton>
+          </Box>
+        ) : (
+          <Box sx={{ width: { xs: '100%', sm: 'calc(50% - 4px)' }, minWidth: 0 }}>
+            <InlineDocAttachmentChip
+              name={uploadingFile?.name || 'Файл'}
+              sizeLabel={
+                uploadingFile
+                  ? `${formatFileSize(uploadingFile.size)} · Анализ...`
+                  : 'Анализ...'
+              }
+              isDarkMode={isDarkMode}
+              onRemove={() => undefined}
+              removeDisabled
+              leading={(
+                <Box sx={{ position: 'relative', width: INLINE_DOC_ICON_SIZE, height: INLINE_DOC_ICON_SIZE, flexShrink: 0 }}>
+                  <InlineDocThumb filename={uploadingFile?.name || ''} isDarkMode={isDarkMode} />
+                  <Box
+                    sx={{
+                      position: 'absolute',
+                      inset: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      borderRadius: '8px',
+                      bgcolor: 'rgba(0, 0, 0, 0.28)',
+                    }}
+                  >
+                    <CircularProgress size={18} sx={{ color: 'rgba(255, 255, 255, 0.92)' }} />
+                  </Box>
+                </Box>
+              )}
+            />
+          </Box>
+        )}
       </Box>
     </Box>
   ) : null;
@@ -760,8 +937,10 @@ export default function ChatInputBar({
       >
         {fileInput}
         <Box sx={{ px: 1.5, pt: 2.75, pb: 1 }}>
+          {inlineFilesSection}
           {filesSection}
           {uploadingSection}
+          {inputSuggestions}
           {isDictating ? (
             dictationPanel
           ) : (
@@ -863,8 +1042,10 @@ export default function ChatInputBar({
       }}
     >
       {fileInput}
+      {inlineFilesSection}
       {filesSection}
       {uploadingSection}
+      {inputSuggestions}
 
       <Box
         sx={{

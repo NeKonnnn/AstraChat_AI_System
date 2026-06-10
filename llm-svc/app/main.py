@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import logging.config
 from app.core.config import settings
 from app.api import router as api_router
-from app.dependencies import get_llama_service, cleanup_llama_service
+from app.llm_dependencies import get_llm_handler, cleanup_llm_handler as cleanup_llama_service
 from app.middleware.logging_middleware import LoggingMiddleware
 from app.services.nexus_client import download_model_from_nexus_if_needed
 from fastapi import Request
@@ -104,9 +104,8 @@ async def lifespan(app: FastAPI):
         if not download_model_from_nexus_if_needed():
             logger.error("Failed to download model from Nexus")
             raise RuntimeError("Failed to download model from Nexus")
-        # Предварительная инициализация сервиса LLM
-        llama_service = await get_llama_service()
-        await llama_service.initialize()
+        # Предварительная инициализация LLM (LlamaHandler; загрузка модели — по возможности)
+        await get_llm_handler()
         logger.info("Application started successfully")
     except Exception as e:
         logger.error(f"Failed to initialize application: {str(e)}")

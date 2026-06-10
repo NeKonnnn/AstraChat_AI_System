@@ -3,9 +3,12 @@ services:
   llm-service:
     build:
       context: ./llm-svc
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.cuda
     ports:
       - "8002:8000"
+    gpus: all
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
     deploy:
       resources:
         reservations:
@@ -17,6 +20,39 @@ services:
       # Только основной набор весов (на хосте: ./models/llm/… → в контейнере /app/models/llm/…)
       - ./models/llm:/app/models/llm:ro
       - ./llm-svc/config:/app/config:ro
+    restart: unless-stopped
+    networks:
+      - astrachat-network
+
+  # ComfyUI — генерация изображений (GGUF Unet через ComfyUI-GGUF). Модели: ./models/comfyui → /app/ComfyUI/models
+  # UI/API: http://localhost:8188 ; из astrachat-backend: http://comfyui:8188 (переменная IMAGE_GEN_COMFYUI_URL)
+  comfyui:
+    build:
+      context: ./docker/comfyui
+      dockerfile: Dockerfile
+    container_name: astrachat-comfyui
+    ports:
+      - "8188:8188"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      # RTX 50xx: образ на PyTorch 2.7 + CUDA 12.8. Временный обход без GPU: COMFYUI_FORCE_CPU=1
+      - COMFYUI_FORCE_CPU=${COMFYUI_FORCE_CPU:-0}
+    volumes:
+      - ./models/comfyui:/app/ComfyUI/models
+      - comfyui_output:/app/ComfyUI/output
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8188/queue"]
+      interval: 20s
+      timeout: 10s
+      retries: 25
+      start_period: 360s
     restart: unless-stopped
     networks:
       - astrachat-network
@@ -122,6 +158,17 @@ services:
       # Старые переменные (для обратной совместимости)
       - LLM_SERVICE_URL=${LLM_SVC_INTERNAL_URL:-http://llm-service:8000}
       - USE_LLM_SVC=${USE_LLM_SVC:-true}
+      - LLM_SVC_TIMEOUT=${LLM_SVC_TIMEOUT:-300}
+      - LLM_SVC_RETRY_ATTEMPTS=${LLM_SVC_RETRY_ATTEMPTS:-3}
+      - LLM_SVC_RETRY_DELAY=${LLM_SVC_RETRY_DELAY:-1}
+      # JWT / auth (backend/auth/jwt_handler.py)
+      - JWT_SECRET=${JWT_SECRET:-dev-secret-key-change-in-production}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET:-dev-refresh-secret-change-in-production}
+      - JWT_ACCESS_TOKEN_EXPIRE_SECONDS=${JWT_ACCESS_TOKEN_EXPIRE_SECONDS:-1800}
+      - JWT_REFRESH_TOKEN_EXPIRE_SECONDS=${JWT_REFRESH_TOKEN_EXPIRE_SECONDS:-604800}
+      - AUTH_MAX_ACTIVE_SESSION=${AUTH_MAX_ACTIVE_SESSION:-5}
+      - AUTH_SESSION_TIMEOUT_SECONDS=${AUTH_SESSION_TIMEOUT_SECONDS:-0}
+      - LDAP_ENABLED=${LDAP_ENABLED:-false}
       # Новые адреса микросервисов (используются backend/config/config.py и backend/llm_client.py)
       - SVC_LLM_URL=http://llm-service:8000
       - SVC_STT_URL=http://stt-service:8000
@@ -136,6 +183,8 @@ services:
       - MONGODB_HOST=${MONGODB_HOST:-mongodb}
       - MONGODB_PORT=${MONGODB_PORT:-27017}
       - MONGODB_DATABASE=${MONGODB_DATABASE:-astrachat}
+      # Root из mongo:7 (MONGO_INITDB_ROOT_*) живёт в admin — иначе ping/подключение без authSource падает
+      - MONGODB_AUTH_SOURCE=${MONGODB_AUTH_SOURCE:-admin}
       - MONGODB_USER=${MONGODB_USER:-admin}
       - MONGODB_PASSWORD=${MONGODB_PASSWORD:-password}
       # PostgreSQL настройки
@@ -155,7 +204,11 @@ services:
       - MINIO_MEMORY_RAG_BUCKET_NAME=${MINIO_MEMORY_RAG_BUCKET_NAME:-astrachat-memory-rag}
       # RAG (SVC-RAG) URL для backend/rag_client.py
       - SVC_RAG_URL=http://svc-rag:8000/v1
+      # ComfyUI в compose: бэкенд ходит на сервис comfyui (перекрывает comfyui_base_url из YAML при генерации картинок)
+      - IMAGE_GEN_COMFYUI_URL=http://comfyui:8188
     depends_on:
+      comfyui:
+        condition: service_started
       llm-service:
         condition: service_started
       stt-service:
@@ -360,6 +413,8 @@ volumes:
     driver: local
   # MinIO данные
   minio_data:
+    driver: local
+  comfyui_output:
     driver: local
 
 networks:

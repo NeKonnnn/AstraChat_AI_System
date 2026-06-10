@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Box,
   Card,
@@ -18,22 +18,53 @@ import {
   WbSunny as SunIcon,
   Brightness3 as MoonIcon,
 } from '@mui/icons-material';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth, AuthLoginError } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import {
+  initSettings,
+  formatRemainingAttemptsHint,
+  LOGIN_LOCKOUT_EXHAUSTED_MESSAGE,
+  type LoginLockoutConfig,
+} from '../settings';
+import { fetchLoginLockoutPolicy } from '../config/api';
+import LoginSessionNotice from '../components/LoginSessionNotice';
 
 export default function LoginPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [attemptHint, setAttemptHint] = useState('');
+  const [lockoutPolicy, setLockoutPolicy] = useState<LoginLockoutConfig | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const saved = localStorage.getItem('theme');
     return saved ? saved === 'dark' : false;
   });
-  
+
   const { login } = useAuth();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        await initSettings();
+        const cfg = await fetchLoginLockoutPolicy();
+        if (!cancelled) {
+          setLockoutPolicy(cfg);
+        }
+      } catch (e) {
+        console.warn(
+          'Не удалось загрузить политику блокировки с backend (GET /api/auth/login-lockout-policy):',
+          e,
+        );
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const toggleTheme = () => {
     const newMode = !isDarkMode;
@@ -47,11 +78,9 @@ export default function LoginPage() {
   const inputBackgroundColor = isDarkMode ? '#2a2a2a' : '#ffffff';
   const inputTextColor = isDarkMode ? '#fff' : '#000';
 
-  // Устанавливаем фон при монтировании
   React.useEffect(() => {
     document.body.style.backgroundColor = isDarkMode ? '#121212' : '#f5f5f5';
     return () => {
-      // Очищаем стиль при размонтировании
       document.body.style.backgroundColor = '';
     };
   }, [isDarkMode]);
@@ -59,13 +88,38 @@ export default function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setAttemptHint('');
     setIsLoading(true);
 
     try {
       await login(username, password);
       navigate('/');
-    } catch (err: any) {
-      setError(err.message || 'Ошибка при входе в систему');
+    } catch (err: unknown) {
+      if (err instanceof AuthLoginError && err.meta.retryAfterSeconds !== undefined) {
+        setError(LOGIN_LOCKOUT_EXHAUSTED_MESSAGE);
+        setAttemptHint('');
+      } else if (err instanceof AuthLoginError) {
+        const message =
+          err.message === 'Сервис аутентификации временно недоступен'
+            ? err.message
+            : 'Неверное имя пользователя или пароль';
+        setError(message);
+
+        const { remainingAttempts, maxFailedAttempts, lockoutDurationSeconds } = err.meta;
+        const max = maxFailedAttempts ?? lockoutPolicy?.maxFailedAttempts;
+        const lockSec =
+          lockoutDurationSeconds ?? lockoutPolicy?.lockoutDurationSeconds ?? 900;
+        if (remainingAttempts !== undefined && max !== undefined) {
+          setAttemptHint(formatRemainingAttemptsHint(remainingAttempts, max, lockSec));
+        } else {
+          setAttemptHint('');
+        }
+      } else {
+        const message =
+          err instanceof Error ? err.message : 'Ошибка при входе в систему';
+        setError(message);
+        setAttemptHint('');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -73,7 +127,7 @@ export default function LoginPage() {
 
   return (
     <Container maxWidth="sm">
-      {/* Кнопка переключения темы в углу */}
+      <LoginSessionNotice />
       <IconButton
         onClick={toggleTheme}
         disableRipple
@@ -121,7 +175,6 @@ export default function LoginPage() {
                 mb: 3,
               }}
             >
-              {/* Логотип вместо иконки замка */}
               <Box
                 component="img"
                 src="/astra.png"
@@ -133,28 +186,35 @@ export default function LoginPage() {
                   objectFit: 'contain',
                 }}
               />
-              <Typography 
-                variant="h4" 
-                component="h1" 
+              <Typography
+                variant="h4"
+                component="h1"
                 fontWeight="bold"
                 sx={{ color: isDarkMode ? '#fff' : '#000' }}
               >
                 Вход в систему
               </Typography>
-              <Typography 
-                variant="body2" 
-                sx={{ 
+              <Typography
+                variant="body2"
+                sx={{
                   mt: 1,
-                  color: isDarkMode ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.6)'
+                  color: isDarkMode ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.6)',
                 }}
               >
                 Используйте ваши учетные данные
               </Typography>
             </Box>
 
-            {error && (
+            {(error || attemptHint) && (
               <Alert severity="error" sx={{ mb: 3 }}>
                 {error}
+                {error && attemptHint ? (
+                  <Typography component="p" variant="body2" sx={{ mt: 1, mb: 0 }}>
+                    {attemptHint}
+                  </Typography>
+                ) : (
+                  attemptHint
+                )}
               </Alert>
             )}
 
@@ -293,9 +353,9 @@ export default function LoginPage() {
                 variant="contained"
                 size="large"
                 disabled={isLoading}
-                sx={{ 
-                  mt: 3, 
-                  mb: 2, 
+                sx={{
+                  mt: 3,
+                  mb: 2,
                   py: 1.5,
                   bgcolor: 'primary.main',
                   '&:hover': {
@@ -310,13 +370,9 @@ export default function LoginPage() {
                 )}
               </Button>
             </form>
-
           </CardContent>
         </Card>
       </Box>
     </Container>
   );
 }
-
-
-

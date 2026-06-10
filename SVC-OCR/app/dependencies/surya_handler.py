@@ -54,7 +54,6 @@ async def get_surya_handler():
             logger.info("Surya OCR: офлайн-режим (HF_HUB_OFFLINE=1)")
 
         # Импортируем Surya после установки env (настройки читаются при импорте)
-        from surya.foundation import FoundationPredictor
         from surya.recognition import RecognitionPredictor
         from surya.detection import DetectionPredictor
 
@@ -67,8 +66,14 @@ async def get_surya_handler():
                 device = "cpu"
         logger.info(f"Surya OCR: используем устройство {device}")
 
-        foundation_predictor = FoundationPredictor()
-        recognition_predictor = RecognitionPredictor(foundation_predictor)
+        try:
+            from surya.foundation import FoundationPredictor
+
+            foundation_predictor = FoundationPredictor()
+            recognition_predictor = RecognitionPredictor(foundation_predictor)
+        except ImportError:
+            # surya-ocr 0.20.x: FoundationPredictor отсутствует
+            recognition_predictor = RecognitionPredictor()
         detection_predictor = DetectionPredictor()
 
         surya_ocr = {

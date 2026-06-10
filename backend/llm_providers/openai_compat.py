@@ -30,16 +30,18 @@ import httpx
 
 from backend.settings.cef_logger.cef_logger import (
     log_cef_int003_llm_request,
-    log_cef_obj002_llm_api_failure,
+    log_cef_int006_llm_api_failure,
 )
 
 from .base import (
     LLMProvider,
     LLMProviderConfig,
+    ChatResult,
     ModelInfo,
     ProviderCapabilities,
     ProviderHealth,
     StreamCallback,
+    ToolCall,
 )
 
 logger = logging.getLogger(__name__)
@@ -189,15 +191,31 @@ class OpenAICompatProvider(LLMProvider):
 
     _capabilities = ProviderCapabilities(
         hot_swap=False,
-        multi_loaded=True,  # В OpenAI-compat ответе /v1/models все модели «доступны».
+        multi_loaded=True,
         native_chat_api=True,
         streaming=True,
         vision=True,
+        function_calling=True,
+        prompt_json_fc=True,
+        langgraph_agent=True,
     )
 
     def __init__(self, config: LLMProviderConfig) -> None:
         super().__init__(config)
         self._timeout_read = float(config.timeout)
+        extra = config.extra or {}
+        if "function_calling" in extra:
+            fc = bool(extra.get("function_calling"))
+            self._capabilities = ProviderCapabilities(
+                hot_swap=self._capabilities.hot_swap,
+                multi_loaded=self._capabilities.multi_loaded,
+                native_chat_api=self._capabilities.native_chat_api,
+                streaming=self._capabilities.streaming,
+                vision=self._capabilities.vision,
+                function_calling=fc,
+                prompt_json_fc=bool(extra.get("prompt_json_fc", True)),
+                langgraph_agent=bool(extra.get("langgraph_agent", True)),
+            )
 
     @property
     def capabilities(self) -> ProviderCapabilities:
@@ -275,9 +293,9 @@ class OpenAICompatProvider(LLMProvider):
     def _http_verify(self) -> Any:
         """
         TLS verify для httpx.
-        Приоритет: NEXUS_CERT_PATH -> SSL_CERT_FILE -> REQUESTS_CA_BUNDLE -> True.
+        Приоритет: TLS_CERT_PATH -> SSL_CERT_FILE -> REQUESTS_CA_BUNDLE -> True.
         """
-        for env_name in ("NEXUS_CERT_PATH", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"):
+        for env_name in ("TLS_CERT_PATH", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"):
             cert_path = str(os.getenv(env_name, "") or "").strip()
             if cert_path:
                 return cert_path
@@ -465,6 +483,110 @@ class OpenAICompatProvider(LLMProvider):
 
     # ---- chat / stream_chat ----------------------------------------------
 
+    def _parse_chat_response(self, data: dict, *, cef_rid: str) -> ChatResult:
+        choices = data.get("choices") or []
+        if not choices:
+            logger.error("[%s] chat: нет choices в ответе: %s", self.id, data)
+            log_cef_int006_llm_api_failure(
+                request_uuid=cef_rid,
+                code_status="FORMAT",
+                text_status=str(data)[:512],
+                service_name=f"openai-compat-{self.id}",
+                status_code=200,
+            )
+            return ChatResult(content="Ошибка генерации ответа")
+        msg = choices[0].get("message") or {}
+        tool_calls_raw = msg.get("tool_calls") or []
+        tool_calls: List[ToolCall] = []
+        for tc in tool_calls_raw:
+            if not isinstance(tc, dict):
+                continue
+            fn = tc.get("function") or {}
+            name = str(fn.get("name") or "")
+            if not name:
+                continue
+            args_raw = fn.get("arguments") or "{}"
+            try:
+                args = json.loads(args_raw) if isinstance(args_raw, str) else dict(args_raw or {})
+            except json.JSONDecodeError:
+                args = {"raw": args_raw}
+            tool_calls.append(
+                ToolCall(
+                    id=str(tc.get("id") or uuid.uuid4().hex),
+                    name=name,
+                    arguments=args if isinstance(args, dict) else {},
+                )
+            )
+        content = _normalize_content_payload(msg.get("content"))
+        reasoning = _normalize_reasoning_payload(
+            msg.get("reasoning_content") or msg.get("reasoning")
+        ).strip()
+        cleaned = clean_llm_response(content)
+        if reasoning and "<think>" not in cleaned:
+            cleaned = f"<think>{reasoning}</think>\n\n{cleaned}" if reasoning else cleaned
+        return ChatResult(content=cleaned, tool_calls=tool_calls, raw_message=msg)
+
+    async def chat_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        model: str,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+        *,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
+        request_extra: Optional[Dict[str, Any]] = None,
+    ) -> ChatResult:
+        payload: Dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": False,
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = tool_choice if tool_choice is not None else "auto"
+        if request_extra:
+            for k, v in request_extra.items():
+                if v is not None:
+                    payload[k] = v
+        cef_rid = uuid.uuid4().hex
+        log_cef_int003_llm_request(
+            base_url=self.base_url,
+            provider_id=self.id,
+            model=model,
+            request_uuid=cef_rid,
+        )
+        async with httpx.AsyncClient(timeout=self._request_timeout(), verify=self._http_verify()) as client:
+            try:
+                response = await client.post(
+                    f"{self.base_url}/v1/chat/completions",
+                    headers=self._headers(),
+                    json=payload,
+                )
+                response.raise_for_status()
+            except httpx.HTTPStatusError as he:
+                log_cef_int006_llm_api_failure(
+                    request_uuid=cef_rid,
+                    code_status=str(he.response.status_code),
+                    text_status=(he.response.text or "")[:512],
+                    service_name=f"openai-compat-{self.id}",
+                    status_code=he.response.status_code,
+                )
+                raise
+            except Exception as e:
+                log_cef_int006_llm_api_failure(
+                    request_uuid=cef_rid,
+                    code_status="EXCEPTION",
+                    text_status=str(e)[:512],
+                    service_name=f"openai-compat-{self.id}",
+                    status_code=None,
+                )
+                raise
+            data = response.json()
+        return self._parse_chat_response(data, cef_rid=cef_rid)
+
     async def chat(
         self,
         messages: List[Dict[str, Any]],
@@ -492,68 +614,15 @@ class OpenAICompatProvider(LLMProvider):
             sorted(list(payload.keys())),
         )
         logger.info("[%s] POST /v1/chat/completions model=%r", self.id, model)
-        cef_rid = uuid.uuid4().hex
-        log_cef_int003_llm_request(
-            base_url=self.base_url,
-            provider_id=self.id,
-            model=model,
-            request_uuid=cef_rid,
+        result = await self.chat_completion(
+            messages,
+            model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            request_extra=request_extra,
         )
-        async with httpx.AsyncClient(timeout=self._request_timeout(), verify=self._http_verify()) as client:
-            try:
-                response = await client.post(
-                    f"{self.base_url}/v1/chat/completions",
-                    headers=self._headers(),
-                    json=payload,
-                )
-                response.raise_for_status()
-            except httpx.HTTPStatusError as he:
-                log_cef_obj002_llm_api_failure(
-                    request_uuid=cef_rid,
-                    code_status=str(he.response.status_code),
-                    text_status=(he.response.text or "")[:512],
-                    service_name=f"openai-compat-{self.id}",
-                    status_code=he.response.status_code,
-                )
-                raise
-            except Exception as e:
-                log_cef_obj002_llm_api_failure(
-                    request_uuid=cef_rid,
-                    code_status="EXCEPTION",
-                    text_status=str(e)[:512],
-                    service_name=f"openai-compat-{self.id}",
-                    status_code=None,
-                )
-                raise
-            data = response.json()
-        choices = data.get("choices") or []
-        if not choices:
-            logger.error("[%s] chat: нет choices в ответе: %s", self.id, data)
-            log_cef_obj002_llm_api_failure(
-                request_uuid=cef_rid,
-                code_status="FORMAT",
-                text_status=str(data)[:512],
-                service_name=f"openai-compat-{self.id}",
-                status_code=200,
-            )
-            return "Ошибка генерации ответа"
-        msg = choices[0].get("message") or {}
-        logger.info(
-            "[%s] chat response keys: message_keys=%s has_reasoning_content=%s has_reasoning=%s",
-            self.id,
-            sorted(list(msg.keys())),
-            "reasoning_content" in msg,
-            "reasoning" in msg,
-        )
-        content = _normalize_content_payload(msg.get("content"))
-        reasoning = _normalize_reasoning_payload(
-            msg.get("reasoning_content") or msg.get("reasoning")
-        ).strip()
-        cleaned = clean_llm_response(content)
-        thinking_requested = bool(payload.get("enable_thinking"))
-        if thinking_requested and reasoning and "<think>" not in cleaned:
-            return f"<think>{reasoning}</think>\n\n{cleaned}"
-        # Быстрый режим: если модель встроила <think> в content — убираем.
+        thinking_requested = bool((request_extra or {}).get("enable_thinking"))
+        cleaned = result.content
         if not thinking_requested and "<think>" in cleaned.lower():
             return _strip_think_tags(cleaned)
         return cleaned
@@ -580,17 +649,12 @@ class OpenAICompatProvider(LLMProvider):
                 if v is not None:
                     payload[k] = v
         logger.info(
-            "[%s] stream flags: enable_thinking=%r payload_keys=%s",
+            "[%s] stream enable_thinking=%r model=%r url=%s/v1/chat/completions",
             self.id,
             payload.get("enable_thinking"),
-            sorted(list(payload.keys())),
+            model,
+            self.base_url,
         )
-        if "enable_thinking" in payload:
-            print(
-                f"[OpenAICompat:{self.id}] stream enable_thinking={payload.get('enable_thinking')!r} "
-                f"model={model!r} url={self.base_url}/v1/chat/completions",
-                flush=True,
-            )
         headers = self._headers(accept_sse=True)
         # Большой RAG-контекст → первый токен может идти долго, read-timeout поднимаем.
         stream_timeout = httpx.Timeout(300.0, connect=10.0, read=300.0, write=10.0)
@@ -671,7 +735,7 @@ class OpenAICompatProvider(LLMProvider):
                             return clean_llm_response(accumulated)
         except httpx.HTTPStatusError as e:
             logger.error("[%s] stream HTTP %s: %s", self.id, e.response.status_code, e)
-            log_cef_obj002_llm_api_failure(
+            log_cef_int006_llm_api_failure(
                 request_uuid=cef_rid,
                 code_status=str(e.response.status_code),
                 text_status=(e.response.text or "")[:512],
@@ -694,7 +758,7 @@ class OpenAICompatProvider(LLMProvider):
             return f"Ошибка потока: {e}"
         except Exception as e:
             logger.error("[%s] stream error: %s", self.id, e)
-            log_cef_obj002_llm_api_failure(
+            log_cef_int006_llm_api_failure(
                 request_uuid=cef_rid,
                 code_status="EXCEPTION",
                 text_status=str(e)[:512],

@@ -33,12 +33,17 @@ MOCK_USERS = {
 }
 
 
+def is_mock_user(username: str) -> bool:
+    """True для локальных тестовых учёток (admin/user/test)."""
+    return bool(username) and username in MOCK_USERS
+
+
 def authenticate_mock(username: str, password: str):
     """Mock аутентификация"""
     user = MOCK_USERS.get(username)
     if not user or user["password"] != password:
         return None
-    
+
     return {
         "user_id": user["user_id"],
         "username": user["username"],
@@ -46,4 +51,5 @@ def authenticate_mock(username: str, password: str):
         "full_name": user["full_name"],
         "is_active": user["is_active"],
         "is_admin": user["is_admin"],
+        "auth_source": "mock",
     }

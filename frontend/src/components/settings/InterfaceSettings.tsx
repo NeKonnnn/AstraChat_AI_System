@@ -48,8 +48,11 @@ import {
   areNotificationsEnabled,
   setNotificationsEnabled,
 } from '../../utils/browserNotifications';
+import {
+  setTabNotificationsEnabled,
+  TAB_NOTIFICATIONS_ENABLED_KEY,
+} from '../../utils/tabNotifications';
 import LlmProvidersSection from './LlmProvidersSection';
-import { MESSAGE_BUBBLE_GLASS_EFFECT_KEY } from '../../constants/messageBubbleGlass';
 
 const SIDEBAR_PALETTE = [
   { name: 'По умолчанию', value: '' },
@@ -124,14 +127,15 @@ export default function InterfaceSettings() {
     const savedLargeTextAsFile = localStorage.getItem('large_text_as_file');
     const savedUserNoBorder = localStorage.getItem('user_no_border');
     const savedAssistantNoBorder = localStorage.getItem('assistant_no_border');
-    const savedMessageBubbleGlass = localStorage.getItem(MESSAGE_BUBBLE_GLASS_EFFECT_KEY);
     const savedLeftAlignMessages = localStorage.getItem('left_align_messages');
     const savedWidescreenMode = localStorage.getItem('widescreen_mode');
     const savedShowUserName = localStorage.getItem('show_user_name');
     const savedEnableNotification = localStorage.getItem('enable_notification');
     const savedUseFoldersMode = localStorage.getItem('use_folders_mode');
     const savedBrowserNotifications = localStorage.getItem('browser_notifications_enabled');
+    const savedTabNotifications = localStorage.getItem(TAB_NOTIFICATIONS_ENABLED_KEY);
     const savedShowDialoguesPanel = localStorage.getItem('show_dialogues_panel');
+    const savedChatAutoscrollStreaming = localStorage.getItem('chat_autoscroll_streaming');
     const savedChatInputStyle = localStorage.getItem('chat_input_style');
     const savedChatInputColor = localStorage.getItem(CHAT_INPUT_COLOR_KEY) || '';
     const savedChatInputContrastRaw = localStorage.getItem(CHAT_INPUT_CONTRAST_KEY);
@@ -142,14 +146,16 @@ export default function InterfaceSettings() {
       largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
       userNoBorder: savedUserNoBorder !== null ? savedUserNoBorder === 'true' : false,
       assistantNoBorder: savedAssistantNoBorder !== null ? savedAssistantNoBorder === 'true' : false,
-      messageBubbleGlass: savedMessageBubbleGlass === 'true',
       leftAlignMessages: savedLeftAlignMessages !== null ? savedLeftAlignMessages === 'true' : false,
       widescreenMode: savedWidescreenMode !== null ? savedWidescreenMode === 'true' : false,
       showUserName: savedShowUserName !== null ? savedShowUserName === 'true' : false,
       enableNotification: savedEnableNotification !== null ? savedEnableNotification === 'true' : false,
       useFoldersMode: savedUseFoldersMode !== null ? savedUseFoldersMode === 'true' : true, // По умолчанию папки
       browserNotifications: savedBrowserNotifications !== null ? savedBrowserNotifications === 'true' : false,
+      tabNotifications: savedTabNotifications !== null ? savedTabNotifications === 'true' : false,
       showDialoguesPanel: savedShowDialoguesPanel !== null ? savedShowDialoguesPanel === 'true' : true,
+      autoScrollWhileStreaming:
+        savedChatAutoscrollStreaming !== null ? savedChatAutoscrollStreaming === 'true' : true,
       chatInputStyle: (savedChatInputStyle as 'compact' | 'classic') || 'compact',
       chatInputColor: savedChatInputColor,
       chatInputContrast: Number.isFinite(savedChatInputContrast)
@@ -374,15 +380,16 @@ export default function InterfaceSettings() {
     localStorage.setItem('large_text_as_file', String(newSettings.largeTextAsFile));
     localStorage.setItem('user_no_border', String(newSettings.userNoBorder));
     localStorage.setItem('assistant_no_border', String(newSettings.assistantNoBorder));
-    localStorage.setItem(MESSAGE_BUBBLE_GLASS_EFFECT_KEY, String(newSettings.messageBubbleGlass));
     localStorage.setItem('left_align_messages', String(newSettings.leftAlignMessages));
     localStorage.setItem('widescreen_mode', String(newSettings.widescreenMode));
     localStorage.setItem('show_user_name', String(newSettings.showUserName));
     localStorage.setItem('enable_notification', String(newSettings.enableNotification));
     localStorage.setItem('use_folders_mode', String(newSettings.useFoldersMode));
     localStorage.setItem('show_dialogues_panel', String(newSettings.showDialoguesPanel));
+    localStorage.setItem('chat_autoscroll_streaming', String(newSettings.autoScrollWhileStreaming));
     setNotificationsEnabled(newSettings.browserNotifications);
-    
+    setTabNotificationsEnabled(newSettings.tabNotifications);
+
     // Отправляем кастомное событие для обновления настроек в том же окне
     window.dispatchEvent(new Event('interfaceSettingsChanged'));
     showNotification('success', 'Настройки интерфейса сохранены');
@@ -418,6 +425,35 @@ export default function InterfaceSettings() {
               <Switch
                 checked={interfaceSettings.autoGenerateTitles}
                 onChange={(e) => handleInterfaceSettingChange('autoGenerateTitles', e.target.checked)}
+              />
+            </ListItem>
+
+            <Divider />
+
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <ListItemText
+                primary="Автопрокрутка чата при ответе модели"
+                secondary="Если выключено, окно чата не прокручивается к концу по мере появления текста от модели"
+                primaryTypographyProps={{
+                  variant: 'body1',
+                  fontWeight: 500,
+                }}
+                secondaryTypographyProps={{
+                  variant: 'body2',
+                  sx: { mt: 0.5 },
+                }}
+              />
+              <Switch
+                checked={interfaceSettings.autoScrollWhileStreaming}
+                onChange={(e) => handleInterfaceSettingChange('autoScrollWhileStreaming', e.target.checked)}
               />
             </ListItem>
 
@@ -523,36 +559,6 @@ export default function InterfaceSettings() {
 
             <Divider />
 
-            {/* Эффект стекла на карточках сообщений */}
-            <ListItem
-              sx={{
-                px: 0,
-                py: 2,
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-              }}
-            >
-              <ListItemText
-                primary="Эффект стекла"
-                secondary="Размытие и полупрозрачность только у карточек в чате; не действует в режиме «без рамки»"
-                primaryTypographyProps={{
-                  variant: 'body1',
-                  fontWeight: 500,
-                }}
-                secondaryTypographyProps={{
-                  variant: 'body2',
-                  sx: { mt: 0.5 },
-                }}
-              />
-              <Switch
-                checked={interfaceSettings.messageBubbleGlass}
-                onChange={(e) => handleInterfaceSettingChange('messageBubbleGlass', e.target.checked)}
-              />
-            </ListItem>
-
-            <Divider />
-
             {/* Включить оповещение (звуковое) */}
             <ListItem
               sx={{
@@ -641,6 +647,66 @@ export default function InterfaceSettings() {
                 checked={interfaceSettings.browserNotifications && isNotificationSupported()}
                 disabled={!isNotificationSupported()}
                 onChange={(e) => handleInterfaceSettingChange('browserNotifications', e.target.checked)}
+              />
+            </ListItem>
+
+            <Divider />
+
+            {/* Счётчик на вкладке браузера */}
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <ListItemText
+                primary={
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    Уведомления
+                    <Tooltip
+                      title="Показывать счётчик на вкладке браузера (в заголовке и на иконке), когда завершится генерация ответа или транскрибация, пока вы на другой вкладке или в другом окне."
+                      arrow
+                    >
+                      <IconButton
+                        size="small"
+                        sx={{
+                          p: 0,
+                          ml: 0.5,
+                          opacity: 0.7,
+                          '&:hover': {
+                            opacity: 1,
+                            '& .MuiSvgIcon-root': {
+                              color: 'primary.main',
+                            },
+                          },
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <HelpOutlineIcon fontSize="small" color="action" />
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
+                }
+                secondary={
+                  interfaceSettings.tabNotifications
+                    ? 'Счётчик на вкладке включён'
+                    : 'Счётчик на вкладке выключен'
+                }
+                primaryTypographyProps={{
+                  variant: 'body1',
+                  fontWeight: 500,
+                }}
+                secondaryTypographyProps={{
+                  variant: 'body2',
+                  sx: { mt: 0.5 },
+                }}
+              />
+              <Switch
+                checked={interfaceSettings.tabNotifications}
+                onChange={(e) => handleInterfaceSettingChange('tabNotifications', e.target.checked)}
               />
             </ListItem>
 

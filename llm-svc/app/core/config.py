@@ -18,14 +18,14 @@ class UrlsConfig(BaseModel):
     """Публичные URL (как у backend/frontend); CORS собирается из непустых полей."""
     model_config = ConfigDict(extra="ignore")
 
-    frontend_port_1: Optional[str] = None
-    frontend_port_1_ipv4: Optional[str] = None
+    frontend_port: Optional[str] = None
+    frontend_port_ipv4: Optional[str] = None
     frontend_port_2: Optional[str] = None
     frontend_port_2_ipv4: Optional[str] = None
     frontend_port_3: Optional[str] = None
     frontend_port_3_ipv4: Optional[str] = None
-    backend_port_1: Optional[str] = None
-    backend_port_1_ipv4: Optional[str] = None
+    backend_port: Optional[str] = None
+    backend_port_ipv4: Optional[str] = None
     backend_port_2: Optional[str] = None
     backend_port_2_ipv4: Optional[str] = None
 
@@ -126,14 +126,14 @@ class YamlConfigSettingsSource(PydanticBaseSettingsSource):
         return value
 def _cors_keys_from_urls() -> Tuple[str, ...]:
     return (
-        "frontend_port_1",
-        "frontend_port_1_ipv4",
+        "frontend_port",
+        "frontend_port_ipv4",
         "frontend_port_2",
         "frontend_port_2_ipv4",
         "frontend_port_3",
         "frontend_port_3_ipv4",
-        "backend_port_1",
-        "backend_port_1_ipv4",
+        "backend_port",
+        "backend_port_ipv4",
         "backend_port_2",
         "backend_port_2_ipv4",
     )

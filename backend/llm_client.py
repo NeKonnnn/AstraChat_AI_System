@@ -4,6 +4,7 @@ LLM Client для взаимодействия с микросервисами A
 import httpx
 import json
 import asyncio
+import contextvars
 import logging
 import re
 import html as html_module
@@ -14,7 +15,7 @@ import os
 import uuid
 from backend.settings.cef_logger.cef_logger import (
     log_cef_int003_llm_request,
-    log_cef_obj002_llm_api_failure,
+    log_cef_int006_llm_api_failure,
 )
 
 
@@ -259,16 +260,16 @@ def _normalize_content_payload(value: Any) -> str:
 def _build_ssl_verify():
     """
     Определяет параметр verify для httpx из переменных окружения.
-    Приоритет: NEXUS_CERT_PATH (путь к CA bundle) > LLM_VERIFY_SSL > True (дефолт).
+    Приоритет: TLS_CERT_PATH (путь к CA bundle) > LLM_VERIFY_SSL > True (дефолт).
     Читается напрямую из os.environ, без зависимости от settings/config.yml.
     """
-    nexus_cert = os.environ.get("NEXUS_CERT_PATH", "").strip()
-    if nexus_cert:
-        if os.path.isfile(nexus_cert):
-            logger.info(f"[SSL] CA bundle из NEXUS_CERT_PATH: {nexus_cert}")
-            return nexus_cert
+    tls_cert = os.environ.get("TLS_CERT_PATH", "").strip()
+    if tls_cert:
+        if os.path.isfile(tls_cert):
+            logger.info(f"[SSL] CA bundle из TLS_CERT_PATH: {tls_cert}")
+            return tls_cert
         else:
-            logger.warning(f"[SSL] NEXUS_CERT_PATH задан, но файл не найден: {nexus_cert}. Используется verify=True")
+            logger.warning(f"[SSL] TLS_CERT_PATH задан, но файл не найден: {tls_cert}. Используется verify=True")
             return True
     verify_str = os.environ.get("LLM_VERIFY_SSL", "").strip().lower()
     if verify_str in ("false", "0", "no"):
@@ -585,13 +586,14 @@ class LLMClient:
                 if v is not None:
                     payload[k] = v
         base = self._url_for_llm_host(host_id)
-        if "enable_thinking" in payload:
-            print(
-                f"[LLMClient] POST /v1/chat/completions host={host_id!r} model={model!r} "
-                f"enable_thinking={payload.get('enable_thinking')!r} stream={stream!r}",
-                flush=True,
-            )
-        logger.info(f"[LLMClient] Запрос к {base}/v1/chat/completions model={model!r}")
+        logger.info(
+            "[LLMClient] POST %s/v1/chat/completions host=%r model=%r stream=%r enable_thinking=%r",
+            base,
+            host_id,
+            model,
+            stream,
+            payload.get("enable_thinking"),
+        )
         try:
             request_timeout = httpx.Timeout(self.timeout, connect=10.0, read=self.timeout, write=10.0)
             async with httpx.AsyncClient(verify=self._verify, timeout=request_timeout) as client:
@@ -1072,7 +1074,13 @@ class LLMService:
                 import base64
                 image_urls = []
                 for image_path in images:
-                    if not image_path or not os.path.exists(image_path):
+                    if not image_path:
+                        continue
+                    # Если уже data URL (base64 от фронтенда) — используем напрямую
+                    if str(image_path).startswith("data:"):
+                        image_urls.append(str(image_path))
+                        continue
+                    if not os.path.exists(image_path):
                         continue
                     try:
                         with open(image_path, "rb") as f:
@@ -1137,15 +1145,14 @@ class LLMService:
                             )
                     if eff_model:
                         logger.info(
-                            "[generate_response] non-llm-svc provider %r (%s), model=%r — "
-                            "делегирую через ProviderRegistry",
-                            provider_ref.id, provider_ref.kind, eff_model,
-                        )
-                        print(
-                            f"[generate_response] DELEGATE provider_id={provider_ref.id!r} kind={provider_ref.kind!r} "
-                            f"model={eff_model!r} streaming={streaming!r} enable_thinking={enable_thinking!r} "
-                            f"req_extra={req_extra!r}",
-                            flush=True,
+                            "[generate_response] DELEGATE provider_id=%r kind=%r model=%r "
+                            "streaming=%r enable_thinking=%r req_extra=%r",
+                            provider_ref.id,
+                            provider_ref.kind,
+                            eff_model,
+                            streaming,
+                            enable_thinking,
+                            req_extra,
                         )
                         if streaming and stream_callback:
                             return await provider_ref.stream_chat(
@@ -1181,20 +1188,15 @@ class LLMService:
             in_pool = pool_contains_model(health, model_to_use)
             if model_to_use and in_pool:
                 self.model_name = model_to_use
-            elif (
-                allow_hot_swap_load
-                and model_to_use
-                and (not llm_ready or not same_llm_svc_model_id(self.model_name, model_to_use))
-            ):
+            elif allow_hot_swap_load and model_to_use and not in_pool:
                 async with self._model_switch_lock:
                     health2 = await self.client.health_check(host_id=hid)
-                    llm_ready2 = health2.get("status") == "healthy"
                     if pool_contains_model(health2, model_to_use):
                         self.model_name = model_to_use
-                    elif not llm_ready2 or not same_llm_svc_model_id(self.model_name, model_to_use):
+                    else:
                         logger.info(
-                            f"[generate_response] Загрузка/переключение llm-svc на модель: {model_to_use!r} host={hid!r} "
-                            f"(было в RAM: {llm_ready2})"
+                            f"[generate_response] Загрузка llm-svc модели: {model_to_use!r} host={hid!r} "
+                            f"(в пуле: {health2.get('loaded_models')})"
                         )
                         ok = await self.client.load_model_if_needed(model_to_use, host_id=hid)
                         if ok:
@@ -1205,7 +1207,7 @@ class LLMService:
                                 f"[generate_response] Не удалось загрузить llm-svc {model_to_use!r}; "
                                 f"кэш имени: {self.model_name!r}"
                             )
-                            model_to_use = self.model_name
+                            model_to_use = self.model_name or model_to_use
             if streaming and stream_callback:
                 log_cef_int003_llm_request(
                     base_url=self.client._url_for_llm_host(hid),
@@ -1243,7 +1245,7 @@ class LLMService:
                         request_extra=req_extra,
                     )
                 except httpx.HTTPStatusError as he:
-                    log_cef_obj002_llm_api_failure(
+                    log_cef_int006_llm_api_failure(
                         request_uuid=cef_llm_rid,
                         code_status=he.response.status_code,
                         text_status=(he.response.text or "")[:512],
@@ -1273,7 +1275,7 @@ class LLMService:
                     return content
                 else:
                     logger.error(f"[generate_response] Ошибка формата: {response}")
-                    log_cef_obj002_llm_api_failure(
+                    log_cef_int006_llm_api_failure(
                         request_uuid=cef_llm_rid,
                         code_status="FORMAT",
                         text_status=str(response)[:512],
@@ -1285,7 +1287,7 @@ class LLMService:
             raise
         except Exception as e:
             logger.error(f"Ошибка generate_response: {e}")
-            log_cef_obj002_llm_api_failure(
+            log_cef_int006_llm_api_failure(
                 request_uuid=cef_llm_rid,
                 code_status="EXCEPTION",
                 text_status=str(e)[:512],
@@ -1323,12 +1325,12 @@ class LLMService:
                     if v is not None:
                         payload[k] = v
             thinking_requested = bool(payload.get("enable_thinking"))
-            if "enable_thinking" in payload:
-                print(
-                    f"[_stream_generation] POST /v1/chat/completions host={host_id!r} "
-                    f"model={payload.get('model')!r} enable_thinking={payload.get('enable_thinking')!r}",
-                    flush=True,
-                )
+            logger.info(
+                "[_stream_generation] POST /v1/chat/completions host=%r model=%r enable_thinking=%r",
+                host_id,
+                payload.get("model"),
+                payload.get("enable_thinking"),
+            )
             headers = {**self.client._get_headers(), "Accept": "text/event-stream"}
             stream_read_timeout = 300.0
             request_timeout = httpx.Timeout(stream_read_timeout, connect=10.0, read=stream_read_timeout, write=10.0)
@@ -1345,7 +1347,7 @@ class LLMService:
                         if cef_correlation_id:
                             r = he.response
                             _ts = (getattr(r, "reason_phrase", None) or str(r.status_code))[:512]
-                            log_cef_obj002_llm_api_failure(
+                            log_cef_int006_llm_api_failure(
                                 request_uuid=cef_correlation_id,
                                 code_status=r.status_code,
                                 text_status=_ts,
@@ -1420,7 +1422,7 @@ class LLMService:
             import traceback
             logger.error(traceback.format_exc())
             if cef_correlation_id:
-                log_cef_obj002_llm_api_failure(
+                log_cef_int006_llm_api_failure(
                     request_uuid=cef_correlation_id,
                     code_status="STREAM",
                     text_status=str(e)[:512],
@@ -1506,11 +1508,17 @@ def ask_agent_llm_svc(
             logger.error(f"[ask_agent_llm_svc] Error in _async_generate: {e}")
             raise
     try:
-        loop = asyncio.get_running_loop()
-        # Уже внутри запущенного event loop — выполняем в потоке
+        asyncio.get_running_loop()
+        # Уже внутри запущенного event loop — выполняем в потоке (иначе contextvars с cef_audit_* теряются)
         import concurrent.futures
+
+        _cef_ctx = contextvars.copy_context()
+
+        def _run_async_generate_in_ctx():
+            return asyncio.run(_async_generate())
+
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(lambda: asyncio.run(_async_generate()))
+            future = executor.submit(_cef_ctx.run, _run_async_generate_in_ctx)
             try:
                 return future.result(timeout=120)
             except httpx.HTTPStatusError as e:

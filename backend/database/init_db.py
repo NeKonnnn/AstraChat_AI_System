@@ -6,6 +6,7 @@ import os
 import logging
 import traceback
 from typing import Optional
+from urllib.parse import quote_plus
 
 # Импортируем настройки
 try:
@@ -32,7 +33,7 @@ try:
         logger.error(f"motor или pymongo не установлены: {e}")
         logger.error("Установите: pip install motor pymongo")
         raise
-    
+
     from .mongodb.connection import MongoDBConnection
     from .mongodb.repository import ConversationRepository
     mongodb_available = True
@@ -88,52 +89,71 @@ def get_mongodb_connection_string() -> str:
     """Получение строки подключения к MongoDB из настроек"""
     if not SETTINGS_AVAILABLE:
         raise RuntimeError("Модуль settings недоступен. Убедитесь, что настройки правильно настроены.")
-    
+
     settings = get_settings()
-    return settings.mongodb.connection_string
+    m = settings.mongodb
+    user = str(m.user or "").strip()
+    password = str(m.password or "").strip()
+    if user and password:
+        auth_source = (os.environ.get("MONGODB_AUTH_SOURCE") or "admin").strip() or "admin"
+        return (
+            f"mongodb://{quote_plus(user)}:{quote_plus(password)}@{m.host}:{m.port}/"
+            f"?authSource={quote_plus(auth_source)}"
+        )
+    return f"mongodb://{m.host}:{m.port}/"
 
 
 async def init_mongodb() -> bool:
     """Инициализация подключения к MongoDB"""
     global mongodb_connection, conversation_repo
-    
+
     if not mongodb_available:
         logger.warning("MongoDB модули недоступны. Пропускаем инициализацию.")
         return False
-    
+
     if not SETTINGS_AVAILABLE:
         logger.error("Модуль settings недоступен. MongoDB не может быть инициализирован.")
         return False
-    
+
     try:
-        # Получаем настройки из settings
         settings = get_settings()
-        connection_string = settings.mongodb.connection_string
-        database_name = settings.mongodb.database
-        
-        logger.info(f"Инициализация MongoDB...")
-        logger.info(f"  Строка подключения: {connection_string.replace(connection_string.split('@')[-1] if '@' in connection_string else connection_string, '***') if '@' in connection_string else connection_string}")
+        m = settings.mongodb
+        database_name = m.database
+        # Строка подключения с экранированием по RFC 3986
+        user = str(m.user or "").strip()
+        password = str(m.password or "").strip()
+        auth_source = (os.environ.get("MONGODB_AUTH_SOURCE") or "admin").strip() or "admin"
+        if user and password:
+            connection_string = (
+                f"mongodb://{quote_plus(user)}:{quote_plus(password)}@{m.host}:{m.port}/"
+                f"?authSource={quote_plus(auth_source)}"
+            )
+        else:
+            connection_string = f"mongodb://{m.host}:{m.port}/"
+        logger.info("Инициализация MongoDB...")
+        _masked = connection_string.split("@")[-1] if "@" in connection_string else "*"
+        logger.info(f"  Строка подключения: mongodb://*@{_masked}")
         logger.info(f"  База данных: {database_name}")
-        
+
         mongodb_connection = MongoDBConnection(connection_string, database_name)
-        
+
         logger.info("Попытка подключения к MongoDB...")
         if await mongodb_connection.connect():
             # Создаем репозиторий
             logger.info("Создание репозитория диалогов...")
             conversation_repo = ConversationRepository(mongodb_connection)
-            
+
             # Создаем индексы
             logger.info("Создание индексов...")
             await conversation_repo.create_indexes()
-            
+
             logger.info("MongoDB успешно инициализирован")
             return True
         else:
             logger.error("Не удалось подключиться к MongoDB")
             logger.error("  Проверьте, что MongoDB запущен и доступен по указанному адресу")
             return False
-            
+
     except Exception as e:
         logger.error(f"Ошибка при инициализации MongoDB: {e}")
         import traceback
@@ -144,15 +164,15 @@ async def init_mongodb() -> bool:
 async def init_postgresql() -> bool:
     """Инициализация подключения к PostgreSQL"""
     global postgresql_connection, document_repo, vector_repo, prompt_repo, tag_repo, agent_repo
-    
+
     if not postgresql_available:
         logger.warning("PostgreSQL модули недоступны. Пропускаем инициализацию.")
         return False
-    
+
     if not SETTINGS_AVAILABLE:
         logger.error("Модуль settings недоступен. PostgreSQL не может быть инициализирован.")
         return False
-    
+
     try:
         # Получаем настройки из settings
         settings = get_settings()
@@ -165,7 +185,7 @@ async def init_postgresql() -> bool:
             password=pg_config.password
         )
         embedding_dim = pg_config.embedding_dim
-        
+
         if await postgresql_connection.connect():
             # Создаем репозитории
             document_repo = DocumentRepository(postgresql_connection)
@@ -173,19 +193,19 @@ async def init_postgresql() -> bool:
             prompt_repo = PromptRepository(postgresql_connection)
             tag_repo = TagRepository(postgresql_connection)
             agent_repo = AgentRepository(postgresql_connection)
-            
+
             # Создаем таблицы
             await document_repo.create_tables()
             await vector_repo.create_tables()
             await prompt_repo.create_tables()
             await agent_repo.create_tables()
-            
+
             logger.info("PostgreSQL успешно инициализирован")
             return True
         else:
             logger.error("Не удалось подключиться к PostgreSQL")
             return False
-            
+
     except Exception as e:
         logger.error(f"Ошибка при инициализации PostgreSQL: {e}")
         return False
@@ -196,7 +216,7 @@ def init_minio() -> bool:
     if not minio_available:
         logger.warning("MinIO модули недоступны. Пропускаем инициализацию.")
         return False
-    
+
     try:
         logger.info("Инициализация MinIO...")
         minio_client = get_minio_client()
@@ -222,11 +242,11 @@ async def init_databases() -> bool:
     logger.info("=" * 60)
     logger.info("ИНИЦИАЛИЗАЦИЯ БАЗ ДАННЫХ")
     logger.info("=" * 60)
-    
+
     mongodb_ok = await init_mongodb()
     postgresql_ok = await init_postgresql()
     minio_ok = init_minio()  # MinIO инициализация синхронная
-    
+
     logger.info("=" * 60)
     if mongodb_ok and postgresql_ok and minio_ok:
         logger.info("Все базы данных успешно инициализированы")
@@ -254,13 +274,13 @@ async def init_databases() -> bool:
 async def close_databases():
     """Закрытие всех подключений к базам данных"""
     global mongodb_connection, postgresql_connection
-    
+
     if mongodb_connection:
         await mongodb_connection.disconnect()
-    
+
     if postgresql_connection:
         await postgresql_connection.disconnect()
-    
+
     logger.info("Все подключения к базам данных закрыты")
 
 
@@ -333,17 +353,3 @@ def get_agent_repository():
     if agent_repo is None:
         raise RuntimeError("PostgreSQL не инициализирован. Вызовите init_postgresql() сначала.")
     return agent_repo
-
-
-
-
-
-
-
-
-
-
-
-
-
-

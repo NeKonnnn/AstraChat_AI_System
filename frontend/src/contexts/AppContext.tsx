@@ -20,6 +20,8 @@ export interface Message {
   content: string;
   timestamp: string;
   isStreaming?: boolean;
+  /** Плейсхолдер ComfyUI пока картинка генерируется */
+  isImageGenerating?: boolean;
   // Для режима multi-llm: несколько ответов от разных моделей
   multiLLMResponses?: MultiLLMResponseSlot[];
   // Для хранения нескольких вариантов ответов (при перегенерации)
@@ -41,6 +43,29 @@ export interface Message {
   };
   /** Рассуждение модели отдельно от основного ответа (стриминг chat_thinking) */
   reasoningContent?: string;
+  /** Inline-вложения (картинки/документы), прикреплённые к сообщению напрямую без RAG */
+  inlineAttachments?: Array<{
+    name: string;
+    contentType: 'text' | 'image';
+    /** base64 data URL для изображений; пустая строка для текстовых (контент уже в промпте) */
+    preview?: string;
+    size?: number;
+  }>;
+  /** MCP tool calls (B-22 / F-6) */
+  mcpToolCalls?: Array<{
+    type: 'mcp_tool_start' | 'mcp_tool_end';
+    server_id: string;
+    tool: string;
+    qualified_name: string;
+    success?: boolean;
+    duration_ms?: number;
+    error?: string | null;
+    model?: string;
+    result_preview?: string;
+    has_image?: boolean;
+    has_audio?: boolean;
+    has_resource?: boolean;
+  }>;
 }
 
 export interface Chat {
@@ -164,7 +189,7 @@ type AppAction =
   | { type: 'DELETE_CHAT'; payload: string }
   | { type: 'DELETE_ALL_CHATS' }
   | { type: 'ADD_MESSAGE'; payload: { chatId: string; message: Message } }
-  | { type: 'UPDATE_MESSAGE'; payload: { chatId: string; messageId: string; content?: string; isStreaming?: boolean; multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>; alternativeResponses?: string[]; currentResponseIndex?: number; documentSearch?: Message['documentSearch']; reasoningContent?: string } }
+  | { type: 'UPDATE_MESSAGE'; payload: { chatId: string; messageId: string; content?: string; isStreaming?: boolean; isImageGenerating?: boolean; multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>; alternativeResponses?: string[]; currentResponseIndex?: number; documentSearch?: Message['documentSearch']; reasoningContent?: string; mcpToolCalls?: Message['mcpToolCalls']; inlineAttachments?: Message['inlineAttachments'] } }
   | { type: 'APPEND_CHUNK'; payload: { chatId: string; messageId: string; chunk: string; isStreaming?: boolean } }
   | { type: 'SET_LOADING'; payload: boolean }
   | { type: 'SET_CHAT_LOADING'; payload: { chatId: string; loading: boolean } }
@@ -365,7 +390,7 @@ function appReducer(state: AppState, action: AppAction): AppState {
     }
       
     case 'UPDATE_MESSAGE': {
-      const { chatId, messageId, content, isStreaming, multiLLMResponses, alternativeResponses, currentResponseIndex, documentSearch, reasoningContent } = action.payload;
+      const { chatId, messageId, content, isStreaming, isImageGenerating, multiLLMResponses, alternativeResponses, currentResponseIndex, documentSearch, reasoningContent, mcpToolCalls, inlineAttachments } = action.payload;
       
       const currentChat = state.chats.find(chat => chat.id === chatId);
       const updatedMessage = currentChat?.messages.find(msg => msg.id === messageId);
@@ -383,11 +408,14 @@ function appReducer(state: AppState, action: AppAction): AppState {
                         ...msg, 
                         ...(content !== undefined ? { content } : {}),
                         ...(isStreaming !== undefined ? { isStreaming } : {}),
+                        ...(isImageGenerating !== undefined ? { isImageGenerating } : {}),
                         ...(multiLLMResponses !== undefined ? { multiLLMResponses } : {}),
                         ...(alternativeResponses !== undefined ? { alternativeResponses } : {}),
                         ...(currentResponseIndex !== undefined ? { currentResponseIndex } : {}),
                         ...(documentSearch !== undefined ? { documentSearch } : {}),
                         ...(reasoningContent !== undefined ? { reasoningContent } : {}),
+                        ...(mcpToolCalls !== undefined ? { mcpToolCalls } : {}),
+                        ...(inlineAttachments !== undefined ? { inlineAttachments } : {}),
                       }
                     : msg
                 ),
@@ -754,13 +782,56 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const mapServerConversationToChat = (conversation: any): Chat => {
     const messages: Message[] = Array.isArray(conversation?.messages)
-      ? conversation.messages.map((msg: any) => ({
-          id: String(msg?.message_id || `msg_${Math.random().toString(36).slice(2, 14)}`),
-          role: msg?.role === 'assistant' ? 'assistant' : 'user',
-          content: String(msg?.content || ''),
-          timestamp: String(msg?.timestamp || new Date().toISOString()),
-          isStreaming: false,
-        }))
+      ? conversation.messages.map((msg: any) => {
+          const rawContent = String(msg?.content || '');
+          const metadata = (msg?.metadata && typeof msg.metadata === 'object') ? msg.metadata : {};
+          const reasoningContent = String(
+            metadata?.reasoning_content || metadata?.reasoning || ''
+          ).trim();
+          const hasThinkTag = /<think>/i.test(rawContent);
+          // Если reasoning сохранён отдельно в metadata, но в content нет <think>,
+          // восстанавливаем совместимый формат для UI.
+          const mergedContent =
+            reasoningContent && !hasThinkTag
+              ? `<think>${reasoningContent}</think>\n\n${rawContent}`
+              : rawContent;
+
+          const rawInline = metadata?.inline_attachments;
+          const inlineAttachments = Array.isArray(rawInline)
+            ? rawInline
+                .filter((a: unknown) => a && typeof a === 'object')
+                .map((a: Record<string, unknown>) => {
+                  const contentType = a.contentType === 'image' ? 'image' as const : 'text' as const;
+                  const minioObject = a.minio_object ? String(a.minio_object) : undefined;
+                  const minioBucket = a.minio_bucket ? String(a.minio_bucket) : undefined;
+                  let preview: string | undefined;
+                  const dataUri = a.data_uri ? String(a.data_uri) : undefined;
+                  if (contentType === 'image' && dataUri) {
+                    preview = dataUri;
+                  } else if (contentType === 'image' && minioObject && minioBucket) {
+                    preview = getApiUrl(
+                      `/api/documents/inline-file?bucket=${encodeURIComponent(minioBucket)}&object=${encodeURIComponent(minioObject)}`,
+                    );
+                  }
+                  return {
+                    name: String(a.name || 'file'),
+                    contentType,
+                    preview,
+                    ...(typeof a.size === 'number' && a.size > 0 ? { size: a.size } : {}),
+                  };
+                })
+            : undefined;
+
+          return {
+            id: String(msg?.message_id || `msg_${Math.random().toString(36).slice(2, 14)}`),
+            role: msg?.role === 'assistant' ? 'assistant' : 'user',
+            content: mergedContent,
+            timestamp: String(msg?.timestamp || new Date().toISOString()),
+            isStreaming: false,
+            ...(reasoningContent ? { reasoningContent } : {}),
+            ...(inlineAttachments?.length ? { inlineAttachments } : {}),
+          } as Message;
+        })
       : [];
 
     const firstUserContent =
@@ -984,8 +1055,8 @@ export function useAppActions() {
       return messageId;
     },
     
-    updateMessage: (chatId: string, messageId: string, content?: string, isStreaming?: boolean, multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>, alternativeResponses?: string[], currentResponseIndex?: number, documentSearch?: Message['documentSearch'], reasoningContent?: string) => {
-      dispatch({ type: 'UPDATE_MESSAGE', payload: { chatId, messageId, content, isStreaming, multiLLMResponses, alternativeResponses, currentResponseIndex, documentSearch, reasoningContent } });
+    updateMessage: (chatId: string, messageId: string, content?: string, isStreaming?: boolean, multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>, alternativeResponses?: string[], currentResponseIndex?: number, documentSearch?: Message['documentSearch'], reasoningContent?: string, mcpToolCalls?: Message['mcpToolCalls'], inlineAttachments?: Message['inlineAttachments'], isImageGenerating?: boolean) => {
+      dispatch({ type: 'UPDATE_MESSAGE', payload: { chatId, messageId, content, isStreaming, multiLLMResponses, alternativeResponses, currentResponseIndex, documentSearch, reasoningContent, mcpToolCalls, inlineAttachments, isImageGenerating } });
     },
     
     appendChunk: (chatId: string, messageId: string, chunk: string, isStreaming?: boolean) => {

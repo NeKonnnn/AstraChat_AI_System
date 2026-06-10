@@ -24,10 +24,18 @@ async def chat_completion(
                 f"Stream: {request.stream}")
     if not llama_service.is_model_id_loaded(request.model):
         loaded = getattr(llama_service, "get_loaded_model_ids", lambda: [])()
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Model '{request.model}' is not loaded. Loaded: {loaded}",
+        logger.info(
+            "Model %r not in pool %s — loading on demand",
+            request.model,
+            loaded,
         )
+        load_ok = await llama_service.load_model(request.model)
+        if not load_ok or not llama_service.is_model_id_loaded(request.model):
+            loaded = getattr(llama_service, "get_loaded_model_ids", lambda: [])()
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Model '{request.model}' is not loaded. Loaded: {loaded}",
+            )
     try:
         if request.stream:
             # Потоковый режим - возвращаем StreamingResponse

@@ -62,7 +62,7 @@ class LlmSvcProvider(OpenAICompatProvider):
         multi_loaded=True,
         native_chat_api=True,
         streaming=True,
-        vision=True,
+        vision=False,
     )
 
     def __init__(self, config: LLMProviderConfig) -> None:

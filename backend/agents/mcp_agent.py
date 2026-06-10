@@ -1,207 +1,122 @@
 """
-MCP агент для интеграции с внешними сервисами
+Generic MCP agent — делегирует в McpPlatformService / McpAgentLoop (B-19).
+
+Не содержит Atlassian- или filesystem-specific логики: любой MCP-сервер
+из ``mcp.servers[]`` доступен через ``tool_ids`` в context.
 """
 
+from __future__ import annotations
+
 import logging
-from typing import Dict, List, Any, Optional
-from .base_agent import BaseAgent
+from typing import Any, Dict, List, Optional
+
+from backend.agents.base_agent import BaseAgent
+from backend.mcp.chat_integration import build_mcp_context_from_user, run_mcp_for_chat
+from backend.mcp.platform import get_mcp_platform
+from backend.mcp.resolvers import parse_mcp_server_ids
 
 logger = logging.getLogger(__name__)
 
+
 class MCPAgent(BaseAgent):
-    """Агент для работы с MCP серверами"""
-    
+    """Универсальный агент для MCP-серверов из конфигурации платформы."""
+
     def __init__(self):
         super().__init__(
             name="mcp",
-            description="Агент для работы с внешними сервисами через MCP"
+            description="Агент для работы с внешними сервисами через MCP",
         )
-        
-        self.capabilities = [
-            "filesystem_access", "web_browser", "database_operations", 
-            "search_services", "external_tools"
-        ]
-        self.mcp_client = None
-    
+        self.capabilities = ["mcp_tools", "external_integrations"]
+
     async def process_message(self, message: str, context: Dict[str, Any] = None) -> str:
-        """Обработка запросов через MCP серверы"""
+        context = context or {}
+        platform = get_mcp_platform()
+        if not platform.enabled:
+            return "MCP-платформа отключена (MCP_ENABLED=false)."
+        if not platform.initialized:
+            return "MCP-платформа ещё не инициализирована."
+
+        tool_ids = self._resolve_tool_ids(context)
+        if not tool_ids:
+            return self._no_servers_hint()
+
+        user = context.get("current_user") or {}
+        model_path = (
+            context.get("selected_model")
+            or context.get("model_path")
+            or ""
+        )
+        if not model_path:
+            try:
+                from backend.app_state import get_current_model_path
+
+                model_path = get_current_model_path()
+            except Exception:
+                model_path = ""
+
         try:
-            # Инициализируем MCP клиент если не инициализирован
-            if not self.mcp_client:
-                await self._initialize_mcp_client()
-            
-            if not self.mcp_client or not self.mcp_client.initialized:
-                return "MCP клиент недоступен. Проверьте настройки MCP серверов."
-            
-            # Определяем тип задачи и выбираем подходящий MCP сервер
-            mcp_task = self._determine_mcp_task(message)
-            
-            if not mcp_task:
-                return "Не удалось определить подходящий MCP сервер для данной задачи."
-            
-            # Выполняем задачу через MCP
-            result = await self._execute_mcp_task(mcp_task, message)
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Ошибка в MCPAgent: {e}")
-            return f"Произошла ошибка при работе с MCP серверами: {str(e)}"
-    
+            result = await run_mcp_for_chat(
+                tool_ids=tool_ids,
+                user_message=message,
+                history=context.get("history"),
+                system_prompt=context.get("system_prompt"),
+                model_path=model_path,
+                user=user,
+                chat_id=context.get("conversation_id"),
+                message_id=context.get("message_id"),
+                temperature=float(context.get("temperature") or 0.7),
+                max_tokens=int(context.get("max_tokens") or 1024),
+                enable_thinking=bool(context.get("enable_thinking")),
+            )
+            if result is not None:
+                return result.content or ""
+            return "MCP-инструменты недоступны для выбранных серверов или нет прав доступа."
+        except Exception as exc:
+            logger.error("MCPAgent error: %s", exc, exc_info=True)
+            return f"Ошибка MCP: {exc}"
+
     def can_handle(self, message: str, context: Dict[str, Any] = None) -> bool:
-        """Определяет, может ли агент обработать сообщение через MCP"""
-        message_lower = message.lower()
-        
-        mcp_keywords = [
-            "файловая система", "работа с файлами", "браузер", "веб-страница",
-            "база данных", "sqlite", "поиск в интернете", "mcp", "внешний сервис"
-        ]
-        
-        return any(keyword in message_lower for keyword in mcp_keywords)
-    
-    async def _initialize_mcp_client(self):
-        """Инициализация MCP клиента"""
-        try:
-            from backend.mcp_client import get_mcp_client
-            self.mcp_client = get_mcp_client()
-            
-            if not self.mcp_client:
-                from backend.mcp_client import initialize_mcp_client
-                success = await initialize_mcp_client()
-                if success:
-                    self.mcp_client = get_mcp_client()
-                    logger.info("MCP клиент инициализирован для агента")
-                else:
-                    logger.warning("Не удалось инициализировать MCP клиент")
-            
-        except Exception as e:
-            logger.error(f"Ошибка инициализации MCP клиента: {e}")
-    
-    def _determine_mcp_task(self, message: str) -> Optional[str]:
-        """Определение типа MCP задачи"""
-        message_lower = message.lower()
-        
-        # Файловая система
-        if any(word in message_lower for word in ["файл", "директория", "папка", "читать файл", "записать файл"]):
-            return "filesystem"
-        
-        # Веб-браузер
-        if any(word in message_lower for word in ["браузер", "веб-страница", "открыть сайт", "скриншот"]):
-            return "browser"
-        
-        # База данных
-        if any(word in message_lower for word in ["база данных", "sqlite", "sql", "запрос к бд"]):
-            return "sqlite"
-        
-        # Поиск
-        if any(word in message_lower for word in ["поиск в интернете", "найти в интернете", "веб-поиск"]):
-            return "search"
-        
-        return None
-    
-    async def _execute_mcp_task(self, task_type: str, message: str) -> str:
-        """Выполнение MCP задачи"""
-        try:
-            if task_type == "filesystem":
-                return await self._handle_filesystem_task(message)
-            elif task_type == "browser":
-                return await self._handle_browser_task(message)
-            elif task_type == "sqlite":
-                return await self._handle_sqlite_task(message)
-            elif task_type == "search":
-                return await self._handle_search_task(message)
-            else:
-                return f"Неподдерживаемый тип MCP задачи: {task_type}"
-                
-        except Exception as e:
-            logger.error(f"Ошибка выполнения MCP задачи {task_type}: {e}")
-            return f"Ошибка выполнения MCP задачи: {str(e)}"
-    
-    async def _handle_filesystem_task(self, message: str) -> str:
-        """Обработка задач файловой системы"""
-        try:
-            # Простые команды файловой системы
-            if "список файлов" in message.lower() or "показать директорию" in message.lower():
-                # Получаем список файлов в домашней директории
-                result = await self.mcp_client.call_tool("filesystem.list_directory", {
-                    "path": "~"
-                })
-                return f"Содержимое домашней директории:\n{result}"
-            
-            elif "читать файл" in message.lower():
-                # Извлекаем путь к файлу из сообщения
-                # Это упрощенная версия, в реальности нужен более сложный парсинг
-                return "Для чтения файла укажите полный путь к файлу"
-            
-            else:
-                return "Доступные команды файловой системы:\n- список файлов\n- читать файл [путь]\n- записать файл [путь] [содержимое]"
-                
-        except Exception as e:
-            return f"Ошибка работы с файловой системой: {str(e)}"
-    
-    async def _handle_browser_task(self, message: str) -> str:
-        """Обработка задач браузера"""
-        try:
-            if "открыть сайт" in message.lower() or "перейти на" in message.lower():
-                # Извлекаем URL из сообщения
-                # Это упрощенная версия
-                return "Для открытия сайта укажите URL, например: 'открыть сайт https://example.com'"
-            
-            elif "скриншот" in message.lower():
-                result = await self.mcp_client.call_tool("browser.take_screenshot", {})
-                return f"Скриншот сделан: {result}"
-            
-            else:
-                return "Доступные команды браузера:\n- открыть сайт [URL]\n- скриншот\n- получить текст страницы"
-                
-        except Exception as e:
-            return f"Ошибка работы с браузером: {str(e)}"
-    
-    async def _handle_sqlite_task(self, message: str) -> str:
-        """Обработка задач базы данных"""
-        try:
-            if "создать таблицу" in message.lower():
-                return "Для создания таблицы укажите SQL команду"
-            
-            elif "выполнить запрос" in message.lower():
-                return "Для выполнения SQL запроса укажите команду"
-            
-            else:
-                return "Доступные команды базы данных:\n- создать таблицу [SQL]\n- выполнить запрос [SQL]\n- показать таблицы"
-                
-        except Exception as e:
-            return f"Ошибка работы с базой данных: {str(e)}"
-    
-    async def _handle_search_task(self, message: str) -> str:
-        """Обработка задач поиска"""
-        try:
-            # Извлекаем поисковый запрос
-            query = message.replace("поиск в интернете", "").replace("найти в интернете", "").strip()
-            
-            if query:
-                result = await self.mcp_client.call_tool("search.search", {
-                    "query": query,
-                    "num_results": 5
-                })
-                return f"Результаты поиска по запросу '{query}':\n{result}"
-            else:
-                return "Укажите поисковый запрос после команды поиска"
-                
-        except Exception as e:
-            return f"Ошибка поиска в интернете: {str(e)}"
-    
+        context = context or {}
+        if self._resolve_tool_ids(context):
+            return True
+
+        platform = get_mcp_platform()
+        if not platform.enabled:
+            return False
+
+        msg = (message or "").lower()
+        for srv in platform.list_servers_public():
+            if not srv.get("enabled"):
+                continue
+            sid = str(srv.get("id") or "")
+            display = str(srv.get("display_name") or "").lower()
+            if sid and sid.lower() in msg:
+                return True
+            if display and display in msg:
+                return True
+        return "mcp" in msg
+
     def get_mcp_status(self) -> Dict[str, Any]:
-        """Получение статуса MCP серверов"""
-        if not self.mcp_client:
-            return {
-                "initialized": False,
-                "servers": 0,
-                "tools": 0
-            }
-        
+        platform = get_mcp_platform()
+        if not platform.initialized:
+            return {"initialized": False, "enabled": platform.enabled, "servers": 0, "tools": 0}
         return {
-            "initialized": self.mcp_client.initialized,
-            "servers": len(self.mcp_client.servers),
-            "tools": len(self.mcp_client.tools),
-            "active_processes": len(self.mcp_client.processes)
+            "initialized": True,
+            "enabled": platform.enabled,
+            "servers": len(platform.list_servers_public()),
         }
+
+    def _resolve_tool_ids(self, context: Dict[str, Any]) -> List[str]:
+        raw = context.get("tool_ids") or context.get("mcp_tool_ids") or []
+        return parse_mcp_server_ids(raw if isinstance(raw, list) else [raw])
+
+    def _no_servers_hint(self) -> str:
+        platform = get_mcp_platform()
+        servers = [s for s in platform.list_servers_public() if s.get("enabled")]
+        if not servers:
+            return "Нет включённых MCP-серверов. Добавьте сервер в mcp.servers[] конфигурации."
+        ids = ", ".join(f"server:mcp:{s['id']}" for s in servers[:5])
+        return (
+            "Укажите MCP-серверы через tool_ids в запросе, например: "
+            f"[{ids}]. Доступные серверы: {', '.join(s['id'] for s in servers)}."
+        )

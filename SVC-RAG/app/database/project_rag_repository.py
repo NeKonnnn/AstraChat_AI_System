@@ -1,5 +1,5 @@
-# Репозиторий для RAG-файлов проектов: project_rag_documents + project_rag_vectors
-# Каждый документ привязан к project_id; при удалении проекта все его данные удаляются каскадом.
+# Репозиторий для RAG-файлов проектов: project_rag_documents + project_rag_vectors.
+# Каждый документ привязан к project_id; при удалении проекта данные удаляются каскадом.
 import json
 import logging
 from typing import Any, Dict, List, Optional, Tuple
@@ -94,7 +94,7 @@ class ProjectRagDocumentRepository:
 
         Используется, когда пользователь в запросе упоминает конкретный файл
         («сделай саммари по Воронин_Михаил.docx»). Поиск case-insensitive,
-        допускает чтобы пользователь написал имя без расширения или только часть.
+        допускает имя без расширения или только часть имени.
         """
         needle = (name_or_stem or "").strip()
         if not needle:
@@ -357,7 +357,7 @@ class ProjectRagVectorRepository:
         """ILIKE-fallback: без токенизаторов, без tsvector, прямое подстрочное совпадение.
 
         Используется в entity-lane как страховка: если ``keyword_search`` (FTS) по
-        именам/кодам вернул 0 — этот метод всё равно найдёт чанки, где токен
+        именам/кодам вернул 0, этот метод всё равно найдёт чанки, где токен
         встречается буквально (в т.ч. после OCR с нестандартной токенизацией).
         """
         tokens = [t for t in (tokens or []) if t and isinstance(t, str)]

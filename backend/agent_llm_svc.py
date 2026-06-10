@@ -393,11 +393,11 @@ def get_model_info():
                     model_path = f"llm-svc://{_selected_model_name}"
                 else:
                     model_name = health.get("model_name") or getattr(service, "model_name", "Unknown")
-                    model_path = "llm-svc"
+                    model_path = ""
                 
                 return {
                     "loaded": health.get("model_loaded", True),
-                    "name": model_name,
+                    "name": model_name if model_path else "Модель не загружена",
                     "metadata": {
                         "general.name": model_name,
                         "general.architecture": "LLM-SVC",
@@ -411,14 +411,14 @@ def get_model_info():
                 return {
                     "loaded": False,
                     "error": "llm-svc недоступен",
-                    "path": "llm-svc"
+                    "path": ""
                 }
         except Exception as e:
             logger.error(f"Ошибка получения информации о модели: {e}")
             return {
                 "loaded": False,
                 "error": str(e),
-                "path": "llm-svc"
+                "path": ""
             }
     else:
         # Fallback к оригинальной логике
@@ -473,11 +473,44 @@ def ask_agent(
     temperature=None,
     enable_thinking=None,
 ):
-    """Основная функция для работы с AI агентом через llm-svc"""
-    
+    """
+    Единая точка LLM для legacy callers.
+
+    - CORSUR / Phoenix / llm-svc в ``llm_providers`` → ProviderRegistry
+    - ``llm-svc://…``, vision (images) → ``ask_agent_llm_svc`` / ``generate_response``
+    - MCP agent loop всегда идёт через registry отдельно (не через эту функцию)
+    """
+    from backend.llm_providers.routing import (
+        registry_response_usable,
+        should_use_llm_svc_direct,
+    )
+
+    eff_max_tokens = max_tokens or (model_settings.get("output_tokens") if model_settings else 1024)
+    eff_temperature = float(temperature if temperature is not None else (model_settings.get("temperature") or 0.7))
+
+    if not should_use_llm_svc_direct(model_path=model_path, images=images):
+        try:
+            from backend.mcp.orchestrator_bridge import sync_chat_via_registry
+
+            registry_response = sync_chat_via_registry(
+                prompt,
+                history=history,
+                model_path=model_path,
+                streaming=streaming,
+                stream_callback=stream_callback,
+                max_tokens=eff_max_tokens,
+                temperature=eff_temperature,
+                system_prompt=system_prompt,
+                enable_thinking=bool(enable_thinking),
+            )
+            if registry_response_usable(registry_response):
+                logger.debug("ask_agent: ProviderRegistry model_path=%s", model_path)
+                return registry_response
+        except Exception as exc:
+            logger.debug("ask_agent: ProviderRegistry failed, fallback llm-svc: %s", exc)
+
     if USE_LLM_SVC:
-        # Используем llm-svc
-        logger.info("Используется llm-svc для генерации ответа")
+        logger.info("ask_agent: llm-svc path model_path=%s images=%s", model_path, bool(images))
         
         # Если не указано количество токенов, берем из настроек
         if max_tokens is None:

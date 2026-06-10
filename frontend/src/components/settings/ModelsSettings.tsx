@@ -421,8 +421,6 @@ export default function ModelsSettings() {
       </Card>
       )}
 
-      <ImageGenerationSettingsSection />
-
       {/* Настройки модели astrachat */}
       <Card sx={MODEL_SETTINGS_CARD_SX}>
         <CardContent>
@@ -775,6 +773,8 @@ export default function ModelsSettings() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <ImageGenerationSettingsSection />
     </Box>
   );
 }

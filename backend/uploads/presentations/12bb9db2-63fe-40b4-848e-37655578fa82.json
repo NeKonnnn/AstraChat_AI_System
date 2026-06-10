@@ -1,0 +1,68 @@
+{
+  "presentation_id": "12bb9db2-63fe-40b4-848e-37655578fa82",
+  "outline": {
+    "title": "Generated Presentation",
+    "slides": [
+      {
+        "index": 1,
+        "topic": "Slide 1"
+      },
+      {
+        "index": 2,
+        "topic": "Slide 2"
+      }
+    ],
+    "source_excerpt": "x"
+  },
+  "structure": {
+    "template": "general",
+    "style_template_priority": false,
+    "slides": [
+      {
+        "index": 1,
+        "layout": "title_content",
+        "slide_type": "title"
+      },
+      {
+        "index": 2,
+        "layout": "title_content",
+        "slide_type": "summary"
+      }
+    ]
+  },
+  "slides": [
+    {
+      "index": 1,
+      "title": "Slide 1",
+      "body": "Контент слайда 1 (Russian)"
+    },
+    {
+      "index": 2,
+      "title": "Slide 2",
+      "body": "Контент слайда 2 (Russian)"
+    }
+  ],
+  "language": "Russian",
+  "template": "general",
+  "style_id": null,
+  "template_pptx_id": "58426346-0f9b-4b7a-af24-7e8b33c00635",
+  "style": null,
+  "effective_style": {
+    "name": "General",
+    "colors": {
+      "bg": "#0F172A",
+      "title": "#F8FAFC",
+      "body": "#CBD5E1",
+      "accent": "#38BDF8"
+    },
+    "fonts": {
+      "heading": "Calibri",
+      "body": "Calibri"
+    }
+  },
+  "prefer_style_layouts": true,
+  "model_path": null,
+  "use_llm_generation": false,
+  "include_images": false,
+  "image_provider": "local-disabled"
+}

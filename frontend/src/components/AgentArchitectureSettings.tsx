@@ -31,6 +31,9 @@ import {
   Edit as EditIcon,
 } from '@mui/icons-material';
 import { getApiUrl } from '../config/api';
+import type { McpPlatformStatus } from '../mcp/types';
+import { formatMcpAggregateLabel, isMcpPlatformHealthy } from '../mcp/utils/statusLabel';
+import { ASTRA_OPEN_SETTINGS_SECTION } from '../constants/hotkeys';
 
 // Backend URL
 
@@ -57,12 +60,7 @@ interface Agent {
   usage_examples?: string[];
 }
 
-interface MCPStatus {
-  initialized: boolean;
-  servers: number;
-  tools: number;
-  active_processes?: number;
-}
+type MCPStatus = McpPlatformStatus;
 
 interface LangGraphStatus {
   initialized: boolean;
@@ -294,12 +292,25 @@ export default function AgentArchitectureSettings() {
               size="small"
             />
             {mcpStatus && (
-              <Chip
-                icon={mcpStatus.initialized ? <CheckIcon /> : <ErrorIcon />}
-                label={`MCP: ${mcpStatus.servers} серверов, ${mcpStatus.tools} инструментов`}
-                color={mcpStatus.initialized ? 'success' : 'error'}
-                size="small"
-              />
+              <>
+                <Chip
+                  icon={isMcpPlatformHealthy(mcpStatus) ? <CheckIcon /> : <ErrorIcon />}
+                  label={formatMcpAggregateLabel(mcpStatus)}
+                  color={isMcpPlatformHealthy(mcpStatus) ? 'success' : 'error'}
+                  size="small"
+                />
+                <Button
+                  size="small"
+                  variant="text"
+                  onClick={() =>
+                    window.dispatchEvent(
+                      new CustomEvent(ASTRA_OPEN_SETTINGS_SECTION, { detail: { section: 'mcp' } }),
+                    )
+                  }
+                >
+                  Настройки MCP →
+                </Button>
+              </>
             )}
             {langgraphStatus && (
               <Chip

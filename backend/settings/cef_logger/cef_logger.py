@@ -10,6 +10,92 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger("cef")
 
+# Отправка в АС СВОИ по UDP: syslog RFC5424, полезная нагрузка MSG — сырая строка CEF.
+_SYSLOG_UDP_SOCK: Optional[socket.socket] = None
+_SYSLOG_FACILITY_CODES = {
+    "KERN": 0,
+    "USER": 1,
+    "MAIL": 2,
+    "DAEMON": 3,
+    "AUTH": 4,
+    "SYSLOG": 5,
+    "LPR": 6,
+    "NEWS": 7,
+    "UUCP": 8,
+    "CRON": 9,
+    "AUTHPRIV": 10,
+    "FTP": 11,
+    "LOCAL0": 16,
+    "LOCAL1": 17,
+    "LOCAL2": 18,
+    "LOCAL3": 19,
+    "LOCAL4": 20,
+    "LOCAL5": 21,
+    "LOCAL6": 22,
+    "LOCAL7": 23,
+}
+
+
+def _cef_severity_to_syslog_pri_severity(cef_severity: int) -> int:
+    """Сопоставление CEF Severity → syslog severity внутри PRI (типовая шкала для аудита)."""
+    if cef_severity <= 3:
+        return 6
+    if cef_severity <= 5:
+        return 5
+    if cef_severity <= 7:
+        return 4
+    return 3
+
+
+def _build_rfc5424_syslog_payload(cef_line: str, cef_severity: int) -> bytes:
+    fac_name = (os.getenv("AUDIT_SYSLOG_FACILITY") or "LOCAL4").upper()
+    facility_code = _SYSLOG_FACILITY_CODES.get(fac_name, _SYSLOG_FACILITY_CODES["LOCAL4"])
+    pri = facility_code * 8 + _cef_severity_to_syslog_pri_severity(int(cef_severity))
+    ts = datetime.now(tz=timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    hostname = resolve_cef_dvchost()
+    app_name = os.getenv("CEF_DEVICE_PROCESS", "astrachat")
+    proc_id = os.getpid()
+    line = f"<{pri}>1 {ts} {hostname} {app_name} {proc_id} - - {cef_line}"
+    return line.encode("utf-8")
+
+
+def resolve_cef_device_version() -> str:
+    """Версия в заголовке CEF — только ``CEF_DEVICE_VERSION`` из env/ConfigMap."""
+    return (os.getenv("CEF_DEVICE_VERSION") or "").strip() or "0.0.0"
+
+
+def resolve_cef_dvchost() -> str:
+    """Имя хоста/pod, генерирующего событие (extension ``dvchost``, как в примерах NDP/ArcSight в CEF.md)."""
+    explicit = (os.getenv("CEF_DVCHOST") or "").strip()
+    if explicit:
+        return explicit
+    for key in ("MY_POD_NAME", "POD_NAME", "HOSTNAME"):
+        val = (os.getenv(key) or "").strip()
+        if val:
+            return val
+    return socket.getfqdn() or socket.gethostname() or "-"
+
+
+def _emit_cef_syslog_udp(cef_line: str, cef_severity: int) -> None:
+    """UDP на коллектор: AUDIT_CEF_ENABLED=true и задан AUDIT_SYSLOG_TARGET."""
+    if os.getenv("AUDIT_CEF_ENABLED", "").lower() != "true":
+        return
+    target = (os.getenv("AUDIT_SYSLOG_TARGET") or "").strip()
+    if not target:
+        return
+    try:
+        port = int(os.getenv("AUDIT_SYSLOG_PORT") or "514")
+    except ValueError:
+        port = 514
+    payload = _build_rfc5424_syslog_payload(cef_line, cef_severity)
+    global _SYSLOG_UDP_SOCK
+    try:
+        if _SYSLOG_UDP_SOCK is None:
+            _SYSLOG_UDP_SOCK = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        _SYSLOG_UDP_SOCK.sendto(payload, (target, port))
+    except OSError as exc:
+        logger.warning("CEF syslog UDP send to %s:%s failed: %s", target, port, exc)
+
 
 @dataclass(frozen=True)
 class CEFEventSpec:
@@ -41,24 +127,6 @@ EVENTS: Dict[str, CEFEventSpec] = {
         "stop",
         "success",
         "Приложение AstraChat остановлено (завершение работы экземпляра) [{cat}]",
-    ),
-    "OBJ001": CEFEventSpec(
-        "OBJ001",
-        "API Call Success",
-        1,
-        "/Object/API/Request",
-        "request",
-        "success",
-        "Обработка запроса '{methodName}' сервиса {serviceName} выполнена успешно ({requestUuid})",
-    ),
-    "OBJ002": CEFEventSpec(
-        "OBJ002",
-        "API Call Failed",
-        4,
-        "/Object/API/Request",
-        "request",
-        "failure",
-        "Ошибка '{codeStatus} {textStatus}' обработки запроса '{methodName}' сервиса {serviceName} ({requestUuid})",
     ),
     "FS001": CEFEventSpec(
         "FS001",
@@ -95,6 +163,33 @@ EVENTS: Dict[str, CEFEventSpec] = {
         "write",
         "failure",
         "Ошибка сохранения файла '{file}' в бакет '{bucket}'",
+    ),
+    "FS005": CEFEventSpec(
+        "FS005",
+        "File Uploaded",
+        3,
+        "/Object/File/Upload",
+        "upload",
+        "success",
+        "Файл {fname} ({fsize} байт) загружен пользователем {suser} [{cat}]",
+    ),
+    "FS006": CEFEventSpec(
+        "FS006",
+        "File Deleted",
+        4,
+        "/Object/File/Delete",
+        "delete",
+        "success",
+        "Файл {fname} ({fsize} байт) удалён пользователем {suser} [{cat}]",
+    ),
+    "FS007": CEFEventSpec(
+        "FS007",
+        "File Inline Extract",
+        2,
+        "/Object/File/InlineExtract",
+        "read",
+        "success",
+        "Файл {fname} ({fsize} байт, тип: {cs1}) извлечён напрямую (без эмбединга) пользователем {suser} [{cat}]",
     ),
     "SEC001": CEFEventSpec(
         "SEC001",
@@ -151,6 +246,15 @@ EVENTS: Dict[str, CEFEventSpec] = {
         "success",
         "Принудительная инвалидация {cn1} предыдущих сессий пользователя {suser}. "
         "Причина: вход из другого браузера/устройства (single-session enforcement) [{cat}]",
+    ),
+    "SEC007": CEFEventSpec(
+        "SEC007",
+        "Token Validation Failed",
+        5,
+        "/Authentication/TokenValidate",
+        "validate",
+        "failure",
+        "Неуспешная проверка JWT ({cs1}): {reason} [{cat}]",
     ),
     "USR001": CEFEventSpec(
         "USR001",
@@ -260,24 +364,6 @@ EVENTS: Dict[str, CEFEventSpec] = {
         "success",
         "Все диалоги пользователя {suser} удалены [{cat}]",
     ),
-    "FIL001": CEFEventSpec(
-        "FIL001",
-        "File Uploaded",
-        3,
-        "/Object/File/Upload",
-        "upload",
-        "success",
-        "Файл {fname} ({fsize} байт) загружен пользователем {suser} [{cat}]",
-    ),
-    "FIL002": CEFEventSpec(
-        "FIL002",
-        "File Deleted",
-        4,
-        "/Object/File/Delete",
-        "delete",
-        "success",
-        "Файл {fname} ({fsize} байт) удалён пользователем {suser} [{cat}]",
-    ),
     "INT001": CEFEventSpec(
         "INT001",
         "MCP Tool Invoked",
@@ -317,6 +403,24 @@ EVENTS: Dict[str, CEFEventSpec] = {
         "success",
         "Пользователь {suser} обратился к агенту {cs1} (ID: {cs2}) с адреса {src} [{cat}]",
     ),
+    "INT005": CEFEventSpec(
+        "INT005",
+        "API Call Success",
+        1,
+        "/Object/API/Request",
+        "request",
+        "success",
+        "Обработка запроса '{methodName}' сервиса {serviceName} выполнена успешно ({requestUuid})",
+    ),
+    "INT006": CEFEventSpec(
+        "INT006",
+        "API Call Failed",
+        4,
+        "/Object/API/Request",
+        "request",
+        "failure",
+        "Ошибка '{codeStatus} {textStatus}' обработки запроса '{methodName}' сервиса {serviceName} ({requestUuid})",
+    ),
 }
 
 
@@ -342,6 +446,7 @@ _EXTENSION_KEY_ORDER: List[str] = [
     "start",
     "end",
     "rt",
+    "dvchost",
     "msg",
     "deviceDirection",
     "cs1",
@@ -354,6 +459,8 @@ _EXTENSION_KEY_ORDER: List[str] = [
     "cs4Label",
     "cn1",
     "cn1Label",
+    "cn2",
+    "cn2Label",
     "fname",
     "fsize",
     "request",
@@ -460,24 +567,101 @@ def ldap_reason_suffix() -> str:
         return ""
 
 
+def _resolve_cef_current_user(
+    request: Any,
+    current_user: Optional[dict],
+) -> Optional[dict]:
+    if current_user:
+        return current_user
+    try:
+        from backend.settings.cef_logger.cef_audit_context import cef_audit_peek
+
+        _, audit_user, _ = cef_audit_peek()
+        if audit_user:
+            return audit_user
+    except Exception:
+        pass
+    if request is not None:
+        try:
+            from backend.auth.jwt_handler import try_user_from_request
+
+            return try_user_from_request(request)
+        except Exception:
+            pass
+    return None
+
+
 def request_context(request: Any, current_user: Optional[dict] = None) -> Dict[str, Any]:
     base_dn = os.getenv("LDAP_USER_SEARCH_BASE", "")
     sntdom = domain_from_ldap_base_dn(base_dn) or (base_dn or "-")
+    current_user = _resolve_cef_current_user(request, current_user)
+
+    sock_hint: Optional[Dict[str, Any]] = None
+    resolve_client_src_from_request_fn = None
+    resolve_client_shost_fn = None
+    shost_override_from_headers_fn = None
+    try:
+        from backend.settings.cef_logger.cef_audit_context import (
+            cef_audit_peek_socket_remote,
+            resolve_client_shost,
+            resolve_client_src_from_request,
+            shost_override_from_headers,
+        )
+
+        resolve_client_src_from_request_fn = resolve_client_src_from_request
+        resolve_client_shost_fn = resolve_client_shost
+        shost_override_from_headers_fn = shost_override_from_headers
+        sock_hint = cef_audit_peek_socket_remote()
+    except Exception:
+        pass
+
     if request is None:
-        src = "127.0.0.1"
-        shost = "localhost"
-        spt = 0
-        app = "HTTPS"
+        if isinstance(sock_hint, dict) and sock_hint.get("src"):
+            src = str(sock_hint["src"]).strip()
+            shost_ov = str(sock_hint.get("shost_override") or "").strip()
+            shost = (
+                resolve_client_shost_fn(src, shost_override=shost_ov or None)
+                if resolve_client_shost_fn
+                else (shost_ov or src)
+            )
+            try:
+                spt = int(sock_hint.get("spt") or 0)
+            except (TypeError, ValueError):
+                spt = 0
+            app_raw = sock_hint.get("app") or "HTTPS"
+            app = "HTTPS" if str(app_raw).upper().startswith("HTTPS") else "HTTP"
+            channel = "websocket"
+        else:
+            src = "127.0.0.1"
+            shost = "localhost"
+            spt = 0
+            app = "HTTPS"
+            shost_ov = ""
+            channel = "websocket-empty"
     else:
-        src = (request.headers.get("x-real-ip") or request.client.host or "127.0.0.1").split(",")[0].strip()
-        fwd = request.headers.get("x-forwarded-for")
-        if fwd:
-            src = fwd.split(",")[0].strip()
-        shost = src
+        if resolve_client_src_from_request_fn:
+            src = resolve_client_src_from_request_fn(request)
+        else:
+            peer = getattr(request.client, "host", None) if request.client else None
+            src = (peer or "127.0.0.1").split(",")[0].strip()
+        shost_ov = (
+            shost_override_from_headers_fn(
+                x_client_hostname=request.headers.get("x-client-hostname"),
+            )
+            if shost_override_from_headers_fn
+            else ""
+        )
+        shost = (
+            resolve_client_shost_fn(src, shost_override=shost_ov or None)
+            if resolve_client_shost_fn
+            else (shost_ov or src)
+        )
         spt = int(getattr(request.client, "port", 0) or 0)
         proto = request.headers.get("x-forwarded-proto") or getattr(request.url, "scheme", "http")
         app = "HTTPS" if str(proto).lower().startswith("https") else "HTTP"
-    return {
+        channel = "http"
+
+    ctx = {
         "src": src,
         "shost": shost,
         "spt": spt,
@@ -485,6 +669,20 @@ def request_context(request: Any, current_user: Optional[dict] = None) -> Dict[s
         "suser": (current_user or {}).get("username", "anonymous"),
         "sntdom": sntdom,
     }
+    try:
+        from backend.settings.cef_logger.cef_audit_context import log_request_context_shost
+
+        req_path = getattr(getattr(request, "url", None), "path", None) if request is not None else None
+        log_request_context_shost(
+            channel=channel,
+            ctx=ctx,
+            shost_override=shost_ov or None,
+            sock_hint=sock_hint if isinstance(sock_hint, dict) else None,
+            request_path=req_path,
+        )
+    except Exception:
+        pass
+    return ctx
 
 
 def cef_llm_int003_extra(
@@ -542,7 +740,7 @@ def log_cef_int003_llm_request(
     )
 
 
-def log_cef_obj002_llm_api_failure(
+def log_cef_int006_llm_api_failure(
     *,
     request_uuid: str,
     code_status: Any,
@@ -551,12 +749,12 @@ def log_cef_obj002_llm_api_failure(
     method_name: str = "POST /v1/chat/completions",
     status_code: Optional[int] = None,
 ) -> None:
-    """CEF OBJ002: сбой вызова LLM API (HTTP, формат ответа, исключение)."""
+    """CEF INT006: сбой вызова LLM API (HTTP, формат ответа, исключение)."""
     from backend.settings.cef_logger.cef_audit_context import cef_audit_peek
 
     req, user, _ = cef_audit_peek()
     log_cef_event(
-        "OBJ002",
+        "INT006",
         request=req,
         current_user=user,
         status_code=status_code,
@@ -631,6 +829,7 @@ def log_cef_event(
         }
         current_user_effective = {"username": "SYSTEM", "user_id": None}
     else:
+        current_user = _resolve_cef_current_user(request, current_user)
         ctx = request_context(request, current_user)
         current_user_effective = current_user
 
@@ -641,6 +840,11 @@ def log_cef_event(
     cef_tail = extra.pop("cef_tail", "")
     if cef_tail is None:
         cef_tail = ""
+
+    # Разрешаем переопределять deviceDirection через extra (для исходящих вызовов по событиям
+    # с device_direction=0 по умолчанию, напр. INT005/INT006 при вызовах к SVC-RAG/MongoDB).
+    _extra_dir = extra.pop("_deviceDirection", None)
+    effective_dir = int(_extra_dir) if _extra_dir is not None else spec.device_direction
 
     extension: Dict[str, Any] = {
         "externalId": uuid.uuid4().hex,
@@ -659,14 +863,15 @@ def log_cef_event(
         "start": now_ms,
         "end": now_ms,
         "rt": datetime.now(tz=timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
-        "deviceDirection": spec.device_direction,
+        "dvchost": resolve_cef_dvchost(),
+        "deviceDirection": effective_dir,
     }
 
     uid = (current_user_effective or {}).get("user_id")
     if uid and event_id != "SYS001":
         extension["suid"] = str(uid)
 
-    if spec.device_direction == 1:
+    if effective_dir == 1:
         if extra.get("dst"):
             extension["dst"] = extra.get("dst")
         if extra.get("duser"):
@@ -700,10 +905,12 @@ def log_cef_event(
     prefix = "CEF:0|{vendor}|{product}|{version}|{event_id}|{name}|{severity}|".format(
         vendor=os.getenv("CEF_DEVICE_VENDOR", "CORSUR"),
         product=os.getenv("CEF_DEVICE_PRODUCT", "AstraChat"),
-        version=os.getenv("CEF_DEVICE_VERSION", "0.0.0"),
+        version=resolve_cef_device_version(),
         event_id=spec.event_id,
         name=spec.name,
         severity=spec.severity,
     )
     ext_str = " ".join(f"{k}={_esc(v)}" for k, v in _extension_ordered_items(extension))
-    logger.info("%s%s", prefix, ext_str)
+    full_cef = f"{prefix}{ext_str}"
+    logger.info("%s", full_cef)
+    _emit_cef_syslog_udp(full_cef, spec.severity)

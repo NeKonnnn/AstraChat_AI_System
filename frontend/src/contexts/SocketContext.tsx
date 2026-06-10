@@ -16,6 +16,55 @@ import {
   isNotificationSupported,
   requestNotificationPermission 
 } from '../utils/browserNotifications';
+import { incrementTabNotification } from '../utils/tabNotifications';
+import { getMcpToolIdsForChat } from '../mcp/selectionStorage';
+import type { McpToolCallRecord } from '../mcp/types';
+import { getApiUrl } from '../config/api';
+import { isLikelyImageGenerationPrompt } from '../utils/imageGenerationPrompt';
+
+function dispatchMcpToolActivity(record: McpToolCallRecord, phase: 'start' | 'end') {
+  window.dispatchEvent(new CustomEvent('astrachatMcpToolActivity', { detail: { record, phase } }));
+}
+
+function clearMcpToolActivity() {
+  window.dispatchEvent(new CustomEvent('astrachatMcpToolActivityClear'));
+}
+
+function isImageGenThinkingPayload(data: Record<string, unknown>): boolean {
+  if (data.image_generation === true) return true;
+  const msg = data.message;
+  return typeof msg === 'string' && /изображен|comfyui/i.test(msg);
+}
+
+function mapServerInlineAttachments(raw: unknown): Message['inlineAttachments'] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const items = raw
+    .filter((a): a is Record<string, unknown> => Boolean(a) && typeof a === 'object')
+    .map((a) => {
+      const contentType = a.contentType === 'image' ? ('image' as const) : ('text' as const);
+      const dataUri = a.data_uri ? String(a.data_uri) : undefined;
+      const minioObject = a.minio_object ? String(a.minio_object) : undefined;
+      const minioBucket = a.minio_bucket ? String(a.minio_bucket) : undefined;
+      let preview: string | undefined;
+      if (contentType === 'image' && dataUri) {
+        preview = dataUri;
+      } else if (contentType === 'image' && minioObject && minioBucket) {
+        preview = getApiUrl(
+          `/api/documents/inline-file?bucket=${encodeURIComponent(minioBucket)}&object=${encodeURIComponent(minioObject)}`,
+        );
+      }
+      return {
+        name: String(a.name || 'file'),
+        contentType,
+        ...(preview ? { preview } : {}),
+        ...(typeof a.size === 'number' && a.size > 0 ? { size: a.size } : {}),
+      };
+    });
+  return items.length > 0 ? items : undefined;
+}
+
+/** Лимит тела Socket.IO (inline-картинки в base64; дефолт engine.io ~1 МБ). */
+const SOCKET_MAX_HTTP_BUFFER_BYTES = 52 * 1024 * 1024;
 
 interface SocketContextType {
   socket: Socket | null;
@@ -28,6 +77,27 @@ interface SocketContextType {
     overrideProjectId?: string | null,
     /** true — ответ только через multi_llm_*; chat_chunk/chat_complete игнорируются (иначе дубль сообщения) */
     expectMultiLlm?: boolean,
+    /** Inline-вложения: текст и/или изображения, передаются напрямую без RAG */
+    inlineData?: {
+      inline_context?: string;
+      inline_images?: string[];
+      /** Метаданные для отображения в пузыре сообщения (не идут на бэкенд) */
+      attachments_meta?: Array<{
+        name: string;
+        contentType: 'text' | 'image';
+        preview?: string;
+        minio_object?: string;
+        minio_bucket?: string;
+        size?: number;
+      }>;
+      inline_attachments?: Array<{
+        name: string;
+        contentType: 'text' | 'image';
+        minio_object?: string;
+        minio_bucket?: string;
+        size?: number;
+      }>;
+    },
   ) => void;
   regenerateResponse: (userMessage: string, assistantMessageId: string, chatId: string, alternativeResponses: string[], currentIndex: number, streaming?: boolean) => void;
   /** Перегенерация одного столбца multi-LLM (тот же assistant message, без нового сообщения пользователя). */
@@ -51,6 +121,18 @@ type PendingSendPayload = {
   streaming?: boolean;
   overrideProjectId?: string | null;
   expectMultiLlm?: boolean;
+  inlineData?: {
+    inline_context?: string;
+    inline_images?: string[];
+    attachments_meta?: Array<{
+      name: string;
+      contentType: 'text' | 'image';
+      preview?: string;
+      minio_object?: string;
+      minio_bucket?: string;
+      size?: number;
+    }>;
+  };
 };
 
 const SocketContext = createContext<SocketContextType | null>(null);
@@ -67,13 +149,27 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   const socketAuthTokenRef = useRef<string | null>(null);
   const activeRequestIdRef = useRef<string | null>(null);
   const connectingRef = useRef<boolean>(false);
+  const tokenRef = useRef<string | null>(null);
+  const socketRecreateIntentRef = useRef(false);
+  const reconnectScheduleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSendRef = useRef<PendingSendPayload | null>(null);
   const hasEverConnectedRef = useRef<boolean>(false);
+  tokenRef.current = token;
+
+  const clearReconnectSchedule = () => {
+    if (reconnectScheduleRef.current) {
+      clearTimeout(reconnectScheduleRef.current);
+      reconnectScheduleRef.current = null;
+    }
+  };
   // Флаг: генерация была остановлена — блокирует создание дублей из in-flight событий
   const isStoppedRef = useRef<boolean>(false);
   const thinkingTraceRef = useRef<string>('');
   // Накопленный текст ответа (без thinking) для корректного совмещения при стриминге
   const responseAccumulatedRef = useRef<string>('');
+  const mcpToolCallsRef = useRef<McpToolCallRecord[]>([]);
+
+  const resolveMcpToolIds = (chatId: string): string[] => getMcpToolIdsForChat(chatId);
 
   const normalizeRagStrategy = (raw: string | null): string => {
     const s = (raw || 'auto').trim().toLowerCase();
@@ -130,8 +226,46 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     expectedModelsCountRef.current = 0;
   };
 
+  const forceReconnect = async () => {
+    if (!tokenRef.current) return;
+
+    clearReconnectSchedule();
+    socketRecreateIntentRef.current = true;
+    connectingRef.current = false;
+
+    setSocket((current) => {
+      if (current) {
+        current.io.off('reconnect');
+        current.removeAllListeners();
+        current.disconnect();
+      }
+      return null;
+    });
+    setIsConnected(false);
+    setIsConnecting(true);
+
+    await connectSocket();
+  };
+
+  const scheduleReconnect = (delayMs = 1000) => {
+    clearReconnectSchedule();
+    if (!tokenRef.current) return;
+    reconnectScheduleRef.current = setTimeout(() => {
+      reconnectScheduleRef.current = null;
+      if (!tokenRef.current || connectingRef.current) return;
+      void forceReconnect().catch((error) => {
+        console.error('Не удалось переподключить WebSocket:', error);
+        scheduleReconnect(Math.min(delayMs * 2, 10000));
+      });
+    }, delayMs);
+  };
+
   const connectSocket = async () => {
     if (connectingRef.current) {
+      return;
+    }
+    if (!tokenRef.current) {
+      setIsConnecting(false);
       return;
     }
     connectingRef.current = true;
@@ -173,18 +307,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     // Логируем URL для отладки
     console.log('Socket.IO подключение к:', socketUrl);
     
-    if (!token) {
-      setIsConnecting(false);
-      connectingRef.current = false;
-      return;
-    }
-
-    socketAuthTokenRef.current = token;
-
-    if (socket) {
-      socket.disconnect();
-      setSocket(null);
-    }
+    socketAuthTokenRef.current = tokenRef.current;
 
     const newSocket = io(socketUrl, {
       transports: ['websocket', 'polling'], // Добавляем fallback на polling
@@ -195,86 +318,70 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       reconnectionAttempts: wsConfig.reconnectionAttempts,
       forceNew: true, // Принудительно создаем новое соединение
       auth: {
-        token,
+        token: tokenRef.current,
       },
+    });
+
+    // engine.io ManagerOptions; в typings socket.io-client 4.x поле не объявлено
+    Object.assign(newSocket.io.opts, { maxHttpBufferSize: SOCKET_MAX_HTTP_BUFFER_BYTES });
+
+    newSocket.io.on('reconnect', () => {
+      clearReconnectSchedule();
+      setIsConnected(true);
+      setIsConnecting(false);
+      connectingRef.current = false;
     });
 
     // Подключение
     newSocket.on('connect', () => {
+      clearReconnectSchedule();
       setIsConnected(true);
       setIsConnecting(false);
       connectingRef.current = false;
+      const wasConnectedBefore = hasEverConnectedRef.current;
       hasEverConnectedRef.current = true;
-      showNotification('success', 'Соединение с сервером установлено');
+      showNotification(
+        'success',
+        wasConnectedBefore ? 'Соединение восстановлено' : 'Соединение с сервером установлено',
+      );
     });
 
     // Отключение
     newSocket.on('disconnect', (reason) => {
       setIsConnected(false);
       const isIntentionalClientDisconnect = reason === 'io client disconnect';
-      const shouldNotifyDisconnect = hasEverConnectedRef.current && !isIntentionalClientDisconnect;
-      setIsConnecting(Boolean(token) && !isIntentionalClientDisconnect);
-      if (shouldNotifyDisconnect) {
-        showNotification('warning', 'Соединение с сервером потеряно');
+      const isRecreate = socketRecreateIntentRef.current;
+      if (isRecreate) {
+        socketRecreateIntentRef.current = false;
       }
-      // Страхуемся от зависшего состояния: вручную инициируем reconnect.
-      window.setTimeout(() => {
-        if (token && !newSocket.connected) {
-          try {
-            newSocket.connect();
-          } catch {
-            // ignore reconnect errors
-          }
-        }
-      }, 800);
+      const shouldNotifyDisconnect =
+        hasEverConnectedRef.current && !isIntentionalClientDisconnect && !isRecreate;
+      const shouldKeepConnecting = Boolean(tokenRef.current) && (!isIntentionalClientDisconnect || isRecreate);
+      setIsConnecting(shouldKeepConnecting);
+      if (shouldNotifyDisconnect) {
+        showNotification('warning', 'Соединение с сервером потеряно. Переподключаемся...');
+      }
+      if (shouldKeepConnecting && !isRecreate) {
+        scheduleReconnect(1500);
+      }
     });
 
     // Ошибки подключения
     newSocket.on('connect_error', (error: any) => {
-      
       setIsConnected(false);
-      setIsConnecting(Boolean(token));
+      setIsConnecting(Boolean(tokenRef.current));
       connectingRef.current = false;
-      // Не показываем уведомление при каждой ошибке - только при критических
       if (hasEverConnectedRef.current && error.message && !error.message.includes('xhr poll error')) {
         showNotification('error', `Ошибка подключения: ${error.message || 'Неизвестная ошибка'}`);
       }
-      // При первом логине бэкенд может ещё не успеть принять соединение с новым токеном.
-      // Socket.IO делает ретраи сам, но на случай если он "завис" — даём явный толчок.
-      if (!hasEverConnectedRef.current) {
-        window.setTimeout(() => {
-          if (token && !newSocket.connected && !hasEverConnectedRef.current) {
-            try {
-              newSocket.connect();
-            } catch {
-              // ignore
-            }
-          }
-        }, 1500);
-      }
+      scheduleReconnect(hasEverConnectedRef.current ? 2000 : 1500);
     });
 
-    newSocket.on('reconnect', (attemptNumber) => {
-      setIsConnected(true);
-      setIsConnecting(false);
-      showNotification('success', 'Соединение восстановлено');
-    });
-
-    newSocket.on('reconnect_error', (error) => {
-      
-    });
-
-    // Когда Socket.IO исчерпывает все попытки и сдаётся — сбрасываем сокет,
-    // чтобы useEffect создал новый и попробовал снова (особенно важно при первом
-    // логине, когда бэкенд мог ещё не успеть принять соединение с новым токеном).
-    newSocket.on('reconnect_failed', () => {
+    newSocket.io.on('reconnect_failed', () => {
       connectingRef.current = false;
       setIsConnected(false);
-      window.setTimeout(() => {
-        if (token && !connectingRef.current) {
-          setSocket(null);
-        }
-      }, 3000);
+      setIsConnecting(Boolean(tokenRef.current));
+      scheduleReconnect(1000);
     });
 
     // Обработка событий Socket.IO
@@ -311,6 +418,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 
     newSocket.on('multi_llm_complete', (data) => {
       handleServerMessage({ type: 'multi_llm_complete', ...data });
+    });
+
+    newSocket.on('chat_mcp_event', (data) => {
+      handleServerMessage({ ...data, type: 'mcp_event', mcp_event_type: data.type });
     });
 
     setSocket(newSocket);
@@ -393,6 +504,41 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     switch (data.type) {
       case 'thinking':
         {
+          if (
+            isImageGenThinkingPayload(data) &&
+            currentChatIdRef.current &&
+            !isStoppedRef.current &&
+            !expectMultiLlmResponseRef.current
+          ) {
+            const chatId = currentChatIdRef.current;
+            if (currentMessageRef.current) {
+              updateMessage(
+                chatId,
+                currentMessageRef.current,
+                '',
+                true,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                true,
+              );
+            } else {
+              const messageId = addMessage(chatId, {
+                role: 'assistant',
+                content: '',
+                timestamp: new Date().toISOString(),
+                isStreaming: true,
+                isImageGenerating: true,
+              });
+              currentMessageRef.current = messageId;
+            }
+            break;
+          }
+
           const accumulated = typeof data?.accumulated === 'string' ? data.accumulated : '';
           const chunk = typeof data?.chunk === 'string' ? data.chunk : '';
           const thought = typeof data?.thinking === 'string' ? data.thinking : '';
@@ -540,6 +686,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         const threshold = Math.max(expectedCount, totalFromEvent);
 
         if (threshold > 0 && completedCount >= threshold) {
+          incrementTabNotification();
           if (currentChatIdRef.current) {
             setChatLoading(currentChatIdRef.current, false);
           }
@@ -562,6 +709,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
           expectedModelsCountRef.current = 0;
           currentMessageRef.current = null;
           activeRequestIdRef.current = null;
+          clearMcpToolActivity();
         }
         
         break;
@@ -684,7 +832,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
             console.error('Ошибка при показе уведомления:', error);
           }
         }
-        
+        incrementTabNotification();
+
         // КРИТИЧЕСКИ ВАЖНО: ВСЕГДА сбрасываем состояние загрузки В ПЕРВУЮ ОЧЕРЕДЬ
         if (currentChatIdRef.current) {
           setChatLoading(currentChatIdRef.current, false);
@@ -710,6 +859,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
             ? `<think>${thinkingTraceRef.current.trim()}</think>\n\n${response}`
             : response;
         const wasStreaming = Boolean(data.was_streaming);
+        const genInlineAttachments = mapServerInlineAttachments(data.inline_attachments);
 
         if (currentMessageRef.current) {
           // Путь 1: сообщение отслеживалось через ref (потоковый режим)
@@ -724,7 +874,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
             } else {
               updatedAlts.push(responseWithReasoning);
             }
-            updateMessage(chatId, trackedId, responseWithReasoning, false, undefined, updatedAlts, regen.currentIndex, docSearch);
+            updateMessage(chatId, trackedId, responseWithReasoning, false, undefined, updatedAlts, regen.currentIndex, docSearch, undefined, undefined, genInlineAttachments, false);
             regenerationStateRef.current = null;
           } else {
             // В потоковом режиме контент уже накоплен через chunk-и,
@@ -738,6 +888,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
               undefined,
               undefined,
               docSearch,
+              undefined,
+              undefined,
+              genInlineAttachments,
+              false,
             );
           }
         } else {
@@ -749,7 +903,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 
           if (streamingMsgs.length > 0) {
             const last = streamingMsgs[streamingMsgs.length - 1];
-            updateMessage(chatId, last.id, responseWithReasoning, false, undefined, undefined, undefined, docSearch);
+            updateMessage(chatId, last.id, responseWithReasoning, false, undefined, undefined, undefined, docSearch, undefined, undefined, genInlineAttachments, false);
           } else if (!isStoppedRef.current && response) {
             // Непотоковый режим: создаём сообщение только если его ещё нет
             const alreadyExists = currentChat?.messages.some(
@@ -761,7 +915,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
                 content: responseWithReasoning,
                 timestamp: data.timestamp || new Date().toISOString(),
                 isStreaming: false,
+                isImageGenerating: false,
                 ...(docSearch ? { documentSearch: docSearch } : {}),
+                ...(genInlineAttachments ? { inlineAttachments: genInlineAttachments } : {}),
               });
             }
           }
@@ -770,6 +926,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         thinkingTraceRef.current = '';
         responseAccumulatedRef.current = '';
         activeRequestIdRef.current = null;
+        clearMcpToolActivity();
         break;
       }
 
@@ -858,7 +1015,47 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         thinkingTraceRef.current = '';
         responseAccumulatedRef.current = '';
         activeRequestIdRef.current = null;
+        clearMcpToolActivity();
         break;
+
+      case 'mcp_event': {
+        if (isStoppedRef.current) break;
+        const eventType = data.mcp_event_type === 'mcp_tool_end' ? 'mcp_tool_end' : 'mcp_tool_start';
+        const record: McpToolCallRecord = {
+          type: eventType,
+          server_id: String(data.server_id || ''),
+          tool: String(data.tool || ''),
+          qualified_name: String(data.qualified_name || ''),
+          success: data.success,
+          duration_ms: data.duration_ms,
+          error: data.error,
+          model: data.model,
+          timestamp: data.timestamp,
+          result_preview: data.result_preview,
+          has_image: data.has_image,
+          has_audio: data.has_audio,
+          has_resource: data.has_resource,
+        };
+        dispatchMcpToolActivity(record, eventType === 'mcp_tool_start' ? 'start' : 'end');
+        mcpToolCallsRef.current = [...mcpToolCallsRef.current, record];
+        const chatId = currentChatIdRef.current;
+        const msgId = currentMessageRef.current || multiLLMMessageRef.current;
+        if (chatId && msgId) {
+          updateMessage(
+            chatId,
+            msgId,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            [...mcpToolCallsRef.current],
+          );
+        }
+        break;
+      }
 
       default:
         console.warn('Неизвестный тип сообщения:', data.type);
@@ -871,11 +1068,30 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     streaming: boolean = true,
     overrideProjectId?: string | null,
     expectMultiLlm?: boolean,
+    inlineData?: {
+      inline_context?: string;
+      inline_images?: string[];
+      attachments_meta?: Array<{
+        name: string;
+        contentType: 'text' | 'image';
+        preview?: string;
+        minio_object?: string;
+        minio_bucket?: string;
+        size?: number;
+      }>;
+      inline_attachments?: Array<{
+        name: string;
+        contentType: 'text' | 'image';
+        minio_object?: string;
+        minio_bucket?: string;
+        size?: number;
+      }>;
+    },
   ) => {
     if (!socket || !isConnected) {
       // При первом входе сокет может быть в фазе коннекта.
       // Сохраняем одно ожидающее сообщение и отправляем его после connect.
-      pendingSendRef.current = { message, chatId, streaming, overrideProjectId, expectMultiLlm };
+      pendingSendRef.current = { message, chatId, streaming, overrideProjectId, expectMultiLlm, inlineData };
       // Не прерываем активную попытку подключения — connect-обработчик сам отправит
       // отложенное сообщение. Reconnect нужен только если сокет не подключается прямо сейчас.
       if (!connectingRef.current) {
@@ -901,18 +1117,33 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     expectedModelsCountRef.current = 0;
     thinkingTraceRef.current = '';
     responseAccumulatedRef.current = '';
+    mcpToolCallsRef.current = [];
+    clearMcpToolActivity();
     
-    // Добавляем сообщение пользователя
+    // Добавляем сообщение пользователя (с inline-вложениями для отображения в пузыре)
     const userMessageId = addMessage(chatId, {
       role: 'user',
       content: message,
       timestamp: new Date().toISOString(),
+      ...(inlineData?.attachments_meta?.length
+        ? { inlineAttachments: inlineData.attachments_meta }
+        : {}),
     });
 
     // Устанавливаем состояние загрузки
     setChatLoading(chatId, true);
     currentMessageRef.current = null;
-    
+
+    if (!expectMultiLlm && isLikelyImageGenerationPrompt(message)) {
+      const placeholderId = addMessage(chatId, {
+        role: 'assistant',
+        content: '',
+        timestamp: new Date().toISOString(),
+        isStreaming: true,
+        isImageGenerating: true,
+      });
+      currentMessageRef.current = placeholderId;
+    }
 
     // Читаем флаг "Base знаний" из localStorage (устанавливается в UnifiedChatPage)
     const useKbRag = localStorage.getItem('use_kb_rag') === 'true';
@@ -945,7 +1176,23 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       project_instructions: project?.instructions || null,
       model_comparison_enabled: Boolean(expectMultiLlm),
       enable_thinking: resolveEnableThinking(),
+      // Inline-вложения (без RAG/эмбединга)
+      inline_context: inlineData?.inline_context || undefined,
+      inline_images: inlineData?.inline_images?.length ? inlineData.inline_images : undefined,
+      inline_attachments: inlineData?.attachments_meta?.length
+        ? inlineData.attachments_meta.map((a) => ({
+            name: a.name,
+            contentType: a.contentType,
+            ...(a.minio_object ? { minio_object: a.minio_object } : {}),
+            ...(a.minio_bucket ? { minio_bucket: a.minio_bucket } : {}),
+            ...(typeof a.size === 'number' && a.size > 0 ? { size: a.size } : {}),
+          }))
+        : undefined,
       request_id: requestId,
+      tool_ids: (() => {
+        const ids = resolveMcpToolIds(chatId);
+        return ids.length ? ids : undefined;
+      })(),
     };
 
     socket!.emit('chat_message', messageData);
@@ -1022,6 +1269,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       model_comparison_enabled: true,
       enable_thinking: resolveEnableThinking(),
       request_id: requestId,
+      tool_ids: (() => {
+        const ids = resolveMcpToolIds(chatId);
+        return ids.length ? ids : undefined;
+      })(),
     });
   };
 
@@ -1059,6 +1310,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     expectMultiLlmResponseRef.current = false;
     thinkingTraceRef.current = '';
     responseAccumulatedRef.current = '';
+    mcpToolCallsRef.current = [];
+    clearMcpToolActivity();
     const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
     activeRequestIdRef.current = requestId;
     
@@ -1083,6 +1336,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       rag_strategy: ragStrategy,
       enable_thinking: resolveEnableThinking(),
       request_id: requestId,
+      tool_ids: (() => {
+        const ids = resolveMcpToolIds(chatId);
+        return ids.length ? ids : undefined;
+      })(),
     };
 
     socket.emit('chat_message', messageData);
@@ -1107,6 +1364,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       setChatLoading(currentChatIdRef.current, false);
     }
     expectMultiLlmResponseRef.current = false;
+    clearMcpToolActivity();
     
     // Очищаем текущее сообщение и убираем флаг стриминга у всех сообщений
     if (currentChatIdRef.current && currentMessageRef.current) {
@@ -1147,15 +1405,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   };
 
   const reconnect = () => {
-    // Сбрасываем флаг подключения, чтобы connectSocket() мог запуститься заново.
-    // Без этого, если reconnect вызывается пока сокет ещё устанавливал соединение,
-    // connectingRef.current остаётся true и новый сокет никогда не создаётся.
-    connectingRef.current = false;
-    if (socket) {
-      socket.disconnect();
-      setSocket(null);
-    }
-    setTimeout(connectSocket, 1000);
+    void forceReconnect().catch((error) => {
+      console.error('Ошибка ручного переподключения WebSocket:', error);
+      scheduleReconnect(2000);
+    });
   };
 
   // До первого paint с токеном, но без сокета, isConnecting ещё false — чат показывал «нет соединения».
@@ -1171,45 +1424,68 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!token) {
+      clearReconnectSchedule();
       if (socket) {
+        socketRecreateIntentRef.current = true;
+        socket.removeAllListeners();
         socket.disconnect();
         setSocket(null);
       }
       setIsConnected(false);
       setIsConnecting(false);
+      connectingRef.current = false;
       return;
     }
 
     const tokenChangedForActiveSocket =
       !!socket && !!socketAuthTokenRef.current && socketAuthTokenRef.current !== token;
     if (tokenChangedForActiveSocket) {
-      socket.disconnect();
-      setSocket(null);
-      setIsConnected(false);
-      setIsConnecting(false);
+      void forceReconnect().catch((error) => {
+        console.error('Ошибка переподключения WebSocket после смены токена:', error);
+        scheduleReconnect(2000);
+      });
       return;
     }
 
-    if (!socket) {
-      setIsConnecting(true);
-      connectSocket().catch((error) => {
+    if (!socket && !connectingRef.current) {
+      void connectSocket().catch((error) => {
         console.error('Ошибка подключения WebSocket:', error);
-        setIsConnecting(false);
+        scheduleReconnect(2000);
       });
     }
+  }, [token, socket]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Если сокет «завис» в disconnected-состоянии — пересоздаём соединение без F5.
+  useEffect(() => {
+    if (!token) return undefined;
+
+    const watchdogId = window.setInterval(() => {
+      if (!tokenRef.current || isConnected || connectingRef.current) return;
+      scheduleReconnect(500);
+    }, 8000);
 
     return () => {
-      if (socket && !tokenChangedForActiveSocket) {
-        socket.disconnect();
-      }
+      window.clearInterval(watchdogId);
     };
-  }, [token, socket]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [token, isConnected]);
+
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (!tokenRef.current || isConnected || connectingRef.current) return;
+      scheduleReconnect(300);
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [isConnected]);
 
   useEffect(() => {
     if (!isConnected || !socket || !pendingSendRef.current) return;
     const pending = pendingSendRef.current;
     pendingSendRef.current = null;
-    sendMessage(pending.message, pending.chatId, pending.streaming, pending.overrideProjectId, pending.expectMultiLlm);
+    sendMessage(pending.message, pending.chatId, pending.streaming, pending.overrideProjectId, pending.expectMultiLlm, pending.inlineData);
   }, [isConnected]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onMultiLLMEvent = (event: string, handler: (data: any) => void) => {

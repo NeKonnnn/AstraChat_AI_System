@@ -66,7 +66,9 @@ class PostgreSQLConnection:
                 user=self.user,
                 password=self.password,
                 min_size=min_size,
-                max_size=max_size
+                max_size=max_size,
+                timeout=5,
+                command_timeout=10,
             )
             
             # Проверка подключения и pgvector расширения

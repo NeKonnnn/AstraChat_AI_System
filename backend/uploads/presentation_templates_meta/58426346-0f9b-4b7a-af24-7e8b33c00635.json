@@ -1,0 +1,328 @@
+{
+  "template_id": "58426346-0f9b-4b7a-af24-7e8b33c00635",
+  "name": "smoke_template",
+  "source_file": "58426346-0f9b-4b7a-af24-7e8b33c00635.pptx",
+  "slides_count_hint": 2,
+  "layout_count": 11,
+  "layouts": [
+    {
+      "layout_idx": 0,
+      "layout_name": "Title Slide",
+      "placeholders": [
+        {
+          "idx": 0,
+          "kind": "body"
+        },
+        {
+          "idx": 1,
+          "kind": "body"
+        },
+        {
+          "idx": 10,
+          "kind": "body"
+        },
+        {
+          "idx": 11,
+          "kind": "body"
+        },
+        {
+          "idx": 12,
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "layout_idx": 1,
+      "layout_name": "Title and Content",
+      "placeholders": [
+        {
+          "idx": 0,
+          "kind": "title"
+        },
+        {
+          "idx": 1,
+          "kind": "body"
+        },
+        {
+          "idx": 10,
+          "kind": "body"
+        },
+        {
+          "idx": 11,
+          "kind": "body"
+        },
+        {
+          "idx": 12,
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "layout_idx": 2,
+      "layout_name": "Section Header",
+      "placeholders": [
+        {
+          "idx": 0,
+          "kind": "title"
+        },
+        {
+          "idx": 1,
+          "kind": "body"
+        },
+        {
+          "idx": 10,
+          "kind": "body"
+        },
+        {
+          "idx": 11,
+          "kind": "body"
+        },
+        {
+          "idx": 12,
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "layout_idx": 3,
+      "layout_name": "Two Content",
+      "placeholders": [
+        {
+          "idx": 0,
+          "kind": "title"
+        },
+        {
+          "idx": 1,
+          "kind": "body"
+        },
+        {
+          "idx": 2,
+          "kind": "body"
+        },
+        {
+          "idx": 10,
+          "kind": "body"
+        },
+        {
+          "idx": 11,
+          "kind": "body"
+        },
+        {
+          "idx": 12,
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "layout_idx": 4,
+      "layout_name": "Comparison",
+      "placeholders": [
+        {
+          "idx": 0,
+          "kind": "title"
+        },
+        {
+          "idx": 1,
+          "kind": "body"
+        },
+        {
+          "idx": 2,
+          "kind": "body"
+        },
+        {
+          "idx": 3,
+          "kind": "body"
+        },
+        {
+          "idx": 4,
+          "kind": "body"
+        },
+        {
+          "idx": 10,
+          "kind": "body"
+        },
+        {
+          "idx": 11,
+          "kind": "body"
+        },
+        {
+          "idx": 12,
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "layout_idx": 5,
+      "layout_name": "Title Only",
+      "placeholders": [
+        {
+          "idx": 0,
+          "kind": "title"
+        },
+        {
+          "idx": 10,
+          "kind": "body"
+        },
+        {
+          "idx": 11,
+          "kind": "body"
+        },
+        {
+          "idx": 12,
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "layout_idx": 6,
+      "layout_name": "Blank",
+      "placeholders": [
+        {
+          "idx": 10,
+          "kind": "body"
+        },
+        {
+          "idx": 11,
+          "kind": "body"
+        },
+        {
+          "idx": 12,
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "layout_idx": 7,
+      "layout_name": "Content with Caption",
+      "placeholders": [
+        {
+          "idx": 0,
+          "kind": "title"
+        },
+        {
+          "idx": 1,
+          "kind": "body"
+        },
+        {
+          "idx": 2,
+          "kind": "body"
+        },
+        {
+          "idx": 10,
+          "kind": "body"
+        },
+        {
+          "idx": 11,
+          "kind": "body"
+        },
+        {
+          "idx": 12,
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "layout_idx": 8,
+      "layout_name": "Picture with Caption",
+      "placeholders": [
+        {
+          "idx": 0,
+          "kind": "title"
+        },
+        {
+          "idx": 1,
+          "kind": "image"
+        },
+        {
+          "idx": 2,
+          "kind": "body"
+        },
+        {
+          "idx": 10,
+          "kind": "body"
+        },
+        {
+          "idx": 11,
+          "kind": "body"
+        },
+        {
+          "idx": 12,
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "layout_idx": 9,
+      "layout_name": "Title and Vertical Text",
+      "placeholders": [
+        {
+          "idx": 0,
+          "kind": "title"
+        },
+        {
+          "idx": 1,
+          "kind": "body"
+        },
+        {
+          "idx": 10,
+          "kind": "body"
+        },
+        {
+          "idx": 11,
+          "kind": "body"
+        },
+        {
+          "idx": 12,
+          "kind": "body"
+        }
+      ]
+    },
+    {
+      "layout_idx": 10,
+      "layout_name": "Vertical Title and Text",
+      "placeholders": [
+        {
+          "idx": 0,
+          "kind": "title"
+        },
+        {
+          "idx": 1,
+          "kind": "body"
+        },
+        {
+          "idx": 10,
+          "kind": "body"
+        },
+        {
+          "idx": 11,
+          "kind": "body"
+        },
+        {
+          "idx": 12,
+          "kind": "body"
+        }
+      ]
+    }
+  ],
+  "theme_colors": {
+    "dk1": "#000000",
+    "lt1": "#FFFFFF",
+    "dk2": "#1F497D",
+    "lt2": "#EEECE1",
+    "accent1": "#4F81BD",
+    "accent2": "#C0504D",
+    "accent3": "#9BBB59",
+    "accent4": "#8064A2",
+    "accent5": "#4BACC6",
+    "accent6": "#F79646",
+    "hlink": "#0000FF",
+    "folHlink": "#800080"
+  },
+  "theme_fonts": {},
+  "slide_size": {
+    "cx": "9144000",
+    "cy": "6858000",
+    "type": "screen4x3"
+  },
+  "notes": "Auto-extracted layout placeholder kinds. Text style preserved from placeholder runs during export."
+}

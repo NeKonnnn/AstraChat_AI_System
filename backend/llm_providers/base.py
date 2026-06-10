@@ -58,6 +58,15 @@ class ProviderCapabilities:
     #: Поддерживает ли ``images`` в user-сообщениях как ``content=[{type:image_url},...]``.
     vision: bool = False
 
+    #: Native OpenAI ``tools`` / ``tool_calls`` API (tier 1 MCP).
+    function_calling: bool = False
+
+    #: Lightweight prompt+JSON fallback (tier 2 MCP).
+    prompt_json_fc: bool = True
+
+    #: LangGraph agent mode (tier 3 — только explicit agent orchestration).
+    langgraph_agent: bool = True
+
 
 @dataclass(frozen=True)
 class ModelInfo:
@@ -148,6 +157,20 @@ StreamCallback = Callable[..., bool]
 Коллбэк потоковой генерации: ``cb(chunk, accumulated) -> continue``.
 Возврат ``False`` прерывает стрим (используется кнопкой «стоп» на фронте).
 """
+
+
+@dataclass
+class ToolCall:
+    id: str
+    name: str
+    arguments: Dict[str, Any]
+
+
+@dataclass
+class ChatResult:
+    content: str
+    tool_calls: List[ToolCall] = field(default_factory=list)
+    raw_message: Dict[str, Any] = field(default_factory=dict)
 
 
 class LLMProvider(abc.ABC):
@@ -254,6 +277,27 @@ class LLMProvider(abc.ABC):
     ) -> str:
         """Синхронная (non-streaming) генерация. Возвращает текст ответа."""
 
+    async def chat_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        model: str,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+        *,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
+        request_extra: Optional[Dict[str, Any]] = None,
+    ) -> "ChatResult":
+        """Non-streaming completion с опциональным native tool calling."""
+        text = await self.chat(
+            messages,
+            model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            request_extra=request_extra,
+        )
+        return ChatResult(content=text or "")
+
     @abc.abstractmethod
     async def stream_chat(
         self,
@@ -290,8 +334,22 @@ class LLMProvider(abc.ABC):
                 "native_chat_api": self.capabilities.native_chat_api,
                 "streaming": self.capabilities.streaming,
                 "vision": self.capabilities.vision,
+                "function_calling": self.capabilities.function_calling,
+                "prompt_json_fc": self.capabilities.prompt_json_fc,
+                "langgraph_agent": self.capabilities.langgraph_agent,
             },
         }
+
+    def mcp_tool_calling_mode(self) -> str:
+        extra = self._config.extra or {}
+        mode = str(extra.get("mcp_tool_calling_mode") or "auto").strip().lower()
+        return mode if mode in ("auto", "native_openai_tools", "prompt_json_fc") else "auto"
+
+    def supports_native_function_calling(self) -> bool:
+        extra = self._config.extra or {}
+        if "function_calling" in extra:
+            return bool(extra.get("function_calling"))
+        return bool(self.capabilities.function_calling)
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} id={self.id!r} base_url={self.base_url!r}>"

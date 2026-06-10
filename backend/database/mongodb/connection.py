@@ -39,8 +39,13 @@ class MongoDBConnection:
             logger.info(f"Создание клиента MongoDB: {safe_connection_string}")
             logger.debug(f"Полная строка подключения: {self.connection_string}")
             
-            self.client = AsyncIOMotorClient(self.connection_string)
-            
+            self.client = AsyncIOMotorClient(
+                self.connection_string,
+                serverSelectionTimeoutMS=5000,
+                connectTimeoutMS=5000,
+                socketTimeoutMS=10000,
+            )
+
             # Проверка подключения
             logger.info("Проверка подключения (ping)...")
             await self.client.admin.command('ping')
@@ -91,18 +96,3 @@ class MongoDBConnection:
     def get_collection(self, collection_name: str):
         """Получение коллекции"""
         return self.get_database()[collection_name]
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

@@ -74,6 +74,7 @@ import {
   AutoStories as KbIcon,
   ChevronRight as ChevronRightIcon,
   Check as CheckIcon,
+  HubOutlined as GearMenuMcpIcon,
   SmartToyOutlined as GearMenuAgentsIcon,
   Psychology as ThinkingModeIcon,
   Bolt as FastModeIcon,
@@ -85,6 +86,13 @@ import VoiceChatDialog from '../components/VoiceChatDialog';
 import ChatInputBar from '../components/ChatInputBar';
 import ChatInputStatusCluster from '../components/ChatInputStatusCluster';
 import ChatGearAgentsPanel from '../components/ChatGearAgentsPanel';
+import ChatGearMcpPanel from '../components/ChatGearMcpPanel';
+import McpSuggestionChips from '../mcp/components/McpSuggestionChips';
+import { getAtlassianSuggestions } from '../mcp/plugins/atlassianSuggestions';
+import { useChatInputMcpIndicators } from '../mcp/hooks/useChatInputMcpIndicators';
+import { useMcpStreamingTools } from '../mcp/hooks/useMcpStreamingTools';
+import McpLiveToolsIndicator from '../mcp/components/McpLiveToolsIndicator';
+import { copyMcpToolIds, projectMcpChatKey } from '../mcp/selectionStorage';
 import { getApiUrl } from '../config/api';
 import { useTheme } from '@mui/material/styles';
 import AgentConstructorPanel from '../components/AgentConstructorPanel';
@@ -235,7 +243,9 @@ export default function ProjectPage() {
   const [isUploading, setIsUploading] = useState(false);
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   /** Раскрытый подпункт меню «Инструменты» (панель агентов). */
-  const [gearToolsPanel, setGearToolsPanel] = useState<'main' | 'agents' | 'model-mode'>('main');
+  const [gearToolsPanel, setGearToolsPanel] = useState<'main' | 'agents' | 'mcp' | 'model-mode'>('main');
+  const gearSubPanelOpen =
+    gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode' || gearToolsPanel === 'mcp';
   const [modelThinkingMode, setModelThinkingMode] = useState<ModelThinkingMode>(() => {
     const saved = (localStorage.getItem(MODEL_THINKING_MODE_STORAGE_KEY) || 'fast') as ModelThinkingMode;
     return saved === 'auto' || saved === 'thinking' || saved === 'fast' ? saved : 'fast';
@@ -341,7 +351,22 @@ export default function ProjectPage() {
   }, []);
 
   const project = projectId ? getProjectById(projectId) : null;
+  const mcpScopeChatId = projectId ? projectMcpChatKey(projectId) : null;
+  const activeMcpServers = useChatInputMcpIndicators(mcpScopeChatId);
+  const { activeMcpTools } = useMcpStreamingTools();
   const isDarkMode = theme.palette.mode === 'dark';
+
+  const handleOpenMcpGearPanel = useCallback(() => {
+    const shell = chatInputToolsAnchorRef.current;
+    if (shell) {
+      setGearToolsPanel('mcp');
+      setAnchorEl(shell);
+      const rect = shell.getBoundingClientRect();
+      setGearToolsMenuWidthPx(Math.round(rect.width));
+      setGearToolsPaperHeightPx(getChatGearMenuPaperHeightPx(rect.top));
+    }
+  }, []);
+
   const libraryInputBadge = useMemo(
     () => (
       <ChatInputStatusCluster
@@ -350,10 +375,39 @@ export default function ProjectPage() {
         onLibraryToggle={toggleKbRag}
         standardAgentsActive={orchestratorAgentsAnyActive}
         myAgentName={myAgentSelection?.name ?? null}
+        activeMcpServers={activeMcpServers}
+        onMcpClick={handleOpenMcpGearPanel}
       />
     ),
-    [isDarkMode, useKbRag, toggleKbRag, orchestratorAgentsAnyActive, myAgentSelection?.name],
+    [
+      isDarkMode,
+      useKbRag,
+      toggleKbRag,
+      orchestratorAgentsAnyActive,
+      myAgentSelection?.name,
+      activeMcpServers,
+      handleOpenMcpGearPanel,
+    ],
   );
+
+  const mcpInputSuggestions = useMemo(() => {
+    const suggestions = getAtlassianSuggestions(activeMcpServers.map((s) => s.id));
+    const chips =
+      suggestions.length > 0 ? (
+        <McpSuggestionChips
+          suggestions={suggestions}
+          disabled={isSending}
+          onSelect={(text) => setInputMessage((prev) => (prev.trim() ? `${prev.trim()}\n${text}` : text))}
+        />
+      ) : null;
+    if (!activeMcpTools.length && !chips) return null;
+    return (
+      <>
+        <McpLiveToolsIndicator tools={activeMcpTools} />
+        {chips}
+      </>
+    );
+  }, [activeMcpServers, activeMcpTools, isSending]);
   const dropdownPanelSx = getDropdownPanelSx(isDarkMode);
   const dropdownItemSx = useMemo(() => getDropdownItemSx(isDarkMode), [isDarkMode]);
 
@@ -507,6 +561,10 @@ export default function ProjectPage() {
       
       // Устанавливаем как текущий чат
       setCurrentChat(chatId);
+
+      if (projectId) {
+        copyMcpToolIds(projectMcpChatKey(projectId), chatId);
+      }
       
       // Отправляем сообщение; передаём projectId явно, так как state может не успеть обновиться
       await sendMessage(inputMessage.trim(), chatId, true, projectId);
@@ -758,6 +816,7 @@ export default function ProjectPage() {
           voiceDisabled={isSending}
           voiceTooltip="Голосовой ввод"
           libraryBadge={libraryInputBadge}
+          inputSuggestions={mcpInputSuggestions}
         />
 
         {/* Список чатов */}
@@ -1018,7 +1077,7 @@ export default function ProjectPage() {
                         gearToolsPaperHeightPx < CHAT_GEAR_MENU_PAPER_MAX_HEIGHT_PX ? 'auto' : 'hidden',
                     }
                   : { maxHeight: CHAT_GEAR_MENU_PAPER_MAX_HEIGHT, overflowY: 'auto' }),
-                ...((gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode')
+                ...((gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode' || gearToolsPanel === 'mcp')
                   ? CHAT_GEAR_SCROLL_AREA_NO_VISIBLE_SCROLLBAR_SX
                   : {}),
               },
@@ -1030,15 +1089,15 @@ export default function ProjectPage() {
               display: 'flex',
               flexDirection: 'row',
               alignItems: 'stretch',
-              gap: gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode' ? `${CHAT_GEAR_MENU_PANELS_GAP_PX}px` : 0,
+              gap: gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode' || gearToolsPanel === 'mcp' ? `${CHAT_GEAR_MENU_PANELS_GAP_PX}px` : 0,
               width:
-                (gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode') && gearToolsMenuWidthPx != null
+                (gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode' || gearToolsPanel === 'mcp') && gearToolsMenuWidthPx != null
                   ? `${gearToolsMenuWidthPx}px`
-                  : gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode'
+                  : gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode' || gearToolsPanel === 'mcp'
                     ? CHAT_GEAR_MENU_EXPANDED_WIDTH_PX
                     : CHAT_GEAR_MENU_PANEL_WIDTH_PX,
               maxWidth:
-                (gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode') && gearToolsMenuWidthPx != null
+                (gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode' || gearToolsPanel === 'mcp') && gearToolsMenuWidthPx != null
                   ? `${gearToolsMenuWidthPx}px`
                   : 'min(96vw, 580px)',
               minHeight: gearToolsPaperHeightPx != null ? `${gearToolsPaperHeightPx}px` : undefined,
@@ -1052,7 +1111,7 @@ export default function ProjectPage() {
               sx={{
                 ...dropdownPanelSx,
                 width:
-                  gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode'
+                  gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode' || gearToolsPanel === 'mcp'
                     ? CHAT_GEAR_MENU_LEFT_RAIL_WIDTH_PX
                     : '100%',
                 flexShrink: 0,
@@ -1094,6 +1153,36 @@ export default function ProjectPage() {
                     ...DROPDOWN_CHEVRON_SX,
                     flexShrink: 0,
                     transform: gearToolsPanel === 'agents' ? 'rotate(90deg)' : 'none',
+                  }}
+                />
+              </Box>
+              <Box
+                onClick={() => setGearToolsPanel((p) => (p === 'mcp' ? 'main' : 'mcp'))}
+                sx={{
+                  ...dropdownItemSx,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1,
+                  color: isDarkMode ? 'white' : '#333',
+                  bgcolor:
+                    gearToolsPanel === 'mcp'
+                      ? isDarkMode
+                        ? DROPDOWN_ITEM_HOVER_BG_DARK
+                        : DROPDOWN_ITEM_HOVER_BG_LIGHT
+                      : 'transparent',
+                }}
+              >
+                <GearMenuMcpIcon
+                  sx={{ fontSize: 18, color: isDarkMode ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.6)', flexShrink: 0 }}
+                />
+                <Typography sx={{ flex: 1, minWidth: 0, fontSize: MENU_ACTION_TEXT_SIZE, whiteSpace: 'nowrap' }}>
+                  MCP
+                </Typography>
+                <ChevronRightIcon
+                  sx={{
+                    ...DROPDOWN_CHEVRON_SX,
+                    flexShrink: 0,
+                    transform: gearToolsPanel === 'mcp' ? 'rotate(90deg)' : 'none',
                   }}
                 />
               </Box>
@@ -1167,7 +1256,7 @@ export default function ProjectPage() {
                 </Typography>
               </Box>
             </Box>
-            {gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode' ? (
+            {gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode' || gearToolsPanel === 'mcp' ? (
               <Box
                 sx={{
                   ...dropdownPanelSx,
@@ -1185,6 +1274,8 @@ export default function ProjectPage() {
                     isDarkMode={isDarkMode}
                     canUseAgents={Boolean(agentStatus?.is_initialized)}
                   />
+                ) : gearToolsPanel === 'mcp' ? (
+                  <ChatGearMcpPanel isDarkMode={isDarkMode} chatId={mcpScopeChatId} />
                 ) : (
                   <Box sx={{ p: 1, display: 'flex', flexDirection: 'column', gap: 0.5, overflowY: 'auto' }}>
                     {([

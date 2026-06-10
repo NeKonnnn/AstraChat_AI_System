@@ -3,6 +3,7 @@ export const ASTRA_FOCUS_CHAT_SEARCH = 'astrachat:focus-chat-search';
 export const ASTRA_TRIGGER_ATTACH = 'astrachat:trigger-attach';
 export const ASTRA_REQUEST_DELETE_CURRENT_CHAT = 'astrachat:request-delete-current-chat';
 export const ASTRA_OPEN_SETTINGS = 'astrachat:open-settings';
+export const ASTRA_OPEN_SETTINGS_SECTION = 'astrachat:open-settings-section';
 export const ASTRA_OPEN_AGENT_CONSTRUCTOR = 'astrachat:open-agent-constructor';
 export const ASTRA_OPEN_TRANSCRIPTION_SIDEBAR = 'astrachat:open-transcription-sidebar';
 

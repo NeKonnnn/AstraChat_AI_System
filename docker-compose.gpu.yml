@@ -1,0 +1,22 @@
+# Оверрайд для запуска llm-svc с GPU (NVIDIA).
+# Использование: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+# Требуется: NVIDIA GPU, драйвер, NVIDIA Container Toolkit (nvidia-docker2).
+# В config.yml задайте gpu_layers: -1 для загрузки слоёв на GPU.
+
+services:
+  llm-service:
+    build:
+      context: ./llm-svc
+      dockerfile: Dockerfile.cuda
+    deploy:
+      resources:
+        limits:
+          memory: 50G
+        reservations:
+          memory: 32G
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all

@@ -11,7 +11,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 class StreamResponseGenerator(BaseResponseGenerator):
-    """Генератор потоковых ответов с поддержкой tool calls для LibreChat"""
+    """Генератор потоковых ответов с поддержкой tool calls."""
     
     def __init__(self, model_name: str, completion_caller: Callable):
         super().__init__(model_name, completion_caller)
@@ -63,7 +63,7 @@ class StreamResponseGenerator(BaseResponseGenerator):
             yield self._create_error_chunk(response_id, str(e))
 
     async def _stream_tool_calls(self, response_id: str, tool_call: dict) -> AsyncGenerator[str, None]:
-        """Строгая имитация OpenAI streaming для LibreChat"""
+        """Строгая имитация OpenAI streaming."""
         # Чанк 1: имя функции
         chunk1 = json.dumps({
             'id': response_id,

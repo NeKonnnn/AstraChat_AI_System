@@ -6,9 +6,11 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request, Depends
 
 from backend.app_state import context_prompt_manager
+from backend.auth.jwt_handler import get_current_user
+from backend.settings.cef_logger.cef_logger import log_cef_event
 
 router = APIRouter(prefix="/api/context-prompts", tags=["context-prompts"])
 logger = logging.getLogger(__name__)
@@ -23,10 +25,28 @@ async def get_global_prompt():
 
 
 @router.put("/global")
-async def update_global_prompt(request: dict):
+async def update_global_prompt(
+    payload: dict,
+    http_request: Request,
+    current_user: dict = Depends(get_current_user),
+):
     try:
-        if not context_prompt_manager.set_global_prompt(request.get("prompt", "")):
+        if not context_prompt_manager.set_global_prompt(payload.get("prompt", "")):
             raise HTTPException(status_code=500, detail="Ошибка при сохранении промпта")
+        log_cef_event(
+            "SEC005",
+            request=http_request,
+            current_user=current_user,
+            status_code=200,
+            extra={
+                "cs1": "global-context-prompts",
+                "cs1Label": "SettingsSection",
+                "cs2": "USER",
+                "cs2Label": "TargetRole",
+                "cs3": "global prompt changed",
+                "cs3Label": "ChangedPermissions",
+            },
+        )
         return {"message": "Глобальный промпт обновлен", "success": True, "timestamp": datetime.now().isoformat()}
     except HTTPException:
         raise

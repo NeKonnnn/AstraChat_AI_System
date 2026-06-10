@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Box, Typography, Popover, Tooltip, CircularProgress } from '@mui/material';
 import {
   Search as SearchIcon,
@@ -11,6 +11,10 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { useAppActions } from '../contexts/AppContext';
 import { getApiUrl } from '../config/api';
+import {
+  isValidSelectedModelPath,
+  LAST_SELECTED_MODEL_PATH_STORAGE_KEY,
+} from '../utils/modelThinking';
 import {
   getDropdownItemSx,
   DROPDOWN_CHEVRON_SX,
@@ -46,9 +50,47 @@ interface ModelItem {
   llm_host_id?: string;
 }
 
+interface ProvidersResponse {
+  default_provider_id?: string | null;
+  providers?: Array<{ id?: string; enabled?: boolean }>;
+}
+
 const STORAGE_AGENT_ID = 'active_agent_id';
 const STORAGE_AGENT_NAME = 'active_agent_name';
 const STORAGE_AGENT_PROMPT = 'active_agent_prompt';
+const MODELS_CACHE_KEY = 'agent_selector_models_cache_v1';
+const PROVIDERS_CACHE_KEY = 'agent_selector_providers_cache_v1';
+/** Дольше, чтобы после простоя сразу показывать последний каталог (фон обновит список). */
+const MODELS_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const PROVIDERS_CACHE_TTL_MS = 60_000;
+const AVAILABLE_MODELS_FETCH_MS = 30_000;
+
+type TimedCache<T> = { ts: number; data: T };
+
+function readTimedCache<T>(key: string, ttlMs: number): T | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && 'ts' in parsed && 'data' in parsed) {
+      const ts = Number((parsed as TimedCache<T>).ts || 0);
+      if (!Number.isFinite(ts) || Date.now() - ts > ttlMs) return null;
+      return (parsed as TimedCache<T>).data;
+    }
+    // legacy cache format (plain array/object)
+    return parsed as T;
+  } catch {
+    return null;
+  }
+}
+
+function writeTimedCache<T>(key: string, data: T): void {
+  try {
+    localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data }));
+  } catch {
+    // ignore cache write errors
+  }
+}
 
 export function getActiveAgentFromStorage(): { id: number; name: string; system_prompt: string } | null {
   if (typeof window === 'undefined') return null;
@@ -82,11 +124,28 @@ export default function AgentSelector({
   const { token } = useAuth();
   const { showNotification } = useAppActions();
 
-  const [models, setModels] = useState<ModelItem[]>([]);
+  const [models, setModels] = useState<ModelItem[]>(() => {
+    const cached = readTimedCache<ModelItem[]>(MODELS_CACHE_KEY, MODELS_CACHE_TTL_MS);
+    return Array.isArray(cached) ? cached : [];
+  });
   const [loadingModels, setLoadingModels] = useState(false);
   const [isLoadingModel, setIsLoadingModel] = useState(false);
   const [loadingModelPath, setLoadingModelPath] = useState<string | null>(null);
   const [selectedModelPath, setSelectedModelPath] = useState('');
+  const [defaultProviderId, setDefaultProviderId] = useState<string>(() => {
+    const cached = readTimedCache<{ defaultProviderId?: string }>(PROVIDERS_CACHE_KEY, PROVIDERS_CACHE_TTL_MS);
+    return (cached?.defaultProviderId || '').toString();
+  });
+  const [providerIds, setProviderIds] = useState<string[]>(() => {
+    const cached = readTimedCache<{ providerIds?: string[] }>(PROVIDERS_CACHE_KEY, PROVIDERS_CACHE_TTL_MS);
+    return Array.isArray(cached?.providerIds) ? (cached?.providerIds ?? []) : [];
+  });
+  const [modelsLoadedOnce, setModelsLoadedOnce] = useState<boolean>(() => {
+    const cached = readTimedCache<ModelItem[]>(MODELS_CACHE_KEY, MODELS_CACHE_TTL_MS);
+    return Array.isArray(cached) && cached.length > 0;
+  });
+  /** Вся загрузка каталога (провайдеры + /available): не показывать «Нет моделей» пока идёт fetch. */
+  const [catalogLoading, setCatalogLoading] = useState(false);
   const [activeAgent, setActiveAgent] = useState<{ id: number; name: string; system_prompt: string } | null>(
     () => getActiveAgentFromStorage(),
   );
@@ -117,67 +176,173 @@ export default function AgentSelector({
     const pid = (model.provider_id || model.llm_host_id || '').trim();
     if (pid) return pid;
     const path = model.path || '';
-    if (!path) return 'local';
+    if (!path) return defaultProviderId || 'local';
     if (path.startsWith('llm-svc://')) {
       const rest = path.slice('llm-svc://'.length);
       const host = rest.includes('/') ? rest.split('/')[0] : rest;
       return host || 'llm-svc';
     }
     if (path.includes('/')) {
-      return path.split('/')[0] || 'local';
+      const head = path.split('/')[0]?.trim();
+      return head || defaultProviderId || 'local';
     }
-    return 'local';
-  }, []);
+    return defaultProviderId || 'local';
+  }, [defaultProviderId]);
+
+  const normalizeModelPath = useCallback((rawPath: string): string => {
+    const p = (rawPath || '').trim();
+    if (!p) return '';
+    if (p.startsWith('llm-svc://')) {
+      const rest = p.slice('llm-svc://'.length).replace(/^\/+/, '');
+      if (rest.includes('/')) return rest;
+      return defaultProviderId ? `${defaultProviderId}/${rest}` : rest;
+    }
+    return p;
+  }, [defaultProviderId]);
 
   const getModelDisplayName = useCallback(
     (path: string) => {
-      if (!path) return '';
-      const fromList = models.find((m) => m.path === path);
+      if (!path || !isValidSelectedModelPath(path)) return '';
+      const normalizedPath = normalizeModelPath(path);
+      const fromList = models.find((m) => normalizeModelPath(m.path) === normalizedPath);
       const raw = fromList?.display_name || fromList?.name;
       if (raw) return raw.replace(/\.gguf$/i, '');
-      return path.split(/[/\\]/).pop()?.replace(/\.gguf$/i, '') ?? path;
+      const modelId = normalizedPath.split('/').slice(1).join('/') || normalizedPath;
+      const byName = models.find((m) => (m.name || '').trim() === modelId);
+      if (byName) return (byName.display_name || byName.name || '').replace(/\.gguf$/i, '');
+      return normalizedPath.split(/[/\\]/).pop()?.replace(/\.gguf$/i, '') ?? normalizedPath;
     },
-    [models],
+    [models, normalizeModelPath],
   );
 
   // ─── Data loading ─────────────────────────────────────────────────────────────
 
-  const loadModels = useCallback(async () => {
-    setLoadingModels(true);
+  const fetchJsonWithTimeout = useCallback(async (url: string, timeoutMs = 8000) => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const [listResp, currentResp] = await Promise.all([
-        fetch(getApiUrl('/api/models')),
-        fetch(getApiUrl('/api/models/current')),
+      const resp = await fetch(url, { signal: controller.signal });
+      if (!resp.ok) return null;
+      return await resp.json();
+    } catch {
+      return null;
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }, []);
+
+  /** Один in-flight запрос на /available: фоновый прогрев и открытие меню не дублируют сеть. */
+  const availableCatalogInFlightRef = useRef<Promise<Record<string, unknown> | null> | null>(null);
+  const fetchAvailableCatalog = useCallback(async (): Promise<Record<string, unknown> | null> => {
+    const existing = availableCatalogInFlightRef.current;
+    if (existing) return existing;
+    const p = fetchJsonWithTimeout(getApiUrl('/api/models/available'), AVAILABLE_MODELS_FETCH_MS) as Promise<
+      Record<string, unknown> | null
+    >;
+    availableCatalogInFlightRef.current = p;
+    void p.finally(() => {
+      if (availableCatalogInFlightRef.current === p) availableCatalogInFlightRef.current = null;
+    });
+    return p;
+  }, [fetchJsonWithTimeout]);
+
+  const loadModels = useCallback(async (showSpinner: boolean = true) => {
+    setCatalogLoading(true);
+    if (showSpinner) setLoadingModels(true);
+    try {
+      // 1) Быстрые данные для UI-каркаса (категории/текущая модель).
+      // Категории должны появляться как можно раньше, не дожидаясь /api/models/available.
+      const [currentData, providersData] = await Promise.all([
+        fetchJsonWithTimeout(getApiUrl('/api/models/current'), 5000),
+        fetchJsonWithTimeout(getApiUrl('/api/llm-providers?include_health=false'), 8000),
       ]);
-      if (listResp.ok) {
-        const data = await listResp.json();
-        setModels(data.models || []);
+      if (currentData?.path) {
+        const normalizedPath = normalizeModelPath(currentData.path);
+        if (isValidSelectedModelPath(normalizedPath)) {
+          setSelectedModelPath(normalizedPath);
+          localStorage.setItem(LAST_SELECTED_MODEL_PATH_STORAGE_KEY, normalizedPath);
+        } else {
+          setSelectedModelPath('');
+          localStorage.removeItem(LAST_SELECTED_MODEL_PATH_STORAGE_KEY);
+        }
       }
-      if (currentResp.ok) {
-        const current = await currentResp.json();
-        setSelectedModelPath(current?.path || '');
+      const providersPayload = (providersData || {}) as ProvidersResponse;
+      const nextDefaultProviderId = (providersPayload.default_provider_id || '').toString();
+      setDefaultProviderId(nextDefaultProviderId);
+      const ids = (providersPayload.providers || [])
+        .map((p) => (p?.id || '').toString().trim())
+        .filter(Boolean);
+      setProviderIds(ids);
+      writeTimedCache(PROVIDERS_CACHE_KEY, { defaultProviderId: nextDefaultProviderId, providerIds: ids });
+      setModelsLoadedOnce(true);
+
+      // 2) Список моделей (на бэкенде провайдеры опрашиваются параллельно).
+      const modelsData = await fetchAvailableCatalog();
+      if (modelsData?.models) {
+        const nextModels = (modelsData.models as ModelItem[]) || [];
+        setModels(nextModels);
+        writeTimedCache(MODELS_CACHE_KEY, nextModels);
       }
     } catch {
       /* silent */
     } finally {
-      setLoadingModels(false);
+      setCatalogLoading(false);
+      if (showSpinner) setLoadingModels(false);
     }
-  }, []);
+  }, [fetchAvailableCatalog, normalizeModelPath]);
+
+  // Один раз за жизнь вкладки: фоновый прогрев каталога до открытия селектора.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const modelsData = await fetchAvailableCatalog();
+        if (cancelled || !modelsData?.models) return;
+        const nextModels = (modelsData.models as ModelItem[]) || [];
+        setModels(nextModels);
+        writeTimedCache(MODELS_CACHE_KEY, nextModels);
+        if (nextModels.length > 0) {
+          setModelsLoadedOnce(true);
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchAvailableCatalog]);
 
   useEffect(() => {
-    if (anchorEl) {
-      void loadModels();
+    // Повторное открытие — тихий рефреш; первый раз — со спиннером слева.
+    if (anchorEl && !modelsLoadedOnce) {
+      void loadModels(true);
+      return;
     }
-  }, [anchorEl, loadModels]);
+    if (anchorEl && modelsLoadedOnce) {
+      void loadModels(false);
+    }
+  }, [anchorEl, loadModels, modelsLoadedOnce]);
 
   useEffect(() => {
     let cancelled = false;
     fetch(getApiUrl('/api/models/current'))
       .then((r) => (r.ok ? r.json() : null))
-      .then((data) => { if (!cancelled && data?.path) setSelectedModelPath(data.path); })
+      .then((data) => {
+        if (!cancelled && data?.path) {
+          const normalizedPath = normalizeModelPath(data.path);
+          if (isValidSelectedModelPath(normalizedPath)) {
+            setSelectedModelPath(normalizedPath);
+            localStorage.setItem(LAST_SELECTED_MODEL_PATH_STORAGE_KEY, normalizedPath);
+          } else {
+            setSelectedModelPath('');
+            localStorage.removeItem(LAST_SELECTED_MODEL_PATH_STORAGE_KEY);
+          }
+        }
+      })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, []);
+  }, [normalizeModelPath]);
 
   useEffect(() => {
     const onAgentSelected = () => setActiveAgent(getActiveAgentFromStorage());
@@ -205,9 +370,17 @@ export default function AgentSelector({
 
   const handleSelectModel = async (modelPath: string) => {
     if (modelPath === selectedModelPath) { handleClose(); return; }
+    const prevModelPath = selectedModelPath;
     try {
       setIsLoadingModel(true);
       setLoadingModelPath(modelPath);
+      // Оптимистично переключаем выбранную модель в UI,
+      // чтобы не блокировать пользователя до полного рефреша списков.
+      setSelectedModelPath(modelPath);
+      localStorage.setItem(LAST_SELECTED_MODEL_PATH_STORAGE_KEY, modelPath);
+      onModelSelect?.(modelPath);
+      handleClose();
+
       const response = await fetch(getApiUrl('/api/models/load'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -215,15 +388,19 @@ export default function AgentSelector({
       });
       const data = await response.json();
       if (response.ok && data.success) {
-        setSelectedModelPath(modelPath);
-        await loadModels();
         showNotification('success', 'Модель успешно загружена');
-        handleClose();
-        onModelSelect?.(modelPath);
+        // Тяжелый рефреш выполняем в фоне, без блокировки UX.
+        void loadModels(false);
       } else {
         throw new Error(data.message || data.detail || 'Не удалось загрузить модель');
       }
     } catch (e: any) {
+      // Откатываем UI, если backend не подтвердил переключение.
+      setSelectedModelPath(prevModelPath);
+      if (prevModelPath) {
+        localStorage.setItem(LAST_SELECTED_MODEL_PATH_STORAGE_KEY, prevModelPath);
+      }
+      if (prevModelPath) onModelSelect?.(prevModelPath);
       showNotification('error', `Ошибка загрузки модели: ${e?.message || e}`);
     } finally {
       setIsLoadingModel(false);
@@ -236,6 +413,9 @@ export default function AgentSelector({
   /** Список подключений (уникальные метки) с их моделями. */
   const connections = useMemo(() => {
     const map = new Map<string, ModelItem[]>();
+    for (const pid of providerIds) {
+      if (!map.has(pid)) map.set(pid, []);
+    }
     for (const m of models) {
       const label = getConnectionLabel(m);
       const bucket = map.get(label);
@@ -262,7 +442,7 @@ export default function AgentSelector({
     ? activeAgent.name
     : loadingModelPath
       ? getModelDisplayName(loadingModelPath)
-      : selectedModelPath
+      : isValidSelectedModelPath(selectedModelPath)
         ? getModelDisplayName(selectedModelPath)
         : 'Агенты / Модели';
 
@@ -322,7 +502,7 @@ export default function AgentSelector({
         title={
           activeAgent
             ? `Агент: ${activeAgent.name}. Модели — наведите «Модели» в меню. Смена агента: Инструменты → Агенты`
-            : loadingModelPath || selectedModelPath
+            : loadingModelPath || isValidSelectedModelPath(selectedModelPath)
               ? `Модель: ${getModelDisplayName(loadingModelPath || selectedModelPath || '')}. Список моделей — наведите «Модели»`
               : 'Модели — наведите на пункт «Модели». Агенты — в меню Инструменты'
         }
@@ -333,7 +513,7 @@ export default function AgentSelector({
         >
           {activeAgent ? (
             <AgentIcon sx={{ fontSize: '1.1rem', color: mutedTextColor, flexShrink: 0 }} />
-          ) : loadingModelPath || selectedModelPath ? (
+          ) : loadingModelPath || isValidSelectedModelPath(selectedModelPath) ? (
             <ComputerIcon sx={{ fontSize: '1.1rem', color: mutedTextColor, flexShrink: 0 }} />
           ) : (
             <AgentIcon sx={{ fontSize: '1.1rem', color: mutedTextColor, flexShrink: 0 }} />
@@ -436,11 +616,11 @@ export default function AgentSelector({
                   );
                 })
               )}
-              {loadingModels && (
+              {(loadingModels && !modelsLoadedOnce) || (catalogLoading && connections.length === 0) ? (
                 <Box sx={{ py: 1.5, display: 'flex', justifyContent: 'center' }}>
                   <CircularProgress size={18} sx={{ color: subtleColor }} />
                 </Box>
-              )}
+              ) : null}
             </Box>
           </Box>
 
@@ -496,6 +676,11 @@ export default function AgentSelector({
                   '&::-webkit-scrollbar': { display: 'none' },
                 }}
               >
+                {catalogLoading && filteredModels.length === 0 ? (
+                  <Box sx={{ py: 3, display: 'flex', justifyContent: 'center' }}>
+                    <CircularProgress size={22} sx={{ color: subtleColor }} />
+                  </Box>
+                ) : null}
                 {filteredModels.map((model) => {
                   const isSelected = selectedModelPath === model.path && !loadingModelPath;
                   const isLoading = loadingModelPath === model.path;
@@ -534,7 +719,7 @@ export default function AgentSelector({
                     </Box>
                   );
                 })}
-                {!loadingModels && filteredModels.length === 0 && (
+                {!catalogLoading && filteredModels.length === 0 && (
                   <Box sx={{ px: 1.5, py: 2, fontSize: MENU_ACTION_TEXT_SIZE, color: subtleColor, textAlign: 'center' }}>
                     {modelSearch.trim() ? 'Ничего не найдено' : 'Нет доступных моделей'}
                   </Box>

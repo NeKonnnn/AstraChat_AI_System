@@ -50,6 +50,7 @@ import {
   Close as CloseIcon,
   Upload as UploadIcon,
   Square as SquareIcon,
+  HubOutlined as GearMenuMcpIcon,
   SmartToyOutlined as GearMenuAgentsIcon,
   ChevronLeft as ChevronLeftIcon,
   ChevronRight as ChevronRightIcon,
@@ -59,6 +60,7 @@ import {
   Check as CheckIcon,
   YouTube as YouTubeIcon,
   ExpandMore as ExpandMoreIcon,
+  KeyboardArrowDown as KeyboardArrowDownIcon,
   Psychology as ThinkingModeIcon,
   Bolt as FastModeIcon,
   AutoAwesome as AutoModeIcon,
@@ -69,19 +71,38 @@ import { useAppContext, useAppActions, Message, MultiLLMResponseSlot } from '../
 import { useSocket } from '../contexts/SocketContext';
 import { getApiUrl, getWsUrl, API_ENDPOINTS } from '../config/api';
 import MessageRenderer from '../components/MessageRenderer';
+import ImageGenerationPlaceholder from '../components/ImageGenerationPlaceholder';
 import { DocumentSearchPanel } from '../components/DocumentSearchPanel';
 import { useNavigate } from 'react-router-dom';
 import TranscriptionResultModal from '../components/TranscriptionResultModal';
 import ModelSelector from '../components/ModelSelector';
 import MessageNavigationBar from '../components/MessageNavigationBar';
 import ShareConfirmDialog from '../components/ShareConfirmDialog';
-import ChatInputBar from '../components/ChatInputBar';
+import ChatInputBar, { InlineAttachment } from '../components/ChatInputBar';
+import { prepareInlineImageFile, formatFileSize, dataUrlToFile, getClipboardImageFile } from '../utils/inlineImage';
+import {
+  buildOversizedInlineAttachMessage,
+  buildUnsupportedInlineAttachMessage,
+  isInlineAttachSizeErrorMessage,
+} from '../utils/inlineAttachmentRules';
+import TopErrorBanner from '../components/TopErrorBanner';
+import { logChatAttach, logChatAttachError } from '../utils/chatAttachDebug';
+import InlineAttachmentsList from '../components/InlineAttachmentsList';
+import InlineImageLightbox from '../components/InlineImageLightbox';
+import { incrementTabNotification } from '../utils/tabNotifications';
 import ChatGearAgentsPanel from '../components/ChatGearAgentsPanel';
+import ChatGearMcpPanel from '../components/ChatGearMcpPanel';
 import VoiceChatDialog from '../components/VoiceChatDialog';
 import AgentConstructorPanel from '../components/AgentConstructorPanel';
 import AgentSelector from '../components/AgentSelector';
 import ChatInputStatusCluster from '../components/ChatInputStatusCluster';
 import { useMyAgentSelection, useOrchestratorAgentsAnyActive } from '../hooks/useChatInputAgentIndicators';
+import { useChatInputMcpIndicators } from '../mcp/hooks/useChatInputMcpIndicators';
+import { useMcpStreamingTools } from '../mcp/hooks/useMcpStreamingTools';
+import McpToolCallsPanel from '../mcp/components/McpToolCallsPanel';
+import McpLiveToolsIndicator from '../mcp/components/McpLiveToolsIndicator';
+import McpSuggestionChips from '../mcp/components/McpSuggestionChips';
+import { getAtlassianSuggestions } from '../mcp/plugins/atlassianSuggestions';
 import { getSidebarPanelBackground } from '../constants/sidebarPanelColor';
 import { getWorkZoneBackgroundColor, getWorkZoneCustomImage, isWorkZoneAnimatedMode } from '../constants/workZoneBackground';
 import { useWorkZoneBgMode } from '../hooks/useWorkZoneBgMode';
@@ -126,6 +147,8 @@ import {
   getSidebarRailCollapsedListItemButtonSx,
 } from '../constants/menuStyles';
 import {
+  isValidSelectedModelPath,
+  LAST_SELECTED_MODEL_PATH_STORAGE_KEY,
   MODEL_THINKING_MODE_STORAGE_KEY,
   ModelThinkingMode,
 } from '../utils/modelThinking';
@@ -194,6 +217,18 @@ function getMultiLlmColumnDisplayText(slot: MultiLLMResponseSlot): string {
     }
   }
   return slot.content;
+}
+
+/** Тело столбца multi-LLM для парсинга рассуждений (с trimEnd после завершения). */
+function getMultiLlmColumnDisplayBody(response: MultiLLMResponseSlot): string {
+  if (response.alternativeResponses?.length && response.currentResponseIndex !== undefined) {
+    const ci = response.currentResponseIndex;
+    if (ci >= 0 && ci < response.alternativeResponses.length) {
+      const alt = response.alternativeResponses[ci];
+      if (alt !== undefined) return response.isStreaming ? alt : alt.trimEnd();
+    }
+  }
+  return response.isStreaming ? response.content : response.content.trimEnd();
 }
 
 function extractReasoningBlock(
@@ -312,7 +347,7 @@ interface MessageCardProps {
 }
 
 // ===========================
-// КОМПОНЕНТ БЛОКА РАССУЖДЕНИЙ — дизайн в стиле Qwen Studio / LibreChat
+// КОМПОНЕНТ БЛОКА РАССУЖДЕНИЙ — дизайн в стиле Qwen Studio / ASTRA
 // ===========================
 interface ReasoningBlockProps {
   reasoningContent: string;
@@ -320,6 +355,8 @@ interface ReasoningBlockProps {
   isExpanded: boolean;
   onToggle: () => void;
   durationSec: number | null;
+  /** Секунды с начала размышления (обновляется раз в секунду во время стриминга). */
+  liveThinkingSec: number | null;
   isDarkMode: boolean;
 }
 
@@ -329,6 +366,7 @@ const ReasoningBlock = React.memo(({
   isExpanded,
   onToggle,
   durationSec,
+  liveThinkingSec,
   isDarkMode,
 }: ReasoningBlockProps) => {
   const theme = useTheme();
@@ -339,13 +377,64 @@ const ReasoningBlock = React.memo(({
   const accentAlpha = theme.palette.mode === 'dark'
     ? alpha('#a78bfa', 0.12)
     : alpha('#7c3aed', 0.06);
-  const borderAlpha = theme.palette.mode === 'dark'
-    ? alpha('#a78bfa', 0.35)
-    : alpha('#7c3aed', 0.3);
+  const isDark = theme.palette.mode === 'dark';
+  const titleColor = isDark ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.85)';
+
+  const headerLabel =
+    isThinkingStreaming
+      ? liveThinkingSec !== null && liveThinkingSec > 0
+        ? `Думает…\u00A0${liveThinkingSec}\u00A0сек`
+        : 'Думает…'
+      : durationSec !== null
+        ? `Думала\u00A0${durationSec}\u00A0сек`
+        : 'Цепочка рассуждений';
+
+  const subtleToggleSx = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 0.5,
+    userSelect: 'none' as const,
+    cursor: 'pointer',
+    width: 'fit-content',
+    maxWidth: '100%',
+    py: 0.25,
+    transition: 'opacity 0.2s',
+    '&:hover': { opacity: 0.75 },
+  };
+
+  const thinkingSegments = isThinkingStreaming ? Array.from(headerLabel) : [];
+  const letterWavePeriodSec = 1.45;
+  const letterCount = Math.max(thinkingSegments.length, 1);
 
   return (
-    <Box sx={{ mb: 1.5 }}>
-      {/* Заголовок */}
+    <Box
+      sx={{
+        mb: 1.5,
+        '@keyframes reasoningLetterWave': {
+          '0%, 100%': {
+            opacity: 0.42,
+            color: isDark ? 'rgba(255,255,255,0.48)' : 'rgba(0,0,0,0.42)',
+            textShadow: 'none',
+            transform: 'translateY(0)',
+          },
+          '22%': {
+            opacity: 1,
+            color: isDark ? '#f3ecff' : '#6d28d9',
+            textShadow: isDark
+              ? '0 0 16px rgba(196,181,253,0.55), 0 0 2px rgba(167,139,250,0.35)'
+              : '0 0 12px rgba(124,58,237,0.35), 0 0 1px rgba(91,33,182,0.25)',
+            transform: 'translateY(-0.4px)',
+          },
+          '44%': {
+            opacity: 0.42,
+            color: isDark ? 'rgba(255,255,255,0.48)' : 'rgba(0,0,0,0.42)',
+            textShadow: 'none',
+            transform: 'translateY(0)',
+          },
+        },
+      }}
+    >
+      {/* Заголовок — строка как у RAG («Исходные документы») */}
       <Box
         onMouseDown={pauseAutoScrollForInteraction}
         onTouchStart={pauseAutoScrollForInteraction}
@@ -353,68 +442,53 @@ const ReasoningBlock = React.memo(({
           pauseAutoScrollForInteraction();
           onToggle();
         }}
-        sx={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 0.75,
-          cursor: 'pointer',
-          userSelect: 'none',
-          px: 1,
-          py: 0.4,
-          borderRadius: '20px',
-          border: '1px solid',
-          borderColor: borderAlpha,
-          bgcolor: accentAlpha,
-          transition: 'all 0.18s ease',
-          '&:hover': {
-            bgcolor: theme.palette.mode === 'dark'
-              ? alpha('#a78bfa', 0.2)
-              : alpha('#7c3aed', 0.1),
-            borderColor: accentColor,
-          },
-        }}
+        sx={subtleToggleSx}
+        role="button"
+        aria-expanded={isExpanded}
+        aria-label={`${headerLabel}. ${isExpanded ? 'Свернуть' : 'Раскрыть'} блок рассуждений`}
       >
-        {/* Иконка с пульсацией во время стриминга */}
-        <Box
-          sx={{
-            display: 'flex',
-            alignItems: 'center',
-            color: accentColor,
-            '@keyframes pulse': {
-              '0%, 100%': { opacity: 1 },
-              '50%': { opacity: 0.4 },
-            },
-            animation: isThinkingStreaming ? 'pulse 1.4s ease-in-out infinite' : 'none',
-          }}
-        >
-          <ThinkingModeIcon sx={{ fontSize: 15 }} />
-        </Box>
+        {isThinkingStreaming ? (
+          <Box
+            component="span"
+            sx={{
+              fontWeight: 400,
+              fontSize: '0.9rem',
+              lineHeight: 1.35,
+              display: 'inline-flex',
+              flexWrap: 'wrap',
+              alignItems: 'baseline',
+              columnGap: 0,
+            }}
+          >
+            {thinkingSegments.map((ch, i) => (
+              <Box
+                key={`r-${i}`}
+                component="span"
+                sx={{
+                  display: 'inline-block',
+                  minWidth: ch === '\u00A0' ? '0.25em' : undefined,
+                  animation: `reasoningLetterWave ${letterWavePeriodSec}s ease-in-out infinite`,
+                  animationDelay: `${(i * letterWavePeriodSec) / letterCount}s`,
+                }}
+              >
+                {ch}
+              </Box>
+            ))}
+          </Box>
+        ) : (
+          <Typography variant="body2" sx={{ fontWeight: 400, fontSize: '0.9rem', lineHeight: 1.35, color: titleColor }}>
+            {headerLabel}
+          </Typography>
+        )}
 
-        {/* Текст статуса */}
-        <Typography
-          variant="caption"
+        <KeyboardArrowDownIcon
+          fontSize="small"
           sx={{
-            fontWeight: 500,
-            fontSize: '0.75rem',
-            color: accentColor,
-            letterSpacing: '0.01em',
-          }}
-        >
-          {isThinkingStreaming
-            ? 'Рассуждение\u2009\u00B7\u00B7\u00B7'
-            : durationSec !== null
-              ? `Думал\u00A0${durationSec}\u00A0сек`
-              : 'Цепочка рассуждений'}
-        </Typography>
-
-        {/* Шеврон */}
-        <ExpandMoreIcon
-          sx={{
-            fontSize: 15,
-            color: accentColor,
-            opacity: 0.8,
-            transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
-            transition: 'transform 0.22s ease',
+            color: titleColor,
+            flexShrink: 0,
+            transform: isExpanded ? 'rotate(180deg)' : 'none',
+            transition: 'transform 0.2s',
+            opacity: isThinkingStreaming ? 0.9 : 1,
           }}
         />
       </Box>
@@ -480,9 +554,16 @@ const MessageCardComponent = ({
   const [hoveredMultiLlmCol, setHoveredMultiLlmCol] = useState<number | null>(null);
   const [reasoningExpanded, setReasoningExpanded] = useState(false);
   const [multiReasoningExpanded, setMultiReasoningExpanded] = useState<Record<number, boolean>>({});
+  const [lightboxSrc, setLightboxSrc] = useState<{ src: string; name: string } | null>(null);
   const thinkingStartRef = useRef<number | null>(null);
   const [thinkingDurationSec, setThinkingDurationSec] = useState<number | null>(null);
+  const [liveThinkingSec, setLiveThinkingSec] = useState<number | null>(null);
   const prevThinkingStreamingRef = useRef(false);
+
+  const multiPrevThinkingStreamingRef = useRef<Record<number, boolean>>({});
+  const multiThinkingStartRef = useRef<Record<number, number | null>>({});
+  const [multiThinkingDurationSec, setMultiThinkingDurationSec] = useState<Record<number, number | null>>({});
+  const [multiLiveThinkingSec, setMultiLiveThinkingSec] = useState<Record<number, number | null>>({});
 
   // Вычисляем тело сообщения и парсим reasoning на уровне компонента (не внутри JSX)
   const visibleBody = useMemo(() => {
@@ -506,9 +587,36 @@ const MessageCardComponent = ({
     [visibleBody, message.isStreaming],
   );
 
+  const showImageGenPlaceholder = useMemo(
+    () =>
+      !isUser &&
+      Boolean(message.isImageGenerating) &&
+      !message.inlineAttachments?.some((a) => a.contentType === 'image' && a.preview),
+    [isUser, message.isImageGenerating, message.inlineAttachments],
+  );
+  const isReasoningStreaming = useMemo(() => {
+    // В текущем потоке reasoning часто приходит уже в закрытом <think>...</think>,
+    // поэтому одного parsedMessage.isThinkingStreaming недостаточно.
+    // Считаем, что модель "думает", если:
+    // 1) сообщение всё ещё стримится,
+    // 2) блок reasoning уже есть,
+    // 3) основной ответ ещё не начал наполняться.
+    return Boolean(
+      parsedMessage.isThinkingStreaming ||
+      (message.isStreaming &&
+        Boolean(parsedMessage.reasoningContent) &&
+        parsedMessage.visibleContent.trim().length === 0),
+    );
+  }, [
+    parsedMessage.isThinkingStreaming,
+    parsedMessage.reasoningContent,
+    parsedMessage.visibleContent,
+    message.isStreaming,
+  ]);
+
   // Отслеживаем длительность рассуждения
   useEffect(() => {
-    const isNowThinking = parsedMessage.isThinkingStreaming;
+    const isNowThinking = isReasoningStreaming;
     const wasThinking = prevThinkingStreamingRef.current;
     if (isNowThinking && !wasThinking) {
       thinkingStartRef.current = Date.now();
@@ -519,14 +627,90 @@ const MessageCardComponent = ({
       thinkingStartRef.current = null;
     }
     prevThinkingStreamingRef.current = isNowThinking;
-  }, [parsedMessage.isThinkingStreaming]);
+  }, [isReasoningStreaming]);
+
+  useEffect(() => {
+    if (!isReasoningStreaming) {
+      setLiveThinkingSec(null);
+      return;
+    }
+    const tick = () => {
+      if (thinkingStartRef.current) {
+        setLiveThinkingSec(Math.max(1, Math.floor((Date.now() - thinkingStartRef.current) / 1000)));
+      }
+    };
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [isReasoningStreaming]);
+
+  useEffect(() => {
+    if (!message.multiLLMResponses?.length) return;
+    message.multiLLMResponses.forEach((response, respIndex) => {
+      const displayBody = getMultiLlmColumnDisplayBody(response);
+      const parsed = extractReasoningBlock(displayBody, response.isStreaming);
+      const isThinkingStreaming = Boolean(
+        parsed.isThinkingStreaming ||
+          (response.isStreaming &&
+            Boolean(parsed.reasoningContent) &&
+            parsed.visibleContent.trim().length === 0),
+      );
+      const was = multiPrevThinkingStreamingRef.current[respIndex] ?? false;
+      if (isThinkingStreaming && !was) {
+        multiThinkingStartRef.current[respIndex] = Date.now();
+        setMultiThinkingDurationSec((p: Record<number, number | null>) => ({ ...p, [respIndex]: null }));
+      } else if (!isThinkingStreaming && was && multiThinkingStartRef.current[respIndex]) {
+        const secs = Math.round((Date.now() - multiThinkingStartRef.current[respIndex]!) / 1000);
+        setMultiThinkingDurationSec((p: Record<number, number | null>) => ({ ...p, [respIndex]: secs > 0 ? secs : 1 }));
+        multiThinkingStartRef.current[respIndex] = null;
+      }
+      multiPrevThinkingStreamingRef.current[respIndex] = isThinkingStreaming;
+    });
+  }, [message]);
+
+  useEffect(() => {
+    if (!message.multiLLMResponses?.length) return;
+    const thinkingIndices: number[] = [];
+    message.multiLLMResponses.forEach((response, respIndex) => {
+      const parsed = extractReasoningBlock(getMultiLlmColumnDisplayBody(response), response.isStreaming);
+      const isThinkingStreaming = Boolean(
+        parsed.isThinkingStreaming ||
+          (response.isStreaming &&
+            Boolean(parsed.reasoningContent) &&
+            parsed.visibleContent.trim().length === 0),
+      );
+      if (isThinkingStreaming) thinkingIndices.push(respIndex);
+    });
+    if (thinkingIndices.length === 0) {
+      setMultiLiveThinkingSec({});
+      return;
+    }
+    const tick = () => {
+      setMultiLiveThinkingSec((prev: Record<number, number | null>) => {
+        const next = { ...prev };
+        for (const respIndex of thinkingIndices) {
+          const start = multiThinkingStartRef.current[respIndex];
+          if (start) next[respIndex] = Math.max(1, Math.floor((Date.now() - start) / 1000));
+        }
+        return next;
+      });
+    };
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [message]);
 
   // Сбрасываем таймер при старте новой генерации этого сообщения
   useEffect(() => {
     if (message.isStreaming) {
       setThinkingDurationSec(null);
+      setLiveThinkingSec(null);
       thinkingStartRef.current = null;
       prevThinkingStreamingRef.current = false;
+      setMultiThinkingDurationSec({});
+      setMultiLiveThinkingSec({});
+      multiThinkingStartRef.current = {};
+      multiPrevThinkingStreamingRef.current = {};
     }
   }, [message.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -582,6 +766,26 @@ const MessageCardComponent = ({
         {!isUser && message.documentSearch && (
           <DocumentSearchPanel trace={message.documentSearch} />
         )}
+        {!isUser && message.mcpToolCalls && message.mcpToolCalls.length > 0 && !message.multiLLMResponses?.length && (
+          <McpToolCallsPanel toolCalls={message.mcpToolCalls} />
+        )}
+
+        {/* Inline-вложения (пользователь и сгенерированные картинки ассистента) */}
+        {message.inlineAttachments && message.inlineAttachments.length > 0 && (
+          <InlineAttachmentsList
+            files={message.inlineAttachments.map((a) => ({
+              name: a.name,
+              contentType: a.contentType,
+              imageSrc: a.contentType === 'image' ? a.preview : undefined,
+              size: a.size,
+            }))}
+            isDarkMode={isDarkMode}
+            variant="message"
+            onImageExpand={(resolvedSrc, name) => setLightboxSrc({ src: resolvedSrc, name })}
+            sx={{ mb: 1 }}
+          />
+        )}
+
         {message.multiLLMResponses && message.multiLLMResponses.length > 0 ? (
           <Box
             sx={{
@@ -594,17 +798,14 @@ const MessageCardComponent = ({
             }}
           >
             {message.multiLLMResponses.map((response, respIndex) => {
-              const displayBody = (() => {
-                if (response.alternativeResponses?.length && response.currentResponseIndex !== undefined) {
-                  const ci = response.currentResponseIndex;
-                  if (ci >= 0 && ci < response.alternativeResponses.length) {
-                    const alt = response.alternativeResponses[ci];
-                    if (alt !== undefined) return response.isStreaming ? alt : alt.trimEnd();
-                  }
-                }
-                return response.isStreaming ? response.content : response.content.trimEnd();
-              })();
+              const displayBody = getMultiLlmColumnDisplayBody(response);
               const parsedResponse = extractReasoningBlock(displayBody, response.isStreaming);
+              const isResponseReasoningStreaming = Boolean(
+                parsedResponse.isThinkingStreaming ||
+                  (response.isStreaming &&
+                    Boolean(parsedResponse.reasoningContent) &&
+                    parsedResponse.visibleContent.trim().length === 0),
+              );
               return (
                 <Card
                   key={`${response.model}-${respIndex}`}
@@ -635,20 +836,28 @@ const MessageCardComponent = ({
                         {parsedResponse.reasoningContent ? (
                           <ReasoningBlock
                             reasoningContent={parsedResponse.reasoningContent}
-                            isThinkingStreaming={parsedResponse.isThinkingStreaming}
+                            isThinkingStreaming={isResponseReasoningStreaming}
                             isExpanded={Boolean(multiReasoningExpanded[respIndex])}
                             onToggle={() =>
                               setMultiReasoningExpanded((prev) => ({ ...prev, [respIndex]: !prev[respIndex] }))
                             }
-                            durationSec={null}
+                            durationSec={multiThinkingDurationSec[respIndex] ?? null}
+                            liveThinkingSec={multiLiveThinkingSec[respIndex] ?? null}
                             isDarkMode={isDarkMode}
                           />
                         ) : null}
                         <MessageRenderer
                           content={parsedResponse.visibleContent}
-                          isStreaming={response.isStreaming}
+                          isStreaming={response.isStreaming && !isResponseReasoningStreaming}
                           onSendMessage={dataRef.current.handleSendMessageFromRenderer}
                         />
+                        {message.mcpToolCalls?.some((t) => !t.model || t.model === response.model) ? (
+                          <McpToolCallsPanel
+                            toolCalls={message.mcpToolCalls.filter(
+                              (t) => !t.model || t.model === response.model,
+                            )}
+                          />
+                        ) : null}
                       </>
                     )}
                   </CardContent>
@@ -806,21 +1015,24 @@ const MessageCardComponent = ({
               );
             })}
           </Box>
+        ) : showImageGenPlaceholder ? (
+          <ImageGenerationPlaceholder />
         ) : (
           <>
             {parsedMessage.reasoningContent ? (
               <ReasoningBlock
                 reasoningContent={parsedMessage.reasoningContent}
-                isThinkingStreaming={parsedMessage.isThinkingStreaming}
+                isThinkingStreaming={isReasoningStreaming}
                 isExpanded={reasoningExpanded}
                 onToggle={() => setReasoningExpanded((p) => !p)}
                 durationSec={thinkingDurationSec}
+                liveThinkingSec={liveThinkingSec}
                 isDarkMode={isDarkMode}
               />
             ) : null}
             <MessageRenderer
               content={parsedMessage.visibleContent}
-              isStreaming={message.isStreaming && !parsedMessage.isThinkingStreaming}
+              isStreaming={message.isStreaming && !isReasoningStreaming}
               onSendMessage={dataRef.current.handleSendMessageFromRenderer}
             />
           </>
@@ -861,12 +1073,27 @@ const MessageCardComponent = ({
               maxWidth: interfaceSettings.leftAlignMessages ? '100%' : (isUser ? '75%' : '100%'),
               minWidth: '180px',
               width: interfaceSettings.leftAlignMessages ? '100%' : (isUser ? undefined : '100%'),
-              backgroundColor: isUser ? 'primary.main' : isDarkMode ? 'background.paper' : '#f8f9fa',
+              backgroundColor: showImageGenPlaceholder
+                ? 'transparent'
+                : isUser
+                  ? 'primary.main'
+                  : isDarkMode
+                    ? 'background.paper'
+                    : '#f8f9fa',
               color: isUser ? 'primary.contrastText' : isDarkMode ? 'text.primary' : '#333',
-              boxShadow: isDarkMode ? '0 2px 8px rgba(0,0,0,0.15)' : '0 2px 8px rgba(0,0,0,0.1)',
+              boxShadow: showImageGenPlaceholder
+                ? 'none'
+                : isDarkMode
+                  ? '0 2px 8px rgba(0,0,0,0.15)'
+                  : '0 2px 8px rgba(0,0,0,0.1)',
             }}
           >
-            <CardContent sx={{ p: 1.2, '&:last-child': { pb: 1.2 } }}>
+            <CardContent
+              sx={{
+                p: showImageGenPlaceholder ? 0 : 1.2,
+                '&:last-child': { pb: showImageGenPlaceholder ? 0 : 1.2 },
+              }}
+            >
               {messageContent}
             </CardContent>
           </Card>
@@ -1036,6 +1263,14 @@ const MessageCardComponent = ({
         </Box>
         )}
       </Box>
+
+      {/* Лайтбокс для просмотра прикреплённых изображений */}
+      <InlineImageLightbox
+        open={Boolean(lightboxSrc)}
+        src={lightboxSrc?.src || ''}
+        name={lightboxSrc?.name || 'image'}
+        onClose={() => setLightboxSrc(null)}
+      />
     </Box>
   );
 };
@@ -1140,22 +1375,21 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   // Состояние для документов
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadingFile, setUploadingFile] = useState<{ name: string; size: number; previewUrl?: string } | null>(null);
+  const [attachErrorBanner, setAttachErrorBanner] = useState<string | null>(null);
+  const [modelErrorBanner, setModelErrorBanner] = useState<string | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [query, setQuery] = useState('');
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [isQuerying, setIsQuerying] = useState(false);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [queryResponse, setQueryResponse] = useState('');
-  const [uploadedFiles, setUploadedFiles] = useState<Array<{
-    name: string;
-    size: number;
-    type: string;
-    uploadDate: string;
-  }>>([]);
   const [showDocumentDialog, setShowDocumentDialog] = useState(false);
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   /** Раскрытый подпункт меню «Инструменты» (колонка справа, как в LeChat). */
-  const [gearToolsPanel, setGearToolsPanel] = useState<'main' | 'agents' | 'model-mode'>('main');
+  const [gearToolsPanel, setGearToolsPanel] = useState<'main' | 'agents' | 'mcp' | 'model-mode'>('main');
+  const gearSubPanelOpen =
+    gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode' || gearToolsPanel === 'mcp';
   const [modelThinkingMode, setModelThinkingMode] = useState<ModelThinkingMode>(() => {
     const saved = (localStorage.getItem(MODEL_THINKING_MODE_STORAGE_KEY) || 'fast') as ModelThinkingMode;
     return saved === 'auto' || saved === 'thinking' || saved === 'fast' ? saved : 'fast';
@@ -1228,6 +1462,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [inlineAttachments, setInlineAttachments] = useState<InlineAttachment[]>([]);
   const messageRefs = useRef<(HTMLDivElement | null)[]>([]);
   // Флаг: пользователь находится у нижнего края → автоскролл разрешён
   const isAtBottomRef = useRef(true);
@@ -1378,17 +1613,34 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     setInputMessage('');
   }, [state.currentChatId]);
 
+  const ensureModelSelectedForSend = useCallback((): boolean => {
+    const rawAgentId = localStorage.getItem('active_agent_id');
+    const parsedAgentId = rawAgentId ? parseInt(rawAgentId, 10) : NaN;
+    if (Number.isFinite(parsedAgentId)) {
+      return true;
+    }
+    const modelPath = localStorage.getItem(LAST_SELECTED_MODEL_PATH_STORAGE_KEY);
+    if (isValidSelectedModelPath(modelPath)) {
+      return true;
+    }
+    setModelErrorBanner('Модель не выбрана! Пожалуйста, выберите модель');
+    return false;
+  }, []);
+
   // Стабильный обработчик для MessageRenderer (НЕ меняется при ререндерах!)
   const handleSendMessageFromRendererRef = useRef<((prompt: string) => void) | null>(null);
   
   // Обновляем ref при изменении зависимостей, но НЕ создаем новую функцию
   useEffect(() => {
     handleSendMessageFromRendererRef.current = (prompt: string) => {
+      if (!ensureModelSelectedForSend()) {
+        return;
+      }
       if (currentChat && isConnected && !currentChatLoading) {
         sendMessage(prompt, currentChat.id);
       }
     };
-  }, [currentChat, isConnected, currentChatLoading, sendMessage]);
+  }, [currentChat, isConnected, currentChatLoading, sendMessage, ensureModelSelectedForSend]);
   
   // Создаем стабильную функцию ОДИН РАЗ (никогда не меняется!)
   const handleSendMessageFromRenderer = useCallback((prompt: string) => {
@@ -1398,6 +1650,31 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   // Состояние для режима multi-llm
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
   const orchestratorAgentsAnyActive = useOrchestratorAgentsAnyActive(Boolean(agentStatus?.is_initialized));
+  const activeMcpServers = useChatInputMcpIndicators(currentChat?.id);
+  const { activeMcpTools } = useMcpStreamingTools();
+
+  const mcpInputSuggestions = useMemo(() => {
+    const enabledServerIds = activeMcpServers.map((s) => s.id);
+    const suggestions = getAtlassianSuggestions(enabledServerIds);
+    const chips =
+      suggestions.length > 0 ? (
+        <McpSuggestionChips
+          suggestions={suggestions}
+          disabled={currentChatLoading || hasActiveChatStreaming}
+          onSelect={(text) => {
+            setInputMessage((prev) => (prev.trim() ? `${prev.trim()}\n${text}` : text));
+            inputRef.current?.focus();
+          }}
+        />
+      ) : null;
+    if (!activeMcpTools.length && !chips) return null;
+    return (
+      <>
+        <McpLiveToolsIndicator tools={activeMcpTools} />
+        {chips}
+      </>
+    );
+  }, [activeMcpServers, activeMcpTools, currentChatLoading, hasActiveChatStreaming]);
   const [availableModels, setAvailableModels] = useState<
     Array<{
       name: string;
@@ -1454,6 +1731,17 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     }
   }, []);
 
+  const handleOpenMcpGearPanel = useCallback(() => {
+    const shell = chatInputToolsAnchorRef.current;
+    if (shell) {
+      setGearToolsPanel('mcp');
+      setAnchorEl(shell);
+      const rect = shell.getBoundingClientRect();
+      setGearToolsMenuWidthPx(Math.round(rect.width));
+      setGearToolsPaperHeightPx(getChatGearMenuPaperHeightPx(rect.top));
+    }
+  }, []);
+
   const libraryInputBadge = useMemo(
     () => (
       <ChatInputStatusCluster
@@ -1462,9 +1750,19 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         onLibraryToggle={toggleKbRag}
         standardAgentsActive={orchestratorAgentsAnyActive}
         myAgentName={myAgentSelection?.name ?? null}
+        activeMcpServers={activeMcpServers}
+        onMcpClick={handleOpenMcpGearPanel}
       />
     ),
-    [isDarkMode, useKbRag, toggleKbRag, orchestratorAgentsAnyActive, myAgentSelection?.name],
+    [
+      isDarkMode,
+      useKbRag,
+      toggleKbRag,
+      orchestratorAgentsAnyActive,
+      myAgentSelection?.name,
+      activeMcpServers,
+      handleOpenMcpGearPanel,
+    ],
   );
 
   const handleToggleMultiLlmMode = useCallback(async () => {
@@ -1526,6 +1824,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     const savedShowUserName = localStorage.getItem('show_user_name');
     const savedEnableNotification = localStorage.getItem('enable_notification');
     const savedChatInputStyle = localStorage.getItem('chat_input_style');
+    const savedChatAutoscrollStreaming = localStorage.getItem('chat_autoscroll_streaming');
     return {
       autoGenerateTitles: savedAutoTitle !== null ? savedAutoTitle === 'true' : true,
       largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
@@ -1535,6 +1834,8 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       widescreenMode: savedWidescreenMode !== null ? savedWidescreenMode === 'true' : false,
       showUserName: savedShowUserName !== null ? savedShowUserName === 'true' : false,
       enableNotification: savedEnableNotification !== null ? savedEnableNotification === 'true' : false,
+      autoScrollWhileStreaming:
+        savedChatAutoscrollStreaming !== null ? savedChatAutoscrollStreaming === 'true' : true,
       chatInputStyle: (savedChatInputStyle as 'compact' | 'classic') || 'compact',
     };
   });
@@ -1551,6 +1852,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       const savedShowUserName = localStorage.getItem('show_user_name');
       const savedEnableNotification = localStorage.getItem('enable_notification');
       const savedChatInputStyle = localStorage.getItem('chat_input_style');
+      const savedChatAutoscrollStreaming = localStorage.getItem('chat_autoscroll_streaming');
       setInterfaceSettings({
         autoGenerateTitles: savedAutoTitle !== null ? savedAutoTitle === 'true' : true,
         largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
@@ -1560,6 +1862,8 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         widescreenMode: savedWidescreenMode !== null ? savedWidescreenMode === 'true' : false,
         showUserName: savedShowUserName !== null ? savedShowUserName === 'true' : false,
         enableNotification: savedEnableNotification !== null ? savedEnableNotification === 'true' : false,
+        autoScrollWhileStreaming:
+          savedChatAutoscrollStreaming !== null ? savedChatAutoscrollStreaming === 'true' : true,
         chatInputStyle: (savedChatInputStyle as 'compact' | 'classic') || 'compact',
       });
     };
@@ -1628,6 +1932,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
 
   // Автоскролл к последнему сообщению — только когда пользователь у дна
   useEffect(() => {
+    if (!interfaceSettings.autoScrollWhileStreaming) return;
     if (Date.now() < autoScrollPauseUntilRef.current) return;
     if (!isAtBottomRef.current) return;
     const container = messagesContainerRef.current;
@@ -1638,7 +1943,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     // Снимаем флаг программного скролла после завершения анимации
     const timer = setTimeout(() => { isProgrammaticScrollRef.current = false; }, 600);
     return () => clearTimeout(timer);
-  }, [messages]);
+  }, [messages, interfaceSettings.autoScrollWhileStreaming]);
 
   // Автоматический фокус на поле ввода при загрузке
   useEffect(() => {
@@ -1791,33 +2096,6 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     prevAgentModeRef.current = isMultiLlmMode ? 'multi-llm' : 'default';
   }, [isMultiLlmMode]);
 
-  // Загружаем список документов при инициализации
-  useEffect(() => {
-    const loadDocuments = async () => {
-      try {
-        const response = await fetch(getApiUrl('/api/documents'));
-        if (response.ok) {
-          const result: any = await response.json();
-          if (result.success && result.documents) {
-            // Преобразуем список имен файлов в объекты файлов
-            const files = result.documents.map((filename: string) => ({
-              name: filename,
-              size: 0, // Размер не сохраняется на бэкенде
-              type: 'application/octet-stream', // Тип не сохраняется на бэкенде
-              uploadDate: new Date().toISOString(),
-            }));
-            setUploadedFiles(files);
-          }
-        }
-      } catch (error) {
-        
-      }
-    };
-
-    loadDocuments();
-  }, []);
-
-
   // ================================
   // ФУНКЦИИ ТЕКСТОВОГО ЧАТА
   // ================================
@@ -1884,7 +2162,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
 
     const selectedModels = getSelectedModels();
     if (selectedModels.length === 0) {
-      showNotification('error', 'Выберите хотя бы одну модель');
+      setModelErrorBanner('Модель не выбрана! Пожалуйста, выберите модель');
       return;
     }
 
@@ -1913,7 +2191,22 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         lastMultiLlmPostedKeyRef.current = modelsKey;
       }
 
-      sendMessage(inputMessage.trim(), chatId, true, undefined, true);
+      const inlinePayload = inlineAttachments.length
+        ? {
+            inline_context: inlineAttachments.filter(f => f.contentType === 'text').map(f => `[${f.name}]\n${f.content}`).join('\n\n') || undefined,
+            inline_images: inlineAttachments.filter(f => f.contentType === 'image').map(f => f.content),
+            attachments_meta: inlineAttachments.map(f => ({
+              name: f.name,
+              contentType: f.contentType as 'text' | 'image',
+              preview: f.contentType === 'image' ? f.content : undefined,
+              minio_object: f.minioObject,
+              minio_bucket: f.minioBucket,
+              ...(typeof f.size === 'number' && f.size > 0 ? { size: f.size } : {}),
+            })),
+          }
+        : undefined;
+      sendMessage(inputMessage.trim(), chatId, true, undefined, true, inlinePayload);
+      setInlineAttachments([]);
 
       setInputMessage('');
 
@@ -1933,7 +2226,10 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       return;
     }
 
-    if (!inputMessage.trim() || currentChatLoading) {
+    if ((!inputMessage.trim() && inlineAttachments.length === 0) || currentChatLoading) {
+      return;
+    }
+    if (!ensureModelSelectedForSend()) {
       return;
     }
     if (!isConnected && !isConnecting) {
@@ -1950,14 +2246,44 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       setCurrentChat(newChatId);
       const messageText = inputMessage.trim();
       setInputMessage('');
+      const inlinePayloadNew = inlineAttachments.length
+        ? {
+            inline_context: inlineAttachments.filter(f => f.contentType === 'text').map(f => `[${f.name}]\n${f.content}`).join('\n\n') || undefined,
+            inline_images: inlineAttachments.filter(f => f.contentType === 'image').map(f => f.content),
+            attachments_meta: inlineAttachments.map(f => ({
+              name: f.name,
+              contentType: f.contentType as 'text' | 'image',
+              preview: f.contentType === 'image' ? f.content : undefined,
+              minio_object: f.minioObject,
+              minio_bucket: f.minioBucket,
+              ...(typeof f.size === 'number' && f.size > 0 ? { size: f.size } : {}),
+            })),
+          }
+        : undefined;
       setTimeout(() => {
-        sendMessage(messageText, newChatId);
+        sendMessage(messageText, newChatId, true, undefined, undefined, inlinePayloadNew);
+        setInlineAttachments([]);
         inputRef.current?.focus();
       }, 50);
       return;
     }
 
-    sendMessage(inputMessage.trim(), currentChat.id);
+    const inlinePayload = inlineAttachments.length
+      ? {
+          inline_context: inlineAttachments.filter(f => f.contentType === 'text').map(f => `[${f.name}]\n${f.content}`).join('\n\n') || undefined,
+          inline_images: inlineAttachments.filter(f => f.contentType === 'image').map(f => f.content),
+          attachments_meta: inlineAttachments.map(f => ({
+            name: f.name,
+            contentType: f.contentType as 'text' | 'image',
+            preview: f.contentType === 'image' ? f.content : undefined,
+            minio_object: f.minioObject,
+            minio_bucket: f.minioBucket,
+            ...(typeof f.size === 'number' && f.size > 0 ? { size: f.size } : {}),
+          })),
+        }
+      : undefined;
+    sendMessage(inputMessage.trim(), currentChat.id, true, undefined, undefined, inlinePayload);
+    setInlineAttachments([]);
     setInputMessage('');
     
     // Возвращаем фокус на поле ввода
@@ -1973,10 +2299,25 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     }
   };
 
-  // Обработчик вставки текста
+  // Вставка из буфера: скриншоты (Ctrl+V) и большой текст как файл
   const handlePaste = async (event: React.ClipboardEvent<HTMLDivElement>): Promise<void> => {
+    const clipboardImage = getClipboardImageFile(event.clipboardData);
+    if (clipboardImage) {
+      event.preventDefault();
+      if (isUploading) {
+        showNotification('warning', 'Дождитесь окончания загрузки');
+        return;
+      }
+      if (multiLlmInputBlocked || chatAwaitingTokens) {
+        showNotification('warning', 'Сейчас нельзя прикрепить файл');
+        return;
+      }
+      await handleMessageAttach(clipboardImage);
+      return;
+    }
+
     if (!interfaceSettings.largeTextAsFile) {
-      return; // Если настройка выключена, используем стандартное поведение
+      return;
     }
 
     const pastedText = event.clipboardData.getData('text');
@@ -1993,8 +2334,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         const fileName = `pasted_text_${Date.now()}.txt`;
         const file = new File([blob], fileName, { type: 'text/plain' });
         
-        // Загружаем файл через handleFileUpload
-        await handleFileUpload(file);
+        await handleMessageAttach(file);
         
         // Очищаем поле ввода
         setInputMessage('');
@@ -2371,159 +2711,174 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
   // ФУНКЦИИ РАБОТЫ С ДОКУМЕНТАМИ
   // ================================
 
-  const handleFileUpload = async (file: File): Promise<void> => {
-    const allowedTypes = [
-      'application/pdf',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'application/vnd.ms-excel',
-      'text/plain',
-      'image/jpeg',
-      'image/jpg',
-      'image/png',
-      'image/webp',
-    ];
+  /** Прикрепить файл: MinIO + содержимое для модели (без RAG/эмбеддингов) */
+  const handleMessageAttach = async (file: File): Promise<void> => {
+    logChatAttach('attach-start', {
+      name: file.name,
+      type: file.type,
+      size: file.size,
+      sizeHuman: formatFileSize(file.size),
+      lastModified: file.lastModified,
+    });
 
-    if (!allowedTypes.includes(file.type)) {
-      showNotification('error', 'Поддерживаются только файлы PDF, Word (.docx), Excel (.xlsx), TXT и изображения (JPG, PNG, WebP)');
-      return;
+    const isImage = /\.(jpe?g|png|webp|gif)$/i.test(file.name)
+      || ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'].includes(file.type);
+
+    logChatAttach('attach-validated', { name: file.name, isImage });
+
+    let previewUrl: string | undefined;
+    if (isImage) {
+      previewUrl = URL.createObjectURL(file);
     }
-
-    if (file.size > 50 * 1024 * 1024) {
-      showNotification('error', 'Размер файла не должен превышать 50MB');
-      return;
-    }
-
+    setUploadingFile({ name: file.name, size: file.size, previewUrl });
     setIsUploading(true);
-    
+    let compressedNotice: string | null = null;
+    const uploadUrl = getApiUrl(API_ENDPOINTS.DOCUMENTS_ATTACH);
     try {
+      let fileToUpload = file;
+      if (isImage) {
+        const prepared = await prepareInlineImageFile(file);
+        fileToUpload = dataUrlToFile(prepared.dataUrl, prepared.filename);
+        logChatAttach('attach-upload-file-ready', {
+          originalName: file.name,
+          uploadName: fileToUpload.name,
+          uploadType: fileToUpload.type,
+          uploadSize: fileToUpload.size,
+          uploadSizeHuman: formatFileSize(fileToUpload.size),
+          wasCompressed: prepared.wasCompressed,
+        });
+        if (prepared.wasCompressed) {
+          compressedNotice = ` (сжато: ${formatFileSize(prepared.originalSize)} → ${formatFileSize(prepared.compressedSize)})`;
+        }
+      } else {
+        logChatAttach('attach-upload-file-ready', {
+          originalName: file.name,
+          uploadName: fileToUpload.name,
+          uploadType: fileToUpload.type,
+          uploadSize: fileToUpload.size,
+          uploadSizeHuman: formatFileSize(fileToUpload.size),
+          wasCompressed: false,
+        });
+      }
+
       const formData = new FormData();
-      formData.append('file', file);
-      
-      const response = await fetch(`${getApiUrl('/api/documents/upload')}`, {
+      formData.append('file', fileToUpload);
+      const uploadStartedAt = performance.now();
+      logChatAttach('attach-fetch-start', { url: uploadUrl, uploadSize: fileToUpload.size });
+
+      const response = await fetch(uploadUrl, {
         method: 'POST',
         body: formData,
       });
-      
-      if (response.ok) {
-        await response.json();
-        showNotification('success', `Документ "${file.name}" успешно загружен. Теперь вы можете задать вопрос по нему в чате.`);
-        
-        // Обновляем список документов с бэкенда (это основной источник истины)
-        try {
-          const docsResponse = await fetch(getApiUrl('/api/documents'));
-          if (docsResponse.ok) {
-            const docsResult: any = await docsResponse.json();
-            if (docsResult.success && docsResult.documents) {
-              const files = docsResult.documents.map((filename: string) => ({
-                name: filename,
-                size: 0,
-                type: 'application/octet-stream',
-                uploadDate: new Date().toISOString(),
-              }));
-              setUploadedFiles(files);
-              
-            } else {
-              // Если список пустой, добавляем загруженный файл
-              setUploadedFiles(prev => {
-                const exists = prev.some(f => f.name === file.name);
-                if (!exists) {
-                  return [...prev, {
-                    name: file.name,
-                    size: file.size,
-                    type: file.type,
-                    uploadDate: new Date().toISOString(),
-                  }];
-                }
-                return prev;
-              });
-            }
-          } else {
-            // Fallback: добавляем файл в список, если не удалось получить список с бэкенда
-            setUploadedFiles(prev => {
-              const exists = prev.some(f => f.name === file.name);
-              if (!exists) {
-                return [...prev, {
-                  name: file.name,
-                  size: file.size,
-                  type: file.type,
-                  uploadDate: new Date().toISOString(),
-                }];
-              }
-              return prev;
-            });
-          }
-        } catch (error) {
-          
-          // Fallback: добавляем файл в список, если произошла ошибка
-          setUploadedFiles(prev => {
-            const exists = prev.some(f => f.name === file.name);
-            if (!exists) {
-              return [...prev, {
-                name: file.name,
-                size: file.size,
-                type: file.type,
-                uploadDate: new Date().toISOString(),
-              }];
-            }
-            return prev;
-          });
-        }
-        
-        // Закрываем диалог загрузки документов после успешной загрузки
-        setShowDocumentDialog(false);
-        
-        // Очищаем input файла, чтобы можно было повторно загрузить тот же файл
-        if (fileInputRef.current) {
-          fileInputRef.current.value = '';
-        }
-        
-      } else {
-        const error = await response.json();
-        showNotification('error', error.detail || 'Ошибка при загрузке документа');
-      }
-    } catch (error) {
-      
-      showNotification('error', 'Ошибка при загрузке файла');
-            } finally {
-      setIsUploading(false);
-    }
-  };
 
-  const handleFileDelete = async (fileName: string): Promise<void> => {
-    try {
-      const response = await fetch(`${getApiUrl(`/api/documents/${encodeURIComponent(fileName)}`)}`, {
-        method: 'DELETE',
+      const fetchMs = Math.round(performance.now() - uploadStartedAt);
+      const responseContentType = response.headers.get('content-type') || '';
+      const responseContentLength = response.headers.get('content-length');
+
+      logChatAttach('attach-fetch-response', {
+        status: response.status,
+        ok: response.ok,
+        statusText: response.statusText,
+        fetchMs,
+        responseContentType,
+        responseContentLength,
       });
-      
+
       if (response.ok) {
-        const result: any = await response.json();
-        // Обновляем список документов с бэкенда
-        if (result.remaining_documents) {
-          const files = result.remaining_documents.map((filename: string) => ({
-            name: filename,
-            size: 0,
-            type: 'application/octet-stream',
-            uploadDate: new Date().toISOString(),
-          }));
-          setUploadedFiles(files);
-        } else {
-          setUploadedFiles(prev => prev.filter(file => file.name !== fileName));
+        const parseStartedAt = performance.now();
+        let result: {
+          type: 'text' | 'image';
+          content: string;
+          filename: string;
+          minio_object?: string;
+          minio_bucket?: string;
+          warning?: string;
+        };
+        try {
+          result = await response.json();
+        } catch (parseError) {
+          logChatAttachError('attach-json-parse-failed', parseError, {
+            status: response.status,
+            responseContentType,
+            fetchMs,
+          });
+          showNotification('error', 'Сервер вернул некорректный ответ при прикреплении файла');
+          return;
         }
-        showNotification('success', `Документ "${fileName}" удален`);
-        
-        // Очищаем input файла после удаления
-        if (fileInputRef.current) {
-          fileInputRef.current.value = '';
+
+        logChatAttach('attach-success', {
+          filename: result.filename,
+          type: result.type,
+          contentChars: result.content?.length ?? 0,
+          minioObject: result.minio_object ?? null,
+          minioBucket: result.minio_bucket ?? null,
+          warning: result.warning ?? null,
+          parseMs: Math.round(performance.now() - parseStartedAt),
+        });
+
+        setInlineAttachments(prev => [
+          ...prev,
+          {
+            name: result.filename || file.name,
+            contentType: result.type,
+            content: result.content,
+            size: file.size,
+            ...(result.minio_object ? { minioObject: result.minio_object } : {}),
+            ...(result.minio_bucket ? { minioBucket: result.minio_bucket } : {}),
+          },
+        ]);
+        if (result.warning) {
+          showNotification('warning', result.warning);
         }
-        
+        showNotification('success', `"${file.name}" прикреплён${compressedNotice || ''}`);
+        setShowDocumentDialog(false);
       } else {
-        const error = await response.json();
-        showNotification('error', error.detail || 'Ошибка при удалении документа');
+        let errBody: unknown = null;
+        let detail = 'Ошибка при прикреплении файла';
+        const responseText = await response.text().catch(() => '');
+        if (responseText) {
+          try {
+            errBody = JSON.parse(responseText);
+            detail = (errBody as { detail?: string }).detail || detail;
+          } catch {
+            errBody = { rawTextPreview: responseText.slice(0, 500) };
+            detail = responseText.slice(0, 200) || detail;
+          }
+        }
+
+        logChatAttach('attach-http-error', {
+          status: response.status,
+          detail,
+          errBody,
+          fetchMs,
+          responseTextLength: responseText.length,
+        });
+
+        if (response.status === 413) {
+          setAttachErrorBanner(buildOversizedInlineAttachMessage(file.name, file.size));
+        } else if (response.status === 400 && isInlineAttachSizeErrorMessage(detail)) {
+          setAttachErrorBanner(buildOversizedInlineAttachMessage(file.name, file.size));
+        } else if (response.status === 400 && /не поддержива|unsupported|формат/i.test(detail)) {
+          setAttachErrorBanner(buildUnsupportedInlineAttachMessage(file.name));
+        } else {
+          showNotification('error', detail);
+        }
       }
     } catch (error) {
-      
-      showNotification('error', 'Ошибка при удалении файла');
+      logChatAttachError('attach-unhandled-error', error, {
+        name: file.name,
+        size: file.size,
+        url: uploadUrl,
+      });
+      showNotification('error', 'Не удалось прикрепить файл');
+    } finally {
+      logChatAttach('attach-finished', { name: file.name });
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+      }
+      setIsUploading(false);
+      setUploadingFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -2551,71 +2906,13 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       return;
     }
     e.preventDefault();
-    handleFileUpload(files[0]);
+    handleMessageAttach(files[0]);
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>): void => {
     const files = e.target.files;
     if (files && files.length > 0) {
-      handleFileUpload(files[0]);
-    }
-    // Очищаем input файла, чтобы можно было повторно загрузить тот же файл
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-  };
-
-  const handleGenerateReport = async (): Promise<void> => {
-    if (uploadedFiles.length === 0) {
-      showNotification('warning', 'Нет загруженных документов для генерации отчета');
-      return;
-    }
-
-    try {
-      showNotification('info', 'Генерация отчета...');
-      
-      // Скачиваем отчет напрямую
-      const response = await fetch(getApiUrl('/api/documents/report/download'));
-      
-      if (response.ok) {
-        // Получаем blob для скачивания
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        
-        // Получаем имя файла из заголовка Content-Disposition или используем дефолтное
-        const contentDisposition = response.headers.get('Content-Disposition');
-        let filename = 'confidence_report.xlsx'; // Дефолтное расширение - .xlsx
-        if (contentDisposition) {
-          // Пробуем разные форматы Content-Disposition
-          // Формат: filename*=UTF-8''filename.xlsx
-          const utf8Match = contentDisposition.match(/filename\*=UTF-8''(.+)/i);
-          if (utf8Match) {
-            filename = decodeURIComponent(utf8Match[1]);
-          } else {
-            // Формат: filename="filename.xlsx" или filename=filename.xlsx
-            const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
-            if (filenameMatch) {
-              filename = filenameMatch[1].replace(/['"]/g, '');
-            }
-          }
-        }
-        
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
-        
-        showNotification('success', 'Отчет успешно сгенерирован и скачан');
-      } else {
-        const error = await response.json();
-        showNotification('error', error.detail || 'Ошибка при генерации отчета');
-      }
-    } catch (error) {
-      
-      showNotification('error', 'Ошибка при генерации отчета');
+      handleMessageAttach(files[0]);
     }
   };
 
@@ -2692,6 +2989,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         const text = result.transcription ?? '';
         setTranscriptionResult(text);
         showNotification('success', 'Транскрибация завершена');
+        incrementTabNotification();
       } else {
         showNotification('error', result.message || 'Ошибка при транскрибации');
       }
@@ -2750,6 +3048,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       if (result.success) {
         setTranscriptionResult(result.transcription ?? '');
         showNotification('success', 'Транскрибация YouTube завершена');
+        incrementTabNotification();
       } else {
         showNotification('error', result.message || 'Ошибка при транскрибации YouTube');
       }
@@ -2933,7 +3232,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
             Перетащите файл сюда или нажмите для выбора
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Поддерживаются PDF, Word, Excel, текстовые файлы и изображения (JPG, PNG, WebP) до 50MB
+            Прикрепление к сообщению: файл сохраняется в MinIO и передаётся в модель (без RAG). PDF, Word, Excel, TXT, изображения до 50MB
           </Typography>
           <input
             ref={fileInputRef}
@@ -3215,6 +3514,19 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
 
   return (
     <Box sx={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
+      {modelErrorBanner ? (
+        <TopErrorBanner
+          message={modelErrorBanner}
+          onClose={() => setModelErrorBanner(null)}
+          ariaLabel="Закрыть уведомление о выборе модели"
+        />
+      ) : attachErrorBanner ? (
+        <TopErrorBanner
+          message={attachErrorBanner}
+          onClose={() => setAttachErrorBanner(null)}
+          ariaLabel="Закрыть уведомление о неподдерживаемом файле"
+        />
+      ) : null}
       {/* Основной контент */}
       <Box 
         className="fullscreen-chat" 
@@ -3711,24 +4023,23 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                            }}
                            fileInputRef={fileInputRef}
                            onAttachClick={() => fileInputRef.current?.click()}
-                           onFileSelect={(files) => { if (files?.length) handleFileUpload(files[0]); }}
-                           uploadedFiles={uploadedFiles.map(f => ({ name: f.name, type: f.type || 'application/octet-stream' }))}
-                           onFileRemove={(file) => handleFileDelete(file.name)}
+                           onFileSelect={(files) => { if (files?.length) handleMessageAttach(files[0]); }}
                            isUploading={isUploading}
+                           uploadingFile={uploadingFile}
                            attachDisabled={isUploading || multiLlmInputBlocked || chatAwaitingTokens}
-                           showReportButton={uploadedFiles.length > 0}
-                           onReportClick={handleGenerateReport}
-                           reportDisabled={isUploading || multiLlmInputBlocked || chatAwaitingTokens}
+                           inlineFiles={inlineAttachments}
+                           onInlineFileRemove={(idx) => setInlineAttachments(prev => prev.filter((_, i) => i !== idx))}
                            onSettingsClick={handleMenuOpen}
                            settingsDisabled={multiLlmInputBlocked || chatAwaitingTokens}
                            showStopButton={currentChatLoading || hasActiveChatStreaming}
                            onStopClick={handleStopGeneration}
                            onSendClick={handleSendMessage}
-                          sendDisabled={!inputMessage.trim() || socketBlocksChatInput || multiLlmInputBlocked || chatAwaitingTokens}
+                          sendDisabled={(!inputMessage.trim() && inlineAttachments.length === 0) || socketBlocksChatInput || multiLlmInputBlocked || chatAwaitingTokens}
                            onVoiceClick={() => setShowVoiceDialog(true)}
                            voiceDisabled={multiLlmInputBlocked || chatAwaitingTokens}
                            voiceTooltip="Голосовой ввод"
                            libraryBadge={libraryInputBadge}
+                           inputSuggestions={mcpInputSuggestions}
                            extraActions={multiLlmSettingsExtraAction}
                          />
                        </Box>
@@ -3761,24 +4072,23 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                }}
                fileInputRef={fileInputRef}
                onAttachClick={() => fileInputRef.current?.click()}
-               onFileSelect={(files) => { if (files?.length) handleFileUpload(files[0]); }}
-               uploadedFiles={uploadedFiles.map(f => ({ name: f.name, type: f.type || 'application/octet-stream' }))}
-               onFileRemove={(file) => handleFileDelete(file.name)}
+               onFileSelect={(files) => { if (files?.length) handleMessageAttach(files[0]); }}
                isUploading={isUploading}
+               uploadingFile={uploadingFile}
                attachDisabled={isUploading || multiLlmInputBlocked || chatAwaitingTokens}
-               showReportButton={uploadedFiles.length > 0}
-               onReportClick={handleGenerateReport}
-               reportDisabled={isUploading || multiLlmInputBlocked || chatAwaitingTokens}
+               inlineFiles={inlineAttachments}
+               onInlineFileRemove={(idx) => setInlineAttachments(prev => prev.filter((_, i) => i !== idx))}
                onSettingsClick={handleMenuOpen}
                settingsDisabled={multiLlmInputBlocked || chatAwaitingTokens}
                showStopButton={currentChatLoading || hasActiveChatStreaming}
                onStopClick={handleStopGeneration}
                onSendClick={handleSendMessage}
-               sendDisabled={!inputMessage.trim() || socketBlocksChatInput || multiLlmInputBlocked || chatAwaitingTokens}
+               sendDisabled={(!inputMessage.trim() && inlineAttachments.length === 0) || socketBlocksChatInput || multiLlmInputBlocked || chatAwaitingTokens}
                onVoiceClick={() => setShowVoiceDialog(true)}
                voiceDisabled={multiLlmInputBlocked || chatAwaitingTokens}
                voiceTooltip="Голосовой ввод"
                libraryBadge={libraryInputBadge}
+               inputSuggestions={mcpInputSuggestions}
                extraActions={multiLlmSettingsExtraAction}
              />
            </>
@@ -3820,7 +4130,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                        gearToolsPaperHeightPx < CHAT_GEAR_MENU_PAPER_MAX_HEIGHT_PX ? 'auto' : 'hidden',
                    }
                  : { maxHeight: CHAT_GEAR_MENU_PAPER_MAX_HEIGHT, overflowY: 'auto' }),
-              ...((gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode')
+              ...((gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode' || gearToolsPanel === 'mcp')
                 ? CHAT_GEAR_SCROLL_AREA_NO_VISIBLE_SCROLLBAR_SX
                 : {}),
              },
@@ -3832,15 +4142,15 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
              display: 'flex',
              flexDirection: 'row',
              alignItems: 'stretch',
-            gap: gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode' ? `${CHAT_GEAR_MENU_PANELS_GAP_PX}px` : 0,
+            gap: gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode' || gearToolsPanel === 'mcp' ? `${CHAT_GEAR_MENU_PANELS_GAP_PX}px` : 0,
              width:
-              (gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode') && gearToolsMenuWidthPx != null
+              (gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode' || gearToolsPanel === 'mcp') && gearToolsMenuWidthPx != null
                  ? `${gearToolsMenuWidthPx}px`
-                : gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode'
+                : gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode' || gearToolsPanel === 'mcp'
                    ? CHAT_GEAR_MENU_EXPANDED_WIDTH_PX
                    : CHAT_GEAR_MENU_PANEL_WIDTH_PX,
              maxWidth:
-              (gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode') && gearToolsMenuWidthPx != null
+              (gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode' || gearToolsPanel === 'mcp') && gearToolsMenuWidthPx != null
                  ? `${gearToolsMenuWidthPx}px`
                  : 'min(96vw, 580px)',
              minHeight: gearToolsPaperHeightPx != null ? `${gearToolsPaperHeightPx}px` : undefined,
@@ -3854,7 +4164,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
              sx={{
                ...dropdownPanelSx,
                width:
-                gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode'
+                gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode' || gearToolsPanel === 'mcp'
                   ? CHAT_GEAR_MENU_LEFT_RAIL_WIDTH_PX
                   : '100%',
                flexShrink: 0,
@@ -3899,6 +4209,36 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                  }}
                />
              </Box>
+            <Box
+              onClick={() => setGearToolsPanel((p) => (p === 'mcp' ? 'main' : 'mcp'))}
+              sx={{
+                ...dropdownItemSx,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1,
+                color: isDarkMode ? 'white' : '#333',
+                bgcolor:
+                  gearToolsPanel === 'mcp'
+                    ? isDarkMode
+                      ? DROPDOWN_ITEM_HOVER_BG_DARK
+                      : DROPDOWN_ITEM_HOVER_BG_LIGHT
+                    : 'transparent',
+              }}
+            >
+              <GearMenuMcpIcon
+                sx={{ fontSize: 18, color: isDarkMode ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.6)', flexShrink: 0 }}
+              />
+              <Typography sx={{ flex: 1, minWidth: 0, fontSize: MENU_ACTION_TEXT_SIZE, whiteSpace: 'nowrap' }}>
+                MCP
+              </Typography>
+              <ChevronRightIcon
+                sx={{
+                  ...DROPDOWN_CHEVRON_SX,
+                  flexShrink: 0,
+                  transform: gearToolsPanel === 'mcp' ? 'rotate(90deg)' : 'none',
+                }}
+              />
+            </Box>
             <Box
               onClick={() => setGearToolsPanel((p) => (p === 'model-mode' ? 'main' : 'model-mode'))}
               sx={{
@@ -3966,7 +4306,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                </Typography>
              </Box>
            </Box>
-          {gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode' ? (
+          {gearToolsPanel === 'agents' || gearToolsPanel === 'model-mode' || gearToolsPanel === 'mcp' ? (
              <Box
                sx={{
                  ...dropdownPanelSx,
@@ -3984,6 +4324,8 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
                   isDarkMode={isDarkMode}
                   canUseAgents={Boolean(agentStatus?.is_initialized)}
                 />
+              ) : gearToolsPanel === 'mcp' ? (
+                <ChatGearMcpPanel isDarkMode={isDarkMode} chatId={currentChat?.id} />
               ) : (
                 <Box sx={{ p: 1, display: 'flex', flexDirection: 'column', gap: 0.5, overflowY: 'auto' }}>
                   {([

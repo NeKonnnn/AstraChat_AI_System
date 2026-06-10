@@ -9,6 +9,11 @@ from pydantic import BaseModel
 class ChatMessage(BaseModel):
     message: str
     streaming: bool = True
+    tool_ids: Optional[List[str]] = None
+    mcp_tool_ids: Optional[List[str]] = None
+    model: Optional[str] = None
+    conversation_id: Optional[str] = None
+    message_id: Optional[str] = None
 
 
 class ModelSettings(BaseModel):
@@ -80,16 +85,11 @@ class RAGSettings(BaseModel):
 
 
 class AgentModeRequest(BaseModel):
-    mode: str  # "agent" | "direct" | "multi-llm"
+    mode: str  # "agent" | "direct"
 
 
-class MultiLLMModelsRequest(BaseModel):
+class ModelComparisonModelsRequest(BaseModel):
     models: List[str]
-
-
-# Совместимость с перенесёнными роутами/фронтом из GPB_ASTRA
-class ModelComparisonModelsRequest(MultiLLMModelsRequest):
-    pass
 
 
 class AgentStatusResponse(BaseModel):

@@ -24,7 +24,6 @@ import shutil
 from tqdm import tqdm
 import re
 import sys
-import torch
 from typing import Optional, Callable, Tuple, List, Dict
 import gc
 import logging
@@ -71,12 +70,21 @@ warnings.filterwarnings("ignore", category=UserWarning, module="pytorch_lightnin
 warnings.filterwarnings("ignore", category=UserWarning, module="pyannote")
 warnings.filterwarnings("ignore", category=UserWarning, module="torch")
 
-try:
-    if torch.cuda.is_available():
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
-except Exception as e:
-    print(f"Предупреждение при настройке TF32: {e}")
+
+def _torch():
+    """Ленивый импорт: при USE_LLM_SVC=true torch в backend не нужен."""
+    import torch as _torch_mod
+    return _torch_mod
+
+
+if not USE_LLM_SVC:
+    try:
+        _t = _torch()
+        if _t.cuda.is_available():
+            _t.backends.cuda.matmul.allow_tf32 = True
+            _t.backends.cudnn.allow_tf32 = True
+    except Exception as e:
+        print(f"Предупреждение при настройке TF32: {e}")
 
 # Импортируем пути к локальным моделям  
 try:
@@ -126,7 +134,8 @@ class WhisperXTranscriber:
         self.model_size = WHISPERX_BASE_MODEL
         
         # Определение устройства  
-        if torch.cuda.is_available():
+        _t = _torch()
+        if _t.cuda.is_available():
             self.device = "cuda"
             self.compute_type = "float16"
         else:
@@ -269,7 +278,8 @@ class WhisperXTranscriber:
             
             del model
             gc.collect()
-            if self.device == "cuda": torch.cuda.empty_cache()
+            if self.device == "cuda":
+                _torch().cuda.empty_cache()
             
             return True, transcript
         except Exception as e:

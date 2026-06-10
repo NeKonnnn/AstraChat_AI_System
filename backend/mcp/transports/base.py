@@ -1,0 +1,8 @@
+"""Protocol для MCP transport connectors."""
+
+from typing import Protocol, runtime_checkable
+
+
+@runtime_checkable
+class McpTransportConnector(Protocol):
+    async def connect(self, client, *, headers: dict | None, timeout: float) -> None: ...

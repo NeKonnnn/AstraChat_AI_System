@@ -1,0 +1,109 @@
+{
+  "presentation_id": "4c10cc46-e414-4bf6-99f6-beb28d942794",
+  "outline": {
+    "title": "Generated Presentation",
+    "slides": [
+      {
+        "index": 1,
+        "topic": "Slide 1"
+      },
+      {
+        "index": 2,
+        "topic": "Slide 2"
+      },
+      {
+        "index": 3,
+        "topic": "Slide 3"
+      },
+      {
+        "index": 4,
+        "topic": "Slide 4"
+      },
+      {
+        "index": 5,
+        "topic": "Slide 5"
+      }
+    ],
+    "source_excerpt": "AI roadmap"
+  },
+  "structure": {
+    "template": "neo-modern",
+    "style_template_priority": false,
+    "slides": [
+      {
+        "index": 1,
+        "layout": "title_content",
+        "slide_type": "title"
+      },
+      {
+        "index": 2,
+        "layout": "title_content",
+        "slide_type": "content"
+      },
+      {
+        "index": 3,
+        "layout": "title_content",
+        "slide_type": "content"
+      },
+      {
+        "index": 4,
+        "layout": "title_content",
+        "slide_type": "content"
+      },
+      {
+        "index": 5,
+        "layout": "title_content",
+        "slide_type": "summary"
+      }
+    ]
+  },
+  "slides": [
+    {
+      "index": 1,
+      "title": "Slide 1",
+      "body": "Контент слайда 1 (Russian)"
+    },
+    {
+      "index": 2,
+      "title": "Slide 2",
+      "body": "Контент слайда 2 (Russian)"
+    },
+    {
+      "index": 3,
+      "title": "Slide 3",
+      "body": "Контент слайда 3 (Russian)"
+    },
+    {
+      "index": 4,
+      "title": "Slide 4",
+      "body": "Контент слайда 4 (Russian)"
+    },
+    {
+      "index": 5,
+      "title": "Slide 5",
+      "body": "Контент слайда 5 (Russian)"
+    }
+  ],
+  "language": "Russian",
+  "template": "neo-modern",
+  "style_id": null,
+  "style": null,
+  "effective_style": {
+    "name": "Neo Modern",
+    "colors": {
+      "bg": "#0B1020",
+      "title": "#67E8F9",
+      "body": "#D1FAFF",
+      "accent": "#22D3EE"
+    },
+    "fonts": {
+      "heading": "JetBrains Mono",
+      "body": "Inter"
+    }
+  },
+  "prefer_style_layouts": true,
+  "model_path": null,
+  "use_llm_generation": false,
+  "include_images": false,
+  "image_provider": "picsum-fallback"
+}

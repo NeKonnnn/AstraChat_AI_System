@@ -61,8 +61,38 @@ async def chat_with_ai(
         raise HTTPException(status_code=503, detail="Memory service не доступен")
     from backend.settings.cef_logger.cef_audit_context import cef_audit_reset, cef_audit_set
 
-    _audit_tok = cef_audit_set(request=request, user=current_user)
+    _audit_tok = cef_audit_set(request=request, user=current_user, socket_remote=None)
     try:
+        from backend.services.comfyui_image_generation import ComfyImageGenError
+        from backend.services.image_generation_service import (
+            handle_chat_image_generation,
+            is_image_generation_chat_request,
+        )
+
+        if is_image_generation_chat_request(message.message):
+            await save_dialog_entry("user", message.message, user_id=current_user["user_id"])
+            try:
+                img_result = await handle_chat_image_generation(message.message)
+                response = img_result.get("response") or ""
+                meta = img_result.get("metadata") or {}
+                await save_dialog_entry(
+                    "assistant",
+                    response,
+                    meta,
+                    user_id=current_user["user_id"],
+                )
+                return {
+                    "response": response,
+                    "timestamp": datetime.now().isoformat(),
+                    "success": True,
+                    "inline_attachments": img_result.get("inline_attachments") or [],
+                    "image_generation": True,
+                }
+            except ComfyImageGenError as img_exc:
+                err_text = f"Не удалось сгенерировать изображение: {img_exc}"
+                await save_dialog_entry("assistant", err_text, user_id=current_user["user_id"])
+                raise HTTPException(status_code=502, detail=err_text) from img_exc
+
         history = await get_recent_dialog_history(max_entries=state.memory_max_messages) if get_recent_dialog_history else []
         orchestrator = get_agent_orchestrator()
         use_agent_mode = orchestrator and orchestrator.get_mode() == "agent"
@@ -71,12 +101,48 @@ async def chat_with_ai(
                 sid="HTTP-POST-/api/chat", conversation_id=None,
                 user_preview=message.message, mode_label="REST /api/chat — оркестратор агентов",
             )
-            response = await orchestrator.process_message(message.message, context={"history": history, "user_message": message.message})
+            response = await orchestrator.process_message(
+                message.message,
+                context={
+                    "history": history,
+                    "user_message": message.message,
+                    "selected_model": message.model or get_current_model_path(),
+                    "tool_ids": message.tool_ids or message.mcp_tool_ids or [],
+                    "current_user": current_user,
+                    "conversation_id": message.conversation_id,
+                    "message_id": message.message_id,
+                },
+            )
         else:
             logger.info("ПРЯМОЙ РЕЖИМ: Переключение на прямое общение с LLM")
             logger.info(f"Запрос пользователя: '{message.message[:100]}{'...' if len(message.message) > 100 else ''}'")
             response = None
-            if rag_client:
+            tool_ids = message.tool_ids or message.mcp_tool_ids or []
+            current_model_path = message.model or get_current_model_path()
+            if tool_ids:
+                try:
+                    from backend.mcp.chat_integration import run_mcp_for_chat
+
+                    mcp_result = await run_mcp_for_chat(
+                        tool_ids=tool_ids,
+                        user_message=message.message,
+                        history=history,
+                        system_prompt=None,
+                        model_path=current_model_path,
+                        user=current_user,
+                        chat_id=message.conversation_id,
+                        message_id=message.message_id,
+                    )
+                    if mcp_result is not None:
+                        response = mcp_result.content
+                        logger.info(
+                            "REST MCP agent loop: mode=%s tools=%s",
+                            mcp_result.mode,
+                            mcp_result.tool_calls_executed,
+                        )
+                except Exception as mcp_exc:
+                    logger.error("REST MCP agent loop error: %s", mcp_exc, exc_info=True)
+            if rag_client and response is None:
                 try:
                     min_sim, rag_block = rag_guard_env()
                     hits = await rag_client.search(message.message, k=get_rag_chat_top_k(), strategy=state.current_rag_strategy)
@@ -118,7 +184,7 @@ async def chat_with_ai(
                         {doc_context}
                         Вопрос пользователя: {message.message}
                         Ответ:"""
-                        current_model_path = get_current_model_path()
+                        current_model_path = message.model or get_current_model_path()
                         _terminal_chat_inference_banner(
                             sid="HTTP-POST-/api/chat", conversation_id=None,
                             user_preview=prompt, mode_label="REST /api/chat — ответ с RAG",
@@ -138,7 +204,7 @@ async def chat_with_ai(
                     logger.error(f"ПРЯМОЙ РЕЖИМ: ошибка при получении контекста документов через SVC-RAG: {e}")
             if not response:
                 logger.info("ПРЯМОЙ РЕЖИМ: Используем обычный AI agent без контекста документов")
-                current_model_path = get_current_model_path()
+                current_model_path = message.model or get_current_model_path()
                 _terminal_chat_inference_banner(
                     sid="HTTP-POST-/api/chat", conversation_id=None,
                     user_preview=message.message, mode_label="REST /api/chat — прямой LLM (без RAG)",
@@ -180,6 +246,7 @@ async def get_conversations(limit: int = 200, current_user: dict = Depends(get_c
                         "role": msg.role,
                         "content": msg.content,
                         "timestamp": msg.timestamp.isoformat() if msg.timestamp else None,
+                        "metadata": msg.metadata or {},
                     }
                     for msg in (conv.messages or [])
                 ],

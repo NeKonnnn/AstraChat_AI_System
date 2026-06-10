@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, startTransition } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import { CssBaseline, Box, IconButton, Tooltip } from '@mui/material';
@@ -6,7 +6,7 @@ import { ChevronRight as ChevronRightIcon } from '@mui/icons-material';
 import Sidebar from './components/Sidebar';
 import GlobalKeyboardShortcuts from './components/GlobalKeyboardShortcuts';
 import SettingsModal from './components/SettingsModal';
-import { ASTRA_FOCUS_CHAT_SEARCH, ASTRA_OPEN_SETTINGS } from './constants/hotkeys';
+import { ASTRA_FOCUS_CHAT_SEARCH, ASTRA_OPEN_SETTINGS, ASTRA_OPEN_SETTINGS_SECTION } from './constants/hotkeys';
 import UnifiedChatPage from './pages/UnifiedChatPage';
 import VoicePage from './pages/VoicePage';
 import DocumentsPage from './pages/DocumentsPage';
@@ -19,11 +19,14 @@ import { SocketProvider } from './contexts/SocketContext';
 import { AppProvider } from './contexts/AppContext';
 import { AuthProvider } from './contexts/AuthContext';
 import PrivateRoute from './components/PrivateRoute';
+import SessionTimeoutWatcher from './components/SessionTimeoutWatcher';
+import SessionValidityWatcher from './components/SessionValidityWatcher';
 import LoginPage from './pages/LoginPage';
 import ProfilePage from './pages/ProfilePage';
 import ShareViewPage from './pages/ShareViewPage';
 import { initSettings } from './settings';
 import LlmStatusBanner from './components/LlmStatusBanner';
+import TabNotificationWatcher from './components/TabNotificationWatcher';
 import './App.css';
 import { MENU_ITEM_HOVER_DARK, MENU_ITEM_HOVER_LIGHT, MENU_BORDER_RADIUS_PX, MENU_ITEM_HOVER_RADIUS_PX, MENU_ITEM_HOVER_MARGIN_PX, MENU_MIN_WIDTH_PX, MENU_ICON_MIN_WIDTH, MENU_ICON_TO_TEXT_GAP_PX, MENU_ICON_FONT_SIZE_PX } from './constants/menuStyles';
 
@@ -144,6 +147,9 @@ function App() {
   const [searchFocusNonce, setSearchFocusNonce] = useState(0);
   /** Настройки по Alt+S — в App, чтобы работало даже при скрытой левой панели. */
   const [settingsFromHotkeyOpen, setSettingsFromHotkeyOpen] = useState(false);
+  const [settingsInitialSection, setSettingsInitialSection] = useState<
+    'general' | 'profile' | 'interface' | 'models' | 'agents' | 'mcp' | 'rag' | 'transcription' | 'chats' | 'about' | undefined
+  >(undefined);
 
   useEffect(() => {
     const onOpenSettings = () => setSettingsFromHotkeyOpen(true);
@@ -152,9 +158,23 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const onOpenSection = (e: Event) => {
+      const section = (e as CustomEvent<{ section?: string }>).detail?.section;
+      if (section) {
+        setSettingsInitialSection(section as typeof settingsInitialSection);
+        setSettingsFromHotkeyOpen(true);
+      }
+    };
+    window.addEventListener(ASTRA_OPEN_SETTINGS_SECTION, onOpenSection);
+    return () => window.removeEventListener(ASTRA_OPEN_SETTINGS_SECTION, onOpenSection);
+  }, []);
+
+  useEffect(() => {
     const onFocusSearch = () => {
-      setSidebarHidden(false);
-      setSidebarOpen(true);
+      startTransition(() => {
+        setSidebarHidden(false);
+        setSidebarOpen(true);
+      });
       setSearchFocusNonce((n) => n + 1);
     };
     window.addEventListener(ASTRA_FOCUS_CHAT_SEARCH, onFocusSearch);
@@ -193,8 +213,9 @@ function App() {
   };
 
   const toggleSidebar = () => {
-    console.log('Переключение сайдбара:', sidebarOpen, '->', !sidebarOpen);
-    setSidebarOpen(!sidebarOpen);
+    startTransition(() => {
+      setSidebarOpen((o) => !o);
+    });
   };
 
   return (
@@ -204,7 +225,10 @@ function App() {
       <AuthProvider>
         <AppProvider>
           <SocketProvider>
+            <TabNotificationWatcher />
             <Router>
+              <SessionTimeoutWatcher />
+              <SessionValidityWatcher />
               <Routes>
                 {/* Публичный маршрут для логина */}
                 <Route path="/login" element={<LoginPage />} />
@@ -224,14 +248,18 @@ function App() {
                             onToggle={toggleSidebar}
                             isDarkMode={isDarkMode}
                             onToggleTheme={toggleTheme}
-                            onHide={() => setSidebarHidden(true)}
+                            onHide={() => startTransition(() => setSidebarHidden(true))}
                             searchFocusNonce={searchFocusNonce}
                           />
                         )}
                         <GlobalKeyboardShortcuts />
                         <SettingsModal
                           open={settingsFromHotkeyOpen}
-                          onClose={() => setSettingsFromHotkeyOpen(false)}
+                          onClose={() => {
+                            setSettingsFromHotkeyOpen(false);
+                            setSettingsInitialSection(undefined);
+                          }}
+                          initialSection={settingsInitialSection}
                           isDarkMode={isDarkMode}
                           onToggleTheme={toggleTheme}
                         />
@@ -261,8 +289,10 @@ function App() {
                               <Tooltip title="Показать панель" placement="right">
                                 <IconButton
                                   onClick={() => {
-                                    setSidebarHidden(false);
-                                    setSidebarOpen(false);
+                                    startTransition(() => {
+                                      setSidebarHidden(false);
+                                      setSidebarOpen(false);
+                                    });
                                   }}
                                   sx={{
                                     bgcolor: 'transparent',

@@ -3,7 +3,9 @@
 """
 import logging
 import os
+import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union
+from urllib.parse import urlparse
 
 import httpx
 
@@ -97,6 +99,26 @@ class RagClient:
 
         self.timeout = timeout
 
+    def _cef_extra(self, method: str, path: str, request_uuid: str) -> Dict[str, Any]:
+        """Поля CEF extension для исходящего вызова к SVC-RAG (INT005 / INT006)."""
+        parsed = urlparse(self.base_url)
+        dhost = parsed.hostname or self.base_url
+        dpt: int
+        if parsed.port:
+            dpt = int(parsed.port)
+        elif (parsed.scheme or "").lower() == "https":
+            dpt = 443
+        else:
+            dpt = 80
+        return {
+            "_deviceDirection": 1,
+            "dhost": dhost,
+            "dpt": dpt,
+            "methodName": f"{method} /v1{path}",
+            "serviceName": "SVC-RAG",
+            "requestUuid": request_uuid,
+        }
+
     async def _request(
         self,
         method: str,
@@ -109,6 +131,9 @@ class RagClient:
     ) -> Any:
         url = _rag_request_url(self.base_url, path)
         client_timeout = self.timeout if http_timeout is None else http_timeout
+        _cef_rid = uuid.uuid4().hex
+        # Пропускаем health-check — он вызывается часто и не несёт аудиторской ценности.
+        _cef_skip = path.rstrip("/") in ("/health",)
         try:
             async with httpx.AsyncClient(timeout=client_timeout) as client:
                 resp = await client.request(
@@ -120,15 +145,67 @@ class RagClient:
                     params=params,
                 )
                 resp.raise_for_status()
-                return resp.json()
+                result = resp.json()
+            if not _cef_skip:
+                try:
+                    from backend.settings.cef_logger.cef_audit_context import cef_audit_peek
+                    from backend.settings.cef_logger.cef_logger import log_cef_event
+
+                    _req, _user, _ = cef_audit_peek()
+                    log_cef_event(
+                        "INT005",
+                        request=_req,
+                        current_user=_user,
+                        status_code=200,
+                        extra=self._cef_extra(method, path, _cef_rid),
+                    )
+                except Exception:
+                    pass
+            return result
         except httpx.HTTPStatusError as e:
             detail = None
             try:
                 detail = e.response.json()
             except Exception:
                 detail = e.response.text
+            if not _cef_skip:
+                try:
+                    from backend.settings.cef_logger.cef_audit_context import cef_audit_peek
+                    from backend.settings.cef_logger.cef_logger import log_cef_event
+
+                    _req, _user, _ = cef_audit_peek()
+                    _ex = self._cef_extra(method, path, _cef_rid)
+                    _ex["codeStatus"] = str(e.response.status_code)
+                    _ex["textStatus"] = str(detail or "")[:512]
+                    log_cef_event(
+                        "INT006",
+                        request=_req,
+                        current_user=_user,
+                        status_code=e.response.status_code,
+                        extra=_ex,
+                    )
+                except Exception:
+                    pass
             raise RuntimeError(f"SVC-RAG {method} {url} failed: {e.response.status_code} {detail}") from e
         except Exception as e:
+            if not _cef_skip:
+                try:
+                    from backend.settings.cef_logger.cef_audit_context import cef_audit_peek
+                    from backend.settings.cef_logger.cef_logger import log_cef_event
+
+                    _req, _user, _ = cef_audit_peek()
+                    _ex = self._cef_extra(method, path, _cef_rid)
+                    _ex["codeStatus"] = "EXCEPTION"
+                    _ex["textStatus"] = str(e)[:512]
+                    log_cef_event(
+                        "INT006",
+                        request=_req,
+                        current_user=_user,
+                        status_code=None,
+                        extra=_ex,
+                    )
+                except Exception:
+                    pass
             raise RuntimeError(f"SVC-RAG {method} {url} error: {e}") from e
 
     @staticmethod

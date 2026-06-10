@@ -21,6 +21,7 @@ type StatusPayload = {
   comfyui_error?: string | null;
   workflow_resolved?: string | null;
   has_node_map: boolean;
+  available_checkpoints?: string[];
 };
 
 export default function ImageGenerationSettingsSection() {
@@ -103,8 +104,9 @@ export default function ImageGenerationSettingsSection() {
         </Typography>
 
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Движок — отдельный ComfyUI (как в Open WebUI): бэкенд шлёт workflow на{' '}
-          <code>/prompt</code>. Модели GGUF загружаются в ComfyUI (Unet Loader), не в llm-svc.
+          Движок — отдельный ComfyUI: бэкенд шлёт workflow на <code>/prompt</code>.
+          В чате напишите, например: <strong>нарисуй кота</strong> или <code>/image закат над морем</code>.
+          Положите checkpoint SD1.5 в <code>models/comfyui/checkpoints/</code> (имя файла — в workflow JSON).
         </Typography>
 
         {loadingStatus ? (
@@ -137,6 +139,9 @@ export default function ImageGenerationSettingsSection() {
             {status.comfyui_reachable === true && (
               <Alert severity="success" sx={{ mb: 1 }}>
                 ComfyUI отвечает по сети
+                {Array.isArray(status.available_checkpoints) && status.available_checkpoints.length > 0
+                  ? ` — checkpoint: ${status.available_checkpoints.join(', ')}`
+                  : ' — checkpoint-модели не найдены (положите .safetensors в models/comfyui/checkpoints/)'}
               </Alert>
             )}
             {status.workflow_resolved && (
