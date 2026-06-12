@@ -88,6 +88,17 @@ class ImageGenerationNodeMapEntry(BaseModel):
     input: str
 
 
+class ImageGenerationPreset(BaseModel):
+    id: str = ""
+    label: str = ""
+    description: str = ""
+    workflow_path: str = ""
+    checkpoint_name: str = ""
+    default_width: int = 1024
+    default_height: int = 1024
+    default_steps: int = 4
+
+
 class ImageGenerationConfig(BaseModel):
     """ComfyUI — генерация изображений из чата и API."""
     enabled: bool = False
@@ -102,6 +113,8 @@ class ImageGenerationConfig(BaseModel):
     default_steps: int = 20
     # Имя файла в ComfyUI models/checkpoints/; пусто — из workflow или первый доступный
     checkpoint_name: str = ""
+    default_preset_id: str = ""
+    presets: Dict[str, ImageGenerationPreset] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod
@@ -150,6 +163,17 @@ class ImageGenerationConfig(BaseModel):
                 if isinstance(v, dict) and v.get("node") and v.get("input"):
                     parsed[str(k)] = v
             result["node_map"] = parsed
+
+        raw_presets = result.get("presets")
+        if isinstance(raw_presets, dict):
+            parsed_presets: Dict[str, Any] = {}
+            for pid, val in raw_presets.items():
+                if not isinstance(val, dict):
+                    continue
+                entry = dict(val)
+                entry["id"] = str(pid)
+                parsed_presets[str(pid)] = entry
+            result["presets"] = parsed_presets
 
         return result
 

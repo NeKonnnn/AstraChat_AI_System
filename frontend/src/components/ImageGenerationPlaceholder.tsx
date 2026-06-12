@@ -19,10 +19,21 @@ const drift = keyframes`
   100% { transform: translate(-8%, -6%) scale(1.1); }
 `;
 
+const twinkle = keyframes`
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.15); }
+`;
+
 type Props = {
   /** Ширина карточки; по умолчанию адаптивная */
   maxWidth?: number | string;
 };
+
+const SPARKLE_POSITIONS = [
+  { top: -6, right: -12, size: 18, delay: '0s', duration: '1.6s' },
+  { top: -14, right: 4, size: 12, delay: '0.45s', duration: '2.1s' },
+  { top: 2, right: -18, size: 10, delay: '0.9s', duration: '1.9s' },
+] as const;
 
 /**
  * Плейсхолдер генерации изображения (анимация в духе Qwen Studio).
@@ -70,15 +81,20 @@ export default function ImageGenerationPlaceholder({ maxWidth = 420 }: Props) {
         }}
       >
         <ImageOutlinedIcon sx={{ fontSize: 40, opacity: 0.95 }} />
-        <SparkleIcon
-          sx={{
-            fontSize: 18,
-            position: 'absolute',
-            top: -4,
-            right: -10,
-            opacity: 0.9,
-          }}
-        />
+        {SPARKLE_POSITIONS.map((sparkle, index) => (
+          <SparkleIcon
+            key={index}
+            sx={{
+              fontSize: sparkle.size,
+              position: 'absolute',
+              top: sparkle.top,
+              right: sparkle.right,
+              color: 'rgba(255,255,255,0.95)',
+              animation: `${twinkle} ${sparkle.duration} ease-in-out infinite`,
+              animationDelay: sparkle.delay,
+            }}
+          />
+        ))}
       </Box>
     </Box>
   );

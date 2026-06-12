@@ -8,8 +8,8 @@
 Использование::
 
     registry = await get_registry()
-    provider = registry.get("local-llmsvc")
-    provider_for_path = registry.resolve("local-llmsvc/qwen-coder-30b")  # -> (provider, "qwen-coder-30b")
+    provider = registry.get("local-llm")
+    provider_for_path = registry.resolve("local-llm/qwen-coder-30b")  # -> (provider, "qwen-coder-30b")
 """
 
 from __future__ import annotations
@@ -357,7 +357,7 @@ def _parse_configs_from_settings(settings: Any) -> Tuple[List[LLMProviderConfig]
       4. ``settings.llm_service.hosts`` — автомиграция: каждый host становится
          llm-svc-провайдером с id = host.id, base_url = host.base_url.
       5. Единственный URL ``settings.llm_service.base_url`` → один llm-svc
-         с id="local-llmsvc".
+         с id="local-llm".
 
     Возвращает (configs, default_provider_id_or_None).
     """
@@ -458,11 +458,11 @@ def _parse_configs_from_settings(settings: Any) -> Tuple[List[LLMProviderConfig]
                     try:
                         configs.append(
                             LLMProviderConfig(
-                                id="local-llmsvc", kind="llm-svc", base_url=burl,
+                                id="local-llm", kind="llm-svc", base_url=burl,
                                 timeout=timeout, enabled=True,
                             )
                         )
-                        default_id = "local-llmsvc"
+                        default_id = "local-llm"
                     except Exception as e:
                         logger.error("Автомиграция single base_url=%r: %s", burl, e)
 

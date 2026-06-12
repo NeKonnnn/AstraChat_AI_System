@@ -51,6 +51,8 @@ export interface Message {
     preview?: string;
     size?: number;
   }>;
+  /** Варианты inline-вложений при перегенерации изображений (1, 2, 3…) */
+  inlineAttachmentVariants?: Array<NonNullable<Message['inlineAttachments']>>;
   /** MCP tool calls (B-22 / F-6) */
   mcpToolCalls?: Array<{
     type: 'mcp_tool_start' | 'mcp_tool_end';
@@ -189,7 +191,7 @@ type AppAction =
   | { type: 'DELETE_CHAT'; payload: string }
   | { type: 'DELETE_ALL_CHATS' }
   | { type: 'ADD_MESSAGE'; payload: { chatId: string; message: Message } }
-  | { type: 'UPDATE_MESSAGE'; payload: { chatId: string; messageId: string; content?: string; isStreaming?: boolean; isImageGenerating?: boolean; multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>; alternativeResponses?: string[]; currentResponseIndex?: number; documentSearch?: Message['documentSearch']; reasoningContent?: string; mcpToolCalls?: Message['mcpToolCalls']; inlineAttachments?: Message['inlineAttachments'] } }
+  | { type: 'UPDATE_MESSAGE'; payload: { chatId: string; messageId: string; content?: string; isStreaming?: boolean; isImageGenerating?: boolean; multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>; alternativeResponses?: string[]; currentResponseIndex?: number; documentSearch?: Message['documentSearch']; reasoningContent?: string; mcpToolCalls?: Message['mcpToolCalls']; inlineAttachments?: Message['inlineAttachments']; inlineAttachmentVariants?: Message['inlineAttachmentVariants'] } }
   | { type: 'APPEND_CHUNK'; payload: { chatId: string; messageId: string; chunk: string; isStreaming?: boolean } }
   | { type: 'SET_LOADING'; payload: boolean }
   | { type: 'SET_CHAT_LOADING'; payload: { chatId: string; loading: boolean } }
@@ -390,7 +392,7 @@ function appReducer(state: AppState, action: AppAction): AppState {
     }
       
     case 'UPDATE_MESSAGE': {
-      const { chatId, messageId, content, isStreaming, isImageGenerating, multiLLMResponses, alternativeResponses, currentResponseIndex, documentSearch, reasoningContent, mcpToolCalls, inlineAttachments } = action.payload;
+      const { chatId, messageId, content, isStreaming, isImageGenerating, multiLLMResponses, alternativeResponses, currentResponseIndex, documentSearch, reasoningContent, mcpToolCalls, inlineAttachments, inlineAttachmentVariants } = action.payload;
       
       const currentChat = state.chats.find(chat => chat.id === chatId);
       const updatedMessage = currentChat?.messages.find(msg => msg.id === messageId);
@@ -416,6 +418,7 @@ function appReducer(state: AppState, action: AppAction): AppState {
                         ...(reasoningContent !== undefined ? { reasoningContent } : {}),
                         ...(mcpToolCalls !== undefined ? { mcpToolCalls } : {}),
                         ...(inlineAttachments !== undefined ? { inlineAttachments } : {}),
+                        ...(inlineAttachmentVariants !== undefined ? { inlineAttachmentVariants } : {}),
                       }
                     : msg
                 ),
@@ -796,31 +799,53 @@ export function AppProvider({ children }: { children: ReactNode }) {
               ? `<think>${reasoningContent}</think>\n\n${rawContent}`
               : rawContent;
 
-          const rawInline = metadata?.inline_attachments;
-          const inlineAttachments = Array.isArray(rawInline)
-            ? rawInline
-                .filter((a: unknown) => a && typeof a === 'object')
-                .map((a: Record<string, unknown>) => {
-                  const contentType = a.contentType === 'image' ? 'image' as const : 'text' as const;
-                  const minioObject = a.minio_object ? String(a.minio_object) : undefined;
-                  const minioBucket = a.minio_bucket ? String(a.minio_bucket) : undefined;
-                  let preview: string | undefined;
-                  const dataUri = a.data_uri ? String(a.data_uri) : undefined;
-                  if (contentType === 'image' && dataUri) {
-                    preview = dataUri;
-                  } else if (contentType === 'image' && minioObject && minioBucket) {
-                    preview = getApiUrl(
-                      `/api/documents/inline-file?bucket=${encodeURIComponent(minioBucket)}&object=${encodeURIComponent(minioObject)}`,
-                    );
-                  }
-                  return {
-                    name: String(a.name || 'file'),
-                    contentType,
-                    preview,
-                    ...(typeof a.size === 'number' && a.size > 0 ? { size: a.size } : {}),
-                  };
-                })
-            : undefined;
+          const mapRawInlineList = (raw: unknown): Message['inlineAttachments'] | undefined => {
+            if (!Array.isArray(raw)) return undefined;
+            const items = raw
+              .filter((a: unknown) => a && typeof a === 'object')
+              .map((a: Record<string, unknown>) => {
+                const contentType = a.contentType === 'image' ? ('image' as const) : ('text' as const);
+                const minioObject = a.minio_object ? String(a.minio_object) : undefined;
+                const minioBucket = a.minio_bucket ? String(a.minio_bucket) : undefined;
+                let preview: string | undefined;
+                const dataUri = a.data_uri ? String(a.data_uri) : undefined;
+                if (contentType === 'image' && dataUri) {
+                  preview = dataUri;
+                } else if (contentType === 'image' && minioObject && minioBucket) {
+                  preview = getApiUrl(
+                    `/api/documents/inline-file?bucket=${encodeURIComponent(minioBucket)}&object=${encodeURIComponent(minioObject)}`,
+                  );
+                }
+                return {
+                  name: String(a.name || 'file'),
+                  contentType,
+                  preview,
+                  ...(typeof a.size === 'number' && a.size > 0 ? { size: a.size } : {}),
+                };
+              });
+            return items.length > 0 ? items : undefined;
+          };
+
+          const rawVariants = metadata?.image_variants;
+          let inlineAttachmentVariants: Message['inlineAttachmentVariants'];
+          if (Array.isArray(rawVariants) && rawVariants.length > 0) {
+            inlineAttachmentVariants = rawVariants
+              .map((block: { inline_attachments?: unknown }) => mapRawInlineList(block?.inline_attachments))
+              .filter((v): v is NonNullable<Message['inlineAttachments']> => Boolean(v?.length));
+          }
+          const variantIndex =
+            typeof metadata?.current_image_variant_index === 'number'
+              ? metadata.current_image_variant_index
+              : 0;
+          const inlineFromMeta = mapRawInlineList(metadata?.inline_attachments);
+          const inlineAttachments =
+            inlineAttachmentVariants?.[variantIndex] ?? inlineFromMeta;
+          const variantCount = inlineAttachmentVariants?.length ?? 0;
+          const alternativeResponses =
+            variantCount > 1
+              ? Array.from({ length: variantCount }, () => mergedContent)
+              : undefined;
+          const currentResponseIndex = variantCount > 1 ? variantIndex : undefined;
 
           return {
             id: String(msg?.message_id || `msg_${Math.random().toString(36).slice(2, 14)}`),
@@ -830,6 +855,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
             isStreaming: false,
             ...(reasoningContent ? { reasoningContent } : {}),
             ...(inlineAttachments?.length ? { inlineAttachments } : {}),
+            ...(inlineAttachmentVariants?.length ? { inlineAttachmentVariants } : {}),
+            ...(alternativeResponses ? { alternativeResponses, currentResponseIndex } : {}),
           } as Message;
         })
       : [];
@@ -1015,7 +1042,13 @@ export function useAppActions() {
           fetch(getApiUrl(`/api/conversations/${chatId}`), {
             method: 'DELETE',
             headers: { Authorization: `Bearer ${effectiveToken}` },
-          }).catch(() => {});
+          })
+            .then((r) => {
+              if (r.ok) {
+                window.dispatchEvent(new CustomEvent('astrachatCreationsUpdated'));
+              }
+            })
+            .catch(() => {});
         }).catch(() => {});
       }
     },
@@ -1030,7 +1063,13 @@ export function useAppActions() {
           fetch(getApiUrl('/api/conversations'), {
             method: 'DELETE',
             headers: { Authorization: `Bearer ${effectiveToken}` },
-          }).catch(() => {});
+          })
+            .then((r) => {
+              if (r.ok) {
+                window.dispatchEvent(new CustomEvent('astrachatCreationsUpdated'));
+              }
+            })
+            .catch(() => {});
         }).catch(() => {});
       }
     },
@@ -1055,8 +1094,8 @@ export function useAppActions() {
       return messageId;
     },
     
-    updateMessage: (chatId: string, messageId: string, content?: string, isStreaming?: boolean, multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>, alternativeResponses?: string[], currentResponseIndex?: number, documentSearch?: Message['documentSearch'], reasoningContent?: string, mcpToolCalls?: Message['mcpToolCalls'], inlineAttachments?: Message['inlineAttachments'], isImageGenerating?: boolean) => {
-      dispatch({ type: 'UPDATE_MESSAGE', payload: { chatId, messageId, content, isStreaming, multiLLMResponses, alternativeResponses, currentResponseIndex, documentSearch, reasoningContent, mcpToolCalls, inlineAttachments, isImageGenerating } });
+    updateMessage: (chatId: string, messageId: string, content?: string, isStreaming?: boolean, multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>, alternativeResponses?: string[], currentResponseIndex?: number, documentSearch?: Message['documentSearch'], reasoningContent?: string, mcpToolCalls?: Message['mcpToolCalls'], inlineAttachments?: Message['inlineAttachments'], isImageGenerating?: boolean, inlineAttachmentVariants?: Message['inlineAttachmentVariants']) => {
+      dispatch({ type: 'UPDATE_MESSAGE', payload: { chatId, messageId, content, isStreaming, multiLLMResponses, alternativeResponses, currentResponseIndex, documentSearch, reasoningContent, mcpToolCalls, inlineAttachments, isImageGenerating, inlineAttachmentVariants } });
     },
     
     appendChunk: (chatId: string, messageId: string, chunk: string, isStreaming?: boolean) => {

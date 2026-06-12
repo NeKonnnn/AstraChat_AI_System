@@ -165,12 +165,16 @@ async def _handle_chat_image_generation_request(
     project_id: Optional[str],
     current_user: Optional[dict],
     streaming: bool,
+    image_gen_preset_id: Optional[str] = None,
+    regenerate: bool = False,
+    assistant_message_id: Optional[str] = None,
 ):
     """Генерация изображения по фразе «нарисуй …» без вызова LLM."""
     from backend.services.comfyui_image_generation import ComfyImageGenError
     from backend.services.image_generation_service import (
         handle_chat_image_generation,
         is_image_generation_chat_request,
+        save_image_generation_assistant_message,
     )
 
     if not is_image_generation_chat_request(user_message):
@@ -187,7 +191,10 @@ async def _handle_chat_image_generation_request(
     )
 
     try:
-        result = await handle_chat_image_generation(user_message)
+        result = await handle_chat_image_generation(
+            user_message,
+            preset_id=image_gen_preset_id,
+        )
     except ComfyImageGenError as exc:
         err_text = f"Не удалось сгенерировать изображение: {exc}"
         logger.warning("Chat image generation failed: %s", exc)
@@ -228,25 +235,15 @@ async def _handle_chat_image_generation_request(
     inline_attachments = result.get("inline_attachments") or []
 
     try:
-        if project_id:
-            from backend.database.memory_service import save_dialog_entry_to_project
-            await save_dialog_entry_to_project(
-                "assistant",
-                response,
-                project_id,
-                conversation_id,
-                metadata=meta,
-                user_id=(current_user or {}).get("user_id"),
-            )
-        else:
-            await save_dialog_entry(
-                "assistant",
-                response,
-                meta,
-                None,
-                conversation_id,
-                user_id=(current_user or {}).get("user_id"),
-            )
+        await save_image_generation_assistant_message(
+            content=response,
+            metadata=meta,
+            conversation_id=conversation_id,
+            project_id=project_id,
+            user_id=(current_user or {}).get("user_id"),
+            regenerate=regenerate,
+            assistant_message_id=assistant_message_id,
+        )
     except Exception as save_exc:
         logger.warning("Не удалось сохранить ответ image gen: %s", save_exc)
 
@@ -399,7 +396,8 @@ def register_handlers(sio):
             )
             use_multi_llm_early = bool(data.get("model_comparison_enabled", False))
             multi_slot_regen = str(data.get("multi_llm_slot_regenerate") or "").strip()
-            skip_user_save = bool(data.get("regenerate")) and use_multi_llm_early and bool(multi_slot_regen)
+            is_regenerate = bool(data.get("regenerate"))
+            skip_user_save = is_regenerate
             if conversation_id:
                 import backend.database.memory_service as mem_mod
                 mem_mod.current_conversation_id = conversation_id
@@ -482,6 +480,9 @@ def register_handlers(sio):
                 project_id=project_id,
                 current_user=validated_user,
                 streaming=streaming,
+                image_gen_preset_id=(data.get("image_gen_preset_id") or None),
+                regenerate=is_regenerate,
+                assistant_message_id=str(data.get("assistant_message_id") or "").strip() or None,
             )
             if handled_image:
                 return

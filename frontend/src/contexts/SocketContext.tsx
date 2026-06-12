@@ -21,6 +21,7 @@ import { getMcpToolIdsForChat } from '../mcp/selectionStorage';
 import type { McpToolCallRecord } from '../mcp/types';
 import { getApiUrl } from '../config/api';
 import { isLikelyImageGenerationPrompt } from '../utils/imageGenerationPrompt';
+import { readSelectedImageGenPresetId } from '../utils/imageGenerationPresets';
 
 function dispatchMcpToolActivity(record: McpToolCallRecord, phase: 'start' | 'end') {
   window.dispatchEvent(new CustomEvent('astrachatMcpToolActivity', { detail: { record, phase } }));
@@ -874,15 +875,45 @@ export function SocketProvider({ children }: { children: ReactNode }) {
             } else {
               updatedAlts.push(responseWithReasoning);
             }
-            updateMessage(chatId, trackedId, responseWithReasoning, false, undefined, updatedAlts, regen.currentIndex, docSearch, undefined, undefined, genInlineAttachments, false);
-            regenerationStateRef.current = null;
-          } else {
-            // В потоковом режиме контент уже накоплен через chunk-и,
-            // поэтому принудительно перезаписываем только если НЕ был стриминг
+            const existingMsg = getChatById(chatId)?.messages.find((m) => m.id === trackedId);
+            let variants = existingMsg?.inlineAttachmentVariants
+              ? [...existingMsg.inlineAttachmentVariants]
+              : [];
+            if (!variants.length && existingMsg?.inlineAttachments?.length) {
+              variants = [existingMsg.inlineAttachments];
+            }
+            if (genInlineAttachments?.length) {
+              while (variants.length <= regen.currentIndex) {
+                variants.push([]);
+              }
+              variants[regen.currentIndex] = genInlineAttachments;
+            }
+            const altResponses =
+              variants.length > 1
+                ? Array.from({ length: variants.length }, (_, i) => updatedAlts[i] ?? responseWithReasoning)
+                : updatedAlts;
             updateMessage(
               chatId,
               trackedId,
-              wasStreaming ? responseWithReasoning : responseWithReasoning,
+              responseWithReasoning,
+              false,
+              undefined,
+              altResponses,
+              regen.currentIndex,
+              docSearch,
+              undefined,
+              undefined,
+              genInlineAttachments ?? variants[regen.currentIndex] ?? existingMsg?.inlineAttachments,
+              false,
+              variants.length ? variants : undefined,
+            );
+            regenerationStateRef.current = null;
+          } else {
+            const attachmentVariants = genInlineAttachments?.length ? [genInlineAttachments] : undefined;
+            updateMessage(
+              chatId,
+              trackedId,
+              responseWithReasoning,
               false,
               undefined,
               undefined,
@@ -892,6 +923,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
               undefined,
               genInlineAttachments,
               false,
+              attachmentVariants,
             );
           }
         } else {
@@ -921,6 +953,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
               });
             }
           }
+        }
+
+        if (data.image_generation === true || genInlineAttachments?.length) {
+          window.dispatchEvent(new CustomEvent('astrachatCreationsUpdated'));
         }
 
         thinkingTraceRef.current = '';
@@ -1193,6 +1229,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         const ids = resolveMcpToolIds(chatId);
         return ids.length ? ids : undefined;
       })(),
+      image_gen_preset_id: readSelectedImageGenPresetId() || undefined,
     };
 
     socket!.emit('chat_message', messageData);
@@ -1340,6 +1377,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         const ids = resolveMcpToolIds(chatId);
         return ids.length ? ids : undefined;
       })(),
+      image_gen_preset_id: readSelectedImageGenPresetId() || undefined,
     };
 
     socket.emit('chat_message', messageData);

@@ -201,6 +201,33 @@ class ConversationRepository:
             logger.error(f"Ошибка при обновлении сообщения: {e}")
             return False
 
+    async def update_assistant_message(
+        self,
+        conversation_id: str,
+        message_id: str,
+        *,
+        content: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Обновляет content и/или metadata сообщения ассистента."""
+        if content is None and metadata is None:
+            return False
+        try:
+            collection = self._get_collection()
+            set_fields: Dict[str, Any] = {"updated_at": datetime.utcnow()}
+            if content is not None:
+                set_fields["messages.$.content"] = content
+            if metadata is not None:
+                set_fields["messages.$.metadata"] = metadata
+            result = await collection.update_one(
+                {"conversation_id": conversation_id, "messages.message_id": message_id},
+                {"$set": set_fields},
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении metadata сообщения: {e}")
+            return False
+
     async def get_user_conversations(
         self, 
         user_id: str, 

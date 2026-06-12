@@ -14,6 +14,7 @@ class ChatMessage(BaseModel):
     model: Optional[str] = None
     conversation_id: Optional[str] = None
     message_id: Optional[str] = None
+    image_gen_preset_id: Optional[str] = None
 
 
 class ModelSettings(BaseModel):

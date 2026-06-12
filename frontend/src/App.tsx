@@ -23,6 +23,7 @@ import SessionTimeoutWatcher from './components/SessionTimeoutWatcher';
 import SessionValidityWatcher from './components/SessionValidityWatcher';
 import LoginPage from './pages/LoginPage';
 import ProfilePage from './pages/ProfilePage';
+import CreationsPage from './pages/CreationsPage';
 import ShareViewPage from './pages/ShareViewPage';
 import { initSettings } from './settings';
 import LlmStatusBanner from './components/LlmStatusBanner';
@@ -311,12 +312,13 @@ function App() {
                           )}
                           
                           <Routes>
-                            <Route path="/" element={<UnifiedChatPage isDarkMode={isDarkMode} sidebarOpen={sidebarOpen} />} />
-                            <Route path="/project/:projectId" element={<ProjectPage />} />
-                            <Route path="/voice" element={<VoicePage />} />
-                            <Route path="/documents" element={<DocumentsPage />} />
-                            <Route path="/knowledge-base" element={<KnowledgeBasePage isDarkMode={isDarkMode} />} />
-                            <Route path="/prompts" element={<PromptGalleryPage />} />
+                            <Route path="/" element={<UnifiedChatPage isDarkMode={isDarkMode} sidebarOpen={sidebarOpen} sidebarHidden={sidebarHidden} />} />
+                            <Route path="/project" element={<UnifiedChatPage isDarkMode={isDarkMode} sidebarOpen={sidebarOpen} sidebarHidden={sidebarHidden} />} />
+                            <Route path="/project/:projectId" element={<UnifiedChatPage isDarkMode={isDarkMode} sidebarOpen={sidebarOpen} sidebarHidden={sidebarHidden} />} />
+                            <Route path="/voice" element={<UnifiedChatPage isDarkMode={isDarkMode} sidebarOpen={sidebarOpen} sidebarHidden={sidebarHidden} />} />
+                            <Route path="/documents" element={<UnifiedChatPage isDarkMode={isDarkMode} sidebarOpen={sidebarOpen} sidebarHidden={sidebarHidden} />} />
+                            <Route path="/search" element={<UnifiedChatPage isDarkMode={isDarkMode} sidebarOpen={sidebarOpen} sidebarHidden={sidebarHidden} />} />
+                            <Route path="/creations" element={<UnifiedChatPage isDarkMode={isDarkMode} sidebarOpen={sidebarOpen} sidebarHidden={sidebarHidden} />} />
                             <Route path="/profile" element={<ProfilePage />} />
                             <Route path="/history" element={<HistoryPage />} />
                           </Routes>

@@ -72,7 +72,10 @@ async def chat_with_ai(
         if is_image_generation_chat_request(message.message):
             await save_dialog_entry("user", message.message, user_id=current_user["user_id"])
             try:
-                img_result = await handle_chat_image_generation(message.message)
+                img_result = await handle_chat_image_generation(
+                    message.message,
+                    preset_id=message.image_gen_preset_id,
+                )
                 response = img_result.get("response") or ""
                 meta = img_result.get("metadata") or {}
                 await save_dialog_entry(
@@ -261,7 +264,16 @@ async def delete_all_conversations(
     repo = get_conversation_repository()
     if repo is None:
         raise HTTPException(status_code=503, detail="MongoDB repository не доступен")
-    deleted = await repo.delete_user_conversations(current_user["user_id"])
+    from backend.services.image_generation_service import persist_image_creations_from_conversation
+
+    user_id = current_user["user_id"]
+    conversations = await repo.get_user_conversations(user_id, limit=10000)
+    for conv in conversations:
+        try:
+            await persist_image_creations_from_conversation(conv)
+        except Exception:
+            pass
+    deleted = await repo.delete_user_conversations(user_id)
     log_cef_event(
         "CNV005",
         request=request,
@@ -284,6 +296,12 @@ async def delete_conversation(
         raise HTTPException(status_code=404, detail="Диалог не найден")
     if conv.user_id != current_user["user_id"]:
         raise HTTPException(status_code=403, detail="Нет доступа к этому диалогу")
+    from backend.services.image_generation_service import persist_image_creations_from_conversation
+
+    try:
+        await persist_image_creations_from_conversation(conv)
+    except Exception:
+        pass
     await repo.delete_conversation(conversation_id)
     log_cef_event(
         "CNV004",

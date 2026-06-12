@@ -1,5 +1,6 @@
 /** События для действий, требующих UI вне глобального обработчика (фокус поиска, вложения). */
 export const ASTRA_FOCUS_CHAT_SEARCH = 'astrachat:focus-chat-search';
+export const ASTRA_PREFILL_CHAT_INPUT = 'astrachatPrefillChatInput';
 export const ASTRA_TRIGGER_ATTACH = 'astrachat:trigger-attach';
 export const ASTRA_REQUEST_DELETE_CURRENT_CHAT = 'astrachat:request-delete-current-chat';
 export const ASTRA_OPEN_SETTINGS = 'astrachat:open-settings';

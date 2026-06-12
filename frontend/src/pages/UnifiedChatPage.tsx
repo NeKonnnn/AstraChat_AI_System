@@ -73,7 +73,7 @@ import { getApiUrl, getWsUrl, API_ENDPOINTS } from '../config/api';
 import MessageRenderer from '../components/MessageRenderer';
 import ImageGenerationPlaceholder from '../components/ImageGenerationPlaceholder';
 import { DocumentSearchPanel } from '../components/DocumentSearchPanel';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import TranscriptionResultModal from '../components/TranscriptionResultModal';
 import ModelSelector from '../components/ModelSelector';
 import MessageNavigationBar from '../components/MessageNavigationBar';
@@ -89,6 +89,7 @@ import TopErrorBanner from '../components/TopErrorBanner';
 import { logChatAttach, logChatAttachError } from '../utils/chatAttachDebug';
 import InlineAttachmentsList from '../components/InlineAttachmentsList';
 import InlineImageLightbox from '../components/InlineImageLightbox';
+import CreationsGallery from '../components/CreationsGallery';
 import { incrementTabNotification } from '../utils/tabNotifications';
 import ChatGearAgentsPanel from '../components/ChatGearAgentsPanel';
 import ChatGearMcpPanel from '../components/ChatGearMcpPanel';
@@ -162,6 +163,7 @@ import {
 interface UnifiedChatPageProps {
   isDarkMode: boolean;
   sidebarOpen?: boolean;
+  sidebarHidden?: boolean;
 }
 
 interface ModelWindow {
@@ -321,6 +323,12 @@ interface MessageCardData {
     multiLLMResponses?: MultiLLMResponseSlot[],
     alternativeResponses?: string[],
     currentResponseIndex?: number,
+    documentSearch?: Message['documentSearch'],
+    reasoningContent?: string,
+    mcpToolCalls?: Message['mcpToolCalls'],
+    inlineAttachments?: Message['inlineAttachments'],
+    isImageGenerating?: boolean,
+    inlineAttachmentVariants?: Message['inlineAttachmentVariants'],
   ) => void;
   formatTimestamp: (ts: string) => string;
   currentChatId: string | undefined;
@@ -554,7 +562,11 @@ const MessageCardComponent = ({
   const [hoveredMultiLlmCol, setHoveredMultiLlmCol] = useState<number | null>(null);
   const [reasoningExpanded, setReasoningExpanded] = useState(false);
   const [multiReasoningExpanded, setMultiReasoningExpanded] = useState<Record<number, boolean>>({});
-  const [lightboxSrc, setLightboxSrc] = useState<{ src: string; name: string } | null>(null);
+  const [lightboxSrc, setLightboxSrc] = useState<{
+    src: string;
+    name: string;
+    editPrompt?: string;
+  } | null>(null);
   const thinkingStartRef = useRef<number | null>(null);
   const [thinkingDurationSec, setThinkingDurationSec] = useState<number | null>(null);
   const [liveThinkingSec, setLiveThinkingSec] = useState<number | null>(null);
@@ -730,6 +742,9 @@ const MessageCardComponent = ({
   }, [message.isStreaming, message.content]);
 
   const hideOuterActionBar = !isUser && (message.multiLLMResponses?.length ?? 0) > 0;
+  const variantIndex = message.currentResponseIndex ?? 0;
+  const displayInlineAttachments =
+    message.inlineAttachmentVariants?.[variantIndex] ?? message.inlineAttachments;
   const multiLlmActionIconSx = {
     opacity: 0.7,
     p: 0.5,
@@ -771,9 +786,9 @@ const MessageCardComponent = ({
         )}
 
         {/* Inline-вложения (пользователь и сгенерированные картинки ассистента) */}
-        {message.inlineAttachments && message.inlineAttachments.length > 0 && (
+        {displayInlineAttachments && displayInlineAttachments.length > 0 && (
           <InlineAttachmentsList
-            files={message.inlineAttachments.map((a) => ({
+            files={displayInlineAttachments.map((a) => ({
               name: a.name,
               contentType: a.contentType,
               imageSrc: a.contentType === 'image' ? a.preview : undefined,
@@ -781,7 +796,14 @@ const MessageCardComponent = ({
             }))}
             isDarkMode={isDarkMode}
             variant="message"
-            onImageExpand={(resolvedSrc, name) => setLightboxSrc({ src: resolvedSrc, name })}
+            onImageExpand={(resolvedSrc, name) => {
+              const promptMatch = message.content.match(/по запросу:\s*«([^»]+)»/i);
+              setLightboxSrc({
+                src: resolvedSrc,
+                name,
+                editPrompt: promptMatch?.[1]?.trim(),
+              });
+            }}
             sx={{ mb: 1 }}
           />
         )}
@@ -1126,6 +1148,8 @@ const MessageCardComponent = ({
                           dataRef.current.currentChatId!, message.id,
                           message.alternativeResponses![ni],
                           undefined, undefined, message.alternativeResponses, ni,
+                          undefined, undefined, undefined,
+                          message.inlineAttachmentVariants?.[ni] ?? message.inlineAttachments,
                         );
                       }
                     }}
@@ -1152,6 +1176,8 @@ const MessageCardComponent = ({
                           dataRef.current.currentChatId!, message.id,
                           message.alternativeResponses![ni],
                           undefined, undefined, message.alternativeResponses, ni,
+                          undefined, undefined, undefined,
+                          message.inlineAttachmentVariants?.[ni] ?? message.inlineAttachments,
                         );
                       }
                     }}
@@ -1270,6 +1296,14 @@ const MessageCardComponent = ({
         src={lightboxSrc?.src || ''}
         name={lightboxSrc?.name || 'image'}
         onClose={() => setLightboxSrc(null)}
+        onEdit={() => {
+          const base = lightboxSrc?.editPrompt?.trim();
+          const text = base ? `Отредактируй изображение: ${base}` : 'Отредактируй изображение: ';
+          window.dispatchEvent(
+            new CustomEvent('astrachatPrefillChatInput', { detail: { text } }),
+          );
+          setLightboxSrc(null);
+        }}
       />
     </Box>
   );
@@ -1287,8 +1321,10 @@ const MessageCard = React.memo(MessageCardComponent, (prev, next) =>
 
 // ================================
 
-export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: UnifiedChatPageProps) {
+export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true, sidebarHidden = false }: UnifiedChatPageProps) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const isCreationsView = location.pathname === '/creations';
   const theme = useTheme();
 
   // Состояние для правой панели
@@ -1956,6 +1992,17 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     return () => clearTimeout(timer);
   }, []);
 
+  useEffect(() => {
+    const onPrefill = (event: Event) => {
+      const text = (event as CustomEvent<{ text?: string }>).detail?.text;
+      if (!text) return;
+      setInputMessage(text);
+      setTimeout(() => inputRef.current?.focus(), 100);
+    };
+    window.addEventListener('astrachatPrefillChatInput', onPrefill);
+    return () => window.removeEventListener('astrachatPrefillChatInput', onPrefill);
+  }, []);
+
   // Автоматический фокус на поле ввода при переключении чатов
   useEffect(() => {
     if (currentChat?.id) {
@@ -2479,17 +2526,30 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
     
     // Добавляем пустое место для нового ответа (будет заполнено при генерации)
     const updatedAlternatives = [...existingAlternatives, ''];
+
+    const isImageMessage = Boolean(
+      message.inlineAttachments?.some((a) => a.contentType === 'image' && a.preview),
+    );
+    let existingVariants = message.inlineAttachmentVariants;
+    if (!existingVariants?.length && message.inlineAttachments?.length) {
+      existingVariants = [message.inlineAttachments];
+    }
     
     // Обновляем сообщение с альтернативными ответами и новым индексом
-    // Не обнуляем content, оставляем текущий
     updateMessage(
       currentChat.id,
       message.id,
-      currentContent, // Оставляем текущий контент, не обнуляем
-      true, // isStreaming - начинаем стриминг
-      undefined, // multiLLMResponses
+      currentContent,
+      true,
+      undefined,
       updatedAlternatives,
-      newIndex // Новый индекс для нового ответа
+      newIndex,
+      undefined,
+      undefined,
+      undefined,
+      message.inlineAttachments,
+      isImageMessage,
+      existingVariants,
     );
 
     // Вызываем перегенерацию без создания нового сообщения пользователя
@@ -3538,7 +3598,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
           overflow: 'hidden',
           marginRight: rightSidebarHidden ? 0 : (rightSidebarOpen ? 0 : '-64px'),
           transition: 'margin-right 0.3s ease',
-          pt: 8,
+          pt: isCreationsView ? 0 : 8,
           backgroundColor: workZoneBgColor,
           ...(workZoneMode === 'custom' && workZoneCustomImage
             ? {
@@ -3554,6 +3614,24 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
       >
       {workZoneMode === 'starry' ? <WorkZoneStarrySky isDarkMode={isDarkMode} /> : null}
       {workZoneMode === 'snowfall' ? <WorkZoneSnowfall isDarkMode={isDarkMode} /> : null}
+      {isCreationsView ? (
+        <Box
+          sx={{
+            flex: 1,
+            minHeight: 0,
+            overflow: 'auto',
+            position: 'relative',
+            zIndex: 1,
+            boxSizing: 'border-box',
+            py: 3,
+            pl: !sidebarHidden && !sidebarOpen ? { xs: 10, md: 10 } : { xs: 2, md: 4 },
+            pr: !rightSidebarHidden && !rightSidebarOpen ? { xs: 10, md: 10 } : { xs: 2, md: 4 },
+          }}
+        >
+          <CreationsGallery isDarkMode={isDarkMode} />
+        </Box>
+      ) : (
+      <>
       {/* Заголовок с информацией о проекте и модели */}
       {currentChat && project && (
         <Box sx={{ 
@@ -4093,6 +4171,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
              />
            </>
            ) : null}
+         </Box>
 
              {/* Диалоги */}
        <VoiceChatDialog
@@ -4434,6 +4513,8 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
            Текст скопирован в буфер обмена
          </Alert>
        </Snackbar>
+      </>
+      )}
       </Box>
 
       {/* Правый сайдбар: кнопки действий → по клику «Конструктор агента» открывается панель */}
@@ -4980,7 +5061,6 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true }: Unif
         isDarkMode={isDarkMode}
         selectedCount={selectedMessages.size}
       />
-      </Box>
     </Box>
   );
 }

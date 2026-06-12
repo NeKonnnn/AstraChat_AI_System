@@ -106,6 +106,18 @@ export const getApiUrl = (endpoint: string): string => {
   return settings.api.getApiUrl(endpoint);
 };
 
+/** Заголовки Authorization для fetch к защищённым API. */
+export function getAuthFetchHeaders(extra?: Record<string, string>): Record<string, string> {
+  const token =
+    typeof window !== 'undefined'
+      ? localStorage.getItem('auth_token') || localStorage.getItem('token')
+      : null;
+  return {
+    ...(extra || {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
 // Функция для получения WebSocket URL
 export const getWsUrl = (endpoint: string): string => {
   const settings = getSettings();

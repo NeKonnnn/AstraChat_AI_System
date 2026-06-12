@@ -146,16 +146,45 @@ minio:
 image_generation:
   enabled: true
   comfyui_base_url: "http://127.0.0.1:8188"
-  # Путь от каталога backend/ (в Docker: /app). Положите checkpoint в models/comfyui/checkpoints/
-  workflow_path: "config/comfy_workflows/sd15_txt2img_api.json"
+  # Workflow (от backend/):
+  #   flux_schnell_fp8_txt2img_api.json — Flux.1 Schnell FP8, 4 шага, ~17 ГБ, Apache (рекомендуется)
+  #   flux_dev_fp8_txt2img_api.json     — Flux.1 Dev FP8, 20 шагов, выше качество, лицензия dev
+  #   sd15_txt2img_api.json             — SD 1.5, лёгкий fallback
+  workflow_path: "config/comfy_workflows/flux_schnell_fp8_txt2img_api.json"
   request_timeout_sec: 900
   poll_interval_sec: 1.0
   chat_triggers_enabled: true
-  default_width: 512
-  default_height: 512
-  default_steps: 20
-  # Пусто = имя из workflow или первый checkpoint, который видит ComfyUI
-  checkpoint_name: ""
+  default_width: 1024
+  default_height: 1024
+  default_steps: 4
+  # Имя .safetensors в models/comfyui/checkpoints/ (пусто = из workflow)
+  checkpoint_name: "flux1-schnell-fp8.safetensors"
+  default_preset_id: "flux_schnell_fp8"
+  presets:
+    flux_schnell_fp8:
+      label: "Flux Schnell FP8"
+      description: "Современное качество, 4 шага, 1024×1024"
+      workflow_path: "config/comfy_workflows/flux_schnell_fp8_txt2img_api.json"
+      checkpoint_name: "flux1-schnell-fp8.safetensors"
+      default_width: 1024
+      default_height: 1024
+      default_steps: 4
+    flux_dev_fp8:
+      label: "Flux Dev FP8"
+      description: "Максимальное качество, 20 шагов (лицензия dev)"
+      workflow_path: "config/comfy_workflows/flux_dev_fp8_txt2img_api.json"
+      checkpoint_name: "flux1-dev-fp8.safetensors"
+      default_width: 1024
+      default_height: 1024
+      default_steps: 20
+    sd15:
+      label: "Stable Diffusion 1.5"
+      description: "Быстро и легко, 512×512"
+      workflow_path: "config/comfy_workflows/sd15_txt2img_api.json"
+      checkpoint_name: "v1-5-pruned-emaonly.safetensors"
+      default_width: 512
+      default_height: 512
+      default_steps: 20
   node_map:
     prompt:
       node: "6"

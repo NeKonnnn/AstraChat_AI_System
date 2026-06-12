@@ -42,7 +42,7 @@ export const CHAT_GEAR_MENU_PANEL_WIDTH_PX = 272;
 export const CHAT_GEAR_MENU_LEFT_RAIL_WIDTH_PX = 196;
 /** Минимальная ширина правой панели агентов (при ширине = пилюля ввода остальное за счёт flex). */
 export const CHAT_GEAR_MENU_AGENTS_RIGHT_MIN_PX = 200;
-/** Зазор между левой и правой «карточкой», как у всплывающего окна «Агенты / Модели» (AgentSelector). */
+/** Зазор между левой и правой «карточкой», как у всплывающего окна «Модели» (AgentSelector). */
 export const CHAT_GEAR_MENU_PANELS_GAP_PX = 6;
 /** Полная ширина меню «Инструменты» с открытыми агентами (две панели + зазор). */
 export const CHAT_GEAR_MENU_EXPANDED_WIDTH_PX =

@@ -99,6 +99,11 @@ import {
 import { getSidebarPanelBackground } from '../constants/sidebarPanelColor';
 import { hotkeyLabel, ASTRA_REQUEST_DELETE_CURRENT_CHAT, ASTRA_OPEN_SETTINGS } from '../constants/hotkeys';
 import { SidebarRailAddIcon, SidebarRailSearchIcon } from '../constants/sidebarRailIcons';
+import { getApiUrl, getAuthFetchHeaders } from '../config/api';
+import AuthenticatedInlineImage from './AuthenticatedInlineImage';
+import { useImageCreations } from '../hooks/useImageCreations';
+import { resolveCreationPreviewSrc } from '../utils/imageCreations';
+import CollectionsBookmarkOutlinedIcon from '@mui/icons-material/CollectionsBookmarkOutlined';
 
 interface SidebarProps {
   open: boolean;
@@ -179,7 +184,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
   const { state } = useAppContext();
   const stateRef = React.useRef(state);
   stateRef.current = state;
-  const { user, logout } = useAuth();
+  const { user, logout, token } = useAuth();
   const { 
     createChat, 
     setCurrentChat, 
@@ -203,6 +208,16 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
     togglePinInProject
   } = useAppActions();
   const { isConnected } = useSocket();
+  const { items: creationItems } = useImageCreations(3);
+  const creationPreviews = React.useMemo(
+    () =>
+      creationItems.slice(0, 3).map((item) => ({
+        id: item.id,
+        preview_url: resolveCreationPreviewSrc(item.preview_url),
+        prompt: item.prompt,
+      })),
+    [creationItems],
+  );
   
   // Получаем папки из состояния и сортируем (папка "Закреплено" должна быть первой)
   const allFolders = getFolders();
@@ -997,6 +1012,71 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                 />
               </ListItemButton>
             </ListItem>
+            <ListItem disablePadding sx={{ mb: 0.5, display: 'block' }}>
+              <ListItemButton
+                onClick={() => navigate('/creations')}
+                sx={{
+                  ...SIDEBAR_CHAT_ROW_LIST_ITEM_BUTTON_SX,
+                  pl: SIDEBAR_ICON_LEADING_PL,
+                  pr: SIDEBAR_CONTROL_PX,
+                  alignItems: 'center',
+                  backgroundColor:
+                    location.pathname === '/creations' ? 'rgba(255,255,255,0.15)' : 'transparent',
+                  '&:hover': {
+                    backgroundColor:
+                      location.pathname === '/creations'
+                        ? 'rgba(255,255,255,0.2)'
+                        : 'rgba(255,255,255,0.08)',
+                  },
+                }}
+              >
+                <ListItemIcon sx={SIDEBAR_LIST_LEADING_ICON_SX}>
+                  <CollectionsBookmarkOutlinedIcon sx={SIDEBAR_LIST_ICON_SX} />
+                </ListItemIcon>
+                <ListItemText
+                  sx={{ flex: 1, minWidth: 0, my: 0 }}
+                  primary={
+                    <Typography variant="body2" sx={{ color: 'white', fontSize: '0.8rem' }}>
+                      Моё творение
+                    </Typography>
+                  }
+                />
+                <ChevronRightIcon sx={{ fontSize: '1rem', color: 'rgba(255,255,255,0.55)', flexShrink: 0 }} />
+              </ListItemButton>
+              {creationPreviews.length > 0 ? (
+                <Box
+                  sx={{
+                    display: 'flex',
+                    gap: 0.5,
+                    mt: 0.5,
+                    flexWrap: 'nowrap',
+                    pl: 3.25,
+                  }}
+                >
+                  {creationPreviews.map((item) => (
+                    <Box
+                      key={item.id}
+                      sx={{
+                        width: 52,
+                        height: 52,
+                        flexShrink: 0,
+                        borderRadius: 1,
+                        overflow: 'hidden',
+                        bgcolor: 'rgba(255,255,255,0.08)',
+                      }}
+                    >
+                      {item.preview_url ? (
+                        <AuthenticatedInlineImage
+                          src={item.preview_url}
+                          alt={item.prompt || ''}
+                          sx={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                        />
+                      ) : null}
+                    </Box>
+                  ))}
+                </Box>
+              ) : null}
+            </ListItem>
           </List>
         </>
       )}
@@ -1052,6 +1132,23 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                     sx={getSidebarRailCollapsedListItemButtonSx(isDarkMode)}
                   >
                     <SidebarRailSearchIcon sx={SIDEBAR_LIST_ICON_SX} />
+                  </ListItemButton>
+                </Box>
+              </Tooltip>
+            </ListItem>
+            <ListItem disablePadding sx={{ mb: 0.5, display: 'block' }}>
+              <Tooltip placement="right" title="Моё творение">
+                <Box component="span" sx={{ display: 'flex', width: '100%', justifyContent: 'center' }}>
+                  <ListItemButton
+                    onClick={() => navigate('/creations')}
+                    sx={{
+                      ...getSidebarRailCollapsedListItemButtonSx(isDarkMode),
+                      ...(location.pathname === '/creations'
+                        ? { bgcolor: 'rgba(255,255,255,0.15)' }
+                        : {}),
+                    }}
+                  >
+                    <CollectionsBookmarkOutlinedIcon sx={SIDEBAR_LIST_ICON_SX} />
                   </ListItemButton>
                 </Box>
               </Tooltip>
@@ -2008,7 +2105,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
       </Box>
       )}
 
-      {/* Меню пользователя (та же логика, что у «Агенты / модели» и меню чатов) */}
+      {/* Меню пользователя (та же логика, что у «Модели» и меню чатов) */}
       <Popover
         open={menuOpen}
         anchorEl={anchorEl}
@@ -2296,7 +2393,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         </DialogContent>
       </Dialog>
 
-      {/* Выпадающее меню для чатов — по паттерну «Агенты / модели»: левое меню + правое подменю */}
+      {/* Выпадающее меню для чатов — по паттерну «Модели»: левое меню + правое подменю */}
       <Popover
         open={chatMenuOpen}
         anchorEl={chatMenuAnchor}

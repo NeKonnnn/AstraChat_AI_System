@@ -39,9 +39,10 @@ def _format_comfy_execution_error(messages: Any) -> str:
 
 _NO_CHECKPOINTS_HINT = (
     "В ComfyUI нет checkpoint-моделей (список пуст). "
-    "Скачайте SD1.5 .safetensors в папку models/comfyui/checkpoints/ на хосте "
-    "(в контейнере: /app/ComfyUI/models/checkpoints/) и перезапустите comfyui. "
-    "Пример: v1-5-pruned-emaonly.safetensors с Hugging Face (runwayml/stable-diffusion-v1-5)."
+    "Скачайте .safetensors в models/comfyui/checkpoints/ на хосте "
+    "(в контейнере: /app/ComfyUI/models/checkpoints/). "
+    "Рекомендуется Flux.1 Schnell FP8: Comfy-Org/flux1-schnell → flux1-schnell-fp8.safetensors (~17 ГБ). "
+    "Альтернатива: SD1.5 v1-5-pruned-emaonly.safetensors + workflow sd15_txt2img_api.json."
 )
 
 
