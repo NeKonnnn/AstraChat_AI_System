@@ -83,5 +83,7 @@
   "rag_query_fix_typos": false,
   "rag_multi_query_enabled": false,
   "rag_hyde_enabled": false,
-  "rag_chat_top_k": 12
+  "rag_chat_top_k": 12,
+  "image_generation_custom_presets": [],
+  "image_generation_default_preset_id": "flux_schnell_fp8"
 }

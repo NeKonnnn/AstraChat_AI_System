@@ -146,6 +146,8 @@ minio:
 image_generation:
   enabled: true
   comfyui_base_url: "http://127.0.0.1:8188"
+  # URL для браузера (в Docker: localhost:8188, бэкенд ходит на comfyui:8188)
+  comfyui_public_url: "http://localhost:8188"
   # Workflow (от backend/):
   #   flux_schnell_fp8_txt2img_api.json — Flux.1 Schnell FP8, 4 шага, ~17 ГБ, Apache (рекомендуется)
   #   flux_dev_fp8_txt2img_api.json     — Flux.1 Dev FP8, 20 шагов, выше качество, лицензия dev
@@ -169,14 +171,34 @@ image_generation:
       default_width: 1024
       default_height: 1024
       default_steps: 4
+      node_map:
+        prompt: { node: "6", input: "text" }
+        negative_prompt: { node: "7", input: "text" }
+        width: { node: "5", input: "width" }
+        height: { node: "5", input: "height" }
+        steps: { node: "3", input: "steps" }
+        seed: { node: "3", input: "seed" }
+        cfg: { node: "3", input: "cfg" }
+        denoise: { node: "3", input: "denoise" }
+        checkpoint: { node: "4", input: "ckpt_name" }
     flux_dev_fp8:
       label: "Flux Dev FP8"
-      description: "Максимальное качество, 20 шагов (лицензия dev)"
+      description: "Максимальное качество, 20 шагов (нужен flux1-dev-fp8.safetensors)"
       workflow_path: "config/comfy_workflows/flux_dev_fp8_txt2img_api.json"
       checkpoint_name: "flux1-dev-fp8.safetensors"
       default_width: 1024
       default_height: 1024
       default_steps: 20
+      node_map:
+        prompt: { node: "6", input: "text" }
+        negative_prompt: { node: "7", input: "text" }
+        width: { node: "5", input: "width" }
+        height: { node: "5", input: "height" }
+        steps: { node: "3", input: "steps" }
+        seed: { node: "3", input: "seed" }
+        cfg: { node: "3", input: "cfg" }
+        denoise: { node: "3", input: "denoise" }
+        checkpoint: { node: "4", input: "ckpt_name" }
     sd15:
       label: "Stable Diffusion 1.5"
       description: "Быстро и легко, 512×512"
@@ -185,6 +207,16 @@ image_generation:
       default_width: 512
       default_height: 512
       default_steps: 20
+      node_map:
+        prompt: { node: "6", input: "text" }
+        negative_prompt: { node: "7", input: "text" }
+        width: { node: "5", input: "width" }
+        height: { node: "5", input: "height" }
+        steps: { node: "3", input: "steps" }
+        seed: { node: "3", input: "seed" }
+        cfg: { node: "3", input: "cfg" }
+        denoise: { node: "3", input: "denoise" }
+        checkpoint: { node: "4", input: "ckpt_name" }
   node_map:
     prompt:
       node: "6"

@@ -136,26 +136,40 @@ async def generate_images(
     steps: Optional[int] = None,
     seed: Optional[int] = None,
     preset_id: Optional[str] = None,
+    negative_prompt: Optional[str] = None,
+    cfg: Optional[float] = None,
+    denoise: Optional[float] = None,
+    reference_image_bytes: Optional[bytes] = None,
+    reference_image_filename: str = "reference.png",
 ) -> List[Tuple[bytes, str]]:
+    from backend.services.comfyui_image_generation import upload_image_to_comfyui
     from backend.services.image_generation_presets import (
         apply_preset_to_generation_params,
         resolve_preset,
     )
 
-    cfg = get_image_generation_settings()
-    if not cfg or not cfg.enabled:
+    cfg_settings = get_image_generation_settings()
+    if not cfg_settings or not cfg_settings.enabled:
         raise ComfyImageGenError("Генерация изображений отключена (image_generation.enabled)")
 
     preset = resolve_preset(preset_id)
     gen = apply_preset_to_generation_params(preset, width=width, height=height, steps=steps)
+    resolved_preset_id = str(gen.get("preset_id") or "")
+    if preset_id and resolved_preset_id and str(preset_id).strip() != resolved_preset_id:
+        logger.warning(
+            "Пресет %r не найден, используем %r (%s)",
+            preset_id,
+            resolved_preset_id,
+            gen.get("preset_label"),
+        )
 
-    url = _resolve_comfyui_url(cfg)
+    url = _resolve_comfyui_url(cfg_settings)
     wf_rel = (gen.get("workflow_path") or "").strip()
-    node_map = _node_map_plain(cfg.node_map)
+    node_map = _node_map_plain(gen.get("node_map") or cfg_settings.node_map)
     if not url or not wf_rel:
         raise ComfyImageGenError("Задайте comfyui_base_url и workflow_path")
     if not node_map:
-        raise ComfyImageGenError("Задайте image_generation.node_map")
+        raise ComfyImageGenError("Задайте image_generation.node_map или node_map в пресете")
 
     wf_path = resolve_workflow_file(wf_rel, _workflow_base_dir())
     workflow = copy.deepcopy(load_workflow_template(wf_path))
@@ -171,10 +185,24 @@ async def generate_images(
     inject["height"] = height
     inject["steps"] = steps
     inject["seed"] = seed
+    if negative_prompt is not None and str(negative_prompt).strip():
+        inject["negative_prompt"] = str(negative_prompt).strip()
+    if cfg is not None:
+        inject["cfg"] = float(cfg)
+    if denoise is not None:
+        inject["denoise"] = float(denoise)
+
+    if reference_image_bytes and node_map.get("reference_image"):
+        uploaded_name = await upload_image_to_comfyui(
+            url,
+            reference_image_bytes,
+            reference_image_filename,
+        )
+        inject["reference_image"] = uploaded_name
 
     inject_workflow_inputs(workflow, node_map, inject)
 
-    ckpt_pref = str(gen.get("checkpoint_name") or getattr(cfg, "checkpoint_name", None) or "").strip()
+    ckpt_pref = str(gen.get("checkpoint_name") or getattr(cfg_settings, "checkpoint_name", None) or "").strip()
     ckpt_node = node_map.get("checkpoint")
     if ckpt_node and not ckpt_pref:
         node_id, field = ckpt_node
@@ -186,16 +214,44 @@ async def generate_images(
 
     try:
         available_ckpts = await fetch_comfyui_checkpoint_names(url)
-        apply_checkpoint_to_workflow(workflow, available_ckpts, preferred=ckpt_pref)
+        chosen_ckpt = apply_checkpoint_to_workflow(
+            workflow,
+            available_ckpts,
+            preferred=ckpt_pref,
+            strict_preferred=bool(ckpt_pref),
+        )
     except httpx.HTTPError as exc:
         raise ComfyImageGenError(f"Не удалось получить список моделей ComfyUI: {exc}") from exc
+
+    logger.info(
+        "ComfyUI image gen: preset=%s (%s) workflow=%s checkpoint=%s size=%sx%s steps=%s",
+        resolved_preset_id or preset_id,
+        gen.get("preset_label"),
+        wf_rel,
+        chosen_ckpt,
+        width,
+        height,
+        steps,
+    )
 
     return await generate_images_via_comfyui(
         comfyui_base_url=url,
         workflow=workflow,
-        timeout_sec=float(cfg.request_timeout_sec),
-        poll_interval_sec=float(cfg.poll_interval_sec),
+        timeout_sec=float(cfg_settings.request_timeout_sec),
+        poll_interval_sec=float(cfg_settings.poll_interval_sec),
     )
+
+
+def resolve_comfyui_public_url(cfg=None) -> str:
+    if cfg is None:
+        cfg = get_image_generation_settings()
+    env_pub = (os.getenv("IMAGE_GEN_COMFYUI_PUBLIC_URL") or "").strip().rstrip("/")
+    if env_pub:
+        return env_pub
+    pub = (getattr(cfg, "comfyui_public_url", None) or "").strip().rstrip("/")
+    if pub:
+        return pub
+    return _resolve_comfyui_url(cfg)
 
 
 def build_generated_image_attachments(
@@ -793,19 +849,31 @@ async def handle_chat_image_generation(
             "укажите node_map, workflow и запустите ComfyUI"
         )
 
-    pairs = await generate_images(prompt=prompt, preset_id=preset_id)
+    from backend.services.image_generation_presets import apply_preset_to_generation_params, resolve_preset
+
+    effective_preset = resolve_preset(preset_id)
+    gen_plan = apply_preset_to_generation_params(effective_preset, width=None, height=None, steps=None)
+
+    pairs = await generate_images(prompt=prompt, preset_id=preset_id or gen_plan.get("preset_id"))
     attachments = await try_upload_generated_images_to_minio(pairs, prompt=prompt)
     text, meta = build_generated_image_attachments(pairs, prompt=prompt)
     if attachments:
         meta = {"inline_attachments": attachments}
-    if preset_id:
-        from backend.services.image_generation_presets import resolve_preset
-
-        preset = resolve_preset(preset_id)
-        if preset:
-            meta = dict(meta)
-            meta["image_gen_preset_id"] = preset.get("id")
-            meta["image_gen_preset_label"] = preset.get("label")
+    if effective_preset:
+        meta = dict(meta)
+        meta["image_gen_preset_id"] = effective_preset.get("id")
+        meta["image_gen_preset_label"] = effective_preset.get("label")
+        meta["image_gen_workflow_path"] = gen_plan.get("workflow_path")
+        meta["image_gen_checkpoint"] = gen_plan.get("checkpoint_name")
+        meta["image_gen_width"] = gen_plan.get("width")
+        meta["image_gen_height"] = gen_plan.get("height")
+        meta["image_gen_steps"] = gen_plan.get("steps")
+        plan_label = gen_plan.get("preset_label") or effective_preset.get("label")
+        if plan_label:
+            text = (
+                f"{text}\n\n_Пресет: {plan_label} · {gen_plan.get('width')}×{gen_plan.get('height')} · "
+                f"{gen_plan.get('checkpoint_name') or 'checkpoint из workflow'}_"
+            )
     return {
         "response": text,
         "metadata": meta,

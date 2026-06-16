@@ -46,6 +46,36 @@ _NO_CHECKPOINTS_HINT = (
 )
 
 
+async def upload_image_to_comfyui(
+    comfyui_base_url: str,
+    image_bytes: bytes,
+    filename: str,
+    *,
+    subfolder: str = "",
+    image_type: str = "input",
+) -> str:
+    """Загружает изображение в ComfyUI /upload/image, возвращает имя для LoadImage."""
+    base = comfyui_base_url.rstrip("/")
+    safe_name = (filename or "reference.png").replace("\\", "/").split("/")[-1] or "reference.png"
+    timeout = httpx.Timeout(60.0, connect=10.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        files = {"image": (safe_name, image_bytes)}
+        data: Dict[str, str] = {"type": image_type}
+        if subfolder:
+            data["subfolder"] = subfolder
+        r = await client.post(f"{base}/upload/image", files=files, data=data)
+        if r.status_code >= 400:
+            raise ComfyImageGenError(f"ComfyUI /upload/image: {r.status_code} {r.text[:500]}")
+        body = r.json()
+    if not isinstance(body, dict):
+        raise ComfyImageGenError("ComfyUI /upload/image: неожиданный ответ")
+    name = str(body.get("name") or safe_name)
+    sub = str(body.get("subfolder") or "")
+    if sub:
+        return f"{sub}/{name}"
+    return name
+
+
 async def fetch_comfyui_checkpoint_names(comfyui_base_url: str) -> List[str]:
     """Список имён checkpoint из ComfyUI object_info (CheckpointLoaderSimple)."""
     base = comfyui_base_url.rstrip("/")
@@ -72,6 +102,7 @@ def apply_checkpoint_to_workflow(
     checkpoint_names: List[str],
     *,
     preferred: str = "",
+    strict_preferred: bool = False,
 ) -> str:
     """
     Подставляет ckpt_name во все CheckpointLoaderSimple.
@@ -94,9 +125,24 @@ def apply_checkpoint_to_workflow(
     elif pref:
         chosen = next(
             (n for n in checkpoint_names if n == pref or n.endswith(f"/{pref}") or n.endswith(pref)),
-            checkpoint_names[0],
+            None,
         )
-        if chosen != pref:
+        if not chosen:
+            hint = (
+                f"Checkpoint «{pref}» не найден в ComfyUI. "
+                f"Доступно: {', '.join(checkpoint_names[:8])}. "
+                "Положите .safetensors в models/comfyui/checkpoints/ и перезапустите ComfyUI."
+            )
+            if strict_preferred:
+                raise ComfyImageGenError(hint)
+            chosen = checkpoint_names[0]
+            logger.warning("%s Используем %r.", hint, chosen)
+        elif chosen != pref:
+            if strict_preferred:
+                raise ComfyImageGenError(
+                    f"Checkpoint «{pref}» не найден в ComfyUI (ближайший: {chosen}). "
+                    f"Доступно: {', '.join(checkpoint_names[:8])}"
+                )
             logger.warning(
                 "Checkpoint %r недоступен в ComfyUI, используем %r (доступно: %s)",
                 pref,

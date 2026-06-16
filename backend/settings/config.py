@@ -97,12 +97,15 @@ class ImageGenerationPreset(BaseModel):
     default_width: int = 1024
     default_height: int = 1024
     default_steps: int = 4
+    node_map: Dict[str, ImageGenerationNodeMapEntry] = Field(default_factory=dict)
 
 
 class ImageGenerationConfig(BaseModel):
     """ComfyUI — генерация изображений из чата и API."""
     enabled: bool = False
     comfyui_base_url: str = "http://127.0.0.1:8188"
+    # URL ComfyUI UI для браузера (если бэкенд ходит на docker-сервис comfyui:8188)
+    comfyui_public_url: str = "http://localhost:8188"
     workflow_path: str = "config/comfy_workflows/sd15_txt2img_api.json"
     request_timeout_sec: float = 900
     poll_interval_sec: float = 1.0
@@ -130,6 +133,10 @@ class ImageGenerationConfig(BaseModel):
         env_url = _get_env_value("IMAGE_GEN_COMFYUI_URL")
         if env_url:
             result["comfyui_base_url"] = env_url
+
+        env_pub = _get_env_value("IMAGE_GEN_COMFYUI_PUBLIC_URL")
+        if env_pub:
+            result["comfyui_public_url"] = env_pub
 
         env_wf = _get_env_value("IMAGE_GEN_WORKFLOW_PATH")
         if env_wf:
@@ -172,6 +179,13 @@ class ImageGenerationConfig(BaseModel):
                     continue
                 entry = dict(val)
                 entry["id"] = str(pid)
+                nm = entry.get("node_map")
+                if isinstance(nm, dict):
+                    parsed_nm: Dict[str, Any] = {}
+                    for k, v in nm.items():
+                        if isinstance(v, dict) and v.get("node") and v.get("input"):
+                            parsed_nm[str(k)] = v
+                    entry["node_map"] = parsed_nm
                 parsed_presets[str(pid)] = entry
             result["presets"] = parsed_presets
 

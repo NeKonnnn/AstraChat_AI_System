@@ -8,80 +8,76 @@ import {
   ASTRA_OPEN_SETTINGS,
   ASTRA_OPEN_AGENT_CONSTRUCTOR,
   ASTRA_OPEN_TRANSCRIPTION_SIDEBAR,
-  isPrimaryModifier,
+  HOTKEY_ACTIONS,
+  matchesHotkeyBinding,
   isTypingInField,
+  getDisabledHotkeys,
+  ASTRA_HOTKEYS_CHANGED,
+  type HotkeyActionId,
 } from '../constants/hotkeys';
+import { useHotkeyBindings } from '../hooks/useHotkeyBindings';
+
+const ACTION_EVENTS: Partial<Record<HotkeyActionId, string>> = {
+  searchChats: ASTRA_FOCUS_CHAT_SEARCH,
+  attachFiles: ASTRA_TRIGGER_ATTACH,
+  deleteChat: ASTRA_REQUEST_DELETE_CURRENT_CHAT,
+  openSettings: ASTRA_OPEN_SETTINGS,
+  openAgentConstructor: ASTRA_OPEN_AGENT_CONSTRUCTOR,
+  openTranscription: ASTRA_OPEN_TRANSCRIPTION_SIDEBAR,
+};
 
 /**
- * Глобальные сочетания: Alt+S/A/T — настройки / конструктор / транскрибатор;
- * Shift+K, O, U, Ctrl+Del — чаты и вложения.
+ * Глобальные сочетания клавиш (настраиваемые пользователем).
  * Слушатель в фазе capture, с preventDefault где нужно.
  */
 export default function GlobalKeyboardShortcuts() {
   const navigate = useNavigate();
   const { state } = useAppContext();
   const { createChat, setCurrentChat, deleteChat } = useAppActions();
+  const { bindings } = useHotkeyBindings();
+  const disabledRef = useRef(getDisabledHotkeys());
   const stateRef = useRef(state);
+  const bindingsRef = useRef(bindings);
   stateRef.current = state;
+  bindingsRef.current = bindings;
+
+  useEffect(() => {
+    const onChange = () => {
+      disabledRef.current = getDisabledHotkeys();
+    };
+    window.addEventListener(ASTRA_HOTKEYS_CHANGED, onChange);
+    return () => window.removeEventListener(ASTRA_HOTKEYS_CHANGED, onChange);
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      // Alt+S / Alt+A / Alt+T (без Ctrl/Meta/Shift) — по физ. клавише, чтобы работало и в русской раскладке
-      if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-        if (isTypingInField(e.target)) {
-          // дальше не обрабатываем
-        } else if (e.code === 'KeyS') {
-          e.preventDefault();
-          window.dispatchEvent(new CustomEvent(ASTRA_OPEN_SETTINGS));
-          return;
-        } else if (e.code === 'KeyA') {
-          e.preventDefault();
-          window.dispatchEvent(new CustomEvent(ASTRA_OPEN_AGENT_CONSTRUCTOR));
-          return;
-        } else if (e.code === 'KeyT') {
-          e.preventDefault();
-          window.dispatchEvent(new CustomEvent(ASTRA_OPEN_TRANSCRIPTION_SIDEBAR));
+      const currentBindings = bindingsRef.current;
+
+      for (const action of HOTKEY_ACTIONS) {
+        if (disabledRef.current.has(action.id)) continue;
+        const binding = currentBindings[action.id];
+        if (!matchesHotkeyBinding(e, binding)) continue;
+        if (!action.worksInInput && isTypingInField(e.target)) continue;
+
+        e.preventDefault();
+
+        if (action.id === 'newChat') {
+          const s = stateRef.current;
+          const cur = s.chats.find((c) => c.id === s.currentChatId) ?? null;
+          if (cur && !chatIsListedInAllChatsSection(cur)) {
+            deleteChat(cur.id);
+          }
+          const id = createChat();
+          setCurrentChat(id);
+          navigate('/');
           return;
         }
-      }
 
-      const mod = isPrimaryModifier(e);
-      if (!mod) return;
-
-      const keyLower = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-
-      // Ctrl+U — вложения: срабатывает и из поля ввода чата
-      if (keyLower === 'u') {
-        e.preventDefault();
-        window.dispatchEvent(new CustomEvent(ASTRA_TRIGGER_ATTACH));
-        return;
-      }
-
-      if (isTypingInField(e.target)) return;
-
-      if (keyLower === 'k' && e.shiftKey) {
-        e.preventDefault();
-        const s = stateRef.current;
-        const cur = s.chats.find((c) => c.id === s.currentChatId) ?? null;
-        if (cur && !chatIsListedInAllChatsSection(cur)) {
-          deleteChat(cur.id);
+        const eventName = ACTION_EVENTS[action.id];
+        if (eventName) {
+          window.dispatchEvent(new CustomEvent(eventName));
         }
-        const id = createChat();
-        setCurrentChat(id);
-        navigate('/');
         return;
-      }
-
-      if (keyLower === 'o') {
-        e.preventDefault();
-        window.dispatchEvent(new CustomEvent(ASTRA_FOCUS_CHAT_SEARCH));
-        return;
-      }
-
-      const isForwardDelete = e.key === 'Delete' || e.code === 'Delete';
-      if (isForwardDelete) {
-        e.preventDefault();
-        window.dispatchEvent(new CustomEvent(ASTRA_REQUEST_DELETE_CURRENT_CHAT));
       }
     };
 

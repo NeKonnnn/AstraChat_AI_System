@@ -47,6 +47,7 @@ import {
   PlayArrow as PlayArrowIcon,
   MusicNote as MusicNoteIcon,
   AutoAwesome as SparkleIcon,
+  SystemUpdateAltOutlined as UpdatesIcon,
   Work as BriefcaseIcon,
   Language as GlobeIcon,
   School as GraduationIcon,
@@ -97,7 +98,9 @@ import {
   getSidebarRailCollapsedListItemButtonSx,
 } from '../constants/menuStyles';
 import { getSidebarPanelBackground } from '../constants/sidebarPanelColor';
-import { hotkeyLabel, ASTRA_REQUEST_DELETE_CURRENT_CHAT, ASTRA_OPEN_SETTINGS } from '../constants/hotkeys';
+import { ASTRA_REQUEST_DELETE_CURRENT_CHAT, ASTRA_OPEN_SETTINGS } from '../constants/hotkeys';
+import { useHotkeyBindings } from '../hooks/useHotkeyBindings';
+import HotkeysSettingsDialog from './HotkeysSettingsDialog';
 import { SidebarRailAddIcon, SidebarRailSearchIcon } from '../constants/sidebarRailIcons';
 import { getApiUrl, getAuthFetchHeaders } from '../config/api';
 import AuthenticatedInlineImage from './AuthenticatedInlineImage';
@@ -234,7 +237,9 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
   const [userMenuSubmenuOffsetTop, setUserMenuSubmenuOffsetTop] = React.useState(0);
   const userSubmenuCloseTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showHelpDialog, setShowHelpDialog] = React.useState(false);
+  const [showUpdatesDialog, setShowUpdatesDialog] = React.useState(false);
   const [showShortcutsDialog, setShowShortcutsDialog] = React.useState(false);
+  const { bindings, format } = useHotkeyBindings();
   const [newChatShortcutHover, setNewChatShortcutHover] = React.useState(false);
   const [searchFieldHover, setSearchFieldHover] = React.useState(false);
   const [chatMenuAnchor, setChatMenuAnchor] = React.useState<null | HTMLElement>(null);
@@ -918,7 +923,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                     letterSpacing: '0.02em',
                   }}
                 >
-                  {hotkeyLabel.newChat()}
+                  {format(bindings.newChat)}
                 </Typography>
               </ListItemButton>
             </ListItem>
@@ -968,7 +973,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                               letterSpacing: '0.02em',
                             }}
                           >
-                            {hotkeyLabel.searchChats()}
+                            {format(bindings.searchChats)}
                           </Typography>
                           {useFoldersMode ? (
                             <Tooltip title="Создать папку">
@@ -1094,7 +1099,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                       Новый чат
                     </Typography>
                     <Typography variant="caption" sx={{ opacity: 0.85, display: 'block', mt: 0.25 }}>
-                      {hotkeyLabel.newChat()}
+                      {format(bindings.newChat)}
                     </Typography>
                   </Box>
                 }
@@ -1116,7 +1121,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                       Поиск в чатах
                     </Typography>
                     <Typography variant="caption" sx={{ opacity: 0.85, display: 'block', mt: 0.25 }}>
-                      {hotkeyLabel.searchChats()}
+                      {format(bindings.searchChats)}
                     </Typography>
                   </Box>
                 }
@@ -2215,6 +2220,16 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                 <Box
                   onClick={() => {
                     handleMenuClose();
+                    setShowUpdatesDialog(true);
+                  }}
+                  sx={{ ...dropdownItemSx, display: 'flex', alignItems: 'center', gap: 1, color: menuItemColor }}
+                >
+                  <UpdatesIcon sx={{ fontSize: 22, color: submenuIconColor, flexShrink: 0 }} />
+                  <Typography sx={{ flex: 1, fontSize: MENU_ACTION_TEXT_SIZE }}>Обновления</Typography>
+                </Box>
+                <Box
+                  onClick={() => {
+                    handleMenuClose();
                     setShowShortcutsDialog(true);
                   }}
                   sx={{ ...dropdownItemSx, display: 'flex', alignItems: 'center', gap: 1, color: menuItemColor }}
@@ -2273,19 +2288,6 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         </DialogTitle>
         <DialogContent>
           <Box sx={{ mt: 1 }}>
-            <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 1 }}>
-              Обновления
-            </Typography>
-            <Typography sx={{ color: isDarkMode ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.8)' }}>
-              В текущем релизе Astra реализован RAG, что позволяет отвечать на запросы с учетом
-              релевантных данных из базы знаний.
-            </Typography>
-          </Box>
-          <Divider sx={{ my: 2 }} />
-          <Box>
-            <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 1 }}>
-              Помощь
-            </Typography>
             <Typography sx={{ color: isDarkMode ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.8)' }}>
               По возникающим вопросам обаращаться:
             </Typography>
@@ -2305,10 +2307,10 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
         </DialogContent>
       </Dialog>
 
-      {/* Диалог «Сочетание клавиш» */}
+      {/* Диалог «Обновления» */}
       <Dialog
-        open={showShortcutsDialog}
-        onClose={() => setShowShortcutsDialog(false)}
+        open={showUpdatesDialog}
+        onClose={() => setShowUpdatesDialog(false)}
         maxWidth="sm"
         fullWidth
         PaperProps={{
@@ -2330,13 +2332,13 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           }}
         >
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <KeyboardIcon />
+            <UpdatesIcon />
             <Typography component="span" variant="h6" fontWeight="600">
-              Сочетание клавиш
+              Обновления
             </Typography>
           </Box>
           <IconButton
-            onClick={() => setShowShortcutsDialog(false)}
+            onClick={() => setShowUpdatesDialog(false)}
             size="small"
             sx={{
               color: isDarkMode ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.6)',
@@ -2349,49 +2351,21 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
           </IconButton>
         </DialogTitle>
         <DialogContent>
-          <List dense sx={{ py: 0 }}>
-            {(
-              [
-                { primary: 'Новый чат', keys: hotkeyLabel.newChat() },
-                { primary: 'Поиск по чатам', keys: hotkeyLabel.searchChats() },
-                { primary: 'Прикрепить файлы', keys: hotkeyLabel.attachFiles() },
-                { primary: 'Удалить текущий чат', keys: hotkeyLabel.deleteChat() },
-                { primary: 'Окно настроек', keys: hotkeyLabel.openSettings() },
-                { primary: 'Конструктор агента (правая панель)', keys: hotkeyLabel.openAgentConstructor() },
-                { primary: 'Транскрибатор (правая панель)', keys: hotkeyLabel.openTranscription() },
-              ] as const
-            ).map((row) => (
-              <ListItem
-                key={row.primary}
-                sx={{ px: 0, py: 1 }}
-                secondaryAction={
-                  <Typography
-                    variant="body2"
-                    sx={{
-                      color: 'primary.light',
-                      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                      fontSize: '0.8rem',
-                    }}
-                  >
-                    {row.keys}
-                  </Typography>
-                }
-              >
-                <ListItemText
-                  primary={row.primary}
-                  primaryTypographyProps={{
-                    sx: { color: isDarkMode ? 'rgba(255,255,255,0.92)' : 'rgba(0,0,0,0.87)' },
-                  }}
-                />
-              </ListItem>
-            ))}
-          </List>
-          <Typography variant="caption" sx={{ display: 'block', mt: 1, opacity: 0.7 }}>
-            На Mac вместо Ctrl — ⌘ (Command); Alt — клавиша Option (⌥). Удаление чата — с подтверждением. Все сочетания
-            рассчитаны на английскую раскладку: сначала переключитесь на English, затем нажимайте горячие клавиши.
-          </Typography>
+          <Box sx={{ mt: 1 }}>
+            <Typography sx={{ color: isDarkMode ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.8)' }}>
+              В текущем релизе Astra реализован RAG, что позволяет отвечать на запросы с учетом
+              релевантных данных из базы знаний.
+            </Typography>
+          </Box>
         </DialogContent>
       </Dialog>
+
+      {/* Диалог «Сочетание клавиш» */}
+      <HotkeysSettingsDialog
+        open={showShortcutsDialog}
+        onClose={() => setShowShortcutsDialog(false)}
+        isDarkMode={isDarkMode}
+      />
 
       {/* Выпадающее меню для чатов — по паттерну «Модели»: левое меню + правое подменю */}
       <Popover

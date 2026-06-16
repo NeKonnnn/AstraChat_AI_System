@@ -7,9 +7,9 @@
 
 from __future__ import annotations
 
+import base64
 import logging
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,14 +21,28 @@ from backend.services.comfyui_image_generation import (
     resolve_workflow_file,
 )
 from backend.services.comfyui_image_generation import fetch_comfyui_checkpoint_names
-from backend.services.image_generation_presets import list_configured_presets, resolve_preset
+from backend.services.image_generation_presets import (
+    get_user_default_preset_id,
+    list_configured_presets,
+    resolve_preset,
+    resolve_preset_node_map,
+    save_user_presets,
+)
 from backend.services.image_generation_service import (
+    _node_map_plain,
     _resolve_comfyui_url,
     _workflow_base_dir,
     generate_images,
     get_image_generation_settings,
     is_image_generation_configured,
     list_user_image_creations,
+    resolve_comfyui_public_url,
+)
+from backend.services.image_generation_workflows import (
+    analyze_workflow,
+    list_workflow_files,
+    read_workflow_file,
+    save_workflow_file,
 )
 from backend.auth.jwt_handler import get_current_user
 
@@ -46,6 +60,18 @@ class ImageGenStatusResponse(BaseModel):
     has_node_map: bool
     chat_triggers_enabled: bool = True
     available_checkpoints: List[str] = Field(default_factory=list)
+    comfyui_public_url: str = ""
+    default_width: int = 512
+    default_height: int = 512
+    default_steps: int = 20
+    workflow_path: str = ""
+    checkpoint_name: str = ""
+    node_map: Dict[str, Dict[str, str]] = Field(default_factory=dict)
+
+
+class NodeMapEntry(BaseModel):
+    node: str
+    input: str
 
 
 class ImagePresetItem(BaseModel):
@@ -58,6 +84,8 @@ class ImagePresetItem(BaseModel):
     default_height: int = 1024
     default_steps: int = 4
     available: bool = True
+    custom: bool = False
+    node_map: Dict[str, NodeMapEntry] = Field(default_factory=dict)
 
 
 class ImagePresetsResponse(BaseModel):
@@ -93,6 +121,55 @@ class ImageGenerateRequest(BaseModel):
     steps: Optional[int] = Field(default=None, ge=1, le=200)
     seed: Optional[int] = None
     preset_id: Optional[str] = None
+    negative_prompt: Optional[str] = Field(default=None, max_length=16000)
+    cfg: Optional[float] = Field(default=None, ge=0.0, le=30.0)
+    denoise: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    reference_image_data_uri: Optional[str] = None
+
+
+class WorkflowListItem(BaseModel):
+    filename: str
+    workflow_path: str
+    size_bytes: int = 0
+    modified_at: str = ""
+
+
+class WorkflowSaveRequest(BaseModel):
+    filename: str
+    workflow: Dict[str, Any]
+
+
+class WorkflowAnalyzeRequest(BaseModel):
+    workflow: Optional[Dict[str, Any]] = None
+    filename: Optional[str] = None
+
+
+class UserPresetSaveRequest(BaseModel):
+    presets: List[Dict[str, Any]]
+    default_preset_id: str = ""
+
+
+def _node_map_to_api(node_map: Any) -> Dict[str, Dict[str, str]]:
+    plain = _node_map_plain(node_map)
+    return {k: {"node": v[0], "input": v[1]} for k, v in plain.items()}
+
+
+def _parse_reference_image(data_uri: Optional[str]) -> Tuple[Optional[bytes], str]:
+    if not data_uri or not str(data_uri).strip():
+        return None, "reference.png"
+    raw = str(data_uri).strip()
+    filename = "reference.png"
+    if raw.startswith("data:"):
+        header, _, b64 = raw.partition(",")
+        if ";" in header:
+            mime_part = header[5:].split(";")[0]
+            ext = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}.get(mime_part, ".png")
+            filename = f"reference{ext}"
+        try:
+            return base64.b64decode(b64), filename
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Невалидный reference_image_data_uri: {e}") from e
+    raise HTTPException(status_code=400, detail="reference_image_data_uri должен быть data URI")
 
 
 class ImageGenerateResponse(BaseModel):
@@ -138,6 +215,13 @@ async def image_generation_status():
         has_node_map=bool(s.node_map),
         chat_triggers_enabled=bool(getattr(s, "chat_triggers_enabled", True)),
         available_checkpoints=checkpoints,
+        comfyui_public_url=resolve_comfyui_public_url(s),
+        default_width=int(getattr(s, "default_width", 512) or 512),
+        default_height=int(getattr(s, "default_height", 512) or 512),
+        default_steps=int(getattr(s, "default_steps", 20) or 20),
+        workflow_path=wf_path,
+        checkpoint_name=str(getattr(s, "checkpoint_name", "") or ""),
+        node_map=_node_map_to_api(s.node_map),
     )
 
 
@@ -159,6 +243,7 @@ async def image_generation_presets():
         available = not ckpt or ckpt in ckpt_set or any(
             c == ckpt or c.endswith(f"/{ckpt}") for c in checkpoints
         )
+        nm = resolve_preset_node_map(row)
         items.append(
             ImagePresetItem(
                 id=str(row.get("id") or ""),
@@ -170,10 +255,15 @@ async def image_generation_presets():
                 default_height=int(row.get("default_height") or 1024),
                 default_steps=int(row.get("default_steps") or 4),
                 available=available,
+                custom=bool(row.get("custom")),
+                node_map={
+                    k: NodeMapEntry(node=v["node"], input=v["input"])
+                    for k, v in _node_map_to_api(nm).items()
+                },
             )
         )
 
-    default_id = str(getattr(s, "default_preset_id", None) or "").strip()
+    default_id = get_user_default_preset_id() or str(getattr(s, "default_preset_id", None) or "").strip()
     if not default_id and items:
         default_id = items[0].id
     resolved = resolve_preset(default_id)
@@ -185,6 +275,59 @@ async def image_generation_presets():
         presets=items,
         available_checkpoints=checkpoints,
     )
+
+
+@router.get("/workflows", response_model=List[WorkflowListItem])
+async def image_generation_workflows():
+    return [WorkflowListItem(**row) for row in list_workflow_files()]
+
+
+@router.get("/workflows/{filename}")
+async def image_generation_workflow_get(filename: str):
+    try:
+        data = read_workflow_file(filename)
+    except ComfyImageGenError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return {"filename": filename, "workflow": data}
+
+
+@router.post("/workflows")
+async def image_generation_workflow_save(body: WorkflowSaveRequest):
+    try:
+        saved = save_workflow_file(body.filename, body.workflow)
+        analysis = analyze_workflow(body.workflow)
+    except ComfyImageGenError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"saved": saved, "analysis": analysis}
+
+
+@router.post("/workflows/analyze")
+async def image_generation_workflow_analyze(body: WorkflowAnalyzeRequest):
+    try:
+        if body.workflow:
+            wf = body.workflow
+        elif body.filename:
+            wf = read_workflow_file(body.filename)
+        else:
+            raise ComfyImageGenError("Укажите workflow или filename")
+        return analyze_workflow(wf)
+    except ComfyImageGenError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/user-presets")
+async def image_generation_save_user_presets(body: UserPresetSaveRequest):
+    try:
+        saved = save_user_presets(body.presets, body.default_preset_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    return {"presets": saved, "default_preset_id": get_user_default_preset_id()}
+
+
+@router.get("/comfyui-ui-url")
+async def image_generation_comfyui_ui_url():
+    s = get_image_generation_settings()
+    return {"url": resolve_comfyui_public_url(s)}
 
 
 @router.get("/creations", response_model=ImageCreationsResponse)
@@ -231,6 +374,8 @@ async def image_generation_generate(body: ImageGenerateRequest):
     if not s.enabled:
         raise HTTPException(status_code=503, detail="Генерация изображений отключена (image_generation.enabled)")
 
+    ref_bytes, ref_name = _parse_reference_image(body.reference_image_data_uri)
+
     try:
         pairs = await generate_images(
             prompt=body.prompt,
@@ -239,6 +384,11 @@ async def image_generation_generate(body: ImageGenerateRequest):
             steps=body.steps,
             seed=body.seed,
             preset_id=body.preset_id,
+            negative_prompt=body.negative_prompt,
+            cfg=body.cfg,
+            denoise=body.denoise,
+            reference_image_bytes=ref_bytes,
+            reference_image_filename=ref_name,
         )
     except ComfyImageGenError as e:
         logger.warning("ComfyUI image gen failed: %s", e)

@@ -10,6 +10,8 @@ export type ImageGenPreset = {
   default_height?: number;
   default_steps?: number;
   available?: boolean;
+  custom?: boolean;
+  node_map?: Record<string, { node: string; input: string }>;
 };
 
 export type ImageGenPresetsPayload = {
