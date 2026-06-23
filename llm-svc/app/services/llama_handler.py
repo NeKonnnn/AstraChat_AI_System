@@ -217,7 +217,11 @@ class LlamaHandler(BaseLLMHandler):
         """Обрезает историю/контент, чтобы prompt + max_tokens поместились в n_ctx."""
         n_ctx = self._get_llama_n_ctx(llama)
         reserved = 32
-        budget = max(256, n_ctx - max_tokens - reserved)
+        min_gen = 64
+        min_prompt = 512
+        # Не резервировать под генерацию больше, чем позволяет окно (иначе budget промпта ~256 токенов)
+        max_tokens = min(max_tokens, max(min_gen, n_ctx - min_prompt - reserved))
+        budget = n_ctx - max_tokens - reserved
 
         dict_msgs = convert_to_dict_messages(messages)
         original_tokens = self._count_prompt_tokens(llama, dict_msgs)
@@ -260,7 +264,7 @@ class LlamaHandler(BaseLLMHandler):
         )
         if new_tokens > budget:
             raise ValueError(
-                f"Prompt too long for context window ({new_tokens} tokens, n_ctx={n_ctx})"
+                f"Prompt too long for context window ({new_tokens} tokens, budget={budget}, n_ctx={n_ctx})"
             )
         return [self._dict_to_message(d) for d in trimmed]
 
@@ -339,6 +343,21 @@ class LlamaHandler(BaseLLMHandler):
         slot = self._model_slots[slot_id]
         temperature = temperature or settings.generation.default_temperature
         max_tokens = max_tokens or settings.generation.default_max_tokens
+        reserved = 32
+        min_gen = 64
+        n_ctx = self._get_llama_n_ctx(slot.llama)
+        prompt_tokens = self._count_prompt_tokens(
+            slot.llama, convert_to_dict_messages(messages)
+        )
+        if prompt_tokens + max_tokens + reserved > n_ctx:
+            max_tokens = max(min_gen, n_ctx - prompt_tokens - reserved)
+            logger.warning(
+                "Clamping max_tokens for prompt fit (slot=%s n_ctx=%s ~prompt_tokens=%s -> max_tokens=%s)",
+                slot_id,
+                n_ctx,
+                prompt_tokens,
+                max_tokens,
+            )
         messages = self._fit_messages_to_context(slot.llama, messages, max_tokens, slot_id)
         max_tokens = self._clamp_max_tokens_for_request(
             slot.llama, messages, max_tokens, slot_id

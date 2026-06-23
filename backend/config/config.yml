@@ -133,6 +133,8 @@ minio:
   use_ssl: false
   bucket_name: "memoai-temp"
   documents_bucket_name: "astrachat-documents"
+  memory_rag_bucket_name: "astrachat-memory-rag"
+  project_rag_bucket_name: "astrachat-project-rag"
 
 # ========================================================
 # ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ (ComfyUI, как Open WebUI)

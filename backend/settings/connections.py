@@ -207,6 +207,8 @@ class MinIOConnectionConfig(BaseModel):
     use_ssl: bool
     bucket_name: str
     documents_bucket_name: str
+    memory_rag_bucket_name: str
+    project_rag_bucket_name: str
     @model_validator(mode='before')
     @classmethod
     def load_from_yaml_or_env(cls, data: dict) -> dict:
@@ -274,6 +276,24 @@ class MinIOConnectionConfig(BaseModel):
                 result["documents_bucket_name"] = result.get("bucket_name", "astrachat-temp").replace("-temp", "-documents")
             else:
                 result["documents_bucket_name"] = documents_bucket_name
+        # Memory RAG bucket
+        if "memory_rag_bucket_name" in data:
+            result["memory_rag_bucket_name"] = data["memory_rag_bucket_name"]
+        else:
+            memory_rag_bucket_name = _get_env_value("MINIO_MEMORY_RAG_BUCKET_NAME")
+            if memory_rag_bucket_name is None:
+                result["memory_rag_bucket_name"] = "astrachat-memory-rag"
+            else:
+                result["memory_rag_bucket_name"] = memory_rag_bucket_name
+        # Project RAG bucket
+        if "project_rag_bucket_name" in data:
+            result["project_rag_bucket_name"] = data["project_rag_bucket_name"]
+        else:
+            project_rag_bucket_name = _get_env_value("MINIO_PROJECT_RAG_BUCKET_NAME")
+            if project_rag_bucket_name is None:
+                result["project_rag_bucket_name"] = "astrachat-project-rag"
+            else:
+                result["project_rag_bucket_name"] = project_rag_bucket_name
         return result
     @property
     def full_endpoint(self) -> str:

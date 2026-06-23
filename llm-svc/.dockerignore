@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Модели (не нужны в образе, монтируются или загружаются)
+models/
+
+# Временные файлы
+*.log
+*.tmp
+.cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Env
+.env
+.env.*
+*.env
+
+# Test files
+test/
+tests/
+*.test.py
+
+# Backend специфичное
+README.md
+
+# Не нужные файлы
+*.md
+LICENSE
+
