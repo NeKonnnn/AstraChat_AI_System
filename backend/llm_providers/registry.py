@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -29,8 +28,9 @@ from .ollama import OllamaProvider
 from .openai_compat import OpenAICompatProvider
 from .openai_native import OpenAIProvider, OpenRouterProvider
 from .vllm import VLLMProvider
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # =============================================================================

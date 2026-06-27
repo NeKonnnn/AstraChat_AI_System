@@ -10,14 +10,14 @@ import asyncio
 import base64
 import copy
 import json
-import logging
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ComfyImageGenError(Exception):

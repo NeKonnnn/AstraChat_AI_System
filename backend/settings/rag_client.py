@@ -1,7 +1,6 @@
 """
 Тонкий async-клиент для SVC-RAG.
 """
-import logging
 import os
 import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -10,8 +9,9 @@ from urllib.parse import urlparse
 import httpx
 
 from .config import get_settings
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _normalize_rag_service_base(url: str) -> str:

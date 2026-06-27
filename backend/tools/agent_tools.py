@@ -3,13 +3,13 @@
 Эти tools вызывают специализированных агентов для выполнения задач
 """
 
-import logging
 import asyncio
 import json
 from typing import Dict, Any, List
 from langchain_core.tools import tool
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _run_async_agent(agent_class, message: str, context: Dict[str, Any] = None):

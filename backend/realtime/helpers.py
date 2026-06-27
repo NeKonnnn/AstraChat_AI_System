@@ -3,10 +3,10 @@ socket_helpers.py - утилиты, общие для socket_handlers и роу�
 """
 
 import json
-import logging
 from typing import List, Optional, Tuple, Any
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _is_structure_query(text: str) -> bool:

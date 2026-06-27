@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import copy
-import logging
 import os
 import random
 import re
@@ -26,8 +25,9 @@ from backend.services.comfyui_image_generation import (
     load_workflow_template,
     resolve_workflow_file,
 )
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _DRAW_VERBS = (
     r"нарисуй|нарисуйте|нарисовать|сгенерируй|сгенерируйте|создай|создайте|"

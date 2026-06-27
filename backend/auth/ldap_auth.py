@@ -5,10 +5,10 @@ from __future__ import annotations
 
 import os
 import ssl
-import logging
 from urllib.parse import urlparse
 from typing import Optional, Dict, Any, List
 from fastapi import HTTPException, status
+from backend.settings.logging import get_logger
 
 try:
     from ldap3 import Server, Connection, SIMPLE, SUBTREE, Tls
@@ -18,7 +18,7 @@ try:
 except ImportError:
     LDAP_AVAILABLE = False
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # AD userAccountControl: ACCOUNTDISABLE
 _AD_ACCOUNT_DISABLED = 0x0002

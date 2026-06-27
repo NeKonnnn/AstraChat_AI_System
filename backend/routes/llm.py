@@ -4,14 +4,14 @@
 ВСЕХ зарегистрированных провайдеров (llm-svc / vLLM / Ollama / OpenAI / ...).
 """
 
-import logging
 
 from fastapi import APIRouter
 
 from backend.llm_providers import get_registry
+from backend.settings.logging import get_logger
 
 router = APIRouter(prefix="/api/llm", tags=["llm"])
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @router.get("/status")

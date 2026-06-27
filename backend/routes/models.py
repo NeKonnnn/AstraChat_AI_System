@@ -3,7 +3,6 @@ routes/models.py - управление моделями
 """
 
 import asyncio
-import logging
 import os
 from datetime import datetime
 from typing import List, Optional, Tuple
@@ -16,9 +15,10 @@ from backend.app_state import (
     get_model_info, get_current_model_path, save_app_settings, load_app_settings,
 )
 from backend.schemas import ModelSettings, ModelLoadRequest, ModelLoadResponse
+from backend.settings.logging import get_logger
 
 router = APIRouter(prefix="/api/models", tags=["models"])
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @router.get("/current")

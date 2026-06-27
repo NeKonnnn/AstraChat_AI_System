@@ -4,7 +4,6 @@ LangGraph Orchestrator - главный оркестратор агентной 
 Все инструменты импортируются из backend/tools/
 """
 
-import logging
 import json
 from typing import Dict, List, Any, Optional, TypedDict, Annotated, Sequence
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
@@ -12,6 +11,7 @@ from langgraph.graph import StateGraph, END, START
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt.tool_node import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
+from backend.settings.logging import get_logger
 
 # Импортируем все инструменты из backend/tools
 try:
@@ -23,7 +23,7 @@ except ModuleNotFoundError:
     sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
     from tools import get_all_tools, get_tools_info
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # ============================================================================
 # Утилита для получения правильной версии ask_agent

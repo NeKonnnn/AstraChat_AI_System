@@ -2,7 +2,6 @@
 API endpoints для галереи агентов
 """
 
-import logging
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from pydantic import BaseModel
@@ -14,8 +13,9 @@ from backend.database.postgresql.agent_models import (
 from backend.database.init_db import get_agent_repository, get_tag_repository
 from backend.auth.jwt_handler import get_current_user, get_optional_user
 from backend.settings.cef_logger.cef_logger import log_cef_event
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Создаём роутер
 router = APIRouter(prefix="/api/agents", tags=["agents"])

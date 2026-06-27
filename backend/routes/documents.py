@@ -2,7 +2,6 @@
 routes/documents.py - загрузка, удаление, запросы к документам, отчеты OCR
 """
 
-import logging
 import os
 import json
 from datetime import datetime
@@ -26,9 +25,10 @@ from backend.rag_query.prompts import RAG_STRICT_NOT_FOUND_MESSAGE, merge_strict
 from backend.rag_query.semantic_cache import bump_rag_semantic_cache
 from backend.settings.cef_logger.cef_logger import log_cef_event
 from backend.auth.jwt_handler import get_current_user
+from backend.settings.logging import get_logger
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 INLINE_ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024
 _INLINE_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}

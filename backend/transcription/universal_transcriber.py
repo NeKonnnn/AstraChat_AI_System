@@ -1,6 +1,7 @@
 import os
 from typing import Optional, Callable, Tuple, List, Dict, Any
 import logging
+from backend.settings.logging import get_logger
 
 # ПРОВЕРКА РЕЖИМА МИКРОСЕРВИСОВ
 USE_LLM_SVC = os.getenv('USE_LLM_SVC', 'false').lower() == 'true'
@@ -40,7 +41,7 @@ class UniversalTranscriber:
     """Транскрайбер: единственный движок — WhisperX (локально или через STT-сервис)."""
 
     def __init__(self, engine: str = "whisperx", hf_token: Optional[str] = None):
-        self.logger = logging.getLogger(f"{__name__}.UniversalTranscriber")
+        self.logger = get_logger(f"{__name__}.UniversalTranscriber")
         if not self.logger.handlers:
             handler = logging.StreamHandler()
             formatter = logging.Formatter('[%(asctime)s] %(levelname)s [Universal] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')

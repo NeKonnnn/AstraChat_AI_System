@@ -7,15 +7,15 @@ Generic MCP agent — делегирует в McpPlatformService / McpAgentLoop 
 
 from __future__ import annotations
 
-import logging
 from typing import Any, Dict, List, Optional
 
 from backend.agents.base_agent import BaseAgent
 from backend.mcp.chat_integration import build_mcp_context_from_user, run_mcp_for_chat
 from backend.mcp.platform import get_mcp_platform
 from backend.mcp.resolvers import parse_mcp_server_ids
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class MCPAgent(BaseAgent):

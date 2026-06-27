@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import time
 from typing import Any, Dict, List, Optional
 
@@ -18,8 +17,9 @@ from backend.mcp.types import AgentLoopResult, McpCallContext, McpToolInfo
 from backend.mcp.events import McpEventCallback, emit_mcp_tool_end, emit_mcp_tool_start
 from backend.settings.config import get_settings
 from backend.settings.cef_logger.cef_logger import log_cef_event
+from backend.settings.logging import get_logger
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 _agent_loop: Optional["McpAgentLoop"] = None
 

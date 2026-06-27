@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import os
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _lock = threading.Lock()
 _store: Dict[str, Tuple[float, List[Tuple[str, float, Optional[int], Optional[int]]]]] = {}

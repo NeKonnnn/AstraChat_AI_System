@@ -1,4 +1,3 @@
-import logging
 import json
 from typing import Optional, List, Tuple, Dict, Any
 from datetime import datetime
@@ -9,8 +8,9 @@ from .agent_models import (
 )
 from .connection import PostgreSQLConnection
 from .prompt_models import Tag
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class AgentRepository:

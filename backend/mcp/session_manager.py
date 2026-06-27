@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 from typing import Dict, List, Optional
 
 import httpx
@@ -21,8 +20,9 @@ from backend.mcp.transports.stdio import connect_stdio
 from backend.mcp.transports.streamable_http import build_mcp_http_url, connect_streamable_http
 from backend.mcp.types import McpCallContext, McpTransport
 from backend.settings.config import McpServerConfig, Settings
+from backend.settings.logging import get_logger
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
 def _headers_fingerprint(headers: Dict[str, str]) -> str:

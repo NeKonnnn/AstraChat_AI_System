@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from contextlib import AsyncExitStack
 from typing import Any, Callable, Dict, List, Optional
 
 import anyio
 from backend.mcp.sdk import import_mcp_sdk
+from backend.settings.logging import get_logger
 
 ClientSession = import_mcp_sdk().ClientSession
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 HttpxClientFactory = Callable[..., Any]
 

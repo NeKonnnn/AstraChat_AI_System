@@ -2,7 +2,6 @@
 Репозиторий для работы с промптами в PostgreSQL
 """
 
-import logging
 from typing import Optional, List, Tuple, Dict, Any
 from datetime import datetime
 
@@ -11,8 +10,9 @@ from .prompt_models import (
     PromptCreate, PromptUpdate, PromptFilters, TagCreate, PromptStats
 )
 from .connection import PostgreSQLConnection
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class PromptRepository:

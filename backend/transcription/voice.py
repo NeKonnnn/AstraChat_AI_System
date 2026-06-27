@@ -1,6 +1,7 @@
 import os
 import sys
 import re
+from backend.settings.logging import get_logger
 
 try:
     import torch
@@ -18,9 +19,8 @@ except Exception:
     sd = None
 import time
 from pathlib import Path
-import logging
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Проверяем, нужно ли использовать llm-svc  
 USE_LLM_SVC = os.getenv('USE_LLM_SVC', 'false').lower() == 'true'

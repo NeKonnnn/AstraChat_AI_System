@@ -17,7 +17,6 @@ Anthropic **не** OpenAI-совместим:
 from __future__ import annotations
 
 import json
-import logging
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -30,8 +29,9 @@ from .base import (
     ProviderHealth,
     StreamCallback,
 )
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 ANTHROPIC_API_VERSION = "2023-06-01"

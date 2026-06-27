@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Dict, List, Optional
 
 from backend.settings.config import McpPlatformConfig, McpServerConfig, Settings
+from backend.settings.logging import get_logger
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
 class McpRegistry:

@@ -1,8 +1,8 @@
-import logging
 from typing import Dict, List, Any, Optional
 from .base_agent import BaseAgent
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class PromptEnhancementAgent(BaseAgent):
     """Агент для улучшения и создания промптов"""

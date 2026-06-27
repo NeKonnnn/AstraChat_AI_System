@@ -4,7 +4,6 @@ routes/transcription.py - транскрибация файлов и YouTube
 
 import asyncio
 import concurrent.futures
-import logging
 import os
 import tempfile
 from datetime import datetime
@@ -15,9 +14,10 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 import backend.app_state as state
 from backend.app_state import minio_client
 from backend.schemas import YouTubeTranscribeRequest
+from backend.settings.logging import get_logger
 
 router = APIRouter(prefix="/api/transcribe", tags=["transcription"])
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @router.post("/upload")

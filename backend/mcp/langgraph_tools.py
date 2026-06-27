@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
-import logging
 import time
 from typing import Any, Dict, List, Optional
+from backend.settings.logging import get_logger
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
 async def load_mcp_langgraph_tools(

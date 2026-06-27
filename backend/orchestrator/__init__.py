@@ -3,10 +3,10 @@
 Использует LangGraph Orchestrator для управления агентами и инструментами
 """
 
-import logging
 from typing import Dict, List, Any, Optional
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class AgentOrchestrator:

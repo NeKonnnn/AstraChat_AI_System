@@ -7,7 +7,6 @@ socket_handlers.py - все @sio.event обработчики Socket.IO
 import asyncio
 import concurrent.futures
 import contextvars
-import logging
 import os
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -38,7 +37,8 @@ from backend.rag_query.post_generation import maybe_replace_ungrounded
 from backend.rag_query.prompts import RAG_STRICT_NOT_FOUND_MESSAGE, merge_strict_rag_system_prompt
 from backend.auth.jwt_handler import decode_token, decode_token_signature_only
 from backend.settings.cef_logger.cef_audit_context import cef_socket_remote_from_environ
-logger = logging.getLogger(__name__)
+from backend.settings.logging import get_logger
+logger = get_logger(__name__)
 
 
 def _run_sync_preserving_cef_audit(factory):

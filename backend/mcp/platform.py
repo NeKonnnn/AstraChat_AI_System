@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, List, Optional
@@ -22,8 +21,9 @@ from backend.mcp.types import (
     McpVerifyResult,
 )
 from backend.settings.config import Settings, get_settings
+from backend.settings.logging import get_logger
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 _platform: Optional["McpPlatformService"] = None
 

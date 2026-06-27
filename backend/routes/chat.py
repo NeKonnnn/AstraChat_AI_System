@@ -3,7 +3,6 @@ routes/chat.py - REST /api/chat, WebSocket /ws/chat, WebSocket /ws/voice
 """
 import asyncio
 import json
-import logging
 import os
 import uuid
 from datetime import datetime
@@ -36,8 +35,9 @@ from backend.rag_query.post_generation import maybe_replace_ungrounded
 from backend.rag_query.prompts import RAG_STRICT_NOT_FOUND_MESSAGE, merge_strict_rag_system_prompt
 from backend.settings.cef_logger.cef_logger import log_cef_event
 from backend.database.mongodb.models import Conversation
+from backend.settings.logging import get_logger
 router = APIRouter(tags=["chat"])
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 # -- WebSocket connection manager
 class ConnectionManager:
     def __init__(self):

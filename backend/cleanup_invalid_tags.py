@@ -8,9 +8,10 @@ import logging
 
 from backend.database.postgresql.connection import PostgreSQLConnection
 from backend.settings import get_settings
+from backend.settings.logging import get_logger
 
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 async def cleanup_invalid_tags(action: str = "rename"):

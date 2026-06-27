@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 from datetime import datetime
 from typing import Any, Dict, Optional
 
 from cryptography.fernet import Fernet, InvalidToken
+from backend.settings.logging import get_logger
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 COLLECTION_NAME = "user_mcp_credentials"
 

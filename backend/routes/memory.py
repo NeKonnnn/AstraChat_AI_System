@@ -2,7 +2,6 @@
 routes/memory.py - история диалогов и настройки памяти
 """
 
-import logging
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
@@ -12,9 +11,10 @@ from backend.app_state import (
     get_recent_dialog_history, clear_dialog_history, save_app_settings,
 )
 from backend.schemas import MemorySettings
+from backend.settings.logging import get_logger
 
 router = APIRouter(tags=["memory"])
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @router.get("/api/history")

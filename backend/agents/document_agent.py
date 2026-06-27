@@ -2,7 +2,6 @@
 Агент для работы с документами
 """
 
-import logging
 from typing import Dict, List, Any, Optional
 from .base_agent import BaseAgent
 
@@ -16,8 +15,9 @@ from backend.realtime.rag_evidence import (
 from backend.app_state import get_rag_chat_top_k
 from backend.rag_query.post_generation import maybe_replace_ungrounded
 from backend.rag_query.prompts import RAG_STRICT_NOT_FOUND_MESSAGE, merge_strict_rag_system_prompt
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class DocumentAgent(BaseAgent):
     """Агент для работы с загруженными документами"""

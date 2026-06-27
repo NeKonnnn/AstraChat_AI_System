@@ -1,11 +1,11 @@
-import logging
 from typing import Optional
 import asyncio
 import asyncpg
 from asyncpg import Pool, Connection
 from asyncpg.exceptions import ConnectionDoesNotExistError, PostgresError
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class _ConnectionContextManager:

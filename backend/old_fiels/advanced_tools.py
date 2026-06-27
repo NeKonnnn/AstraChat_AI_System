@@ -10,10 +10,10 @@ import subprocess
 import tempfile
 from typing import Dict, List, Any, Optional
 from datetime import datetime
-import logging
 from langchain_core.tools import tool
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # ================================
 # ИНСТРУМЕНТЫ ДЛЯ РАБОТЫ С ФАЙЛАМИ

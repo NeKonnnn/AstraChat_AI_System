@@ -13,15 +13,15 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from typing import Any, Dict, List, Optional
 
 import httpx
 
 from .base import LLMProviderConfig, ProviderCapabilities, ProviderHealth
 from .openai_compat import OpenAICompatProvider
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def same_llm_svc_model_id(loaded: Optional[str], requested: Optional[str]) -> bool:

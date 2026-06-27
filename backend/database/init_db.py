@@ -3,10 +3,10 @@
 """
 
 import os
-import logging
 import traceback
 from typing import Optional
 from urllib.parse import quote_plus
+from backend.settings.logging import get_logger
 
 # Импортируем настройки
 try:
@@ -14,10 +14,10 @@ try:
     SETTINGS_AVAILABLE = True
 except ImportError:
     SETTINGS_AVAILABLE = False
-    logger = logging.getLogger(__name__)
+    logger = get_logger(__name__)
     logger.warning("Модуль settings недоступен. Используются переменные окружения напрямую.")
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Попытка импорта MongoDB модулей
 try:

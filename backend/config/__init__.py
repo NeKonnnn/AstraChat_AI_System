@@ -6,6 +6,7 @@ import os
 import yaml
 from pathlib import Path
 from typing import Dict, Any, Optional
+from backend.settings.logging import get_logger
 
 # Глобальная переменная для хранения конфигурации
 _config: Optional[Dict[str, Any]] = None
@@ -160,8 +161,7 @@ def get_path(path_key: str) -> str:
     
     if not relative_path:
         # Логируем предупреждение, если путь не найден
-        import logging
-        logger = logging.getLogger(__name__)
+        logger = get_logger(__name__)
         logger.warning(f"Путь '{path_key}' не найден в config.yml секции paths")
         return ""
     
@@ -170,8 +170,7 @@ def get_path(path_key: str) -> str:
     result = str(full_path.absolute())
     
     # Логируем для отладки
-    import logging
-    logger = logging.getLogger(__name__)
+    logger = get_logger(__name__)
     logger.debug(f"get_path('{path_key}'): project_root={project_root}, relative={relative_path}, full={result}")
     
     return result

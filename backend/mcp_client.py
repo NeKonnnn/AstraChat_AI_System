@@ -5,15 +5,15 @@ MCP (Model Context Protocol) клиент для astrachat
 
 import asyncio
 import json
-import logging
 from typing import Dict, List, Any, Optional, AsyncGenerator
 from dataclasses import dataclass
 import subprocess
 import os
 import time
 from backend.settings.cef_logger.cef_logger import log_cef_event
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 @dataclass
 class MCPServer:

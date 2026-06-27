@@ -1,7 +1,6 @@
 """
 API routes для аутентификации
 """
-import logging
 import os
 import uuid
 from fastapi import APIRouter, HTTPException, status, Depends, Request
@@ -35,9 +34,10 @@ from backend.settings.cef_logger.cef_logger import (
     ldap_reason_suffix,
     log_cef_event,
 )
+from backend.settings.logging import get_logger
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class LoginRequest(BaseModel):

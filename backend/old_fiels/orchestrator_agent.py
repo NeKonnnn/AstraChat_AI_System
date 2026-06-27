@@ -1,12 +1,12 @@
-import logging
 from typing import Dict, List, Any, Optional
 from settings import get_settings
 from .base_agent import BaseAgent
 from .document_agent import DocumentAgent
 from .mcp_agent import MCPAgent
 from .langgraph_agent import LangGraphAgent
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Получаем настройки
 settings = get_settings()

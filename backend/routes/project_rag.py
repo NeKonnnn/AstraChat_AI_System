@@ -2,16 +2,16 @@
 routes/project_rag.py - RAG файлов проектов (MinIO + SVC-RAG) и оркестрационное удаление проекта
 """
 
-import logging
 import os
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from backend.app_state import rag_client, minio_client, settings
 from backend.rag_query.semantic_cache import bump_rag_semantic_cache
+from backend.settings.logging import get_logger
 
 router = APIRouter(tags=["project-rag"])
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # -- документы проекта RAG

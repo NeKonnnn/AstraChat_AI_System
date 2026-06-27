@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from backend.mcp.agent_loop import get_mcp_agent_loop
@@ -10,8 +9,9 @@ from backend.mcp.events import McpEventCallback
 from backend.mcp.platform import get_mcp_platform
 from backend.mcp.resolvers import build_chat_messages, parse_mcp_server_ids
 from backend.mcp.types import AgentLoopResult, McpCallContext
+from backend.settings.logging import get_logger
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
 def build_mcp_context_from_user(

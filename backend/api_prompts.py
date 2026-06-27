@@ -2,7 +2,6 @@
 API endpoints для галереи промптов
 """
 
-import logging
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel
@@ -13,8 +12,9 @@ from backend.database.postgresql.prompt_models import (
 )
 from backend.database.init_db import get_prompt_repository, get_tag_repository
 from backend.auth.jwt_handler import get_current_user, get_optional_user
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Создаём роутер
 router = APIRouter(prefix="/api/prompts", tags=["prompts"])

@@ -6,12 +6,12 @@ from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import uuid
 from datetime import datetime
-import logging
 
 from backend.database.init_db import get_mongodb_connection
 from backend.auth.jwt_handler import get_optional_user
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/share", tags=["share"])
 

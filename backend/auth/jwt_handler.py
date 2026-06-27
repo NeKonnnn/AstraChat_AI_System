@@ -3,7 +3,6 @@ JWT токены для аутентификации
 """
 
 import os
-import logging
 import uuid
 from datetime import datetime, timedelta
 from threading import RLock
@@ -13,9 +12,10 @@ from jose.exceptions import ExpiredSignatureError
 from fastapi import HTTPException, status, Depends, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from backend.settings.cef_logger.cef_logger import log_cef_event
+from backend.settings.logging import get_logger
 
 security = HTTPBearer()
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Настройки JWT
 JWT_ACCESS_SECRET = os.getenv("JWT_SECRET")

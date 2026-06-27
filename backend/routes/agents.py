@@ -2,7 +2,6 @@
 routes/agents.py - агентная архитектура, оркестратор, multi-llm
 """
 
-import logging
 import os
 from datetime import datetime
 from typing import Dict, List
@@ -14,9 +13,10 @@ from backend.app_state import get_agent_orchestrator
 from backend.auth.jwt_handler import get_current_user
 from backend.schemas import AgentModeRequest, AgentStatusResponse
 from backend.settings.cef_logger.cef_logger import domain_from_ldap_base_dn, log_cef_event
+from backend.settings.logging import get_logger
 
 router = APIRouter(prefix="/api/agent", tags=["agents"])
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ToolToggleBody(BaseModel):

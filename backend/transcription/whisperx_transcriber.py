@@ -4,6 +4,7 @@ import subprocess
 import wave
 import json
 import pytubefix
+from backend.settings.logging import get_logger
 try:
     from moviepy.editor import VideoFileClip
     MOVIEPY_AVAILABLE = True
@@ -31,7 +32,7 @@ import traceback
 import warnings
 
 # Базовый логгер модуля (используется в коде до инициализации класса)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 if not logger.handlers:
     _handler = logging.StreamHandler()
     _formatter = logging.Formatter(
@@ -100,7 +101,7 @@ except ImportError:
 class WhisperXTranscriber:
     def __init__(self):
         # Настройка логирования  
-        self.logger = logging.getLogger(f"{__name__}.WhisperXTranscriber")
+        self.logger = get_logger(f"{__name__}.WhisperXTranscriber")
         if not self.logger.handlers:
             handler = logging.StreamHandler()
             formatter = logging.Formatter('[%(asctime)s] %(levelname)s [WhisperX] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')

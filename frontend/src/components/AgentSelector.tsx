@@ -512,12 +512,6 @@ export default function AgentSelector({
     handleClose();
   };
 
-  const imagePresetLabel = useMemo(() => {
-    if (!selectedImagePresetId) return '';
-    const hit = imagePresets.find((p) => p.id === selectedImagePresetId);
-    return hit?.label || selectedImagePresetId;
-  }, [imagePresets, selectedImagePresetId]);
-
   const triggerLabel = activeAgent
     ? activeAgent.name
     : loadingModelPath
@@ -598,33 +592,19 @@ export default function AgentSelector({
           ) : (
             <AgentIcon sx={{ fontSize: '1.1rem', color: mutedTextColor, flexShrink: 0 }} />
           )}
-          <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Typography
-              sx={{
-                fontSize: MENU_ACTION_TEXT_SIZE,
-                fontWeight: 500,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {triggerLabel}
-            </Typography>
-            {imagePresetLabel ? (
-              <Typography
-                sx={{
-                  fontSize: '0.68rem',
-                  color: subtleColor,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  lineHeight: 1.2,
-                }}
-              >
-                Изображения: {imagePresetLabel}
-              </Typography>
-            ) : null}
-          </Box>
+          <Typography
+            sx={{
+              fontSize: MENU_ACTION_TEXT_SIZE,
+              fontWeight: 500,
+              flex: 1,
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {triggerLabel}
+          </Typography>
           {isLoadingModel ? (
             <CircularProgress size={16} sx={{ color: mutedTextColor, flexShrink: 0 }} />
           ) : (

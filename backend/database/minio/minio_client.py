@@ -9,6 +9,7 @@ import tempfile
 from typing import Optional, BinaryIO
 from datetime import datetime, timedelta
 from io import BytesIO
+from backend.settings.logging import get_logger
 
 # Импортируем настройки
 try:
@@ -25,7 +26,7 @@ except ImportError:
     MINIO_AVAILABLE = False
     logging.warning("MinIO библиотека не установлена. Установите: pip install minio")
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class MinIOClient:

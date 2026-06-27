@@ -3,7 +3,6 @@ routes/system.py - health-check, системный статус, socket-test
 """
 
 import asyncio
-import logging
 from datetime import datetime
 
 from fastapi import APIRouter
@@ -16,9 +15,10 @@ from backend.app_state import (
     settings,
 )
 import backend.app_state as state
+from backend.settings.logging import get_logger
 
 router = APIRouter(tags=["system"])
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _urls = settings.urls
 

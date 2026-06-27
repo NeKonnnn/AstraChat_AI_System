@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -14,9 +13,10 @@ from backend.mcp.exceptions import McpServerNotFoundError
 from backend.mcp.platform import get_mcp_platform
 from backend.mcp.types import McpCallContext
 from backend.settings.config import get_settings
+from backend.settings.logging import get_logger
 
 router = APIRouter(tags=["mcp"])
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class McpVerifyBody(BaseModel):

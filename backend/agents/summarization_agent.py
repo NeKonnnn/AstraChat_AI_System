@@ -8,11 +8,11 @@
 4. Создавать различные виды саммари (executive summary, bullets, highlights)
 """
 
-import logging
 from typing import Dict, Any, Optional, List
 from .base_agent import get_ask_agent
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger("Backend")
+logger = get_logger("Backend")
 
 class SummarizationAgent:
     """Агент для суммаризации текстов и документов"""

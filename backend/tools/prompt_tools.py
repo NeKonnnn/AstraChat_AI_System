@@ -3,15 +3,15 @@
 Помогают создавать, улучшать и анализировать промпты для LLM
 """
 
-import logging
 import asyncio
 import re
 from contextvars import ContextVar
 from typing import Dict, Any, Optional
 from langchain_core.tools import tool
 import threading
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # ContextVar для контекста инструментов (работает через потоки и async/await)
 _tool_context: ContextVar[Dict[str, Any]] = ContextVar('tool_context', default={})

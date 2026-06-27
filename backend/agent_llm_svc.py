@@ -6,6 +6,7 @@ AstraChat Agent с поддержкой llm-svc
 # Настройка кодировки для Windows
 import sys
 import os
+from backend.settings.logging import get_logger
 
 # Импортируем утилиту для исправления кодировки
 try:
@@ -49,7 +50,7 @@ except ImportError:
     )
 
 # Настройка логирования с поддержкой UTF-8
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Настройка кодировки для обработчиков логирования
 for handler in logging.root.handlers:

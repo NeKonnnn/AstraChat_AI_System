@@ -15,15 +15,15 @@ Ollama может держать несколько моделей в RAM одн
 
 from __future__ import annotations
 
-import logging
 from typing import List
 
 import httpx
 
 from .base import LLMProviderConfig, ModelInfo, ProviderCapabilities, ProviderHealth
 from .openai_compat import OpenAICompatProvider
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class OllamaProvider(OpenAICompatProvider):

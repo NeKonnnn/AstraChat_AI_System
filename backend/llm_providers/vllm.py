@@ -14,15 +14,15 @@ vLLM — OpenAI-совместимый inference-сервер, но одна и�
 
 from __future__ import annotations
 
-import logging
 from typing import List, Optional
 
 import httpx
 
 from .base import LLMProviderConfig, ModelInfo, ProviderCapabilities, ProviderHealth
 from .openai_compat import OpenAICompatProvider
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class VLLMProvider(OpenAICompatProvider):

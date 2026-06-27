@@ -2,7 +2,6 @@
 routes/context_prompts.py - управление контекстными промптами для моделей
 """
 
-import logging
 from datetime import datetime
 from typing import Optional
 
@@ -11,9 +10,10 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 from backend.app_state import context_prompt_manager
 from backend.auth.jwt_handler import get_current_user
 from backend.settings.cef_logger.cef_logger import log_cef_event
+from backend.settings.logging import get_logger
 
 router = APIRouter(prefix="/api/context-prompts", tags=["context-prompts"])
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @router.get("/global")

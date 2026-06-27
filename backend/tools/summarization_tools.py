@@ -2,9 +2,9 @@
 Инструменты для суммаризации текстов и документов
 """
 
-import logging
 from typing import Dict, Any
 from langchain_core.tools import tool
+from backend.settings.logging import get_logger
 
 try:
     from backend.agents.summarization_agent import SummarizationAgent
@@ -13,7 +13,7 @@ except ModuleNotFoundError:
     from agents.summarization_agent import SummarizationAgent
     from tools.prompt_tools import _run_async_agent
 
-logger = logging.getLogger("Backend")
+logger = get_logger("Backend")
 
 @tool
 def summarize_text(query: str) -> str:

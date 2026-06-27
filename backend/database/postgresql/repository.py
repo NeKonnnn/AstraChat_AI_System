@@ -2,7 +2,6 @@
 Репозиторий для работы с документами и векторами в PostgreSQL
 """
 
-import logging
 import json
 from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime
@@ -10,8 +9,9 @@ import numpy as np
 
 from .models import Document, DocumentVector
 from .connection import PostgreSQLConnection
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class DocumentRepository:

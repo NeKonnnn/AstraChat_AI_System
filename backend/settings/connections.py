@@ -2,8 +2,8 @@ from pydantic import BaseModel, Field, model_validator
 from typing import Optional, Dict, List, Union
 import os
 from urllib.parse import quote_plus
-import logging
-logger = logging.getLogger(__name__)
+from backend.settings.logging import get_logger
+logger = get_logger(__name__)
 #os_env: dict = {}
 def _load_envs() -> Dict:
     """Method load system environment to local dictionary _os_env"""

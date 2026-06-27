@@ -2,61 +2,67 @@
 Утилита для исправления проблем с кодировкой в Windows
 """
 
-import sys
 import os
-import logging
+import subprocess
+import sys
+
+try:
+    from backend.settings.logging import get_logger
+except Exception:
+    import logging
+
+    def get_logger(name: str):
+        return logging.getLogger(name)
+
+
+logger = get_logger(__name__)
+
 
 def fix_windows_encoding():
     """Исправляет проблемы с кодировкой в Windows"""
-    if sys.platform == "win32":
+    if sys.platform != "win32":
+        return True
+
+    try:
+        import shutil
+
+        _chcp = shutil.which("chcp") or os.path.join(
+            os.environ.get("SystemRoot", r"C:\Windows"), "System32", "chcp.exe"
+        )
+        subprocess.run([_chcp, "65001"], check=False, capture_output=True)
+
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8")
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8")
+
         try:
-            # Устанавливаем UTF-8 кодировку для консоли Windows
-            os.system("chcp 65001 >nul 2>&1")
-            
-            # Настраиваем stdout и stderr для корректного отображения русских символов
-            if hasattr(sys.stdout, 'reconfigure'):
-                sys.stdout.reconfigure(encoding='utf-8')
-            if hasattr(sys.stderr, 'reconfigure'):
-                sys.stderr.reconfigure(encoding='utf-8')
-            
-            # Настраиваем кодировку для всех обработчиков логирования
-            for handler in logging.root.handlers:
-                if hasattr(handler, 'stream') and hasattr(handler.stream, 'reconfigure'):
-                    handler.stream.reconfigure(encoding='utf-8')
-            
-            print("Кодировка Windows настроена на UTF-8")
-            return True
-            
-        except Exception as e:
-            print(f"Ошибка настройки кодировки: {e}")
-            return False
-    
-    return True
+            from backend.settings.logging import reconfigure_backend_handler_streams_utf8
+
+            reconfigure_backend_handler_streams_utf8()
+        except Exception:
+            pass
+
+        logger.info("Кодировка Windows настроена на UTF-8")
+        return True
+    except Exception:
+        logger.exception("Ошибка настройки кодировки")
+        return False
+
 
 def safe_print(text: str):
     """Безопасный вывод текста с правильной кодировкой"""
     try:
-        print(text)
+        logger.info("%s", text)
     except UnicodeEncodeError:
-        # Если не удается вывести с UTF-8, пробуем ASCII
-        print(text.encode('ascii', 'ignore').decode('ascii'))
+        logger.info("%s", text.encode("ascii", "ignore").decode("ascii"))
 
-def safe_log(logger, level: str, message: str):
+
+def safe_log(log, level: str, message: str):
     """Безопасное логирование с правильной кодировкой"""
     try:
-        if level.upper() == 'INFO':
-            logger.info(message)
-        elif level.upper() == 'DEBUG':
-            logger.debug(message)
-        elif level.upper() == 'WARNING':
-            logger.warning(message)
-        elif level.upper() == 'ERROR':
-            logger.error(message)
-        else:
-            logger.info(message)
+        log_fn = getattr(log, level.lower(), log.info)
+        log_fn(message)
     except UnicodeEncodeError:
-        # Если не удается залогировать с UTF-8, пробуем ASCII
-        safe_message = message.encode('ascii', 'ignore').decode('ascii')
-        logger.info(safe_message)
-
-
+        safe_message = message.encode("ascii", "ignore").decode("ascii")
+        log.info(safe_message)

@@ -37,46 +37,10 @@ sys.path.insert(0, _root_dir)
 # -- логирование
 import logging
 from backend.settings.cef_logger.cef_logger import log_cef_event
+from backend.settings.logging import configure_logging, get_logger, get_uvicorn_log_config
 
-_BACKEND_LOG_FORMAT = "[%(asctime)s] %(levelname)s [Backend] %(message)s"
-_BACKEND_LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
-
-
-def _configure_backend_logging() -> None:
-    """INFO/WARNING backend.* в stdout при запуске через uvicorn (не python main.py).
-
-    Uvicorn настраивает root до импорта app — basicConfig тогда не срабатывает,
-    root handler часто на WARNING, и logger.info из backend.* не виден в kubectl logs.
-    """
-    level_name = (
-        os.getenv("APP_LOG_LEVEL")
-        or os.getenv("astrachat_LOG_LEVEL")
-        or os.getenv("ASTRACHAT_LOG_LEVEL")
-        or "INFO"
-    ).upper()
-    level = getattr(logging, level_name, logging.INFO)
-    formatter = logging.Formatter(_BACKEND_LOG_FORMAT, datefmt=_BACKEND_LOG_DATEFMT)
-    backend_logger = logging.getLogger("backend")
-    backend_logger.setLevel(level)
-    backend_logger.propagate = False
-    if not backend_logger.handlers:
-        handler = logging.StreamHandler(sys.stdout)
-        handler.setFormatter(formatter)
-        handler.setLevel(level)
-        if hasattr(handler.stream, "reconfigure"):
-            handler.stream.reconfigure(encoding="utf-8")
-        backend_logger.addHandler(handler)
-
-
-logging.basicConfig(
-    level=logging.DEBUG,
-    format=_BACKEND_LOG_FORMAT,
-    datefmt=_BACKEND_LOG_DATEFMT,
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
-_configure_backend_logging()
-# CEF: отдельный логгер «cef» — при старте через uvicorn root уже может быть настроен,
-# и строки CEF теряются среди форматов вида «INFO:backend…». Пишем сырую строку CEF в stdout.
+configure_logging()
+# CEF: отдельный логгер «cef» — пишем сырую строку CEF в stdout.
 _cef_logger = logging.getLogger("cef")
 _cef_logger.setLevel(logging.INFO)
 _cef_logger.propagate = False
@@ -85,12 +49,7 @@ if not _cef_logger.handlers:
     _cef_handler.setLevel(logging.INFO)
     _cef_handler.setFormatter(logging.Formatter("%(message)s"))
     _cef_logger.addHandler(_cef_handler)
-for _h in logging.root.handlers:
-    if hasattr(_h, "stream") and hasattr(_h.stream, "reconfigure"):
-        _h.stream.reconfigure(encoding="utf-8")
-for _noisy in ("pymongo", "pymongo.topology", "pymongo.connection", "pymongo.serverSelection"):
-    logging.getLogger(_noisy).setLevel(logging.WARNING)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 logger.info("Логирование настроено")
 # -- импорт app_state (загружает все сервисы)
 import backend.app_state as state
@@ -101,7 +60,6 @@ from backend.app_state import (
     memory_clear_on_restart, minio_client,
 )
 # -- FastAPI
-import traceback
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -197,8 +155,8 @@ async def startup_event():
                     logger.info(f"MinIO готов: {minio_client.endpoint}")
             else:
                 logger.warning("Часть БД не инициализирована - файловый режим")
-        except Exception as e:
-            logger.error(f"Ошибка init_databases: {e}\n{traceback.format_exc()}")
+        except Exception:
+            logger.exception("Ошибка init_databases")
     if initialize_agent_orchestrator:
         try:
             if await initialize_agent_orchestrator():
@@ -266,4 +224,11 @@ if __name__ == "__main__":
                     logger.warning(f"Не удалось восстановить: {_saved}")
     except Exception as e:
         logger.error(f"Ошибка восстановления модели: {e}")
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=False, log_level="info", log_config=None)
+    uvicorn.run(
+        app,
+        host=os.getenv("UVICORN_HOST", settings.server.host),
+        port=8000,
+        reload=False,
+        log_level="info",
+        log_config=get_uvicorn_log_config(),
+    )

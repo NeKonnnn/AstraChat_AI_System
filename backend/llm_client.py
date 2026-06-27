@@ -5,7 +5,6 @@ import httpx
 import json
 import asyncio
 import contextvars
-import logging
 import re
 import html as html_module
 from typing import List, Dict, Any, Optional, Callable, AsyncGenerator, Tuple
@@ -17,6 +16,7 @@ from backend.settings.cef_logger.cef_logger import (
     log_cef_int003_llm_request,
     log_cef_int006_llm_api_failure,
 )
+from backend.settings.logging import get_logger
 
 
 def _invoke_stream_callback_safe(
@@ -281,7 +281,7 @@ try:
     from settings import get_settings
 except ImportError:
     from backend.settings import get_settings
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 class LLMClient:
     """Клиент для взаимодействия с распределенными API сервисов"""
     def __init__(self, base_url: Optional[str] = None, api_key: Optional[str] = None):

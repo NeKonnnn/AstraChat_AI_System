@@ -17,7 +17,6 @@ REST API для работы со списком LLM-провайдеров.
 
 from __future__ import annotations
 
-import logging
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, HTTPException
@@ -28,9 +27,10 @@ from backend.llm_providers import (
     join_model_path,
 )
 from backend.llm_providers.registry import build_registry_debug_snapshot
+from backend.settings.logging import get_logger
 
 router = APIRouter(prefix="/api/llm-providers", tags=["llm-providers"])
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # =============================================================================

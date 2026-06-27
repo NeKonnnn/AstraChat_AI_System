@@ -1,4 +1,3 @@
-import logging
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 from motor.motor_asyncio import AsyncIOMotorCollection
@@ -6,8 +5,9 @@ from bson import ObjectId
 
 from .models import Conversation, Message
 from .connection import MongoDBConnection
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ConversationRepository:

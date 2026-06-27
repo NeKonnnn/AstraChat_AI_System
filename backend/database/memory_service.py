@@ -3,14 +3,14 @@
 Файловый режим отключен - используется только MongoDB
 """
 
-import logging
 import os
 import uuid
 import re
 from datetime import datetime
 from typing import List, Dict, Any, Optional
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _strip_reasoning_from_history_content(text: str) -> str:

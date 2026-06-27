@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import html as _html_module
 import json
-import logging
 import os
 import re
 import uuid
@@ -43,8 +42,9 @@ from .base import (
     StreamCallback,
     ToolCall,
 )
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _invoke_stream_callback(callback: Any, chunk: str, acc: str, stream_role: str = "content") -> bool:

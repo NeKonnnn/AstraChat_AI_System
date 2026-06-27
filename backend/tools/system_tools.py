@@ -8,9 +8,9 @@ import psutil
 from datetime import datetime
 from typing import Dict, List, Any
 from langchain_core.tools import tool
-import logging
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class SystemTools:
     """Класс с инструментами для работы с системой"""

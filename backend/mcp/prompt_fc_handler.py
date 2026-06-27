@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import re
 import time
 from typing import Any, Dict, List, Optional
@@ -16,8 +15,9 @@ from backend.mcp.result_parser import format_parsed_for_llm, parse_mcp_result_to
 from backend.mcp.tool_adapter import to_openai_tools
 from backend.mcp.types import AgentLoopResult, McpCallContext, McpToolInfo
 from backend.settings.config import get_settings
+from backend.settings.logging import get_logger
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 DEFAULT_PROMPT_TEMPLATE = """Available Tools: {{TOOLS}}
 

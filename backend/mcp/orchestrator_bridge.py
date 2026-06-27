@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
-import logging
 from typing import Any, Callable, Dict, List, Optional
 
 from backend.llm_providers.routing import build_chat_messages
+from backend.settings.logging import get_logger
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
 def _run_async(coro):

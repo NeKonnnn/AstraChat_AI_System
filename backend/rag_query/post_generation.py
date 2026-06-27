@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
-import logging
 import os
 from typing import Optional
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 import re
 

@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import base64
-import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -45,8 +44,9 @@ from backend.services.image_generation_workflows import (
     save_workflow_file,
 )
 from backend.auth.jwt_handler import get_current_user
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/image-generation", tags=["image-generation"])
 

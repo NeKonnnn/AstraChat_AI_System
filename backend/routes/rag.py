@@ -2,7 +2,6 @@
 routes/rag.py - настройки RAG, База Знаний (KB), библиотека памяти (memory-rag)
 """
 
-import logging
 import os
 
 import httpx
@@ -12,9 +11,10 @@ import backend.app_state as state
 from backend.app_state import rag_client, minio_client, settings, save_app_settings
 from backend.rag_query.semantic_cache import bump_rag_semantic_cache
 from backend.schemas import RAGSettings
+from backend.settings.logging import get_logger
 
 router = APIRouter(tags=["rag"])
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _VALID_STRATEGIES = {"auto", "hierarchical", "hybrid", "standard", "raw_cosine", "graph"}
 

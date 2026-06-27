@@ -6,13 +6,13 @@
 
 from __future__ import annotations
 
-import logging
 import os
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from backend.rag_query.prompts import RAG_STRICT_NOT_FOUND_MESSAGE
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Единая формулировка с strict-промптом и REST/агентами
 RAG_NO_RELEVANT_CONTEXT_MESSAGE = RAG_STRICT_NOT_FOUND_MESSAGE

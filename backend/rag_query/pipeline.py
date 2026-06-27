@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import json
-import logging
 import os
 import re
 from dataclasses import dataclass
@@ -13,8 +12,9 @@ from typing import Any, Dict, List, Optional
 
 from backend.rag_query.metadata_filters import extract_filters_from_query
 from backend.rag_query.preprocess import normalize_query
+from backend.settings.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -11,8 +10,9 @@ from typing import Callable, Deque, Dict, Optional
 
 from backend.mcp.connection import McpServerSession
 from backend.settings.config import McpPoolConfig
+from backend.settings.logging import get_logger
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
 @dataclass
