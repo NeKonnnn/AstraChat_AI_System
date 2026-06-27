@@ -71,13 +71,14 @@ def _active_rules() -> str:
     return STRICT_CONTEXT_RULES_LEGACY if _strict_answer_mode() == "strict" else SOFT_CONTEXT_RULES
 
 
-def merge_strict_rag_system_prompt(existing: Optional[str]) -> str:
+def merge_strict_rag_system_prompt(existing: Optional[str], rag_override: Optional[str] = None) -> str:
     """Добавляет правила CONTEXT к системному промпту при RAG.
 
     Название сохранено для обратной совместимости; фактически добавляются мягкие
     правила (по умолчанию) либо строгие при RAG_STRICT_ANSWER_MODE=strict.
     """
-    block = build_rag_user_instruction()
+    override = str(rag_override or "").strip()
+    block = override if override else build_rag_user_instruction()
     if not existing or not str(existing).strip():
         return block
     ex = str(existing).strip()

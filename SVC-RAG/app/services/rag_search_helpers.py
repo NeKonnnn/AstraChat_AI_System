@@ -95,7 +95,7 @@ def effective_use_reranking(
     раз повышает качество на русскоязычном корпусе без замены модели.
     """
     st = (strategy or "auto").lower()
-    if st in ("standard", "raw_cosine", "flat"):
+    if st in ("standard", "raw_cosine", "flat", "lexical", "keyword", "bm25"):
         return False
     base = False
     if st in ("hybrid", "reranking"):

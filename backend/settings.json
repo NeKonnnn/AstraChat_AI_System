@@ -78,7 +78,7 @@
   "current_model_status": "loaded",
   "transcription_engine": "whisperx",
   "transcription_language": "ru",
-  "rag_strategy": "hybrid",
+  "rag_strategy": "standard",
   "agentic_rag_enabled": false,
   "rag_query_fix_typos": false,
   "rag_multi_query_enabled": false,

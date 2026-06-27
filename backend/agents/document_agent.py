@@ -90,7 +90,9 @@ class DocumentAgent(BaseAgent):
                     history=[],
                     streaming=False,
                     model_path=selected_model,
-                    system_prompt=merge_strict_rag_system_prompt(None),
+                    system_prompt=merge_strict_rag_system_prompt(
+                        None, rag_override=getattr(state, "rag_system_prompt", None)
+                    ),
                 )
             else:
                 logger.info("DocumentAgent использует модель по умолчанию")
@@ -98,7 +100,9 @@ class DocumentAgent(BaseAgent):
                     prompt,
                     history=[],
                     streaming=False,
-                    system_prompt=merge_strict_rag_system_prompt(None),
+                    system_prompt=merge_strict_rag_system_prompt(
+                        None, rag_override=getattr(state, "rag_system_prompt", None)
+                    ),
                 )
 
             response = await maybe_replace_ungrounded(

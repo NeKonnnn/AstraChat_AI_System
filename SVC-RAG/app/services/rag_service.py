@@ -323,6 +323,8 @@ class RagService:
         user_strategy = (strategy or "auto").lower()
         if user_strategy == "flat":
             user_strategy = "standard"
+        if user_strategy in {"keyword", "bm25"}:
+            user_strategy = "lexical"
 
         original_strategy = user_strategy
         rerank_key = user_strategy
@@ -389,6 +391,58 @@ class RagService:
                 eval_gold_chunks=eval_gold_chunks,
                 eval_llm_judge=eval_llm_judge,
             )
+
+        if user_strategy == "lexical":
+            bm25_rows = await self._bm25_search(q_text, max(k * 6, 48))
+            if document_id is not None:
+                bm25_rows = [row for row in bm25_rows if int(row[0]) == int(document_id)]
+            if not bm25_rows:
+                await log_retrieval_with_eval(
+                    store="global (глобальные документы)",
+                    strategy_resolved="lexical",
+                    pipeline="bm25_only (пустая выдача)",
+                    extra_lines=[f"k={k}", f"document_id={document_id}"],
+                    final_hits=[],
+                    k_requested=k,
+                    query_for_eval=q_text,
+                    search_started_perf=t_search_start,
+                    gold_document_ids=eval_gold_document_ids,
+                    gold_chunks=eval_gold_chunks,
+                    llm_judge=eval_llm_judge,
+                )
+                return []
+            max_bm25 = max((float(score) for _, _, score in bm25_rows), default=1.0) or 1.0
+            out_lexical: List[Tuple[str, float, Optional[int], Optional[int]]] = []
+            for doc_id_bm25, chunk_idx_bm25, score_bm25 in bm25_rows:
+                vec = await self.vector_repo.get_vector_by_document_and_chunk(doc_id_bm25, chunk_idx_bm25)
+                if not vec:
+                    continue
+                out_lexical.append(
+                    (
+                        vec.content,
+                        float(score_bm25) / max_bm25,
+                        vec.document_id,
+                        vec.chunk_index,
+                    )
+                )
+                if len(out_lexical) >= max(k * 3, 48):
+                    break
+            out_lexical = out_lexical[:k]
+            final_lexical = await self._finalize_hit_rows(out_lexical, used_rerank=False)
+            await log_retrieval_with_eval(
+                store="global (глобальные документы)",
+                strategy_resolved="lexical",
+                pipeline="bm25_only",
+                extra_lines=[f"k={k}", f"document_id={document_id}", "реранк_cross_encoder=нет"],
+                final_hits=final_lexical,
+                k_requested=k,
+                query_for_eval=q_text,
+                search_started_perf=t_search_start,
+                gold_document_ids=eval_gold_document_ids,
+                gold_chunks=eval_gold_chunks,
+                llm_judge=eval_llm_judge,
+            )
+            return final_lexical
 
         cfg_rerank_enabled = self._cfg.use_reranking
         use_rerank = effective_use_reranking(

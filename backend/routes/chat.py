@@ -198,7 +198,9 @@ async def chat_with_ai(
                             history=[],
                             streaming=False,
                             model_path=current_model_path,
-                            system_prompt=merge_strict_rag_system_prompt(None),
+                            system_prompt=merge_strict_rag_system_prompt(
+                                None, rag_override=getattr(state, "rag_system_prompt", None)
+                            ),
                         )
                         response = await maybe_replace_ungrounded(
                             prompt[:20000], response, RAG_STRICT_NOT_FOUND_MESSAGE

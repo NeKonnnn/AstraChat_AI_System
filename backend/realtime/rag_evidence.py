@@ -66,10 +66,18 @@ def rag_guard_env() -> Tuple[float, bool]:
     пуст, backend сам отвечает канонической фразой без вызова LLM. Чтобы ВСЕГДА звать LLM
     (даже без опоры на документы), поставьте RAG_BLOCK_ON_NO_EVIDENCE=0.
     """
+    min_sim = None
     try:
-        min_sim = float(os.getenv("RAG_MIN_SIMILARITY", "0"))
-    except ValueError:
-        min_sim = 0.0
+        import backend.app_state as state
+
+        min_sim = float(getattr(state, "rag_similarity_threshold", 0.0))
+    except Exception:
+        min_sim = None
+    if min_sim is None:
+        try:
+            min_sim = float(os.getenv("RAG_MIN_SIMILARITY", "0"))
+        except ValueError:
+            min_sim = 0.0
     min_sim = max(0.0, min(min_sim, 1.0))
     block = os.getenv("RAG_BLOCK_ON_NO_EVIDENCE", "1").strip().lower() not in ("0", "false", "no", "off")
     return min_sim, block

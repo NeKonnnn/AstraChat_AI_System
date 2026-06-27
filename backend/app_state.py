@@ -186,6 +186,22 @@ def _env_rag_pipeline_bool(name: str, default: bool = False) -> bool:
 rag_query_fix_typos: bool = _env_rag_pipeline_bool("RAG_QUERY_FIX_TYPOS", False)
 rag_multi_query_enabled: bool = _env_rag_pipeline_bool("RAG_MULTI_QUERY_ENABLED", False)
 rag_hyde_enabled: bool = _env_rag_pipeline_bool("RAG_HYDE_ENABLED", False)
+rag_chunking_strategy: str = "hierarchical"
+rag_chunk_overlap: int = max(0, int(os.getenv("RAG_CHUNK_OVERLAP", "200") or 200))
+try:
+    _rst = float(os.getenv("RAG_MIN_SIMILARITY", "0"))
+except ValueError:
+    _rst = 0.0
+rag_similarity_threshold: float = max(0.0, min(_rst, 1.0))
+rag_reranking_enabled: bool = _env_rag_pipeline_bool("RAG_USE_RERANKING", False)
+try:
+    _rtn = int(os.getenv("RAG_RERANK_TOP_N", "5"))
+except ValueError:
+    _rtn = 5
+rag_rerank_top_n: int = max(1, min(_rtn, 64))
+rag_system_prompt: str = (
+    'Используй только предоставленный контекст. Если ответа нет в тексте, скажи «Не знаю». Не придумывай факты.'
+)
 try:
     _rk = int(os.getenv("RAG_CHAT_TOP_K", "12"))
 except ValueError:
@@ -270,6 +286,8 @@ def load_app_settings() -> dict:
     global memory_max_messages, memory_include_system_prompts, memory_clear_on_restart
     global current_rag_strategy, agentic_rag_enabled, agentic_max_iterations
     global rag_query_fix_typos, rag_multi_query_enabled, rag_hyde_enabled, rag_chat_top_k
+    global rag_chunking_strategy, rag_chunk_overlap, rag_similarity_threshold
+    global rag_reranking_enabled, rag_rerank_top_n, rag_system_prompt
     try:
         if os.path.exists(SETTINGS_FILE):
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
@@ -304,6 +322,31 @@ def load_app_settings() -> dict:
                     rag_chat_top_k = max(1, min(int(data["rag_chat_top_k"]), 64))
                 except (TypeError, ValueError):
                     pass
+            if "rag_chunking_strategy" in data:
+                v = str(data.get("rag_chunking_strategy") or "").strip().lower()
+                if v in {"hierarchical", "fixed", "markdown", "separators", "semantic"}:
+                    rag_chunking_strategy = v
+            if "rag_chunk_overlap" in data:
+                try:
+                    rag_chunk_overlap = max(0, min(int(data["rag_chunk_overlap"]), 2000))
+                except (TypeError, ValueError):
+                    pass
+            if "rag_similarity_threshold" in data:
+                try:
+                    rag_similarity_threshold = max(0.0, min(float(data["rag_similarity_threshold"]), 1.0))
+                except (TypeError, ValueError):
+                    pass
+            if "rag_reranking_enabled" in data:
+                rag_reranking_enabled = bool(data["rag_reranking_enabled"])
+            if "rag_rerank_top_n" in data:
+                try:
+                    rag_rerank_top_n = max(1, min(int(data["rag_rerank_top_n"]), 64))
+                except (TypeError, ValueError):
+                    pass
+            if "rag_system_prompt" in data:
+                prompt = str(data.get("rag_system_prompt") or "").strip()
+                if prompt:
+                    rag_system_prompt = prompt
             logger.info(f"Настройки загружены из {SETTINGS_FILE}")
             return data
     except Exception as e:
@@ -317,6 +360,12 @@ def load_app_settings() -> dict:
         "rag_strategy": current_rag_strategy,
         "agentic_rag_enabled": agentic_rag_enabled,
         "agentic_max_iterations": agentic_max_iterations,
+        "rag_chunking_strategy": rag_chunking_strategy,
+        "rag_chunk_overlap": rag_chunk_overlap,
+        "rag_similarity_threshold": rag_similarity_threshold,
+        "rag_reranking_enabled": rag_reranking_enabled,
+        "rag_rerank_top_n": rag_rerank_top_n,
+        "rag_system_prompt": rag_system_prompt,
         "current_model_path": None,
     }
 def save_app_settings(updates: dict) -> bool:

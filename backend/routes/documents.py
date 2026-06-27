@@ -482,7 +482,7 @@ async def query_document(request: DocumentQueryRequest):
             f"CONTEXT:\n{chr(10).join(parts)}\n\nВопрос: {request.query}\n\nОтвет:"
         )
         response_text = ask_agent(
-            prompt, system_prompt=merge_strict_rag_system_prompt(None)
+            prompt, system_prompt=merge_strict_rag_system_prompt(None, rag_override=getattr(state, "rag_system_prompt", None))
         )
         response_text = await maybe_replace_ungrounded(
             prompt[:20000], response_text, RAG_STRICT_NOT_FOUND_MESSAGE

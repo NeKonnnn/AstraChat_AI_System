@@ -16,7 +16,8 @@ from backend.settings.logging import get_logger
 router = APIRouter(tags=["rag"])
 logger = get_logger(__name__)
 
-_VALID_STRATEGIES = {"auto", "hierarchical", "hybrid", "standard", "raw_cosine", "graph"}
+_VALID_STRATEGIES = {"auto", "hierarchical", "hybrid", "standard", "lexical", "raw_cosine", "graph"}
+_VALID_CHUNKING_STRATEGIES = {"hierarchical", "fixed", "markdown", "separators", "semantic"}
 
 
 def _is_upstream_httpx_timeout(exc: BaseException) -> bool:
@@ -39,7 +40,8 @@ def _rag_settings_response_dict() -> dict:
             "auto": "Автоматический выбор стратегии.",
             "hierarchical": "Иерархический поиск по суммаризациям.",
             "hybrid": "Гибридный поиск: вектор + BM25.",
-            "standard": "Стандартный векторный поиск с фильтрацией шума.",
+            "standard": "Векторный поиск по semantic similarity.",
+            "lexical": "Лексический поиск BM25 (без семантического расширения).",
             "raw_cosine": "Сырой cosine-поиск (без постобработки).",
             "graph": "Графовый RAG: расширение по связям между чанками.",
         }.get(state.current_rag_strategy, ""),
@@ -49,6 +51,18 @@ def _rag_settings_response_dict() -> dict:
         "rag_multi_query_enabled": bool(getattr(state, "rag_multi_query_enabled", False)),
         "rag_hyde_enabled": bool(getattr(state, "rag_hyde_enabled", False)),
         "rag_chat_top_k": state.get_rag_chat_top_k(),
+        "rag_chunking_strategy": str(getattr(state, "rag_chunking_strategy", "hierarchical")),
+        "rag_chunk_overlap": int(getattr(state, "rag_chunk_overlap", 200)),
+        "rag_similarity_threshold": float(getattr(state, "rag_similarity_threshold", 0.0)),
+        "rag_reranking_enabled": bool(getattr(state, "rag_reranking_enabled", False)),
+        "rag_rerank_top_n": int(getattr(state, "rag_rerank_top_n", 5)),
+        "rag_system_prompt": str(
+            getattr(
+                state,
+                "rag_system_prompt",
+                'Используй только предоставленный контекст. Если ответа нет в тексте, скажи «Не знаю». Не придумывай факты.',
+            )
+        ),
     }
 
 
@@ -69,6 +83,14 @@ async def reset_rag_settings():
         state.rag_multi_query_enabled = False
         state.rag_hyde_enabled = False
         state.rag_chat_top_k = 8
+        state.rag_chunking_strategy = "hierarchical"
+        state.rag_chunk_overlap = 200
+        state.rag_similarity_threshold = 0.0
+        state.rag_reranking_enabled = False
+        state.rag_rerank_top_n = 5
+        state.rag_system_prompt = (
+            'Используй только предоставленный контекст. Если ответа нет в тексте, скажи «Не знаю». Не придумывай факты.'
+        )
         save_app_settings(
             {
                 "rag_strategy": "auto",
@@ -78,6 +100,12 @@ async def reset_rag_settings():
                 "rag_multi_query_enabled": False,
                 "rag_hyde_enabled": False,
                 "rag_chat_top_k": 8,
+                "rag_chunking_strategy": "hierarchical",
+                "rag_chunk_overlap": 200,
+                "rag_similarity_threshold": 0.0,
+                "rag_reranking_enabled": False,
+                "rag_rerank_top_n": 5,
+                "rag_system_prompt": 'Используй только предоставленный контекст. Если ответа нет в тексте, скажи «Не знаю». Не придумывай факты.',
             }
         )
         bump_rag_semantic_cache()
@@ -91,11 +119,21 @@ async def update_rag_settings(settings_data: RAGSettings):
     strat = settings_data.strategy
     if strat is not None and strat == "reranking":
         strat = "hybrid"
+    if strat is not None and strat == "lexical":
+        strat = "lexical"
     if strat is not None and strat not in _VALID_STRATEGIES:
         raise HTTPException(
             status_code=400,
             detail=f"Недопустимая стратегия. Допустимые: {_VALID_STRATEGIES}",
         )
+    chunking = settings_data.rag_chunking_strategy
+    if chunking is not None:
+        chunking = str(chunking).strip().lower()
+        if chunking not in _VALID_CHUNKING_STRATEGIES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Недопустимая стратегия чанкования. Допустимые: {_VALID_CHUNKING_STRATEGIES}",
+            )
     if (
         settings_data.strategy is None
         and settings_data.agentic_rag_enabled is None
@@ -104,6 +142,12 @@ async def update_rag_settings(settings_data: RAGSettings):
         and settings_data.rag_multi_query_enabled is None
         and settings_data.rag_hyde_enabled is None
         and settings_data.rag_chat_top_k is None
+        and settings_data.rag_chunking_strategy is None
+        and settings_data.rag_chunk_overlap is None
+        and settings_data.rag_similarity_threshold is None
+        and settings_data.rag_reranking_enabled is None
+        and settings_data.rag_rerank_top_n is None
+        and settings_data.rag_system_prompt is None
     ):
         raise HTTPException(status_code=400, detail="Нет полей для обновления")
     try:
@@ -134,9 +178,44 @@ async def update_rag_settings(settings_data: RAGSettings):
                 updates["rag_chat_top_k"] = state.rag_chat_top_k
             except (TypeError, ValueError):
                 raise HTTPException(status_code=400, detail="rag_chat_top_k: ожидается целое число 1–64")
+        if chunking is not None:
+            state.rag_chunking_strategy = chunking
+            updates["rag_chunking_strategy"] = chunking
+        if settings_data.rag_chunk_overlap is not None:
+            try:
+                overlap = int(settings_data.rag_chunk_overlap)
+                state.rag_chunk_overlap = max(0, min(overlap, 2000))
+                updates["rag_chunk_overlap"] = state.rag_chunk_overlap
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="rag_chunk_overlap: ожидается целое число 0–2000")
+        if settings_data.rag_similarity_threshold is not None:
+            try:
+                threshold = float(settings_data.rag_similarity_threshold)
+                state.rag_similarity_threshold = max(0.0, min(threshold, 1.0))
+                updates["rag_similarity_threshold"] = state.rag_similarity_threshold
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="rag_similarity_threshold: ожидается число 0..1")
+        if settings_data.rag_reranking_enabled is not None:
+            state.rag_reranking_enabled = bool(settings_data.rag_reranking_enabled)
+            updates["rag_reranking_enabled"] = state.rag_reranking_enabled
+        if settings_data.rag_rerank_top_n is not None:
+            try:
+                top_n = int(settings_data.rag_rerank_top_n)
+                state.rag_rerank_top_n = max(1, min(top_n, 64))
+                updates["rag_rerank_top_n"] = state.rag_rerank_top_n
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="rag_rerank_top_n: ожидается целое число 1–64")
+        if settings_data.rag_system_prompt is not None:
+            prompt = str(settings_data.rag_system_prompt or "").strip()
+            state.rag_system_prompt = (
+                prompt
+                if prompt
+                else 'Используй только предоставленный контекст. Если ответа нет в тексте, скажи «Не знаю». Не придумывай факты.'
+            )
+            updates["rag_system_prompt"] = state.rag_system_prompt
         if updates:
             save_app_settings(updates)
-            if "rag_chat_top_k" in updates:
+            if "rag_chat_top_k" in updates or "rag_rerank_top_n" in updates:
                 bump_rag_semantic_cache()
         return {"message": "Настройки RAG обновлены", "success": True, **_rag_settings_response_dict()}
     except HTTPException:

@@ -735,7 +735,9 @@ async def _handle_multi_llm(
     inline_imgs = list(inline_images) if inline_images else None
     eff_system_prompt = project_instructions.strip() if project_instructions else None
     if context_added:
-        eff_system_prompt = merge_strict_rag_system_prompt(eff_system_prompt)
+        eff_system_prompt = merge_strict_rag_system_prompt(
+            eff_system_prompt, rag_override=getattr(state, "rag_system_prompt", None)
+        )
     canned = await maybe_rag_no_evidence_message(
         rag_client,
         block_when_no_evidence=rag_block,
@@ -1387,7 +1389,9 @@ async def _handle_direct(
     else:
         eff_system_prompt = base_system_prompt or None
     if context_added:
-        eff_system_prompt = merge_strict_rag_system_prompt(eff_system_prompt)
+        eff_system_prompt = merge_strict_rag_system_prompt(
+            eff_system_prompt, rag_override=getattr(state, "rag_system_prompt", None)
+        )
     canned = await maybe_rag_no_evidence_message(
         rag_client,
         block_when_no_evidence=rag_block,

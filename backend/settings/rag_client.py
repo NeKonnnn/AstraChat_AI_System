@@ -305,8 +305,16 @@ class RagClient:
         body: Dict[str, Any] = {"query": pq.query_for_search, "k": k}
         if document_id is not None:
             body["document_id"] = document_id
-        if use_reranking is not None:
-            body["use_reranking"] = use_reranking
+        _rr_enabled = bool(getattr(_app_state, "rag_reranking_enabled", False))
+        effective_reranking = bool(use_reranking) if use_reranking is not None else _rr_enabled
+        if strategy and str(strategy).strip().lower() == "lexical":
+            effective_reranking = False
+        try:
+            rerank_top_n = int(getattr(_app_state, "rag_rerank_top_n", 0) or 0)
+        except (TypeError, ValueError):
+            rerank_top_n = 0
+        rerank_top_n = max(0, min(rerank_top_n, 64))
+        body["use_reranking"] = effective_reranking
         if strategy is not None:
             body["strategy"] = strategy
         if pq.vector_query:
@@ -318,9 +326,9 @@ class RagClient:
             path,
             pq.normalized,
             k,
-            strategy,
+            f"{strategy}|topn={rerank_top_n if effective_reranking else 0}",
             document_id,
-            use_reranking,
+            effective_reranking,
             pq.filters,
             project_id,
             rag_fix_typos=_fix,
@@ -336,7 +344,7 @@ class RagClient:
                     strategy=body.get("strategy"),
                     k=k,
                     document_id=document_id,
-                    use_reranking=use_reranking,
+                    use_reranking=effective_reranking,
                     hits=len(hits_cached),
                     query_preview=_rag_query_preview(pq.query_for_search),
                     prep_suffix="",
@@ -351,6 +359,8 @@ class RagClient:
             hits = self._parse_hits(resp)
 
         hits = dedupe_rag_hits(hits, jaccard_threshold=_dedupe_jaccard_threshold())
+        if effective_reranking and rerank_top_n > 0:
+            hits = hits[: max(1, min(rerank_top_n, k))]
         if semantic_cache_enabled():
             cache_set(cache_key, hits)
         prep_bits: List[str] = []
@@ -364,7 +374,7 @@ class RagClient:
             strategy=body.get("strategy"),
             k=k,
             document_id=document_id,
-            use_reranking=use_reranking,
+            use_reranking=effective_reranking,
             hits=len(hits),
             query_preview=_rag_query_preview(pq.query_for_search),
             prep_suffix=prep_s,

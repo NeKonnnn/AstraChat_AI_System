@@ -74,7 +74,7 @@ class DocumentQueryRequest(BaseModel):
 
 
 class RAGSettings(BaseModel):
-    strategy: Optional[str] = None  # auto | hierarchical | hybrid | standard/raw_cosine | graph
+    strategy: Optional[str] = None  # auto | hybrid | standard | lexical | raw_cosine | graph
     agentic_rag_enabled: Optional[bool] = None
     agentic_max_iterations: Optional[int] = None
     # Препроцесс запроса перед поиском в SVC-RAG (доп. вызовы LLM при включении)
@@ -83,6 +83,18 @@ class RAGSettings(BaseModel):
     rag_hyde_enabled: Optional[bool] = None
     # Сколько чанков подмешивать в контекст чата (1–64, по умолчанию 8)
     rag_chat_top_k: Optional[int] = None
+    # Стратегия нарезки новых документов на чанки (UI-настройка)
+    rag_chunking_strategy: Optional[str] = None  # hierarchical | fixed | markdown | separators | semantic
+    # Размер перекрытия соседних чанков при индексации
+    rag_chunk_overlap: Optional[int] = None
+    # Порог похожести retrieval [0..1]
+    rag_similarity_threshold: Optional[float] = None
+    # Включить cross-encoder reranking
+    rag_reranking_enabled: Optional[bool] = None
+    # Сколько чанков оставить после reranking (Top-N)
+    rag_rerank_top_n: Optional[int] = None
+    # Пользовательский системный промпт для ответа с RAG-контекстом
+    rag_system_prompt: Optional[str] = None
 
 
 class AgentModeRequest(BaseModel):

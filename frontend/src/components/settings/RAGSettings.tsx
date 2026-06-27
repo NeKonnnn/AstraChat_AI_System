@@ -39,18 +39,31 @@ import {
   MODEL_SETTINGS_RESET_BUTTON_SX,
   MODEL_SETTINGS_LABEL_WRAPPER_SX,
   MODEL_SETTINGS_HELP_ICON_BUTTON_SX,
+  MODEL_SETTINGS_INPUT_SX,
 } from '../../constants/modelSettingsStyles';
 
-type RAGStrategy = 'auto' | 'hierarchical' | 'hybrid' | 'standard' | 'graph';
+type RAGStrategy = 'auto' | 'hybrid' | 'standard' | 'graph' | 'lexical';
+type ChunkingStrategy = 'hierarchical' | 'fixed' | 'markdown' | 'separators' | 'semantic';
 const RAG_STRATEGY_STORAGE_KEY = 'rag_strategy';
+const RAG_CHUNKING_STORAGE_KEY = 'rag_chunking_strategy';
+const DEFAULT_RAG_SYSTEM_PROMPT =
+  'Используй только предоставленный контекст. Если ответа нет в тексте, скажи «Не знаю». Не придумывай факты.';
 
 function normalizeStoredStrategy(raw: string | null): RAGStrategy {
   const s = (raw || 'auto').trim().toLowerCase();
   if (s === 'reranking') return 'hybrid';
-  if (s === 'auto' || s === 'hierarchical' || s === 'hybrid' || s === 'standard' || s === 'graph') {
+  if (s === 'auto' || s === 'hybrid' || s === 'standard' || s === 'graph' || s === 'lexical') {
     return s;
   }
   return 'auto';
+}
+
+function normalizeChunkingStrategy(raw: string | null): ChunkingStrategy {
+  const s = (raw || 'hierarchical').trim().toLowerCase();
+  if (s === 'hierarchical' || s === 'fixed' || s === 'markdown' || s === 'separators' || s === 'semantic') {
+    return s;
+  }
+  return 'hierarchical';
 }
 
 interface RAGSettingsProps {}
@@ -64,13 +77,24 @@ export default function RAGSettings({}: RAGSettingsProps) {
   });
   const [isLoading, setIsLoading] = useState(false);
   const [strategyPopoverAnchor, setStrategyPopoverAnchor] = useState<HTMLElement | null>(null);
+  const [chunkingPopoverAnchor, setChunkingPopoverAnchor] = useState<HTMLElement | null>(null);
   const [memoryRagModalOpen, setMemoryRagModalOpen] = useState(false);
   const [agenticRagEnabled, setAgenticRagEnabled] = useState(true);
   const [ragQueryFixTypos, setRagQueryFixTypos] = useState(false);
   const [ragMultiQueryEnabled, setRagMultiQueryEnabled] = useState(false);
   const [ragHydeEnabled, setRagHydeEnabled] = useState(false);
   const [ragChatTopK, setRagChatTopK] = useState(5);
+  const [ragChunkingStrategy, setRagChunkingStrategy] = useState<ChunkingStrategy>(() => {
+    const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(RAG_CHUNKING_STORAGE_KEY) : null;
+    return normalizeChunkingStrategy(saved);
+  });
+  const [ragChunkOverlap, setRagChunkOverlap] = useState(200);
+  const [ragSimilarityThreshold, setRagSimilarityThreshold] = useState(0);
+  const [ragRerankingEnabled, setRagRerankingEnabled] = useState(false);
+  const [ragRerankTopN, setRagRerankTopN] = useState(5);
+  const [ragSystemPrompt, setRagSystemPrompt] = useState(DEFAULT_RAG_SYSTEM_PROMPT);
   const [strategyInfoExpanded, setStrategyInfoExpanded] = useState(true);
+  const [chunkingInfoExpanded, setChunkingInfoExpanded] = useState(true);
   const isInitializedRef = useRef(false);
   const skipNextRagSaveToastRef = useRef(false);
   const { showNotification } = useAppActions();
@@ -104,6 +128,12 @@ export default function RAGSettings({}: RAGSettingsProps) {
     ragMultiQueryEnabled,
     ragHydeEnabled,
     ragChatTopK,
+    ragChunkingStrategy,
+    ragChunkOverlap,
+    ragSimilarityThreshold,
+    ragRerankingEnabled,
+    ragRerankTopN,
+    ragSystemPrompt,
   ]);
 
   const loadRAGSettings = async () => {
@@ -135,6 +165,28 @@ export default function RAGSettings({}: RAGSettingsProps) {
           const k = Math.max(1, Math.min(64, Math.round(data.rag_chat_top_k)));
           setRagChatTopK(k);
         }
+        if (typeof data.rag_chunking_strategy === 'string') {
+          const strategy = normalizeChunkingStrategy(data.rag_chunking_strategy);
+          setRagChunkingStrategy(strategy);
+          if (typeof localStorage !== 'undefined') {
+            localStorage.setItem(RAG_CHUNKING_STORAGE_KEY, strategy);
+          }
+        }
+        if (typeof data.rag_chunk_overlap === 'number' && Number.isFinite(data.rag_chunk_overlap)) {
+          setRagChunkOverlap(Math.max(0, Math.min(2000, Math.round(data.rag_chunk_overlap))));
+        }
+        if (typeof data.rag_similarity_threshold === 'number' && Number.isFinite(data.rag_similarity_threshold)) {
+          setRagSimilarityThreshold(Math.max(0, Math.min(1, data.rag_similarity_threshold)));
+        }
+        if (typeof data.rag_reranking_enabled === 'boolean') {
+          setRagRerankingEnabled(data.rag_reranking_enabled);
+        }
+        if (typeof data.rag_rerank_top_n === 'number' && Number.isFinite(data.rag_rerank_top_n)) {
+          setRagRerankTopN(Math.max(1, Math.min(64, Math.round(data.rag_rerank_top_n))));
+        }
+        if (typeof data.rag_system_prompt === 'string' && data.rag_system_prompt.trim()) {
+          setRagSystemPrompt(data.rag_system_prompt);
+        }
       } else if (response.status === 404) {
         // Оставляем текущее значение (локальное), если endpoint не найден
       }
@@ -159,6 +211,12 @@ export default function RAGSettings({}: RAGSettingsProps) {
           rag_multi_query_enabled: ragMultiQueryEnabled,
           rag_hyde_enabled: ragHydeEnabled,
           rag_chat_top_k: ragChatTopK,
+          rag_chunking_strategy: ragChunkingStrategy,
+          rag_chunk_overlap: ragChunkOverlap,
+          rag_similarity_threshold: ragSimilarityThreshold,
+          rag_reranking_enabled: ragRerankingEnabled,
+          rag_rerank_top_n: ragRerankTopN,
+          rag_system_prompt: ragSystemPrompt.trim() || DEFAULT_RAG_SYSTEM_PROMPT,
         }),
       });
       
@@ -196,12 +254,12 @@ export default function RAGSettings({}: RAGSettingsProps) {
     switch (strategy) {
       case 'auto':
         return 'Автоматический выбор';
-      case 'hierarchical':
-        return 'Иерархический поиск';
       case 'hybrid':
         return 'Гибридный поиск';
       case 'standard':
-        return 'Стандартный поиск';
+        return 'Векторный';
+      case 'lexical':
+        return 'Ключевой/Лексический (BM25)';
       case 'graph':
         return 'Graph RAG (графовый поиск)';
       default:
@@ -212,13 +270,13 @@ export default function RAGSettings({}: RAGSettingsProps) {
   const getStrategyDescription = (strategy: RAGStrategy): string => {
     switch (strategy) {
       case 'auto':
-        return 'Сервер сам выбирает режим среди доступных: гибрид (BM25+вектор), граф, иерархия (только глобальная библиотека, если построен индекс) или стандартный вектор — по тексту запроса и флагу RAG_AUTO_MODE (heuristic по умолчанию или priority). Переранжирование (cross-encoder) включается настройками SVC-RAG для выбранного режима.';
-      case 'hierarchical':
-        return 'Умный поиск по иерархической структуре документов. Автоматически выбирает между быстрой стратегией (summary) для общих вопросов и детальной (detailed) для конкретных. Идеально для больших документов.';
+        return 'Сервер автоматически подбирает оптимальный режим среди доступных стратегий (гибрид, векторный, графовый) по типу запроса.';
       case 'hybrid':
         return 'Комбинирует векторный поиск (семантический) и BM25 (ключевые слова), объединяет кандидатов; при RAG_USE_RERANKING в SVC-RAG — cross-encoder переупорядочивает фрагменты под запрос. Так легче попасть в нужный абзац (например, место работы в резюме).';
       case 'standard':
-        return 'Базовый векторный поиск через pgvector с использованием cosine similarity. Самый быстрый вариант, но менее точный. Используется как fallback, если другие стратегии недоступны.';
+        return 'Чистый векторный поиск через pgvector (cosine similarity). Хорошо работает на смысловых запросах и перефразах.';
+      case 'lexical':
+        return 'Ключевой/лексический поиск работает по BM25. Полезен для точных совпадений терминов, кодов, артикулов, ФИО и формулировок без смыслового расширения.';
       case 'graph':
         return 'Графовый RAG: сначала находит релевантные seed-чанки, затем расширяет контекст по связям между фрагментами (соседние чанки, семантические связи, общие сущности) и ранжирует итоговый набор. Полезно для многошаговых вопросов и длинных документов.';
       default:
@@ -230,17 +288,82 @@ export default function RAGSettings({}: RAGSettingsProps) {
     switch (strategy) {
       case 'auto':
         return 'Используйте для большинства случаев - система сама выберет оптимальную стратегию.';
-      case 'hierarchical':
-        return 'Используйте для работы с большими документами (отчеты, книги, длинные тексты).';
       case 'hybrid':
         return 'Используйте когда нужен баланс между точностью и скоростью, особенно для поиска по ключевым словам и датам.';
       case 'standard':
-        return 'Используйте только если другие стратегии недоступны или нужна максимальная скорость.';
+        return 'Используйте как основной семантический режим: хороший баланс точности и скорости.';
+      case 'lexical':
+        return 'Используйте для строгих запросов по словам: коды, номера, имена, артикулы, точные термины.';
       case 'graph':
         return 'Используйте для сложных запросов, где ответ требует объединять факты из нескольких связанных фрагментов.';
       default:
         return '';
     }
+  };
+
+  const getChunkingLabel = (strategy: ChunkingStrategy): string => {
+    switch (strategy) {
+      case 'hierarchical':
+        return 'Иерархическое';
+      case 'fixed':
+        return 'Фиксированное';
+      case 'markdown':
+        return 'По разметке';
+      case 'separators':
+        return 'По разделителям';
+      case 'semantic':
+        return 'Семантическое';
+      default:
+        return 'Иерархическое';
+    }
+  };
+
+  const getChunkingDescription = (strategy: ChunkingStrategy): string => {
+    switch (strategy) {
+      case 'hierarchical':
+        return 'Документ сначала делится на крупные смысловые блоки, затем на более мелкие фрагменты. Это обычно дает лучший баланс между полнотой контекста и точностью поиска.';
+      case 'fixed':
+        return 'Текст режется на чанки фиксированной длины. Предсказуемо по размеру и скорости, но может разрывать мысль на границах.';
+      case 'markdown':
+        return 'Чанкование ориентируется на структуру разметки (заголовки, списки, секции). Хорошо подходит для технической документации и markdown-файлов.';
+      case 'separators':
+        return 'Разделение по естественным разделителям (абзацы, переносы, знаки, служебные маркеры). Менее жесткое, чем fixed, и обычно более читабельное.';
+      case 'semantic':
+        return 'Смысловое чанкование пытается сохранять цельные идеи внутри чанка. Обычно дает лучшее качество retrieval, но требует больше вычислений.';
+      default:
+        return '';
+    }
+  };
+
+  const getChunkingUseCase = (strategy: ChunkingStrategy): string => {
+    switch (strategy) {
+      case 'hierarchical':
+        return 'Рекомендуется как универсальный режим для смешанных корпусов документов.';
+      case 'fixed':
+        return 'Подходит для простых однотипных документов, где важна стабильная производительность.';
+      case 'markdown':
+        return 'Используйте для wiki/документации с выраженной структурой разделов.';
+      case 'separators':
+        return 'Подходит для текстов с понятной абзацной структурой без сложной разметки.';
+      case 'semantic':
+        return 'Используйте, когда приоритет - максимальная релевантность и смысловая целостность чанков.';
+      default:
+        return '';
+    }
+  };
+
+  const ragPillsRowSx = {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 1.5,
+    alignItems: 'flex-start',
+  };
+
+  const ragPillFieldWrapperSx = {
+    width: { xs: '100%', sm: 148 },
+    maxWidth: { xs: '100%', sm: 148 },
+    flex: '0 0 auto',
+    minWidth: 0,
   };
 
   return (
@@ -397,7 +520,7 @@ export default function RAGSettings({}: RAGSettingsProps) {
                   slotProps={{ paper: { sx: getDropdownPopoverPaperSx(strategyPopoverAnchor) } }}
                 >
                   <Box sx={{ py: 0.5 }}>
-                    {(['auto', 'hierarchical', 'hybrid', 'standard', 'graph'] as const).map((strategy) => (
+                    {(['auto', 'hybrid', 'standard', 'lexical', 'graph'] as const).map((strategy) => (
                       <Box
                         key={strategy}
                         onClick={() => {
@@ -471,8 +594,143 @@ export default function RAGSettings({}: RAGSettingsProps) {
 
             <Divider />
 
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <ListItemText
+                primary={
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    Стратегия чанкования
+                    <Tooltip title="Выберите способ нарезки документов на чанки перед индексацией." arrow>
+                      <IconButton
+                        size="small"
+                        sx={{
+                          p: 0,
+                          ml: 0.5,
+                          opacity: 0.7,
+                          '&:hover': {
+                            opacity: 1,
+                            '& .MuiSvgIcon-root': {
+                              color: 'primary.main',
+                            },
+                          },
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <HelpOutlineIcon fontSize="small" color="action" />
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
+                }
+                primaryTypographyProps={{
+                  variant: 'body1',
+                  fontWeight: 500,
+                }}
+              />
+              <Box sx={{ minWidth: 280 }}>
+                <Box
+                  onClick={(e) => !isLoading && setChunkingPopoverAnchor(e.currentTarget)}
+                  sx={{
+                    ...DROPDOWN_TRIGGER_BUTTON_SX,
+                    opacity: isLoading ? 0.7 : 1,
+                    pointerEvents: isLoading ? 'none' : 'auto',
+                  }}
+                >
+                  <Typography sx={{ color: 'white', fontWeight: 500, fontSize: '0.875rem' }}>
+                    {getChunkingLabel(ragChunkingStrategy)}
+                  </Typography>
+                  <ExpandMoreIcon sx={{ ...DROPDOWN_CHEVRON_SX, transform: chunkingPopoverAnchor ? 'rotate(180deg)' : 'none' }} />
+                </Box>
+                <Popover
+                  open={Boolean(chunkingPopoverAnchor)}
+                  anchorEl={chunkingPopoverAnchor}
+                  onClose={() => setChunkingPopoverAnchor(null)}
+                  anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+                  transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(chunkingPopoverAnchor) } }}
+                >
+                  <Box sx={{ py: 0.5 }}>
+                    {(['hierarchical', 'fixed', 'markdown', 'separators', 'semantic'] as const).map((strategy) => (
+                      <Box
+                        key={strategy}
+                        onClick={() => {
+                          if (typeof localStorage !== 'undefined') {
+                            localStorage.setItem(RAG_CHUNKING_STORAGE_KEY, strategy);
+                          }
+                          setRagChunkingStrategy(strategy);
+                          setChunkingPopoverAnchor(null);
+                        }}
+                        sx={{
+                          ...dropdownItemSx,
+                          color: ragChunkingStrategy === strategy ? 'white' : 'rgba(255,255,255,0.9)',
+                          fontWeight: ragChunkingStrategy === strategy ? 600 : 400,
+                          bgcolor: ragChunkingStrategy === strategy ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
+                        }}
+                      >
+                        {getChunkingLabel(strategy)}
+                      </Box>
+                    ))}
+                  </Box>
+                </Popover>
+              </Box>
+            </ListItem>
+
             <ListItem sx={{ px: 0, py: 1.5, display: 'block' }}>
-              <Box sx={{ maxWidth: { xs: '100%', sm: 236 }, minWidth: 0 }}>
+              <Alert
+                severity="info"
+                sx={{
+                  '& .MuiAlert-message': { width: '100%', pt: 0.25 },
+                  py: 1,
+                }}
+                action={
+                  <Tooltip title={chunkingInfoExpanded ? 'Свернуть' : 'Развернуть'} arrow>
+                    <IconButton
+                      size="small"
+                      color="inherit"
+                      aria-expanded={chunkingInfoExpanded}
+                      aria-label={chunkingInfoExpanded ? 'Свернуть описание чанкования' : 'Развернуть описание чанкования'}
+                      onClick={() => setChunkingInfoExpanded((v) => !v)}
+                      edge="end"
+                    >
+                      <ExpandMoreIcon
+                        sx={{
+                          transform: chunkingInfoExpanded ? 'rotate(180deg)' : 'none',
+                          transition: theme.transitions.create('transform', {
+                            duration: theme.transitions.duration.shorter,
+                          }),
+                        }}
+                      />
+                    </IconButton>
+                  </Tooltip>
+                }
+              >
+                <Typography variant="subtitle2" fontWeight="600" gutterBottom>
+                  {getChunkingLabel(ragChunkingStrategy)}
+                </Typography>
+                <Collapse in={chunkingInfoExpanded} timeout="auto" unmountOnExit={false}>
+                  <Box>
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                      {getChunkingDescription(ragChunkingStrategy)}
+                    </Typography>
+                    <Typography variant="body2" fontWeight="500" sx={{ mt: 1 }}>
+                      {getChunkingUseCase(ragChunkingStrategy)}
+                    </Typography>
+                  </Box>
+                </Collapse>
+              </Alert>
+            </ListItem>
+
+            <Divider />
+
+            <ListItem sx={{ px: 0, py: 1.5, display: 'block' }}>
+              <Box sx={ragPillsRowSx}>
+                <Box sx={ragPillFieldWrapperSx}>
                 <TextField
                   fullWidth
                   size="small"
@@ -517,13 +775,105 @@ export default function RAGSettings({}: RAGSettingsProps) {
                     else setRagChatTopK(Math.max(1, Math.min(64, n)));
                   }}
                   inputProps={{ min: 1, max: 64, step: 1 }}
-                  InputLabelProps={{ shrink: true }}
+                  sx={MODEL_SETTINGS_INPUT_SX}
                 />
+                </Box>
+                <Box sx={ragPillFieldWrapperSx}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  disabled={isLoading}
+                  type="number"
+                  label="Размер перекрытия"
+                  value={ragChunkOverlap}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (raw === '') return;
+                    const v = parseInt(raw, 10);
+                    if (!Number.isNaN(v)) setRagChunkOverlap(Math.max(0, Math.min(2000, v)));
+                  }}
+                  onBlur={(e) => {
+                    const raw = e.target.value.trim();
+                    if (raw === '') {
+                      setRagChunkOverlap(200);
+                      return;
+                    }
+                    const n = parseInt(raw, 10);
+                    if (Number.isNaN(n)) setRagChunkOverlap(200);
+                    else setRagChunkOverlap(Math.max(0, Math.min(2000, n)));
+                  }}
+                  inputProps={{ min: 0, max: 2000, step: 10 }}
+                  sx={MODEL_SETTINGS_INPUT_SX}
+                />
+                </Box>
+                <Box sx={ragPillFieldWrapperSx}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  disabled={isLoading}
+                  type="number"
+                  label="Порог схожести"
+                  value={ragSimilarityThreshold}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (raw === '') return;
+                    const v = Number(raw);
+                    if (!Number.isNaN(v)) {
+                      setRagSimilarityThreshold(Math.max(0, Math.min(1, Number(v.toFixed(4)))));
+                    }
+                  }}
+                  onBlur={(e) => {
+                    const raw = e.target.value.trim();
+                    if (raw === '') {
+                      setRagSimilarityThreshold(0);
+                      return;
+                    }
+                    const n = Number(raw);
+                    if (Number.isNaN(n)) setRagSimilarityThreshold(0);
+                    else setRagSimilarityThreshold(Math.max(0, Math.min(1, Number(n.toFixed(4)))));
+                  }}
+                  inputProps={{ min: 0, max: 1, step: 0.01 }}
+                  sx={MODEL_SETTINGS_INPUT_SX}
+                />
+                </Box>
               </Box>
             </ListItem>
 
             <Divider />
 
+            <ListItem sx={{ px: 0, py: 1.5, display: 'block' }}>
+              <TextField
+                fullWidth
+                size="small"
+                disabled={isLoading}
+                multiline
+                minRows={4}
+                maxRows={12}
+                label="Системный промпт для RAG"
+                value={ragSystemPrompt}
+                onChange={(e) => setRagSystemPrompt(e.target.value)}
+                InputLabelProps={{ shrink: true }}
+                sx={MODEL_SETTINGS_INPUT_SX}
+              />
+            </ListItem>
+          </List>
+
+          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', ...MODEL_SETTINGS_RESET_BUTTON_SX }}>
+            <Button variant="outlined" startIcon={<RestoreIcon />} onClick={resetRAGSettings} disabled={isLoading}>
+              Восстановить настройки
+            </Button>
+          </Box>
+        </CardContent>
+      </Card>
+
+      <Card sx={{ mb: 3 }}>
+        <CardContent>
+          <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <SearchIcon color="primary" />
+            Методы улучшения запросов
+          </Typography>
+
+          <List sx={{ p: 0 }}>
             <ListItem
               sx={{
                 px: 0,
@@ -571,6 +921,83 @@ export default function RAGSettings({}: RAGSettingsProps) {
                 disabled={isLoading}
                 color="primary"
               />
+            </ListItem>
+
+            <Divider />
+
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <ListItemText
+                primary={
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    Переранжирование
+                    <Tooltip title="Cross-encoder переупорядочивает найденные чанки после первичного retrieval." arrow>
+                      <IconButton
+                        size="small"
+                        sx={{
+                          p: 0,
+                          ml: 0.5,
+                          opacity: 0.7,
+                          '&:hover': {
+                            opacity: 1,
+                            '& .MuiSvgIcon-root': { color: 'primary.main' },
+                          },
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <HelpOutlineIcon fontSize="small" color="action" />
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
+                }
+                primaryTypographyProps={{ variant: 'body1', fontWeight: 500 }}
+              />
+              <Switch
+                checked={ragRerankingEnabled}
+                onChange={(e) => setRagRerankingEnabled(e.target.checked)}
+                disabled={isLoading}
+                color="primary"
+              />
+            </ListItem>
+
+            <Divider />
+
+            <ListItem sx={{ px: 0, py: 1.5, display: 'block' }}>
+              <Box sx={ragPillFieldWrapperSx}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  disabled={isLoading || !ragRerankingEnabled}
+                  type="number"
+                  label="Top-N после реранкинга"
+                  value={ragRerankTopN}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (raw === '') return;
+                    const v = parseInt(raw, 10);
+                    if (!Number.isNaN(v)) setRagRerankTopN(Math.max(1, Math.min(64, v)));
+                  }}
+                  onBlur={(e) => {
+                    const raw = e.target.value.trim();
+                    if (raw === '') {
+                      setRagRerankTopN(5);
+                      return;
+                    }
+                    const n = parseInt(raw, 10);
+                    if (Number.isNaN(n)) setRagRerankTopN(5);
+                    else setRagRerankTopN(Math.max(1, Math.min(64, n)));
+                  }}
+                  inputProps={{ min: 1, max: 64, step: 1 }}
+                  sx={MODEL_SETTINGS_INPUT_SX}
+                />
+              </Box>
             </ListItem>
 
             <Divider />
@@ -640,7 +1067,7 @@ export default function RAGSettings({}: RAGSettingsProps) {
                     Несколько формулировок (multi-query)
                     <Tooltip
                       title={
-                        'LLM генерирует 3–5 коротких альтернативных формулировок того же смысла. По каждой выполняется поиск в RAG, затем результаты объединяются. ' +
+                        'LLM генерирует 3-5 коротких альтернативных формулировок того же смысла. По каждой выполняется поиск в RAG, затем результаты объединяются. ' +
                         'Помогает, когда в документе другие слова (например «soft skills» и «софт скилы», «автомобиль» и «машина»), если модель попала в удачные синонимы. ' +
                         'Вызывает LLM и несколько запросов к RAG за один вопрос — ответ в чате медленнее, но выше шанс найти нужные формулировки в документах.'
                       }
@@ -692,7 +1119,7 @@ export default function RAGSettings({}: RAGSettingsProps) {
                     <Tooltip
                       title={
                         'HyDE: LLM пишет короткий гипотетический ответ на ваш вопрос. Текст добавляется при построении вектора запроса, чтобы ближе по смыслу совпасть с абзацами в документах. ' +
-                        'Не подставляет реальные факты из файлов — только улучшает retrieval. Один вызов LLM для гипотетического текста, затем обогащённый запрос уходит в эмбеддинг. Можно включать вместе с multi-query.'
+                        'Не подставляет реальные факты из файлов — только улучшает retrieval. Один вызов LLM для гипотетического текста, затем обогащенный запрос уходит в эмбеддинг. Можно включать вместе с multi-query.'
                       }
                       arrow
                     >
@@ -724,12 +1151,6 @@ export default function RAGSettings({}: RAGSettingsProps) {
               />
             </ListItem>
           </List>
-
-          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', ...MODEL_SETTINGS_RESET_BUTTON_SX }}>
-            <Button variant="outlined" startIcon={<RestoreIcon />} onClick={resetRAGSettings} disabled={isLoading}>
-              Восстановить настройки
-            </Button>
-          </Box>
         </CardContent>
       </Card>
 

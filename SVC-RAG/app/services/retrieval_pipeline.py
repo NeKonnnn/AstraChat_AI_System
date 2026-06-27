@@ -176,6 +176,9 @@ async def run_retrieval_pipeline(
     requested = (strategy or "auto").lower()
     if requested == "flat":
         requested = "standard"
+    if requested in {"lexical", "keyword", "bm25"}:
+        logger.info("[%s] strategy=%s не поддерживается этим хранилищем, fallback=standard", store, requested)
+        requested = "standard"
     # ``hierarchical`` в нон-global пока не поддерживается индексной стороной — graceful fallback.
     if requested == "hierarchical" and store != "global":
         logger.info(
