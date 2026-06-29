@@ -2,7 +2,8 @@
 schemas.py - Pydantic-модели запросов/ответов
 """
 
-from typing import List, Optional, Any, Dict
+from typing import List, Optional
+
 from pydantic import BaseModel
 
 
@@ -14,7 +15,6 @@ class ChatMessage(BaseModel):
     model: Optional[str] = None
     conversation_id: Optional[str] = None
     message_id: Optional[str] = None
-    image_gen_preset_id: Optional[str] = None
 
 
 class ModelSettings(BaseModel):
@@ -95,6 +95,14 @@ class RAGSettings(BaseModel):
     rag_rerank_top_n: Optional[int] = None
     # Пользовательский системный промпт для ответа с RAG-контекстом
     rag_system_prompt: Optional[str] = None
+    # Пути выбранных моделей (local/... или huggingface/...)
+    rag_embedding_model_path: Optional[str] = None
+    rag_reranker_model_path: Optional[str] = None
+
+
+class RagModelSelectRequest(BaseModel):
+    model_type: str  # embedding | reranker
+    model_path: str
 
 
 class AgentModeRequest(BaseModel):

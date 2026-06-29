@@ -35,6 +35,7 @@ import {
   DROPDOWN_ITEM_HOVER_BG,
 } from '../../constants/menuStyles';
 import MemoryRagLibraryModal from '../MemoryRagLibraryModal';
+import RagModelSelector from '../RagModelSelector';
 import {
   MODEL_SETTINGS_RESET_BUTTON_SX,
   MODEL_SETTINGS_LABEL_WRAPPER_SX,
@@ -49,6 +50,35 @@ const RAG_NUM_FIELDS_ROW_SX = {
   alignItems: { sm: 'flex-start' },
   flexWrap: 'wrap',
 } as const;
+
+const RAG_MODEL_SELECTOR_ROW_SX = {
+  display: 'flex',
+  flexDirection: { xs: 'column', sm: 'row' },
+  justifyContent: 'space-between',
+  alignItems: { xs: 'flex-start', sm: 'center' },
+  gap: 1.5,
+  py: 1,
+} as const;
+
+function ragModelRowLabel(label: string, tooltip: string) {
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0, flexShrink: 0 }}>
+      <Typography variant="body1" fontWeight={500}>
+        {label}
+      </Typography>
+      <Tooltip title={tooltip} arrow>
+        <IconButton
+          size="small"
+          sx={MODEL_SETTINGS_HELP_ICON_BUTTON_SX}
+          onClick={(e) => e.stopPropagation()}
+          aria-label={`Справка: ${label}`}
+        >
+          <HelpOutlineIcon fontSize="small" color="action" />
+        </IconButton>
+      </Tooltip>
+    </Box>
+  );
+}
 
 type RAGStrategy = 'auto' | 'hybrid' | 'standard' | 'graph' | 'lexical';
 type ChunkingStrategy = 'hierarchical' | 'fixed' | 'markdown' | 'separators' | 'semantic';
@@ -445,6 +475,41 @@ export default function RAGSettings({}: RAGSettingsProps) {
               >
                 Открыть базу данных
               </Button>
+            </ListItem>
+
+            <Divider />
+
+            <ListItem sx={{ px: 0, py: 0.5, display: 'block' }}>
+              <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+                <Box sx={RAG_MODEL_SELECTOR_ROW_SX}>
+                  {ragModelRowLabel(
+                    'Модель эмбеддингов',
+                    'Преобразует текст документов и запросов в векторы для семантического поиска в RAG.'
+                  )}
+                  <Box sx={{ flexShrink: 0, width: { xs: '100%', sm: 'auto' } }}>
+                    <RagModelSelector
+                      kind="embedding"
+                      isDarkMode={theme.palette.mode === 'dark'}
+                      disabled={isLoading}
+                      triggerMaxWidth={280}
+                    />
+                  </Box>
+                </Box>
+                <Box sx={RAG_MODEL_SELECTOR_ROW_SX}>
+                  {ragModelRowLabel(
+                    'Cross-encoder (реранкер)',
+                    'Переупорядочивает найденные чанки после первичного поиска для более точной выдачи.'
+                  )}
+                  <Box sx={{ flexShrink: 0, width: { xs: '100%', sm: 'auto' } }}>
+                    <RagModelSelector
+                      kind="reranker"
+                      isDarkMode={theme.palette.mode === 'dark'}
+                      disabled={isLoading}
+                      triggerMaxWidth={280}
+                    />
+                  </Box>
+                </Box>
+              </Box>
             </ListItem>
 
             <Divider />
