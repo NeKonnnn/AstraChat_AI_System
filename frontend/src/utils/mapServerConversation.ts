@@ -2,6 +2,35 @@ import { getApiUrl } from '../config/api';
 import type { Chat, Message, MultiLLMResponseSlot } from '../contexts/AppContext';
 import { normalizeMcpToolCallList } from '../mcp/utils/normalizeToolCall';
 
+export function mapInlineAttachmentRecords(
+  raw: unknown,
+): NonNullable<Message['inlineAttachments']> | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const items = raw
+    .filter((a): a is Record<string, unknown> => Boolean(a) && typeof a === 'object')
+    .map((a) => {
+      const contentType = a.contentType === 'image' ? ('image' as const) : ('text' as const);
+      const dataUri = a.data_uri ? String(a.data_uri) : undefined;
+      const minioObject = a.minio_object ? String(a.minio_object) : undefined;
+      const minioBucket = a.minio_bucket ? String(a.minio_bucket) : undefined;
+      let preview: string | undefined;
+      if (contentType === 'image' && dataUri) {
+        preview = dataUri;
+      } else if (contentType === 'image' && minioObject && minioBucket) {
+        preview = getApiUrl(
+          `/api/documents/inline-file?bucket=${encodeURIComponent(minioBucket)}&object=${encodeURIComponent(minioObject)}`,
+        );
+      }
+      return {
+        name: String(a.name || 'file'),
+        contentType,
+        ...(preview ? { preview } : {}),
+        ...(typeof a.size === 'number' && a.size > 0 ? { size: a.size } : {}),
+      };
+    });
+  return items.length > 0 ? items : undefined;
+}
+
 export function mapServerConversationToChat(conversation: any): Chat {
   const messages: Message[] = Array.isArray(conversation?.messages)
     ? conversation.messages.map((msg: any) => {
@@ -17,26 +46,24 @@ export function mapServerConversationToChat(conversation: any): Chat {
             : rawContent;
 
         const rawInline = metadata?.inline_attachments;
-        const inlineAttachments = Array.isArray(rawInline)
-          ? rawInline
-              .filter((a: unknown) => a && typeof a === 'object')
-              .map((a: Record<string, unknown>) => {
-                const contentType = a.contentType === 'image' ? ('image' as const) : ('text' as const);
-                const minioObject = a.minio_object ? String(a.minio_object) : undefined;
-                const minioBucket = a.minio_bucket ? String(a.minio_bucket) : undefined;
-                let preview: string | undefined;
-                if (contentType === 'image' && minioObject && minioBucket) {
-                  preview = getApiUrl(
-                    `/api/documents/inline-file?bucket=${encodeURIComponent(minioBucket)}&object=${encodeURIComponent(minioObject)}`,
-                  );
-                }
-                return {
-                  name: String(a.name || 'file'),
-                  contentType,
-                  preview,
-                  ...(typeof a.size === 'number' && a.size > 0 ? { size: a.size } : {}),
-                };
-              })
+        const inlineAttachments = mapInlineAttachmentRecords(rawInline);
+
+        const rawImageVariants = metadata?.image_variants;
+        const inlineAttachmentVariants = Array.isArray(rawImageVariants)
+          ? rawImageVariants
+              .map((block: unknown) =>
+                block && typeof block === 'object'
+                  ? mapInlineAttachmentRecords((block as Record<string, unknown>).inline_attachments)
+                  : undefined,
+              )
+              .filter((v): v is NonNullable<Message['inlineAttachments']> => Boolean(v?.length))
+          : undefined;
+        const currentImageVariantIndex =
+          typeof metadata?.current_image_variant_index === 'number'
+            ? metadata.current_image_variant_index
+            : undefined;
+        const rawAltResponses = Array.isArray(metadata?.alternative_responses)
+          ? metadata.alternative_responses.map((v: unknown) => String(v ?? ''))
           : undefined;
 
         const mcpToolCalls = normalizeMcpToolCallList(metadata?.mcp_tool_calls);
@@ -81,6 +108,11 @@ export function mapServerConversationToChat(conversation: any): Chat {
           isStreaming: false,
           ...(reasoningContent ? { reasoningContent } : {}),
           ...(inlineAttachments?.length ? { inlineAttachments } : {}),
+          ...(inlineAttachmentVariants?.length ? { inlineAttachmentVariants } : {}),
+          ...(rawAltResponses?.length ? { alternativeResponses: rawAltResponses } : {}),
+          ...(typeof currentImageVariantIndex === 'number'
+            ? { currentResponseIndex: currentImageVariantIndex }
+            : {}),
           ...(mcpToolCalls.length ? { mcpToolCalls } : {}),
           ...(multiLLMResponses.length ? { multiLLMResponses } : {}),
         } as Message;

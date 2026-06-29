@@ -318,7 +318,7 @@ function App() {
                             <Route path="/voice" element={<UnifiedChatPage isDarkMode={isDarkMode} sidebarOpen={sidebarOpen} sidebarHidden={sidebarHidden} />} />
                             <Route path="/documents" element={<UnifiedChatPage isDarkMode={isDarkMode} sidebarOpen={sidebarOpen} sidebarHidden={sidebarHidden} />} />
                             <Route path="/search" element={<UnifiedChatPage isDarkMode={isDarkMode} sidebarOpen={sidebarOpen} sidebarHidden={sidebarHidden} />} />
-                            <Route path="/creations" element={<UnifiedChatPage isDarkMode={isDarkMode} sidebarOpen={sidebarOpen} sidebarHidden={sidebarHidden} />} />
+                            <Route path="/creations" element={<CreationsPage />} />
                             <Route path="/profile" element={<ProfilePage />} />
                             <Route path="/history" element={<HistoryPage />} />
                           </Routes>

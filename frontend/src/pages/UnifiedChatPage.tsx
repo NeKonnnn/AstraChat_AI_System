@@ -89,6 +89,7 @@ import TopErrorBanner from '../components/TopErrorBanner';
 import { logChatAttach, logChatAttachError } from '../utils/chatAttachDebug';
 import InlineAttachmentsList from '../components/InlineAttachmentsList';
 import InlineImageLightbox from '../components/InlineImageLightbox';
+import ImageGenerationPlaceholder from '../components/ImageGenerationPlaceholder';
 import { incrementTabNotification } from '../utils/tabNotifications';
 import ChatGearAgentsPanel from '../components/ChatGearAgentsPanel';
 import ChatGearMcpPanel from '../components/ChatGearMcpPanel';
@@ -233,6 +234,17 @@ function getMultiLlmColumnDisplayBody(response: MultiLLMResponseSlot): string {
   return response.isStreaming ? response.content : response.content.trimEnd();
 }
 
+function getAssistantInlineAttachments(message: Message): NonNullable<Message['inlineAttachments']> | undefined {
+  const variants = message.inlineAttachmentVariants;
+  if (variants?.length) {
+    const idx = message.currentResponseIndex ?? variants.length - 1;
+    const clamped = Math.max(0, Math.min(idx, variants.length - 1));
+    const picked = variants[clamped];
+    return picked?.length ? picked : undefined;
+  }
+  return message.inlineAttachments?.length ? message.inlineAttachments : undefined;
+}
+
 function extractReasoningBlock(
   rawText: string,
   isStreaming?: boolean,
@@ -324,6 +336,12 @@ interface MessageCardData {
     multiLLMResponses?: MultiLLMResponseSlot[],
     alternativeResponses?: string[],
     currentResponseIndex?: number,
+    documentSearch?: Message['documentSearch'],
+    reasoningContent?: string,
+    mcpToolCalls?: Message['mcpToolCalls'],
+    inlineAttachments?: Message['inlineAttachments'],
+    isImageGenerating?: boolean,
+    inlineAttachmentVariants?: Message['inlineAttachmentVariants'],
   ) => void;
   formatTimestamp: (ts: string) => string;
   currentChatId: string | undefined;
@@ -589,6 +607,16 @@ const MessageCardComponent = ({
     () => extractReasoningBlock(visibleBody, message.isStreaming),
     [visibleBody, message.isStreaming],
   );
+  const assistantInlineAttachments = useMemo(
+    () => (isUser ? undefined : getAssistantInlineAttachments(message)),
+    [isUser, message],
+  );
+  const showImageGenerationPlaceholder = Boolean(
+    !isUser &&
+      message.isImageGenerating &&
+      message.isStreaming &&
+      !assistantInlineAttachments?.length,
+  );
   const isReasoningStreaming = useMemo(() => {
     // В текущем потоке reasoning часто приходит уже в закрытом <think>...</think>,
     // поэтому одного parsedMessage.isThinkingStreaming недостаточно.
@@ -763,6 +791,27 @@ const MessageCardComponent = ({
         )}
         {!isUser && message.mcpToolCalls && message.mcpToolCalls.length > 0 && !message.multiLLMResponses?.length && (
           <McpToolCallsPanel toolCalls={message.mcpToolCalls} />
+        )}
+
+        {showImageGenerationPlaceholder ? (
+          <Box sx={{ mb: parsedMessage.visibleContent.trim() ? 1 : 0 }}>
+            <ImageGenerationPlaceholder />
+          </Box>
+        ) : null}
+
+        {!isUser && assistantInlineAttachments && assistantInlineAttachments.length > 0 && (
+          <InlineAttachmentsList
+            files={assistantInlineAttachments.map((a) => ({
+              name: a.name,
+              contentType: a.contentType,
+              imageSrc: a.contentType === 'image' ? a.preview : undefined,
+              size: a.size,
+            }))}
+            isDarkMode={isDarkMode}
+            variant="message"
+            onImageExpand={(resolvedSrc, name) => setLightboxSrc({ src: resolvedSrc, name })}
+            sx={{ mb: 1 }}
+          />
         )}
 
         {/* Inline-вложения пользователя — тот же вид, что при прикреплении через «+» */}
@@ -1037,11 +1086,13 @@ const MessageCardComponent = ({
                 isDarkMode={isDarkMode}
               />
             ) : null}
-            <MessageRenderer
-              content={parsedMessage.visibleContent}
-              isStreaming={message.isStreaming && !isReasoningStreaming}
-              onSendMessage={dataRef.current.handleSendMessageFromRenderer}
-            />
+            {!showImageGenerationPlaceholder || parsedMessage.visibleContent.trim() ? (
+              <MessageRenderer
+                content={parsedMessage.visibleContent}
+                isStreaming={message.isStreaming && !isReasoningStreaming}
+                onSendMessage={dataRef.current.handleSendMessageFromRenderer}
+              />
+            ) : null}
           </>
         )}
       </Box>
@@ -1114,10 +1165,13 @@ const MessageCardComponent = ({
                       const ci = message.currentResponseIndex ?? 0;
                       if (ci > 0) {
                         const ni = ci - 1;
+                        const nextAttachments = message.inlineAttachmentVariants?.[ni];
                         dataRef.current.updateMessage(
                           dataRef.current.currentChatId!, message.id,
                           message.alternativeResponses![ni],
                           undefined, undefined, message.alternativeResponses, ni,
+                          undefined, undefined, undefined,
+                          nextAttachments?.length ? nextAttachments : undefined,
                         );
                       }
                     }}
@@ -1140,10 +1194,13 @@ const MessageCardComponent = ({
                       const ci = message.currentResponseIndex ?? 0;
                       if (ci < message.alternativeResponses!.length - 1) {
                         const ni = ci + 1;
+                        const nextAttachments = message.inlineAttachmentVariants?.[ni];
                         dataRef.current.updateMessage(
                           dataRef.current.currentChatId!, message.id,
                           message.alternativeResponses![ni],
                           undefined, undefined, message.alternativeResponses, ni,
+                          undefined, undefined, undefined,
+                          nextAttachments?.length ? nextAttachments : undefined,
                         );
                       }
                     }}
