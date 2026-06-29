@@ -42,6 +42,14 @@ import {
   MODEL_SETTINGS_INPUT_SX,
 } from '../../constants/modelSettingsStyles';
 
+const RAG_NUM_FIELDS_ROW_SX = {
+  display: 'flex',
+  flexDirection: { xs: 'column', sm: 'row' },
+  gap: 2,
+  alignItems: { sm: 'flex-start' },
+  flexWrap: 'wrap',
+} as const;
+
 type RAGStrategy = 'auto' | 'hybrid' | 'standard' | 'graph' | 'lexical';
 type ChunkingStrategy = 'hierarchical' | 'fixed' | 'markdown' | 'separators' | 'semantic';
 const RAG_STRATEGY_STORAGE_KEY = 'rag_strategy';
@@ -350,20 +358,6 @@ export default function RAGSettings({}: RAGSettingsProps) {
       default:
         return '';
     }
-  };
-
-  const ragPillsRowSx = {
-    display: 'flex',
-    flexWrap: 'wrap',
-    gap: 1.5,
-    alignItems: 'flex-start',
-  };
-
-  const ragPillFieldWrapperSx = {
-    width: { xs: '100%', sm: 148 },
-    maxWidth: { xs: '100%', sm: 148 },
-    flex: '0 0 auto',
-    minWidth: 0,
   };
 
   return (
@@ -729,112 +723,145 @@ export default function RAGSettings({}: RAGSettingsProps) {
             <Divider />
 
             <ListItem sx={{ px: 0, py: 1.5, display: 'block' }}>
-              <Box sx={ragPillsRowSx}>
-                <Box sx={ragPillFieldWrapperSx}>
-                <TextField
-                  fullWidth
-                  size="small"
-                  disabled={isLoading}
-                  type="number"
-                  label={
-                    <Box sx={MODEL_SETTINGS_LABEL_WRAPPER_SX} component="span">
-                      Количество чанков (K)
-                      <Tooltip
-                        title={
-                          'Сколько наиболее релевантных фрагментов запрашивать у SVC-RAG и подмешивать в промпт (чат, /api/chat с RAG, агент с документами; в retrieve_rag_context — если k в JSON не указан). ' +
-                          'Диапазон 1–64, по умолчанию 5. Больше K — длиннее контекст и медленнее ответ LLM. ' +
-                          'Нарезка файла при загрузке в базу не меняется: при индексации используется RecursiveCharacterTextSplitter в SVC-RAG (размер чанка и перекрытие из конфига сервиса, обычно ~1000 символов и ~200 перекрытия).'
-                        }
-                        arrow
-                      >
-                        <IconButton
-                          size="small"
-                          sx={MODEL_SETTINGS_HELP_ICON_BUTTON_SX}
-                          onClick={(e) => e.stopPropagation()}
+              <Box sx={RAG_NUM_FIELDS_ROW_SX}>
+                <Box sx={{ maxWidth: { xs: '100%', sm: 300 }, minWidth: { sm: 260 }, flex: { sm: '0 0 auto' } }}>
+                  <TextField
+                    fullWidth
+                    size="small"
+                    disabled={isLoading}
+                    type="number"
+                    label={
+                      <Box sx={MODEL_SETTINGS_LABEL_WRAPPER_SX} component="span">
+                        Количество чанков (K)
+                        <Tooltip
+                          title={
+                            'Сколько наиболее релевантных фрагментов запрашивать у SVC-RAG и подмешивать в промпт. Диапазон 1–64, по умолчанию 5. Больше K — длиннее контекст и медленнее ответ LLM.'
+                          }
+                          arrow
                         >
-                          <HelpOutlineIcon fontSize="small" color="action" />
-                        </IconButton>
-                      </Tooltip>
-                    </Box>
-                  }
-                  value={ragChatTopK}
-                  onChange={(e) => {
-                    const raw = e.target.value;
-                    if (raw === '') return;
-                    const v = parseInt(raw, 10);
-                    if (!Number.isNaN(v)) setRagChatTopK(Math.max(1, Math.min(64, v)));
-                  }}
-                  onBlur={(e) => {
-                    const raw = e.target.value.trim();
-                    if (raw === '') {
-                      setRagChatTopK(5);
-                      return;
+                          <IconButton
+                            size="small"
+                            sx={MODEL_SETTINGS_HELP_ICON_BUTTON_SX}
+                            onClick={(e) => e.stopPropagation()}
+                            aria-label="Справка: количество чанков"
+                          >
+                            <HelpOutlineIcon fontSize="small" color="action" />
+                          </IconButton>
+                        </Tooltip>
+                      </Box>
                     }
-                    const n = parseInt(raw, 10);
-                    if (Number.isNaN(n)) setRagChatTopK(5);
-                    else setRagChatTopK(Math.max(1, Math.min(64, n)));
-                  }}
-                  inputProps={{ min: 1, max: 64, step: 1 }}
-                  sx={MODEL_SETTINGS_INPUT_SX}
-                />
+                    value={ragChatTopK}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      if (raw === '') return;
+                      const v = parseInt(raw, 10);
+                      if (!Number.isNaN(v)) setRagChatTopK(Math.max(1, Math.min(64, v)));
+                    }}
+                    onBlur={(e) => {
+                      const raw = e.target.value.trim();
+                      if (raw === '') {
+                        setRagChatTopK(5);
+                        return;
+                      }
+                      const n = parseInt(raw, 10);
+                      if (Number.isNaN(n)) setRagChatTopK(5);
+                      else setRagChatTopK(Math.max(1, Math.min(64, n)));
+                    }}
+                    inputProps={{ min: 1, max: 64, step: 1 }}
+                    InputLabelProps={{ shrink: true }}
+                  />
                 </Box>
-                <Box sx={ragPillFieldWrapperSx}>
-                <TextField
-                  fullWidth
-                  size="small"
-                  disabled={isLoading}
-                  type="number"
-                  label="Размер перекрытия"
-                  value={ragChunkOverlap}
-                  onChange={(e) => {
-                    const raw = e.target.value;
-                    if (raw === '') return;
-                    const v = parseInt(raw, 10);
-                    if (!Number.isNaN(v)) setRagChunkOverlap(Math.max(0, Math.min(2000, v)));
-                  }}
-                  onBlur={(e) => {
-                    const raw = e.target.value.trim();
-                    if (raw === '') {
-                      setRagChunkOverlap(200);
-                      return;
+                <Box sx={{ maxWidth: { xs: '100%', sm: 236 }, minWidth: { sm: 200 }, flex: { sm: '0 0 auto' } }}>
+                  <TextField
+                    fullWidth
+                    size="small"
+                    disabled={isLoading}
+                    type="number"
+                    label={
+                      <Box sx={MODEL_SETTINGS_LABEL_WRAPPER_SX} component="span">
+                        Размер перекрытия
+                        <Tooltip
+                          title="Количество символов перекрытия между соседними чанками при нарезке документа. Диапазон 0–2000, по умолчанию 200."
+                          arrow
+                        >
+                          <IconButton
+                            size="small"
+                            sx={MODEL_SETTINGS_HELP_ICON_BUTTON_SX}
+                            onClick={(e) => e.stopPropagation()}
+                            aria-label="Справка: размер перекрытия"
+                          >
+                            <HelpOutlineIcon fontSize="small" color="action" />
+                          </IconButton>
+                        </Tooltip>
+                      </Box>
                     }
-                    const n = parseInt(raw, 10);
-                    if (Number.isNaN(n)) setRagChunkOverlap(200);
-                    else setRagChunkOverlap(Math.max(0, Math.min(2000, n)));
-                  }}
-                  inputProps={{ min: 0, max: 2000, step: 10 }}
-                  sx={MODEL_SETTINGS_INPUT_SX}
-                />
+                    value={ragChunkOverlap}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      if (raw === '') return;
+                      const v = parseInt(raw, 10);
+                      if (!Number.isNaN(v)) setRagChunkOverlap(Math.max(0, Math.min(2000, v)));
+                    }}
+                    onBlur={(e) => {
+                      const raw = e.target.value.trim();
+                      if (raw === '') {
+                        setRagChunkOverlap(200);
+                        return;
+                      }
+                      const n = parseInt(raw, 10);
+                      if (Number.isNaN(n)) setRagChunkOverlap(200);
+                      else setRagChunkOverlap(Math.max(0, Math.min(2000, n)));
+                    }}
+                    inputProps={{ min: 0, max: 2000, step: 10 }}
+                    InputLabelProps={{ shrink: true }}
+                  />
                 </Box>
-                <Box sx={ragPillFieldWrapperSx}>
-                <TextField
-                  fullWidth
-                  size="small"
-                  disabled={isLoading}
-                  type="number"
-                  label="Порог схожести"
-                  value={ragSimilarityThreshold}
-                  onChange={(e) => {
-                    const raw = e.target.value;
-                    if (raw === '') return;
-                    const v = Number(raw);
-                    if (!Number.isNaN(v)) {
-                      setRagSimilarityThreshold(Math.max(0, Math.min(1, Number(v.toFixed(4)))));
+                <Box sx={{ maxWidth: { xs: '100%', sm: 236 }, minWidth: { sm: 200 }, flex: { sm: '0 0 auto' } }}>
+                  <TextField
+                    fullWidth
+                    size="small"
+                    disabled={isLoading}
+                    type="number"
+                    label={
+                      <Box sx={MODEL_SETTINGS_LABEL_WRAPPER_SX} component="span">
+                        Порог схожести
+                        <Tooltip
+                          title="Минимальный порог схожести для включения чанка в результат поиска. 0 — без фильтрации, выше — строже отбор. Диапазон 0–1."
+                          arrow
+                        >
+                          <IconButton
+                            size="small"
+                            sx={MODEL_SETTINGS_HELP_ICON_BUTTON_SX}
+                            onClick={(e) => e.stopPropagation()}
+                            aria-label="Справка: порог схожести"
+                          >
+                            <HelpOutlineIcon fontSize="small" color="action" />
+                          </IconButton>
+                        </Tooltip>
+                      </Box>
                     }
-                  }}
-                  onBlur={(e) => {
-                    const raw = e.target.value.trim();
-                    if (raw === '') {
-                      setRagSimilarityThreshold(0);
-                      return;
-                    }
-                    const n = Number(raw);
-                    if (Number.isNaN(n)) setRagSimilarityThreshold(0);
-                    else setRagSimilarityThreshold(Math.max(0, Math.min(1, Number(n.toFixed(4)))));
-                  }}
-                  inputProps={{ min: 0, max: 1, step: 0.01 }}
-                  sx={MODEL_SETTINGS_INPUT_SX}
-                />
+                    value={ragSimilarityThreshold}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      if (raw === '') return;
+                      const v = Number(raw);
+                      if (!Number.isNaN(v)) {
+                        setRagSimilarityThreshold(Math.max(0, Math.min(1, Number(v.toFixed(4)))));
+                      }
+                    }}
+                    onBlur={(e) => {
+                      const raw = e.target.value.trim();
+                      if (raw === '') {
+                        setRagSimilarityThreshold(0);
+                        return;
+                      }
+                      const n = Number(raw);
+                      if (Number.isNaN(n)) setRagSimilarityThreshold(0);
+                      else setRagSimilarityThreshold(Math.max(0, Math.min(1, Number(n.toFixed(4)))));
+                    }}
+                    inputProps={{ min: 0, max: 1, step: 0.01 }}
+                    InputLabelProps={{ shrink: true }}
+                  />
                 </Box>
               </Box>
             </ListItem>
@@ -970,13 +997,30 @@ export default function RAGSettings({}: RAGSettingsProps) {
             <Divider />
 
             <ListItem sx={{ px: 0, py: 1.5, display: 'block' }}>
-              <Box sx={ragPillFieldWrapperSx}>
+              <Box sx={{ maxWidth: { xs: '100%', sm: 320 }, minWidth: { sm: 280 }, flex: { sm: '0 0 auto' } }}>
                 <TextField
                   fullWidth
                   size="small"
                   disabled={isLoading || !ragRerankingEnabled}
                   type="number"
-                  label="Top-N после реранкинга"
+                  label={
+                    <Box sx={MODEL_SETTINGS_LABEL_WRAPPER_SX} component="span">
+                      Количество чанков после реранкинга (Top-N)
+                      <Tooltip
+                        title="Сколько лучших чанков оставить после переранжирования cross-encoder. Диапазон 1–64, по умолчанию 5. Работает только при включённом переранжировании."
+                        arrow
+                      >
+                        <IconButton
+                          size="small"
+                          sx={MODEL_SETTINGS_HELP_ICON_BUTTON_SX}
+                          onClick={(e) => e.stopPropagation()}
+                          aria-label="Справка: Top-N после реранкинга"
+                        >
+                          <HelpOutlineIcon fontSize="small" color="action" />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                  }
                   value={ragRerankTopN}
                   onChange={(e) => {
                     const raw = e.target.value;
@@ -995,7 +1039,7 @@ export default function RAGSettings({}: RAGSettingsProps) {
                     else setRagRerankTopN(Math.max(1, Math.min(64, n)));
                   }}
                   inputProps={{ min: 1, max: 64, step: 1 }}
-                  sx={MODEL_SETTINGS_INPUT_SX}
+                  InputLabelProps={{ shrink: true }}
                 />
               </Box>
             </ListItem>
