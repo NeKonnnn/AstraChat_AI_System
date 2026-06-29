@@ -2,6 +2,9 @@ import React, { createContext, useContext, useReducer, useEffect, ReactNode } fr
 import { getApiUrl } from '../config/api';
 import { initSettings } from '../settings';
 import { useAuth } from './AuthContext';
+import { normalizeMcpToolCallList } from '../mcp/utils/normalizeToolCall';
+import { buildBranchChatTitle, cloneMessagesForBranch } from '../utils/branchChat';
+import { mapServerConversationToChat } from '../utils/mapServerConversation';
 
 /** Один столбец ответа в режиме multi-LLM (на карточке — свои кнопки и варианты перегенерации). */
 export interface MultiLLMResponseSlot {
@@ -20,8 +23,6 @@ export interface Message {
   content: string;
   timestamp: string;
   isStreaming?: boolean;
-  /** Плейсхолдер ComfyUI пока картинка генерируется */
-  isImageGenerating?: boolean;
   // Для режима multi-llm: несколько ответов от разных моделей
   multiLLMResponses?: MultiLLMResponseSlot[];
   // Для хранения нескольких вариантов ответов (при перегенерации)
@@ -51,22 +52,29 @@ export interface Message {
     preview?: string;
     size?: number;
   }>;
-  /** Варианты inline-вложений при перегенерации изображений (1, 2, 3…) */
+  /** Варианты inline-вложений при перегенерации изображений */
   inlineAttachmentVariants?: Array<NonNullable<Message['inlineAttachments']>>;
+  /** Идёт генерация изображения (ComfyUI / image_generation) */
+  isImageGenerating?: boolean;
   /** MCP tool calls (B-22 / F-6) */
   mcpToolCalls?: Array<{
     type: 'mcp_tool_start' | 'mcp_tool_end';
     server_id: string;
     tool: string;
     qualified_name: string;
+    call_id?: string;
+    arguments?: Record<string, unknown>;
     success?: boolean;
     duration_ms?: number;
     error?: string | null;
     model?: string;
+    timestamp?: number;
     result_preview?: string;
+    result?: string;
     has_image?: boolean;
     has_audio?: boolean;
     has_resource?: boolean;
+    download_urls?: Array<{ url: string; label?: string; mime?: string }>;
   }>;
 }
 
@@ -79,10 +87,13 @@ export interface Chat {
   isArchived?: boolean;
   projectId?: string;
   isPinnedInProject?: boolean;
+  /** Ветка: есть история в UI, но в сайдбаре не показываем, пока пользователь не отправит новое сообщение. */
+  hiddenFromSidebarUntilUserMessage?: boolean;
 }
 
 /** Чат показывается в блоке сайдбара «Все чаты», если уже есть переписка (сообщения пользователя и/или ассистента). */
 export function chatIsListedInAllChatsSection(chat: Chat): boolean {
+  if (chat.hiddenFromSidebarUntilUserMessage) return false;
   return chat.messages.length > 0;
 }
 
@@ -191,7 +202,7 @@ type AppAction =
   | { type: 'DELETE_CHAT'; payload: string }
   | { type: 'DELETE_ALL_CHATS' }
   | { type: 'ADD_MESSAGE'; payload: { chatId: string; message: Message } }
-  | { type: 'UPDATE_MESSAGE'; payload: { chatId: string; messageId: string; content?: string; isStreaming?: boolean; isImageGenerating?: boolean; multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>; alternativeResponses?: string[]; currentResponseIndex?: number; documentSearch?: Message['documentSearch']; reasoningContent?: string; mcpToolCalls?: Message['mcpToolCalls']; inlineAttachments?: Message['inlineAttachments']; inlineAttachmentVariants?: Message['inlineAttachmentVariants'] } }
+  | { type: 'UPDATE_MESSAGE'; payload: { chatId: string; messageId: string; content?: string; isStreaming?: boolean; multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>; alternativeResponses?: string[]; currentResponseIndex?: number; documentSearch?: Message['documentSearch']; reasoningContent?: string; mcpToolCalls?: Message['mcpToolCalls']; inlineAttachments?: Message['inlineAttachments']; isImageGenerating?: boolean; inlineAttachmentVariants?: Message['inlineAttachmentVariants'] } }
   | { type: 'APPEND_CHUNK'; payload: { chatId: string; messageId: string; chunk: string; isStreaming?: boolean } }
   | { type: 'SET_LOADING'; payload: boolean }
   | { type: 'SET_CHAT_LOADING'; payload: { chatId: string; loading: boolean } }
@@ -380,6 +391,9 @@ function appReducer(state: AppState, action: AppAction): AppState {
                 ...chat,
                 messages: [...chat.messages, message],
                 updatedAt: new Date().toISOString(),
+                ...(chat.hiddenFromSidebarUntilUserMessage && message.role === 'user'
+                  ? { hiddenFromSidebarUntilUserMessage: undefined }
+                  : {}),
               }
             : chat
         ),
@@ -392,7 +406,7 @@ function appReducer(state: AppState, action: AppAction): AppState {
     }
       
     case 'UPDATE_MESSAGE': {
-      const { chatId, messageId, content, isStreaming, isImageGenerating, multiLLMResponses, alternativeResponses, currentResponseIndex, documentSearch, reasoningContent, mcpToolCalls, inlineAttachments, inlineAttachmentVariants } = action.payload;
+      const { chatId, messageId, content, isStreaming, multiLLMResponses, alternativeResponses, currentResponseIndex, documentSearch, reasoningContent, mcpToolCalls, inlineAttachments, isImageGenerating, inlineAttachmentVariants } = action.payload;
       
       const currentChat = state.chats.find(chat => chat.id === chatId);
       const updatedMessage = currentChat?.messages.find(msg => msg.id === messageId);
@@ -410,7 +424,6 @@ function appReducer(state: AppState, action: AppAction): AppState {
                         ...msg, 
                         ...(content !== undefined ? { content } : {}),
                         ...(isStreaming !== undefined ? { isStreaming } : {}),
-                        ...(isImageGenerating !== undefined ? { isImageGenerating } : {}),
                         ...(multiLLMResponses !== undefined ? { multiLLMResponses } : {}),
                         ...(alternativeResponses !== undefined ? { alternativeResponses } : {}),
                         ...(currentResponseIndex !== undefined ? { currentResponseIndex } : {}),
@@ -418,6 +431,7 @@ function appReducer(state: AppState, action: AppAction): AppState {
                         ...(reasoningContent !== undefined ? { reasoningContent } : {}),
                         ...(mcpToolCalls !== undefined ? { mcpToolCalls } : {}),
                         ...(inlineAttachments !== undefined ? { inlineAttachments } : {}),
+                        ...(isImageGenerating !== undefined ? { isImageGenerating } : {}),
                         ...(inlineAttachmentVariants !== undefined ? { inlineAttachmentVariants } : {}),
                       }
                     : msg
@@ -783,99 +797,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(appReducer, initialState);
   const { token } = useAuth();
 
-  const mapServerConversationToChat = (conversation: any): Chat => {
-    const messages: Message[] = Array.isArray(conversation?.messages)
-      ? conversation.messages.map((msg: any) => {
-          const rawContent = String(msg?.content || '');
-          const metadata = (msg?.metadata && typeof msg.metadata === 'object') ? msg.metadata : {};
-          const reasoningContent = String(
-            metadata?.reasoning_content || metadata?.reasoning || ''
-          ).trim();
-          const hasThinkTag = /<think>/i.test(rawContent);
-          // Если reasoning сохранён отдельно в metadata, но в content нет <think>,
-          // восстанавливаем совместимый формат для UI.
-          const mergedContent =
-            reasoningContent && !hasThinkTag
-              ? `<think>${reasoningContent}</think>\n\n${rawContent}`
-              : rawContent;
-
-          const mapRawInlineList = (raw: unknown): Message['inlineAttachments'] | undefined => {
-            if (!Array.isArray(raw)) return undefined;
-            const items = raw
-              .filter((a: unknown) => a && typeof a === 'object')
-              .map((a: Record<string, unknown>) => {
-                const contentType = a.contentType === 'image' ? ('image' as const) : ('text' as const);
-                const minioObject = a.minio_object ? String(a.minio_object) : undefined;
-                const minioBucket = a.minio_bucket ? String(a.minio_bucket) : undefined;
-                let preview: string | undefined;
-                const dataUri = a.data_uri ? String(a.data_uri) : undefined;
-                if (contentType === 'image' && dataUri) {
-                  preview = dataUri;
-                } else if (contentType === 'image' && minioObject && minioBucket) {
-                  preview = getApiUrl(
-                    `/api/documents/inline-file?bucket=${encodeURIComponent(minioBucket)}&object=${encodeURIComponent(minioObject)}`,
-                  );
-                }
-                return {
-                  name: String(a.name || 'file'),
-                  contentType,
-                  preview,
-                  ...(typeof a.size === 'number' && a.size > 0 ? { size: a.size } : {}),
-                };
-              });
-            return items.length > 0 ? items : undefined;
-          };
-
-          const rawVariants = metadata?.image_variants;
-          let inlineAttachmentVariants: Message['inlineAttachmentVariants'];
-          if (Array.isArray(rawVariants) && rawVariants.length > 0) {
-            inlineAttachmentVariants = rawVariants
-              .map((block: { inline_attachments?: unknown }) => mapRawInlineList(block?.inline_attachments))
-              .filter((v): v is NonNullable<Message['inlineAttachments']> => Boolean(v?.length));
-          }
-          const variantIndex =
-            typeof metadata?.current_image_variant_index === 'number'
-              ? metadata.current_image_variant_index
-              : 0;
-          const inlineFromMeta = mapRawInlineList(metadata?.inline_attachments);
-          const inlineAttachments =
-            inlineAttachmentVariants?.[variantIndex] ?? inlineFromMeta;
-          const variantCount = inlineAttachmentVariants?.length ?? 0;
-          const alternativeResponses =
-            variantCount > 1
-              ? Array.from({ length: variantCount }, () => mergedContent)
-              : undefined;
-          const currentResponseIndex = variantCount > 1 ? variantIndex : undefined;
-
-          return {
-            id: String(msg?.message_id || `msg_${Math.random().toString(36).slice(2, 14)}`),
-            role: msg?.role === 'assistant' ? 'assistant' : 'user',
-            content: mergedContent,
-            timestamp: String(msg?.timestamp || new Date().toISOString()),
-            isStreaming: false,
-            ...(reasoningContent ? { reasoningContent } : {}),
-            ...(inlineAttachments?.length ? { inlineAttachments } : {}),
-            ...(inlineAttachmentVariants?.length ? { inlineAttachmentVariants } : {}),
-            ...(alternativeResponses ? { alternativeResponses, currentResponseIndex } : {}),
-          } as Message;
-        })
-      : [];
-
-    const firstUserContent =
-      messages.find((m) => m.role === 'user')?.content?.slice(0, 60) || 'Новый чат';
-
-    const storedTitle = conversation?.title ? String(conversation.title).trim() : '';
-
-    return {
-      id: String(conversation?.conversation_id || Date.now().toString()),
-      title: storedTitle || firstUserContent,
-      messages,
-      createdAt: String(conversation?.created_at || new Date().toISOString()),
-      updatedAt: String(conversation?.updated_at || new Date().toISOString()),
-      projectId: conversation?.project_id ? String(conversation.project_id) : undefined,
-    };
-  };
-
   // Инициализация/перезагрузка состояния при смене токена (LDAP login/logout)
   useEffect(() => {
     const loadInitialState = async () => {
@@ -1042,13 +963,7 @@ export function useAppActions() {
           fetch(getApiUrl(`/api/conversations/${chatId}`), {
             method: 'DELETE',
             headers: { Authorization: `Bearer ${effectiveToken}` },
-          })
-            .then((r) => {
-              if (r.ok) {
-                window.dispatchEvent(new CustomEvent('astrachatCreationsUpdated'));
-              }
-            })
-            .catch(() => {});
+          }).catch(() => {});
         }).catch(() => {});
       }
     },
@@ -1063,13 +978,7 @@ export function useAppActions() {
           fetch(getApiUrl('/api/conversations'), {
             method: 'DELETE',
             headers: { Authorization: `Bearer ${effectiveToken}` },
-          })
-            .then((r) => {
-              if (r.ok) {
-                window.dispatchEvent(new CustomEvent('astrachatCreationsUpdated'));
-              }
-            })
-            .catch(() => {});
+          }).catch(() => {});
         }).catch(() => {});
       }
     },
@@ -1300,6 +1209,78 @@ export function useAppActions() {
     
     togglePinInProject: (chatId: string) => {
       dispatch({ type: 'TOGGLE_PIN_IN_PROJECT', payload: { chatId } });
+    },
+
+    branchChatAtMessage: async (
+      sourceChatId: string,
+      messageId: string,
+      options?: { multiLlmSlotIndex?: number },
+    ): Promise<string | null> => {
+      const sourceChat = state.chats.find((chat) => chat.id === sourceChatId);
+      if (!sourceChat) return null;
+
+      const messageIndex = sourceChat.messages.findIndex((message) => message.id === messageId);
+      if (messageIndex < 0) return null;
+
+      const branchMessage = sourceChat.messages[messageIndex];
+      if (branchMessage.role !== 'assistant' || branchMessage.isStreaming) return null;
+
+      const effectiveToken = token || localStorage.getItem('auth_token');
+      if (effectiveToken) {
+        try {
+          await initSettings();
+          const body: Record<string, unknown> = { message_id: messageId };
+          if (options?.multiLlmSlotIndex !== undefined) {
+            body.multi_llm_slot_index = options.multiLlmSlotIndex;
+          }
+          const response = await fetch(getApiUrl(`/api/conversations/${sourceChatId}/branch`), {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${effectiveToken}`,
+            },
+            body: JSON.stringify(body),
+          });
+          if (response.ok) {
+            const payload = await response.json();
+            const newChat = mapServerConversationToChat(payload.conversation);
+            dispatch({
+              type: 'CREATE_CHAT',
+              payload: { ...newChat, hiddenFromSidebarUntilUserMessage: true },
+            });
+            if (sourceChat.projectId) {
+              dispatch({
+                type: 'MOVE_CHAT_TO_PROJECT',
+                payload: { chatId: newChat.id, projectId: sourceChat.projectId },
+              });
+            }
+            dispatch({ type: 'SET_CURRENT_CHAT', payload: newChat.id });
+            return newChat.id;
+          }
+        } catch (error) {
+          console.error('Ошибка создания ветки на сервере:', error);
+        }
+      }
+
+      const branchedMessages = cloneMessagesForBranch(
+        sourceChat.messages,
+        messageIndex,
+        options?.multiLlmSlotIndex,
+      );
+      const newChatId = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+      const now = new Date().toISOString();
+      const newChat: Chat = {
+        id: newChatId,
+        title: buildBranchChatTitle(sourceChat.title),
+        messages: branchedMessages,
+        createdAt: now,
+        updatedAt: now,
+        projectId: sourceChat.projectId,
+        hiddenFromSidebarUntilUserMessage: true,
+      };
+      dispatch({ type: 'CREATE_CHAT', payload: newChat });
+      dispatch({ type: 'SET_CURRENT_CHAT', payload: newChatId });
+      return newChatId;
     },
   };
 }

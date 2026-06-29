@@ -25,7 +25,11 @@ export default function McpToolsTable({ tools, filterServerId, isDarkMode }: Mcp
 
   const filtered = useMemo(() => {
     if (!filterServerId) return tools;
-    return tools.filter((t) => t.server_id === filterServerId);
+    const matched = tools.filter((t) => t.server_id === filterServerId);
+    if (matched.length > 0) return matched;
+    // /api/mcp/servers/{id}/tools может не вернуть server_id — тогда список уже для этого сервера
+    if (tools.length > 0 && tools.every((t) => !t.server_id)) return tools;
+    return matched;
   }, [tools, filterServerId]);
 
   if (filtered.length === 0) {
@@ -66,6 +70,14 @@ interface McpToolsSectionProps extends McpToolsTableProps {
 
 export function McpToolsSection({ title = 'Инструменты MCP', ...props }: McpToolsSectionProps) {
   const [open, setOpen] = useState(false);
+  const visibleCount = useMemo(() => {
+    const { tools, filterServerId } = props;
+    if (!filterServerId) return tools.length;
+    const matched = tools.filter((t) => t.server_id === filterServerId);
+    if (matched.length > 0) return matched.length;
+    if (tools.length > 0 && tools.every((t) => !t.server_id)) return tools.length;
+    return matched.length;
+  }, [props.tools, props.filterServerId]);
   return (
     <Box>
       <Box
@@ -81,7 +93,7 @@ export function McpToolsSection({ title = 'Инструменты MCP', ...props
         sx={{ display: 'flex', alignItems: 'center', gap: 0.5, cursor: 'pointer', mb: 1 }}
       >
         <Typography variant="subtitle2">{title}</Typography>
-        <Chip label={props.tools.length} size="small" />
+        <Chip label={visibleCount} size="small" />
         <IconButton size="small" sx={{ transform: open ? 'rotate(180deg)' : 'none' }}>
           <ExpandMoreIcon fontSize="small" />
         </IconButton>

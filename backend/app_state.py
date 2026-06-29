@@ -212,6 +212,7 @@ rag_query_fix_typos: bool = _env_rag_pipeline_bool("RAG_QUERY_FIX_TYPOS", False)
 rag_multi_query_enabled: bool = _env_rag_pipeline_bool("RAG_MULTI_QUERY_ENABLED", False)
 rag_hyde_enabled: bool = _env_rag_pipeline_bool("RAG_HYDE_ENABLED", False)
 rag_chunking_strategy: str = "hierarchical"
+rag_chunk_size: int = max(200, min(int(os.getenv("RAG_CHUNK_SIZE", "1000") or 1000), 8000))
 rag_chunk_overlap: int = max(0, int(os.getenv("RAG_CHUNK_OVERLAP", "200") or 200))
 try:
     _rst = float(os.getenv("RAG_MIN_SIMILARITY", "0"))
@@ -236,6 +237,22 @@ except ValueError:
 rag_chat_top_k: int = max(1, min(_rk, 64))
 _model_comparison_models: list[str] = []
 _model_comparison_models_lock = threading.Lock()
+
+
+def get_rag_chunk_index_params() -> dict[str, int]:
+    """Параметры нарезки чанков для передачи в SVC-RAG при индексации."""
+    try:
+        size = int(rag_chunk_size)
+    except (TypeError, ValueError):
+        size = 1000
+    try:
+        overlap = int(rag_chunk_overlap)
+    except (TypeError, ValueError):
+        overlap = 200
+    return {
+        "chunk_size": max(200, min(size, 8000)),
+        "chunk_overlap": max(0, min(overlap, 2000)),
+    }
 
 
 def get_rag_chat_top_k() -> int:
@@ -322,7 +339,7 @@ def load_app_settings() -> dict:
     global memory_max_messages, memory_include_system_prompts, memory_clear_on_restart
     global current_rag_strategy, agentic_rag_enabled, agentic_max_iterations
     global rag_query_fix_typos, rag_multi_query_enabled, rag_hyde_enabled, rag_chat_top_k
-    global rag_chunking_strategy, rag_chunk_overlap, rag_similarity_threshold
+    global rag_chunking_strategy, rag_chunk_size, rag_chunk_overlap, rag_similarity_threshold
     global rag_reranking_enabled, rag_rerank_top_n, rag_system_prompt
     global rag_embedding_model_path, rag_reranker_model_path
     try:
@@ -367,6 +384,11 @@ def load_app_settings() -> dict:
                     rag_chunk_overlap = max(0, min(int(data["rag_chunk_overlap"]), 2000))
                 except (TypeError, ValueError):
                     pass
+            if "rag_chunk_size" in data:
+                try:
+                    rag_chunk_size = max(200, min(int(data["rag_chunk_size"]), 8000))
+                except (TypeError, ValueError):
+                    pass
             if "rag_similarity_threshold" in data:
                 try:
                     rag_similarity_threshold = max(0.0, min(float(data["rag_similarity_threshold"]), 1.0))
@@ -401,6 +423,7 @@ def load_app_settings() -> dict:
         "agentic_rag_enabled": agentic_rag_enabled,
         "agentic_max_iterations": agentic_max_iterations,
         "rag_chunking_strategy": rag_chunking_strategy,
+        "rag_chunk_size": rag_chunk_size,
         "rag_chunk_overlap": rag_chunk_overlap,
         "rag_similarity_threshold": rag_similarity_threshold,
         "rag_reranking_enabled": rag_reranking_enabled,

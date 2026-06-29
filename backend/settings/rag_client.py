@@ -1,6 +1,7 @@
 """
 Тонкий async-клиент для SVC-RAG.
 """
+
 import os
 import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -8,8 +9,9 @@ from urllib.parse import urlparse
 
 import httpx
 
-from .config import get_settings
+from backend.settings.config import get_settings
 from backend.settings.logging import get_logger
+from backend.settings.logging.errors import logged_suppress
 
 logger = get_logger(__name__)
 
@@ -27,6 +29,19 @@ def _rag_request_url(base_url: str, path: str) -> str:
     b = (base_url or "").strip().rstrip("/")
     p = path if path.startswith("/") else f"/{path}"
     return f"{b}/v1{p}"
+
+
+def _with_chunk_index_form_data(
+    data: Dict[str, Any],
+    *,
+    chunk_size: Optional[int] = None,
+    chunk_overlap: Optional[int] = None,
+) -> Dict[str, Any]:
+    if chunk_size is not None:
+        data["chunk_size"] = str(int(chunk_size))
+    if chunk_overlap is not None:
+        data["chunk_overlap"] = str(int(chunk_overlap))
+    return data
 
 
 def _svc_rag_document_index_timeout() -> httpx.Timeout:
@@ -69,14 +84,15 @@ def _log_backend_rag_strategy_banner(
     bar = "*" * 72
     logger.info(bar)
     logger.info("[astrachat-backend RAG] Использована стратегия в запросе к SVC-RAG: %s", strategy or "(default)")
-    logger.info("[astrachat-backend RAG] endpoint=%s k=%s document_id=%s use_reranking=%s", path, k, document_id, use_reranking)
+    logger.info(
+        "[astrachat-backend RAG] endpoint=%s k=%s document_id=%s use_reranking=%s", path, k, document_id, use_reranking
+    )
     logger.info("[astrachat-backend RAG] хитов после ответа=%s %s", hits, "(из кэша)" if from_cache else "")
     logger.info("[astrachat-backend RAG] запрос: %s", query_preview)
     if prep_suffix:
         logger.info("[astrachat-backend RAG] %s", prep_suffix.strip())
     logger.info(
-        "[astrachat-backend RAG] Реальный пайплайн (косинус / BM25 / реранк / graph) смотрите в логах контейнера "
-        "svc-rag — блок из %s звёздочек «Использована стратегия поиска».",
+        "[astrachat-backend RAG] Реальный пайплайн (косинус / BM25 / реранк / graph) смотрите в логах контейнера svc-rag — блок из %s звёздочек «Использована стратегия поиска».",
         len(bar),
     )
     logger.info(bar)
@@ -96,7 +112,6 @@ class RagClient:
             self.base_url = _normalize_rag_service_base(
                 settings.microservice_http_base("rag_service_docker", "rag_service_port")
             )
-
         self.timeout = timeout
 
     def _cef_extra(self, method: str, path: str, request_uuid: str) -> Dict[str, Any]:
@@ -132,22 +147,14 @@ class RagClient:
         url = _rag_request_url(self.base_url, path)
         client_timeout = self.timeout if http_timeout is None else http_timeout
         _cef_rid = uuid.uuid4().hex
-        # Пропускаем health-check — он вызывается часто и не несёт аудиторской ценности.
         _cef_skip = path.rstrip("/") in ("/health",)
         try:
             async with httpx.AsyncClient(timeout=client_timeout) as client:
-                resp = await client.request(
-                    method=method,
-                    url=url,
-                    json=json,
-                    files=files,
-                    data=data,
-                    params=params,
-                )
+                resp = await client.request(method=method, url=url, json=json, files=files, data=data, params=params)
                 resp.raise_for_status()
                 result = resp.json()
             if not _cef_skip:
-                try:
+                with logged_suppress(logger):
                     from backend.settings.cef_logger.cef_audit_context import cef_audit_peek
                     from backend.settings.cef_logger.cef_logger import log_cef_event
 
@@ -159,17 +166,16 @@ class RagClient:
                         status_code=200,
                         extra=self._cef_extra(method, path, _cef_rid),
                     )
-                except Exception:
-                    pass
             return result
         except httpx.HTTPStatusError as e:
             detail = None
             try:
                 detail = e.response.json()
-            except Exception:
+            except Exception as e:
+                logger.exception("Ошибка операции")
                 detail = e.response.text
             if not _cef_skip:
-                try:
+                with logged_suppress(logger):
                     from backend.settings.cef_logger.cef_audit_context import cef_audit_peek
                     from backend.settings.cef_logger.cef_logger import log_cef_event
 
@@ -178,18 +184,14 @@ class RagClient:
                     _ex["codeStatus"] = str(e.response.status_code)
                     _ex["textStatus"] = str(detail or "")[:512]
                     log_cef_event(
-                        "INT006",
-                        request=_req,
-                        current_user=_user,
-                        status_code=e.response.status_code,
-                        extra=_ex,
+                        "INT006", request=_req, current_user=_user, status_code=e.response.status_code, extra=_ex
                     )
-                except Exception:
-                    pass
-            raise RuntimeError(f"SVC-RAG {method} {url} failed: {e.response.status_code} {detail}") from e
+            msg = f"SVC-RAG {method} {url} failed: {e.response.status_code} {detail}"
+            raise RuntimeError(msg) from e
         except Exception as e:
+            logger.exception("Ошибка операции")
             if not _cef_skip:
-                try:
+                with logged_suppress(logger):
                     from backend.settings.cef_logger.cef_audit_context import cef_audit_peek
                     from backend.settings.cef_logger.cef_logger import log_cef_event
 
@@ -197,36 +199,19 @@ class RagClient:
                     _ex = self._cef_extra(method, path, _cef_rid)
                     _ex["codeStatus"] = "EXCEPTION"
                     _ex["textStatus"] = str(e)[:512]
-                    log_cef_event(
-                        "INT006",
-                        request=_req,
-                        current_user=_user,
-                        status_code=None,
-                        extra=_ex,
-                    )
-                except Exception:
-                    pass
-            raise RuntimeError(f"SVC-RAG {method} {url} error: {e}") from e
+                    log_cef_event("INT006", request=_req, current_user=_user, status_code=None, extra=_ex)
+            msg = f"SVC-RAG {method} {url} error: {e}"
+            raise RuntimeError(msg) from e
 
     @staticmethod
     def _parse_hits(resp: Any) -> List[Tuple[str, float, Optional[int], Optional[int]]]:
         hits = resp.get("hits", []) if isinstance(resp, dict) else []
         return [
-            (
-                h.get("content", ""),
-                float(h.get("score", 0.0)),
-                h.get("document_id"),
-                h.get("chunk_index"),
-            )
-            for h in hits
+            (h.get("content", ""), float(h.get("score", 0.0)), h.get("document_id"), h.get("chunk_index")) for h in hits
         ]
 
     async def _merge_variant_searches(
-        self,
-        path: str,
-        base_body: Dict[str, Any],
-        variants: List[str],
-        k: int,
+        self, path: str, base_body: Dict[str, Any], variants: List[str], k: int
     ) -> List[Tuple[str, float, Optional[int], Optional[int]]]:
         merged: Dict[Tuple[Optional[int], Optional[int]], Tuple[str, float, Optional[int], Optional[int]]] = {}
         order_q: List[str] = []
@@ -237,7 +222,6 @@ class RagClient:
         vq = base_body.get("vector_query")
         for idx, qtext in enumerate(order_q):
             body = {**base_body, "query": qtext}
-            # HyDE/vector_query только для основной формулировки; варианты — отдельные эмбеддинги без HyDE.
             if idx > 0 or not vq:
                 body.pop("vector_query", None)
             resp = await self._request("POST", path, json=body)
@@ -261,16 +245,10 @@ class RagClient:
         strategy: Optional[str] = None,
         project_id: Optional[str] = None,
     ) -> List[Tuple[str, float, Optional[int], Optional[int]]]:
+        from backend import app_state as _app_state
         from backend.rag_query.pipeline import process_user_query
         from backend.rag_query.postprocess import dedupe_rag_hits
-        from backend.rag_query.semantic_cache import (
-            cache_get,
-            cache_set,
-            make_cache_key,
-            semantic_cache_enabled,
-        )
-
-        from backend import app_state as _app_state
+        from backend.rag_query.semantic_cache import cache_get, cache_set, make_cache_key, semantic_cache_enabled
 
         st = (strategy or "").strip().lower()
         raw_mode = st == "raw_cosine"
@@ -292,16 +270,10 @@ class RagClient:
                 from_cache=False,
             )
             return hits
-
         _fix = bool(getattr(_app_state, "rag_query_fix_typos", False))
         _multi = bool(getattr(_app_state, "rag_multi_query_enabled", False))
         _hyde = bool(getattr(_app_state, "rag_hyde_enabled", False))
-        pq = await process_user_query(
-            query,
-            fix_typos=_fix,
-            multi_query=_multi,
-            hyde=_hyde,
-        )
+        pq = await process_user_query(query, fix_typos=_fix, multi_query=_multi, hyde=_hyde)
         body: Dict[str, Any] = {"query": pq.query_for_search, "k": k}
         if document_id is not None:
             body["document_id"] = document_id
@@ -321,7 +293,6 @@ class RagClient:
             body["vector_query"] = pq.vector_query
         if pq.filters:
             body["filters"] = pq.filters
-
         cache_key = make_cache_key(
             path,
             pq.normalized,
@@ -344,23 +315,22 @@ class RagClient:
                     strategy=body.get("strategy"),
                     k=k,
                     document_id=document_id,
-                    use_reranking=effective_reranking,
+                    use_reranking=use_reranking,
                     hits=len(hits_cached),
                     query_preview=_rag_query_preview(pq.query_for_search),
                     prep_suffix="",
                     from_cache=True,
                 )
                 return hits_cached
-
         if pq.multi_variants:
             hits = await self._merge_variant_searches(path, body, pq.multi_variants, k)
         else:
             resp = await self._request("POST", path, json=body)
             hits = self._parse_hits(resp)
-
         hits = dedupe_rag_hits(hits, jaccard_threshold=_dedupe_jaccard_threshold())
-        if effective_reranking and rerank_top_n > 0:
-            hits = hits[: max(1, min(rerank_top_n, k))]
+        if effective_reranking:
+            if rerank_top_n > 0:
+                hits = hits[: max(1, min(rerank_top_n, k))]
         if semantic_cache_enabled():
             cache_set(cache_key, hits)
         prep_bits: List[str] = []
@@ -374,7 +344,7 @@ class RagClient:
             strategy=body.get("strategy"),
             k=k,
             document_id=document_id,
-            use_reranking=effective_reranking,
+            use_reranking=use_reranking,
             hits=len(hits),
             query_preview=_rag_query_preview(pq.query_for_search),
             prep_suffix=prep_s,
@@ -392,10 +362,10 @@ class RagClient:
         minio_object: Optional[str] = None,
         minio_bucket: Optional[str] = None,
         original_path: Optional[str] = None,
+        chunk_size: Optional[int] = None,
+        chunk_overlap: Optional[int] = None,
     ) -> Dict[str, Any]:
-        files = {
-            "file": (filename, file_bytes, "application/octet-stream"),
-        }
+        files = {"file": (filename, file_bytes, "application/octet-stream")}
         data: Dict[str, Any] = {}
         if minio_object:
             data["minio_object"] = minio_object
@@ -403,13 +373,9 @@ class RagClient:
             data["minio_bucket"] = minio_bucket
         if original_path:
             data["original_path"] = original_path
-
+        data = _with_chunk_index_form_data(data, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
         return await self._request(
-            "POST",
-            "/documents",
-            files=files,
-            data=data,
-            http_timeout=_svc_rag_document_index_timeout(),
+            "POST", "/documents", files=files, data=data, http_timeout=_svc_rag_document_index_timeout()
         )
 
     async def list_documents(self) -> List[Dict[str, Any]]:
@@ -423,28 +389,17 @@ class RagClient:
         return await self._request("DELETE", f"/documents/by-filename/{filename}")
 
     async def get_document_start_chunks(
-        self,
-        document_id: int,
-        max_chunks: int = 2,
+        self, document_id: int, max_chunks: int = 2
     ) -> List[Tuple[str, float, Optional[int], Optional[int]]]:
         try:
             resp = await self._request(
-                "GET",
-                f"/documents/{document_id}/chunks",
-                params={"start": 0, "limit": max_chunks},
+                "GET", f"/documents/{document_id}/chunks", params={"start": 0, "limit": max_chunks}
             )
         except Exception:
+            logger.exception("Ошибка операции")
             return []
         chunks = resp.get("chunks", [])
-        return [
-            (
-                c.get("content", ""),
-                1.0,
-                c.get("document_id"),
-                c.get("chunk_index"),
-            )
-            for c in chunks
-        ]
+        return [(c.get("content", ""), 1.0, c.get("document_id"), c.get("chunk_index")) for c in chunks]
 
     async def search(
         self,
@@ -474,22 +429,18 @@ class RagClient:
             return None
         return resp
 
-    # ─── Knowledge Base (постоянная база знаний) ─────────────────────────────
-
     async def kb_upload_document(
         self,
         file_bytes: bytes,
         filename: str,
+        chunk_size: Optional[int] = None,
+        chunk_overlap: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Загрузить документ в постоянную Базу Знаний."""
-        files = {
-            "file": (filename, file_bytes, "application/octet-stream"),
-        }
+        files = {"file": (filename, file_bytes, "application/octet-stream")}
+        data = _with_chunk_index_form_data({}, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
         return await self._request(
-            "POST",
-            "/kb/documents",
-            files=files,
-            http_timeout=_svc_rag_document_index_timeout(),
+            "POST", "/kb/documents", files=files, data=data, http_timeout=_svc_rag_document_index_timeout()
         )
 
     async def kb_list_documents(self) -> List[Dict[str, Any]]:
@@ -524,14 +475,14 @@ class RagClient:
             project_id=None,
         )
 
-    # ─── Библиотека памяти (настройки): memory_rag_documents / memory_rag_vectors ─
-
     async def memory_rag_index_document(
         self,
         file_bytes: bytes,
         filename: str,
         minio_object: Optional[str] = None,
         minio_bucket: Optional[str] = None,
+        chunk_size: Optional[int] = None,
+        chunk_overlap: Optional[int] = None,
     ) -> Dict[str, Any]:
         files = {"file": (filename, file_bytes, "application/octet-stream")}
         data: Dict[str, Any] = {}
@@ -539,12 +490,9 @@ class RagClient:
             data["minio_object"] = minio_object
         if minio_bucket:
             data["minio_bucket"] = minio_bucket
+        data = _with_chunk_index_form_data(data, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
         return await self._request(
-            "POST",
-            "/memory-rag/documents",
-            files=files,
-            data=data,
-            http_timeout=_svc_rag_document_index_timeout(),
+            "POST", "/memory-rag/documents", files=files, data=data, http_timeout=_svc_rag_document_index_timeout()
         )
 
     async def memory_rag_list_documents(self) -> List[Dict[str, Any]]:
@@ -573,9 +521,6 @@ class RagClient:
             project_id=None,
         )
 
-
-    # ─── RAG проектов: project_rag_documents / project_rag_vectors ─────────────
-
     async def project_rag_upload_document(
         self,
         file_bytes: bytes,
@@ -583,6 +528,8 @@ class RagClient:
         project_id: str,
         minio_object: Optional[str] = None,
         minio_bucket: Optional[str] = None,
+        chunk_size: Optional[int] = None,
+        chunk_overlap: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Загрузить документ в RAG-хранилище проекта."""
         files = {"file": (filename, file_bytes, "application/octet-stream")}
@@ -591,6 +538,7 @@ class RagClient:
             data["minio_object"] = minio_object
         if minio_bucket:
             data["minio_bucket"] = minio_bucket
+        data = _with_chunk_index_form_data(data, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
         return await self._request(
             "POST",
             f"/project-rag/projects/{project_id}/documents",
@@ -606,9 +554,7 @@ class RagClient:
 
     async def project_rag_delete_document(self, project_id: str, document_id: int) -> Dict[str, Any]:
         """Удалить один документ из RAG проекта."""
-        return await self._request(
-            "DELETE", f"/project-rag/projects/{project_id}/documents/{document_id}"
-        )
+        return await self._request("DELETE", f"/project-rag/projects/{project_id}/documents/{document_id}")
 
     async def project_rag_delete_project(self, project_id: str) -> Dict[str, Any]:
         """Удалить все RAG-данные проекта (при удалении проекта)."""

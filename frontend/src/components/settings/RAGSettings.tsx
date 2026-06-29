@@ -127,6 +127,7 @@ export default function RAGSettings({}: RAGSettingsProps) {
     return normalizeChunkingStrategy(saved);
   });
   const [ragChunkOverlap, setRagChunkOverlap] = useState(200);
+  const [ragChunkSize, setRagChunkSize] = useState(1000);
   const [ragSimilarityThreshold, setRagSimilarityThreshold] = useState(0);
   const [ragRerankingEnabled, setRagRerankingEnabled] = useState(false);
   const [ragRerankTopN, setRagRerankTopN] = useState(5);
@@ -167,6 +168,7 @@ export default function RAGSettings({}: RAGSettingsProps) {
     ragHydeEnabled,
     ragChatTopK,
     ragChunkingStrategy,
+    ragChunkSize,
     ragChunkOverlap,
     ragSimilarityThreshold,
     ragRerankingEnabled,
@@ -213,6 +215,9 @@ export default function RAGSettings({}: RAGSettingsProps) {
         if (typeof data.rag_chunk_overlap === 'number' && Number.isFinite(data.rag_chunk_overlap)) {
           setRagChunkOverlap(Math.max(0, Math.min(2000, Math.round(data.rag_chunk_overlap))));
         }
+        if (typeof data.rag_chunk_size === 'number' && Number.isFinite(data.rag_chunk_size)) {
+          setRagChunkSize(Math.max(200, Math.min(8000, Math.round(data.rag_chunk_size))));
+        }
         if (typeof data.rag_similarity_threshold === 'number' && Number.isFinite(data.rag_similarity_threshold)) {
           setRagSimilarityThreshold(Math.max(0, Math.min(1, data.rag_similarity_threshold)));
         }
@@ -250,6 +255,7 @@ export default function RAGSettings({}: RAGSettingsProps) {
           rag_hyde_enabled: ragHydeEnabled,
           rag_chat_top_k: ragChatTopK,
           rag_chunking_strategy: ragChunkingStrategy,
+          rag_chunk_size: ragChunkSize,
           rag_chunk_overlap: ragChunkOverlap,
           rag_similarity_threshold: ragSimilarityThreshold,
           rag_reranking_enabled: ragRerankingEnabled,
@@ -833,6 +839,51 @@ export default function RAGSettings({}: RAGSettingsProps) {
                       else setRagChatTopK(Math.max(1, Math.min(64, n)));
                     }}
                     inputProps={{ min: 1, max: 64, step: 1 }}
+                    InputLabelProps={{ shrink: true }}
+                  />
+                </Box>
+                <Box sx={{ maxWidth: { xs: '100%', sm: 236 }, minWidth: { sm: 200 }, flex: { sm: '0 0 auto' } }}>
+                  <TextField
+                    fullWidth
+                    size="small"
+                    disabled={isLoading}
+                    type="number"
+                    label={
+                      <Box sx={MODEL_SETTINGS_LABEL_WRAPPER_SX} component="span">
+                        Размер чанка
+                        <Tooltip
+                          title="Целевой размер одного чанка в символах при нарезке документа. Диапазон 200–8000, по умолчанию 1000. Меньше — точнее, но больше чанков; больше — шире контекст в каждом фрагменте."
+                          arrow
+                        >
+                          <IconButton
+                            size="small"
+                            sx={MODEL_SETTINGS_HELP_ICON_BUTTON_SX}
+                            onClick={(e) => e.stopPropagation()}
+                            aria-label="Справка: размер чанка"
+                          >
+                            <HelpOutlineIcon fontSize="small" color="action" />
+                          </IconButton>
+                        </Tooltip>
+                      </Box>
+                    }
+                    value={ragChunkSize}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      if (raw === '') return;
+                      const v = parseInt(raw, 10);
+                      if (!Number.isNaN(v)) setRagChunkSize(Math.max(200, Math.min(8000, v)));
+                    }}
+                    onBlur={(e) => {
+                      const raw = e.target.value.trim();
+                      if (raw === '') {
+                        setRagChunkSize(1000);
+                        return;
+                      }
+                      const n = parseInt(raw, 10);
+                      if (Number.isNaN(n)) setRagChunkSize(1000);
+                      else setRagChunkSize(Math.max(200, Math.min(8000, n)));
+                    }}
+                    inputProps={{ min: 200, max: 8000, step: 50 }}
                     InputLabelProps={{ shrink: true }}
                   />
                 </Box>

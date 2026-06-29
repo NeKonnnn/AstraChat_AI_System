@@ -95,6 +95,12 @@ export function mergeCreationItems(
 
 export function resolveCreationPreviewSrc(previewUrl?: string | null): string | null {
   if (!previewUrl) return null;
-  if (previewUrl.startsWith('data:') || previewUrl.startsWith('blob:')) return previewUrl;
+  if (
+    previewUrl.startsWith('data:') ||
+    previewUrl.startsWith('blob:') ||
+    /^https?:\/\//i.test(previewUrl)
+  ) {
+    return previewUrl;
+  }
   return getApiUrl(previewUrl);
 }

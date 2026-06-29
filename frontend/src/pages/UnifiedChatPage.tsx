@@ -56,6 +56,7 @@ import {
   ChevronRight as ChevronRightIcon,
   Add as AddIcon,
   Share as ShareIcon,
+  CallSplit as BranchIcon,
   AutoStories as KbIcon,
   Check as CheckIcon,
   YouTube as YouTubeIcon,
@@ -71,9 +72,8 @@ import { useAppContext, useAppActions, Message, MultiLLMResponseSlot } from '../
 import { useSocket } from '../contexts/SocketContext';
 import { getApiUrl, getWsUrl, API_ENDPOINTS } from '../config/api';
 import MessageRenderer from '../components/MessageRenderer';
-import ImageGenerationPlaceholder from '../components/ImageGenerationPlaceholder';
 import { DocumentSearchPanel } from '../components/DocumentSearchPanel';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import TranscriptionResultModal from '../components/TranscriptionResultModal';
 import ModelSelector from '../components/ModelSelector';
 import MessageNavigationBar from '../components/MessageNavigationBar';
@@ -89,7 +89,6 @@ import TopErrorBanner from '../components/TopErrorBanner';
 import { logChatAttach, logChatAttachError } from '../utils/chatAttachDebug';
 import InlineAttachmentsList from '../components/InlineAttachmentsList';
 import InlineImageLightbox from '../components/InlineImageLightbox';
-import CreationsGallery from '../components/CreationsGallery';
 import { incrementTabNotification } from '../utils/tabNotifications';
 import ChatGearAgentsPanel from '../components/ChatGearAgentsPanel';
 import ChatGearMcpPanel from '../components/ChatGearMcpPanel';
@@ -101,6 +100,7 @@ import { useMyAgentSelection, useOrchestratorAgentsAnyActive } from '../hooks/us
 import { useChatInputMcpIndicators } from '../mcp/hooks/useChatInputMcpIndicators';
 import { useMcpStreamingTools } from '../mcp/hooks/useMcpStreamingTools';
 import McpToolCallsPanel from '../mcp/components/McpToolCallsPanel';
+import { mergeMcpToolCalls } from '../mcp/utils/mergeToolCalls';
 import McpLiveToolsIndicator from '../mcp/components/McpLiveToolsIndicator';
 import McpSuggestionChips from '../mcp/components/McpSuggestionChips';
 import { getAtlassianSuggestions } from '../mcp/plugins/atlassianSuggestions';
@@ -314,6 +314,7 @@ interface MessageCardData {
   handleRegenerateMultiLlmColumn: (message: Message, slotIndex: number) => void;
   synthesizeSpeech: (text: string) => void;
   handleEnterShareMode: () => void;
+  handleBranchToNewChat: (message: Message, multiLlmSlotIndex?: number) => void;
   handleToggleMessage: (userMsgId: string, assistantMsgId: string) => void;
   updateMessage: (
     chatId: string,
@@ -323,12 +324,6 @@ interface MessageCardData {
     multiLLMResponses?: MultiLLMResponseSlot[],
     alternativeResponses?: string[],
     currentResponseIndex?: number,
-    documentSearch?: Message['documentSearch'],
-    reasoningContent?: string,
-    mcpToolCalls?: Message['mcpToolCalls'],
-    inlineAttachments?: Message['inlineAttachments'],
-    isImageGenerating?: boolean,
-    inlineAttachmentVariants?: Message['inlineAttachmentVariants'],
   ) => void;
   formatTimestamp: (ts: string) => string;
   currentChatId: string | undefined;
@@ -562,11 +557,7 @@ const MessageCardComponent = ({
   const [hoveredMultiLlmCol, setHoveredMultiLlmCol] = useState<number | null>(null);
   const [reasoningExpanded, setReasoningExpanded] = useState(false);
   const [multiReasoningExpanded, setMultiReasoningExpanded] = useState<Record<number, boolean>>({});
-  const [lightboxSrc, setLightboxSrc] = useState<{
-    src: string;
-    name: string;
-    editPrompt?: string;
-  } | null>(null);
+  const [lightboxSrc, setLightboxSrc] = useState<{ src: string; name: string } | null>(null);
   const thinkingStartRef = useRef<number | null>(null);
   const [thinkingDurationSec, setThinkingDurationSec] = useState<number | null>(null);
   const [liveThinkingSec, setLiveThinkingSec] = useState<number | null>(null);
@@ -597,14 +588,6 @@ const MessageCardComponent = ({
   const parsedMessage = useMemo(
     () => extractReasoningBlock(visibleBody, message.isStreaming),
     [visibleBody, message.isStreaming],
-  );
-
-  const showImageGenPlaceholder = useMemo(
-    () =>
-      !isUser &&
-      Boolean(message.isImageGenerating) &&
-      !message.inlineAttachments?.some((a) => a.contentType === 'image' && a.preview),
-    [isUser, message.isImageGenerating, message.inlineAttachments],
   );
   const isReasoningStreaming = useMemo(() => {
     // В текущем потоке reasoning часто приходит уже в закрытом <think>...</think>,
@@ -742,9 +725,6 @@ const MessageCardComponent = ({
   }, [message.isStreaming, message.content]);
 
   const hideOuterActionBar = !isUser && (message.multiLLMResponses?.length ?? 0) > 0;
-  const variantIndex = message.currentResponseIndex ?? 0;
-  const displayInlineAttachments =
-    message.inlineAttachmentVariants?.[variantIndex] ?? message.inlineAttachments;
   const multiLlmActionIconSx = {
     opacity: 0.7,
     p: 0.5,
@@ -785,10 +765,10 @@ const MessageCardComponent = ({
           <McpToolCallsPanel toolCalls={message.mcpToolCalls} />
         )}
 
-        {/* Inline-вложения (пользователь и сгенерированные картинки ассистента) */}
-        {displayInlineAttachments && displayInlineAttachments.length > 0 && (
+        {/* Inline-вложения пользователя — тот же вид, что при прикреплении через «+» */}
+        {isUser && message.inlineAttachments && message.inlineAttachments.length > 0 && (
           <InlineAttachmentsList
-            files={displayInlineAttachments.map((a) => ({
+            files={message.inlineAttachments.map((a) => ({
               name: a.name,
               contentType: a.contentType,
               imageSrc: a.contentType === 'image' ? a.preview : undefined,
@@ -796,14 +776,7 @@ const MessageCardComponent = ({
             }))}
             isDarkMode={isDarkMode}
             variant="message"
-            onImageExpand={(resolvedSrc, name) => {
-              const promptMatch = message.content.match(/по запросу:\s*«([^»]+)»/i);
-              setLightboxSrc({
-                src: resolvedSrc,
-                name,
-                editPrompt: promptMatch?.[1]?.trim(),
-              });
-            }}
+            onImageExpand={(resolvedSrc, name) => setLightboxSrc({ src: resolvedSrc, name })}
             sx={{ mb: 1 }}
           />
         )}
@@ -1021,15 +994,29 @@ const MessageCardComponent = ({
                         </IconButton>
                       </Tooltip>
                       {!shareMode ? (
-                        <Tooltip title="Поделиться">
-                          <IconButton
-                            size="small"
-                            onClick={() => dataRef.current.handleEnterShareMode()}
-                            sx={multiLlmActionIconSx}
-                          >
-                            <ShareIcon />
-                          </IconButton>
-                        </Tooltip>
+                        <>
+                          <Tooltip title="Поделиться">
+                            <IconButton
+                              size="small"
+                              onClick={() => dataRef.current.handleEnterShareMode()}
+                              sx={multiLlmActionIconSx}
+                            >
+                              <ShareIcon />
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip title="Ветка в новом чате">
+                            <span>
+                              <IconButton
+                                size="small"
+                                onClick={() => dataRef.current.handleBranchToNewChat(message, respIndex)}
+                                disabled={Boolean(response.isStreaming)}
+                                sx={multiLlmActionIconSx}
+                              >
+                                <BranchIcon />
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                        </>
                       ) : null}
                     </Box>
                   ) : null}
@@ -1037,8 +1024,6 @@ const MessageCardComponent = ({
               );
             })}
           </Box>
-        ) : showImageGenPlaceholder ? (
-          <ImageGenerationPlaceholder />
         ) : (
           <>
             {parsedMessage.reasoningContent ? (
@@ -1095,27 +1080,12 @@ const MessageCardComponent = ({
               maxWidth: interfaceSettings.leftAlignMessages ? '100%' : (isUser ? '75%' : '100%'),
               minWidth: '180px',
               width: interfaceSettings.leftAlignMessages ? '100%' : (isUser ? undefined : '100%'),
-              backgroundColor: showImageGenPlaceholder
-                ? 'transparent'
-                : isUser
-                  ? 'primary.main'
-                  : isDarkMode
-                    ? 'background.paper'
-                    : '#f8f9fa',
+              backgroundColor: isUser ? 'primary.main' : isDarkMode ? 'background.paper' : '#f8f9fa',
               color: isUser ? 'primary.contrastText' : isDarkMode ? 'text.primary' : '#333',
-              boxShadow: showImageGenPlaceholder
-                ? 'none'
-                : isDarkMode
-                  ? '0 2px 8px rgba(0,0,0,0.15)'
-                  : '0 2px 8px rgba(0,0,0,0.1)',
+              boxShadow: isDarkMode ? '0 2px 8px rgba(0,0,0,0.15)' : '0 2px 8px rgba(0,0,0,0.1)',
             }}
           >
-            <CardContent
-              sx={{
-                p: showImageGenPlaceholder ? 0 : 1.2,
-                '&:last-child': { pb: showImageGenPlaceholder ? 0 : 1.2 },
-              }}
-            >
+            <CardContent sx={{ p: 1.2, '&:last-child': { pb: 1.2 } }}>
               {messageContent}
             </CardContent>
           </Card>
@@ -1148,8 +1118,6 @@ const MessageCardComponent = ({
                           dataRef.current.currentChatId!, message.id,
                           message.alternativeResponses![ni],
                           undefined, undefined, message.alternativeResponses, ni,
-                          undefined, undefined, undefined,
-                          message.inlineAttachmentVariants?.[ni] ?? message.inlineAttachments,
                         );
                       }
                     }}
@@ -1176,8 +1144,6 @@ const MessageCardComponent = ({
                           dataRef.current.currentChatId!, message.id,
                           message.alternativeResponses![ni],
                           undefined, undefined, message.alternativeResponses, ni,
-                          undefined, undefined, undefined,
-                          message.inlineAttachmentVariants?.[ni] ?? message.inlineAttachments,
                         );
                       }
                     }}
@@ -1272,19 +1238,38 @@ const MessageCardComponent = ({
           </Tooltip>
 
           {!isUser && !shareMode && (
-            <Tooltip title="Поделиться">
-              <IconButton
-                size="small"
-                onClick={() => dataRef.current.handleEnterShareMode()}
-                className="message-share-button"
-                data-theme={isDarkMode ? 'dark' : 'light'}
-                sx={{ opacity: 0.7, p: 0.5, borderRadius: '6px', minWidth: '28px', width: '28px', height: '28px',
-                  '&:hover': { opacity: 1, '& .MuiSvgIcon-root': { color: 'primary.main' } },
-                  '& .MuiSvgIcon-root': { fontSize: '18px !important', width: '18px !important', height: '18px !important' } }}
-              >
-                <ShareIcon />
-              </IconButton>
-            </Tooltip>
+            <>
+              <Tooltip title="Поделиться">
+                <IconButton
+                  size="small"
+                  onClick={() => dataRef.current.handleEnterShareMode()}
+                  className="message-share-button"
+                  data-theme={isDarkMode ? 'dark' : 'light'}
+                  sx={{ opacity: 0.7, p: 0.5, borderRadius: '6px', minWidth: '28px', width: '28px', height: '28px',
+                    '&:hover': { opacity: 1, '& .MuiSvgIcon-root': { color: 'primary.main' } },
+                    '& .MuiSvgIcon-root': { fontSize: '18px !important', width: '18px !important', height: '18px !important' } }}
+                >
+                  <ShareIcon />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title="Ветка в новом чате">
+                <span>
+                  <IconButton
+                    size="small"
+                    onClick={() => dataRef.current.handleBranchToNewChat(message)}
+                    disabled={Boolean(message.isStreaming)}
+                    className="message-branch-button"
+                    data-theme={isDarkMode ? 'dark' : 'light'}
+                    sx={{ opacity: 0.7, p: 0.5, borderRadius: '6px', minWidth: '28px', width: '28px', height: '28px',
+                      '&:hover:not(:disabled)': { opacity: 1, '& .MuiSvgIcon-root': { color: 'primary.main' } },
+                      '&:disabled': { opacity: 0.4 },
+                      '& .MuiSvgIcon-root': { fontSize: '18px !important', width: '18px !important', height: '18px !important' } }}
+                  >
+                    <BranchIcon />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </>
           )}
         </Box>
         )}
@@ -1296,14 +1281,6 @@ const MessageCardComponent = ({
         src={lightboxSrc?.src || ''}
         name={lightboxSrc?.name || 'image'}
         onClose={() => setLightboxSrc(null)}
-        onEdit={() => {
-          const base = lightboxSrc?.editPrompt?.trim();
-          const text = base ? `Отредактируй изображение: ${base}` : 'Отредактируй изображение: ';
-          window.dispatchEvent(
-            new CustomEvent('astrachatPrefillChatInput', { detail: { text } }),
-          );
-          setLightboxSrc(null);
-        }}
       />
     </Box>
   );
@@ -1321,10 +1298,12 @@ const MessageCard = React.memo(MessageCardComponent, (prev, next) =>
 
 // ================================
 
-export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true, sidebarHidden = false }: UnifiedChatPageProps) {
+export default function UnifiedChatPage({
+  isDarkMode,
+  sidebarOpen = true,
+  sidebarHidden = false,
+}: UnifiedChatPageProps) {
   const navigate = useNavigate();
-  const location = useLocation();
-  const isCreationsView = location.pathname === '/creations';
   const theme = useTheme();
 
   // Состояние для правой панели
@@ -1563,6 +1542,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true, sideba
     updateChatTitle,
     getProjectById,
     setLoading,
+    branchChatAtMessage,
   } = useAppActions();
   const { sendMessage, regenerateResponse, regenerateMultiLlmSlot, isConnected, isConnecting, stopGeneration } =
     useSocket();
@@ -1584,6 +1564,16 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true, sideba
     () => (currentChat ? state.loadingChatIds.includes(currentChat.id) : false),
     [currentChat, state.loadingChatIds],
   );
+  const hasRunningMcpTools = useMemo(() => {
+    if (!currentChatLoading) return false;
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const message = messages[i];
+      if (message.role !== 'assistant') continue;
+      if (!message.mcpToolCalls?.length) return false;
+      return mergeMcpToolCalls(message.mcpToolCalls).some((exec) => exec.status === 'running');
+    }
+    return false;
+  }, [messages, currentChatLoading]);
 
   const dropdownPanelSx = getDropdownPanelSx(isDarkMode);
   const dropdownItemSx = useMemo(() => getDropdownItemSx(isDarkMode), [isDarkMode]);
@@ -1732,7 +1722,8 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true, sideba
     [modelWindows],
   );
   const multiLlmInputBlocked = isMultiLlmMode && !multiLlmHasSelection;
-  const chatAwaitingTokens = currentChatLoading && !hasActiveChatStreaming;
+  const chatAwaitingTokens =
+    currentChatLoading && !hasActiveChatStreaming && !hasRunningMcpTools;
   /** Плейсхолдер поля ввода: без dev-текста про порт 8000; при активной генерации — обычная подсказка (кнопка стоп и так видна). */
   const chatMainPlaceholder = useMemo(() => {
     if (!isConnected) {
@@ -1990,17 +1981,6 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true, sideba
     }, 300);
     
     return () => clearTimeout(timer);
-  }, []);
-
-  useEffect(() => {
-    const onPrefill = (event: Event) => {
-      const text = (event as CustomEvent<{ text?: string }>).detail?.text;
-      if (!text) return;
-      setInputMessage(text);
-      setTimeout(() => inputRef.current?.focus(), 100);
-    };
-    window.addEventListener('astrachatPrefillChatInput', onPrefill);
-    return () => window.removeEventListener('astrachatPrefillChatInput', onPrefill);
   }, []);
 
   // Автоматический фокус на поле ввода при переключении чатов
@@ -2526,30 +2506,17 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true, sideba
     
     // Добавляем пустое место для нового ответа (будет заполнено при генерации)
     const updatedAlternatives = [...existingAlternatives, ''];
-
-    const isImageMessage = Boolean(
-      message.inlineAttachments?.some((a) => a.contentType === 'image' && a.preview),
-    );
-    let existingVariants = message.inlineAttachmentVariants;
-    if (!existingVariants?.length && message.inlineAttachments?.length) {
-      existingVariants = [message.inlineAttachments];
-    }
     
     // Обновляем сообщение с альтернативными ответами и новым индексом
+    // Не обнуляем content, оставляем текущий
     updateMessage(
       currentChat.id,
       message.id,
-      currentContent,
-      true,
-      undefined,
+      currentContent, // Оставляем текущий контент, не обнуляем
+      true, // isStreaming - начинаем стриминг
+      undefined, // multiLLMResponses
       updatedAlternatives,
-      newIndex,
-      undefined,
-      undefined,
-      undefined,
-      message.inlineAttachments,
-      isImageMessage,
-      existingVariants,
+      newIndex // Новый индекс для нового ответа
     );
 
     // Вызываем перегенерацию без создания нового сообщения пользователя
@@ -3157,6 +3124,33 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true, sideba
     setSelectedMessages(new Set());
   };
 
+  const handleBranchToNewChat = useCallback(
+    async (message: Message, multiLlmSlotIndex?: number): Promise<void> => {
+      if (!currentChat?.id) return;
+      if (message.role !== 'assistant') return;
+      if (message.isStreaming) {
+        showNotification('info', 'Дождитесь окончания генерации ответа');
+        return;
+      }
+      if (
+        multiLlmSlotIndex !== undefined &&
+        message.multiLLMResponses?.[multiLlmSlotIndex]?.isStreaming
+      ) {
+        showNotification('info', 'Дождитесь окончания генерации ответа');
+        return;
+      }
+
+      const newChatId = await branchChatAtMessage(currentChat.id, message.id, { multiLlmSlotIndex });
+      if (newChatId) {
+        showNotification('success', 'Создана ветка в новом чате');
+        navigate('/');
+      } else {
+        showNotification('error', 'Не удалось создать ветку');
+      }
+    },
+    [branchChatAtMessage, currentChat?.id, navigate, showNotification],
+  );
+
   const handleExitShareMode = () => {
     setShareMode(false);
     setSelectedMessages(new Set());
@@ -3329,6 +3323,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true, sideba
     handleRegenerateMultiLlmColumn,
     synthesizeSpeech,
     handleEnterShareMode,
+    handleBranchToNewChat,
     handleToggleMessage,
     updateMessage,
     formatTimestamp,
@@ -3598,7 +3593,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true, sideba
           overflow: 'hidden',
           marginRight: rightSidebarHidden ? 0 : (rightSidebarOpen ? 0 : '-64px'),
           transition: 'margin-right 0.3s ease',
-          pt: isCreationsView ? 0 : 8,
+          pt: 8,
           backgroundColor: workZoneBgColor,
           ...(workZoneMode === 'custom' && workZoneCustomImage
             ? {
@@ -3614,30 +3609,12 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true, sideba
       >
       {workZoneMode === 'starry' ? <WorkZoneStarrySky isDarkMode={isDarkMode} /> : null}
       {workZoneMode === 'snowfall' ? <WorkZoneSnowfall isDarkMode={isDarkMode} /> : null}
-      {isCreationsView ? (
-        <Box
-          sx={{
-            flex: 1,
-            minHeight: 0,
-            overflow: 'auto',
-            position: 'relative',
-            zIndex: 1,
-            boxSizing: 'border-box',
-            py: 3,
-            pl: !sidebarHidden && !sidebarOpen ? { xs: 10, md: 10 } : { xs: 2, md: 4 },
-            pr: !rightSidebarHidden && !rightSidebarOpen ? { xs: 10, md: 10 } : { xs: 2, md: 4 },
-          }}
-        >
-          <CreationsGallery isDarkMode={isDarkMode} />
-        </Box>
-      ) : (
-      <>
       {/* Заголовок с информацией о проекте и модели */}
       {currentChat && project && (
         <Box sx={{ 
           position: 'absolute',
           top: 16,
-          left: sidebarOpen ? 16 : 80,
+          left: sidebarHidden ? 16 : sidebarOpen ? 16 : 80,
           zIndex: 1200,
           transition: 'left 0.3s ease',
           display: 'flex',
@@ -3711,7 +3688,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true, sideba
         <Box sx={{ 
           position: 'absolute',
           top: 16,
-          left: sidebarOpen ? 16 : 80,
+          left: sidebarHidden ? 16 : sidebarOpen ? 16 : 80,
           zIndex: 1200,
           transition: 'left 0.3s ease',
           display: 'flex',
@@ -3830,6 +3807,16 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true, sideba
               px: interfaceSettings.widescreenMode ? 4 : 2,
             }}>
               {messages.map((message, index) => {
+                const isEmptyAssistantPlaceholder =
+                  message.role === 'assistant' &&
+                  !message.isStreaming &&
+                  !message.content.trim() &&
+                  !message.mcpToolCalls?.length &&
+                  !message.multiLLMResponses?.length &&
+                  !message.documentSearch;
+                if (isEmptyAssistantPlaceholder && currentChatLoading) {
+                  return null;
+                }
                 const isUserMsg = message.role === 'user';
                 const isPairStart = isUserMsg && index < messages.length - 1 && messages[index + 1].role === 'assistant';
                 const isSelected = isPairStart &&
@@ -4171,7 +4158,6 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true, sideba
              />
            </>
            ) : null}
-         </Box>
 
              {/* Диалоги */}
        <VoiceChatDialog
@@ -4513,8 +4499,6 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true, sideba
            Текст скопирован в буфер обмена
          </Alert>
        </Snackbar>
-      </>
-      )}
       </Box>
 
       {/* Правый сайдбар: кнопки действий → по клику «Конструктор агента» открывается панель */}
@@ -4981,7 +4965,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true, sideba
           sx={{
             position: 'fixed',
             bottom: 0,
-            left: sidebarOpen ? 240 : 64,
+            left: sidebarHidden ? 0 : sidebarOpen ? 240 : 64,
             right: 0,
             zIndex: 1200,
             borderRadius: 0,
@@ -5061,6 +5045,7 @@ export default function UnifiedChatPage({ isDarkMode, sidebarOpen = true, sideba
         isDarkMode={isDarkMode}
         selectedCount={selectedMessages.size}
       />
+      </Box>
     </Box>
   );
 }

@@ -108,3 +108,42 @@ export async function saveMcpCredentials(serverId: string, payload: Record<strin
 export async function deleteMcpCredentials(serverId: string): Promise<void> {
   await mcpFetch(MCP_API.SERVER_CREDENTIALS(serverId), { method: 'DELETE' });
 }
+
+export async function downloadMcpFile(fileUrl: string, filename?: string): Promise<void> {
+  const token = localStorage.getItem('auth_token') || localStorage.getItem('token');
+  const url = fileUrl.startsWith('http://') || fileUrl.startsWith('https://')
+    ? fileUrl
+    : getApiUrl(fileUrl.startsWith('/') ? fileUrl : `/${fileUrl}`);
+
+  const response = await fetch(url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+
+  if (!response.ok) {
+    let detail = response.statusText;
+    try {
+      const body = await response.json();
+      detail = typeof body.detail === 'string' ? body.detail : body.message || detail;
+    } catch {
+      /* ignore */
+    }
+    if (response.status === 401) {
+      window.dispatchEvent(new CustomEvent('astrachatAuthRequired'));
+    }
+    throw new Error(detail || 'Не удалось скачать файл');
+  }
+
+  const blob = await response.blob();
+  if (blob.size < 4) {
+    throw new Error('Получен пустой или повреждённый файл');
+  }
+
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = objectUrl;
+  anchor.download = filename || 'download';
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(objectUrl);
+}

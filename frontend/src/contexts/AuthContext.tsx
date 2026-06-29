@@ -8,7 +8,7 @@ import {
   mapApiSessionPolicyToConfig,
   type SessionPolicyResponse,
 } from '../settings/sessionTimeout';
-import { cacheServerInstanceId, clearServerInstanceId, resolveLoginSessionNoticeReason, setLoginSessionNotice } from '../settings/sessionValidity';
+import { cacheServerInstanceId, clearServerInstanceId, resolveLoginSessionNoticeReason, setLoginSessionNotice, type LoginSessionNoticeReason } from '../settings/sessionValidity';
 import { getApiUrl, fetchSessionPolicy } from '../config/api';
 
 export type LoginErrorMeta = {
@@ -28,6 +28,39 @@ export class AuthLoginError extends Error {
   }
 }
 
+const MISSING_ROLE_LOGIN_MESSAGE =
+  'У вас нет необходимой роли для взаимодействия с AstraChat. Обратитесь к администратору проекта';
+
+const ROLE_ERROR_MARKERS = [
+  'роль',
+  'roles',
+  'role',
+  'insufficient',
+  'forbidden',
+  'доступ запрещен',
+  'доступ запрещён',
+];
+
+function containsRoleErrorMarker(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const normalized = value.toLowerCase();
+  return ROLE_ERROR_MARKERS.some((marker) => normalized.includes(marker));
+}
+
+function isMissingRoleLoginError(detail: unknown, parsedMessage?: string): boolean {
+  if (containsRoleErrorMarker(parsedMessage)) return true;
+  if (containsRoleErrorMarker(detail)) return true;
+  if (detail && typeof detail === 'object') {
+    const obj = detail as Record<string, unknown>;
+    return (
+      containsRoleErrorMarker(obj.message) ||
+      containsRoleErrorMarker(obj.detail) ||
+      containsRoleErrorMarker(obj.error)
+    );
+  }
+  return false;
+}
+
 interface User {
   username: string;
   user_id?: string;  // ID пользователя (может быть равен username)
@@ -41,6 +74,7 @@ interface AuthContextType {
   user: User | null;
   token: string | null;
   login: (username: string, password: string) => Promise<void>;
+  completeSsoLogin: (ticket: string) => Promise<void>;
   logout: () => void;
   isAuthenticated: boolean;
   isLoading: boolean;
@@ -77,122 +111,31 @@ const getJwtExpiryMs = (jwtToken: string): number | null => {
   }
 };
 
+/** Access JWT просрочен (с запасом TOKEN_REFRESH_SKEW_MS, как при авто-refresh). */
+const isAccessTokenExpired = (jwtToken: string): boolean => {
+  const expMs = getJwtExpiryMs(jwtToken);
+  if (expMs === null) return false;
+  return expMs <= Date.now() + TOKEN_REFRESH_SKEW_MS;
+};
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const refreshInFlightRef = React.useRef<Promise<string | null> | null>(null);
 
-  // Инициализация: проверяем наличие токена в localStorage
-  useEffect(() => {
-    const initializeAuth = async () => {
-      // Сначала убеждаемся, что настройки загружены
-      try {
-        await initSettings();
-      } catch (error) {
-        console.warn('Не удалось загрузить настройки, используем дефолтные значения:', error);
-      }
-      
-      const savedToken = localStorage.getItem('auth_token');
-      const savedRefreshToken = localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY);
-      const savedUser = localStorage.getItem('auth_user');
-      
-      if (savedToken && savedUser) {
-        try {
-          setToken(savedToken);
-          setUser(JSON.parse(savedUser));
-          
-          // Проверяем валидность токена асинхронно (не блокируем загрузку).
-          // Если access-токен устарел, пробуем обновить по refresh-токену.
-          verifyToken(savedToken).catch(async (error: any) => {
-            if (error.response?.status !== 401) {
-              console.warn('Не удалось проверить токен, но продолжаем работу:', error.message);
-              return;
-            }
-            if (!savedRefreshToken) {
-              console.warn('Access-токен невалиден и отсутствует refresh-токен, очищаем авторизацию');
-              setLoginSessionNotice(resolveLoginSessionNoticeReason(error?.response?.data?.detail));
-              localStorage.removeItem('auth_token');
-              localStorage.removeItem('auth_user');
-              clearSessionTimeoutState();
-              clearServerInstanceId();
-              setToken(null);
-              setUser(null);
-              return;
-            }
-            try {
-              const refreshedToken = await refreshAccessToken(savedRefreshToken);
-              if (!refreshedToken) {
-                throw new Error('refresh token rejected');
-              }
-            } catch (refreshError: any) {
-              console.warn('Не удалось обновить токен, очищаем авторизацию:', refreshError);
-              setLoginSessionNotice(
-                resolveLoginSessionNoticeReason(refreshError?.response?.data?.detail),
-              );
-              localStorage.removeItem('auth_token');
-              localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
-              localStorage.removeItem('auth_user');
-              clearSessionTimeoutState();
-              clearServerInstanceId();
-              setToken(null);
-              setUser(null);
-            }
-          });
-        } catch (error) {
-          console.error('Ошибка при инициализации авторизации:', error);
-          // Очищаем поврежденные данные
-          localStorage.removeItem('auth_token');
-          localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
-          localStorage.removeItem('auth_user');
-          clearSessionTimeoutState();
-          clearServerInstanceId();
-          setToken(null);
-          setUser(null);
-        }
-      }
-      
-      setIsLoading(false);
-    };
-    
-    initializeAuth();
-  }, []);
-
-  useEffect(() => {
-    if (!token) return;
-
-    const refreshToken = localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY);
-    if (!refreshToken) return;
-
-    const expiresAtMs = getJwtExpiryMs(token);
-    const nowMs = Date.now();
-    const targetTimeMs = expiresAtMs
-      ? Math.max(0, expiresAtMs - TOKEN_REFRESH_SKEW_MS - nowMs)
-      : TOKEN_REFRESH_FALLBACK_MS;
-
-    const timerId = window.setTimeout(async () => {
-      if (!refreshInFlightRef.current) {
-        refreshInFlightRef.current = refreshAccessToken(refreshToken)
-          .finally(() => {
-            refreshInFlightRef.current = null;
-          });
-      }
-      const newAccessToken = await refreshInFlightRef.current;
-      if (!newAccessToken) {
-        localStorage.removeItem('auth_token');
-        localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
-        localStorage.removeItem('auth_user');
-        clearSessionTimeoutState();
-        clearServerInstanceId();
-        setToken(null);
-        setUser(null);
-      }
-    }, targetTimeMs);
-
-    return () => {
-      window.clearTimeout(timerId);
-    };
-  }, [token]);
+  const clearStoredAuth = (noticeReason?: LoginSessionNoticeReason) => {
+    if (noticeReason) {
+      setLoginSessionNotice(noticeReason);
+    }
+    localStorage.removeItem('auth_token');
+    localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
+    localStorage.removeItem('auth_user');
+    clearSessionTimeoutState();
+    clearServerInstanceId();
+    setToken(null);
+    setUser(null);
+  };
 
   // Проверка валидности токена
   const verifyToken = async (token: string) => {
@@ -246,8 +189,129 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  // Инициализация: восстанавливаем сессию только после проверки/refresh (без гонки с API/WS).
+  useEffect(() => {
+    const initializeAuth = async () => {
+      // Сначала убеждаемся, что настройки загружены
+      try {
+        await initSettings();
+      } catch (error) {
+        console.warn('Не удалось загрузить настройки, используем дефолтные значения:', error);
+      }
+
+      const savedToken = localStorage.getItem('auth_token');
+      const savedRefreshToken = localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY);
+      const savedUser = localStorage.getItem('auth_user');
+
+      if (savedToken && savedUser) {
+        try {
+          const parsedUser = JSON.parse(savedUser) as User;
+          let effectiveToken = savedToken;
+
+          if (isAccessTokenExpired(savedToken)) {
+            if (!savedRefreshToken) {
+              console.warn('Access-токен просрочен, refresh отсутствует — очищаем авторизацию');
+              clearStoredAuth();
+              setIsLoading(false);
+              return;
+            }
+            const refreshedToken = await refreshAccessToken(savedRefreshToken);
+            if (!refreshedToken) {
+              clearStoredAuth();
+              setIsLoading(false);
+              return;
+            }
+            effectiveToken = refreshedToken;
+          }
+
+          try {
+            await verifyToken(effectiveToken);
+          } catch (error: any) {
+            if (error.response?.status !== 401) {
+              console.warn('Не удалось проверить токен, но продолжаем работу:', error.message);
+            } else if (effectiveToken === savedToken && savedRefreshToken) {
+              const refreshedToken = await refreshAccessToken(savedRefreshToken);
+              if (!refreshedToken) {
+                clearStoredAuth(
+                  resolveLoginSessionNoticeReason(error?.response?.data?.detail),
+                );
+                setIsLoading(false);
+                return;
+              }
+              effectiveToken = refreshedToken;
+              try {
+                await verifyToken(effectiveToken);
+              } catch (verifyAfterRefresh: any) {
+                if (verifyAfterRefresh.response?.status === 401) {
+                  clearStoredAuth(
+                    resolveLoginSessionNoticeReason(verifyAfterRefresh?.response?.data?.detail),
+                  );
+                  setIsLoading(false);
+                  return;
+                }
+              }
+            } else {
+              clearStoredAuth(resolveLoginSessionNoticeReason(error?.response?.data?.detail));
+              setIsLoading(false);
+              return;
+            }
+          }
+
+          const latestUserRaw = localStorage.getItem('auth_user');
+          setToken(localStorage.getItem('auth_token') || effectiveToken);
+          setUser(latestUserRaw ? (JSON.parse(latestUserRaw) as User) : parsedUser);
+        } catch (error) {
+          console.error('Ошибка при инициализации авторизации:', error);
+          clearStoredAuth();
+        }
+      }
+
+      setIsLoading(false);
+    };
+
+    initializeAuth();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!token) return;
+
+    const refreshToken = localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY);
+    if (!refreshToken) return;
+
+    const expiresAtMs = getJwtExpiryMs(token);
+    const nowMs = Date.now();
+    const targetTimeMs = expiresAtMs
+      ? Math.max(0, expiresAtMs - TOKEN_REFRESH_SKEW_MS - nowMs)
+      : TOKEN_REFRESH_FALLBACK_MS;
+
+    const timerId = window.setTimeout(async () => {
+      if (!refreshInFlightRef.current) {
+        refreshInFlightRef.current = refreshAccessToken(refreshToken)
+          .finally(() => {
+            refreshInFlightRef.current = null;
+          });
+      }
+      const newAccessToken = await refreshInFlightRef.current;
+      if (!newAccessToken) {
+        localStorage.removeItem('auth_token');
+        localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
+        localStorage.removeItem('auth_user');
+        clearSessionTimeoutState();
+        clearServerInstanceId();
+        setToken(null);
+        setUser(null);
+      }
+    }, targetTimeMs);
+
+    return () => {
+      window.clearTimeout(timerId);
+    };
+  }, [token]);
+
   // Настройка axios для автоматического добавления токена
   useEffect(() => {
+    axios.defaults.withCredentials = true;
     if (token) {
       axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
     } else {
@@ -302,53 +366,71 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  const applyLoginResponse = async (responseData: {
+    access_token: string;
+    refresh_token: string;
+    user: User;
+    session_policy?: SessionPolicyResponse;
+    server_instance_id?: string;
+  }) => {
+    const { access_token, refresh_token, user: userData, session_policy } = responseData;
+    if (!refresh_token) {
+      throw new Error('Сервер не вернул refresh-токен');
+    }
+
+    markSessionStarted();
+    if (typeof responseData.server_instance_id === 'string') {
+      cacheServerInstanceId(responseData.server_instance_id);
+    }
+    if (session_policy) {
+      cacheSessionPolicy(mapApiSessionPolicyToConfig(session_policy));
+    } else {
+      try {
+        await initSettings();
+        cacheSessionPolicy(await fetchSessionPolicy());
+      } catch (policyError) {
+        console.warn('Не удалось загрузить session_policy после login:', policyError);
+      }
+    }
+
+    setToken(access_token);
+    setUser(userData);
+    localStorage.setItem('auth_token', access_token);
+    localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, refresh_token);
+    localStorage.setItem('auth_user', JSON.stringify(userData));
+  };
+
   const login = async (username: string, password: string) => {
     try {
+      try {
+        await initSettings();
+      } catch (settingsError) {
+        console.warn('Не удалось загрузить настройки перед login, используем дефолтные:', settingsError);
+      }
       const response = await axios.post(authApiUrl('/api/auth/login'), {
         username,
         password,
       });
-
-      const { access_token, refresh_token, user: userData, session_policy } = response.data;
-      if (!refresh_token) {
-        throw new Error('Сервер не вернул refresh-токен');
-      }
-
-      markSessionStarted();
-      if (typeof response.data.server_instance_id === 'string') {
-        cacheServerInstanceId(response.data.server_instance_id);
-      }
-      if (session_policy) {
-        cacheSessionPolicy(
-          mapApiSessionPolicyToConfig(session_policy as SessionPolicyResponse),
-        );
-      } else {
-        try {
-          await initSettings();
-          cacheSessionPolicy(await fetchSessionPolicy());
-        } catch (policyError) {
-          console.warn('Не удалось загрузить session_policy после login:', policyError);
-        }
-      }
-
-      setToken(access_token);
-      setUser(userData);
-
-      localStorage.setItem('auth_token', access_token);
-      localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, refresh_token);
-      localStorage.setItem('auth_user', JSON.stringify(userData));
+      await applyLoginResponse(response.data);
     } catch (error: any) {
       const detail = error.response?.data?.detail;
+      const parsed = parseLoginErrorDetail(detail);
+      const missingRole = isMissingRoleLoginError(detail, parsed.message);
       if (error.response?.status === 401) {
-        const parsed = parseLoginErrorDetail(detail);
-        throw new AuthLoginError(parsed.message, {
+        throw new AuthLoginError(missingRole ? MISSING_ROLE_LOGIN_MESSAGE : parsed.message, {
           remainingAttempts: parsed.remainingAttempts,
           maxFailedAttempts: parsed.maxFailedAttempts,
           lockoutDurationSeconds: parsed.lockoutDurationSeconds,
         });
       }
+      if (error.response?.status === 403) {
+        throw new AuthLoginError(
+          missingRole
+            ? MISSING_ROLE_LOGIN_MESSAGE
+            : parsed.message || 'Доступ запрещен',
+        );
+      }
       if (error.response?.status === 429) {
-        const parsed = parseLoginErrorDetail(detail);
         throw new AuthLoginError(
           parsed.message || 'Слишком много неудачных попыток входа. Попробуйте позже.',
           {
@@ -364,6 +446,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       throw new AuthLoginError('Ошибка при входе в систему');
     }
+  };
+
+  const completeSsoLogin = async (ticket: string) => {
+    // Сбрасываем старую LDAP/SSO-сессию до обмена ticket — иначе параллельные запросы
+    // с устаревшим client binding дают 401 и мешают новому входу.
+    setToken(null);
+    setUser(null);
+    delete axios.defaults.headers.common['Authorization'];
+    localStorage.removeItem('auth_token');
+    localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
+    localStorage.removeItem('auth_user');
+    clearSessionTimeoutState();
+    clearServerInstanceId();
+
+    try {
+      await initSettings();
+    } catch (error) {
+      console.warn('Не удалось загрузить настройки перед SSO exchange, используем дефолтные:', error);
+    }
+    const response = await axios.post(authApiUrl('/api/auth/sso/keycloak/exchange'), { ticket });
+    await applyLoginResponse(response.data);
   };
 
   const logout = async () => {
@@ -401,6 +504,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     user,
     token,
     login,
+    completeSsoLogin,
     logout,
     isAuthenticated: !!token && !!user,
     isLoading,

@@ -1,84 +1,261 @@
-import React, { useState } from 'react';
-import { Box, Chip, Collapse, IconButton, Typography } from '@mui/material';
-import { ExpandMore as ExpandMoreIcon, HubOutlined as HubIcon } from '@mui/icons-material';
+import React, { useMemo, useState } from 'react';
+import {
+  Box,
+  CircularProgress,
+  Collapse,
+  IconButton,
+  Link,
+  Typography,
+} from '@mui/material';
+import {
+  CheckCircleOutline as CheckIcon,
+  ErrorOutline as ErrorIcon,
+  ExpandMore as ExpandMoreIcon,
+} from '@mui/icons-material';
 import type { McpToolCallRecord } from '../types';
+import { downloadMcpFile } from '../api';
+import { mergeMcpToolCalls } from '../utils/mergeToolCalls';
 
 interface McpToolCallsPanelProps {
   toolCalls: McpToolCallRecord[];
   serverLabels?: Record<string, string>;
 }
 
-export default function McpToolCallsPanel({ toolCalls, serverLabels }: McpToolCallsPanelProps) {
-  const [open, setOpen] = useState(false);
-  if (!toolCalls.length) return null;
+function formatJsonBlock(value: unknown): string {
+  if (value == null) return '';
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        return JSON.stringify(JSON.parse(trimmed), null, 2);
+      } catch {
+        return value;
+      }
+    }
+    return value;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
 
-  const ends = toolCalls.filter((t) => t.type === 'mcp_tool_end');
+function McpDownloadLink({ url, label }: { url: string; label?: string }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleDownload = async (event: React.MouseEvent) => {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await downloadMcpFile(url, label);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось скачать файл');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
-    <Box sx={{ mt: 1 }}>
+    <Box>
+      <Link
+        component="button"
+        type="button"
+        onClick={handleDownload}
+        disabled={busy}
+        variant="caption"
+        sx={{ wordBreak: 'break-all', textAlign: 'left' }}
+      >
+        {busy ? 'Скачивание…' : `Скачать: ${label || 'файл'}`}
+      </Link>
+      {error ? (
+        <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.25 }}>
+          {error}
+        </Typography>
+      ) : null}
+    </Box>
+  );
+}
+
+function statusLabel(status: 'running' | 'completed' | 'failed', tool: string): string {
+  if (status === 'running') return `Выполняется: ${tool}`;
+  if (status === 'failed') return `Ошибка: ${tool}`;
+  return `Выполнено: ${tool}`;
+}
+
+function CodeBlock({ children }: { children: string }) {
+  if (!children.trim()) {
+    return (
+      <Typography variant="caption" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+        (пусто)
+      </Typography>
+    );
+  }
+  return (
+    <Box
+      component="pre"
+      sx={{
+        m: 0,
+        p: 1.25,
+        borderRadius: 1,
+        bgcolor: 'action.hover',
+        border: '1px solid',
+        borderColor: 'divider',
+        fontSize: '0.72rem',
+        lineHeight: 1.45,
+        fontFamily: 'Consolas, Monaco, "Courier New", monospace',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+        maxHeight: 280,
+        overflow: 'auto',
+      }}
+    >
+      {children}
+    </Box>
+  );
+}
+
+function McpToolCallCard({
+  execution,
+  serverLabel,
+  defaultOpen,
+}: {
+  execution: ReturnType<typeof mergeMcpToolCalls>[number];
+  serverLabel: string;
+  defaultOpen: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const inputText = formatJsonBlock(execution.arguments ?? {});
+  const resultText = formatJsonBlock(execution.result ?? execution.result_preview ?? execution.error ?? '');
+
+  return (
+    <Box
+      sx={{
+        border: '1px solid',
+        borderColor: execution.status === 'failed' ? 'error.light' : 'divider',
+        borderRadius: 1.5,
+        overflow: 'hidden',
+        bgcolor: 'background.paper',
+      }}
+    >
       <Box
         role="button"
         tabIndex={0}
         onClick={() => setOpen((v) => !v)}
-        sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, cursor: 'pointer' }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setOpen((v) => !v);
+          }
+        }}
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 1,
+          px: 1.25,
+          py: 0.85,
+          cursor: 'pointer',
+          userSelect: 'none',
+          '&:hover': { bgcolor: 'action.hover' },
+        }}
       >
-        <HubIcon sx={{ fontSize: 16, color: 'primary.main' }} />
-        <Typography variant="caption" color="primary">
-          Использованные MCP-инструменты ({ends.length || toolCalls.length})
+        {execution.status === 'running' ? (
+          <CircularProgress size={16} sx={{ flexShrink: 0 }} />
+        ) : execution.status === 'failed' ? (
+          <ErrorIcon sx={{ fontSize: 18, color: 'error.main', flexShrink: 0 }} />
+        ) : (
+          <CheckIcon sx={{ fontSize: 18, color: 'success.main', flexShrink: 0 }} />
+        )}
+        <Typography variant="body2" sx={{ flex: 1, fontWeight: 500 }}>
+          {statusLabel(execution.status, execution.tool)}
+        </Typography>
+        {execution.duration_ms != null ? (
+          <Typography variant="caption" color="text.secondary">
+            {execution.duration_ms} ms
+          </Typography>
+        ) : null}
+        <IconButton
+          size="small"
+          aria-label={open ? 'Свернуть' : 'Развернуть'}
+          sx={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}
+        >
+          <ExpandMoreIcon fontSize="small" />
+        </IconButton>
+      </Box>
+
+      <Collapse in={open}>
+        <Box sx={{ px: 1.25, pb: 1.25, display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+          <Box>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+              AstraChat отправил эту информацию {serverLabel}
+            </Typography>
+            <CodeBlock>{inputText}</CodeBlock>
+          </Box>
+
+          {execution.status !== 'running' ? (
+            <Box>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                Результат
+              </Typography>
+              <CodeBlock>{resultText}</CodeBlock>
+            </Box>
+          ) : null}
+
+          {execution.download_urls?.length ? (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.35 }}>
+              {execution.download_urls.map((file) => (
+                <McpDownloadLink
+                  key={`${file.url}-${file.label || 'file'}`}
+                  url={file.url}
+                  label={file.label}
+                />
+              ))}
+            </Box>
+          ) : null}
+        </Box>
+      </Collapse>
+    </Box>
+  );
+}
+
+export default function McpToolCallsPanel({ toolCalls, serverLabels }: McpToolCallsPanelProps) {
+  const executions = useMemo(() => mergeMcpToolCalls(toolCalls), [toolCalls]);
+  const [open, setOpen] = useState(true);
+
+  if (!executions.length) return null;
+
+  const runningCount = executions.filter((x) => x.status === 'running').length;
+  const completedCount = executions.filter((x) => x.status === 'completed').length;
+
+  return (
+    <Box sx={{ mt: 1.25, display: 'flex', flexDirection: 'column', gap: 1 }}>
+      <Box
+        role="button"
+        tabIndex={0}
+        onClick={() => setOpen((v) => !v)}
+        sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, cursor: 'pointer', width: 'fit-content' }}
+      >
+        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+          MCP-инструменты ({completedCount}/{executions.length}
+          {runningCount > 0 ? `, выполняется ${runningCount}` : ''})
         </Typography>
         <IconButton size="small" sx={{ transform: open ? 'rotate(180deg)' : 'none' }}>
           <ExpandMoreIcon fontSize="small" />
         </IconButton>
       </Box>
+
       <Collapse in={open}>
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mt: 0.75, pl: 0.5 }}>
-          {(ends.length ? ends : toolCalls).map((t, i) => (
-            <Box
-              key={`${t.qualified_name}-${i}`}
-              sx={{
-                borderLeft: '2px solid',
-                borderColor: t.success === false ? 'error.light' : 'primary.light',
-                pl: 1,
-              }}
-            >
-              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center' }}>
-                <Chip size="small" label={serverLabels?.[t.server_id] || t.server_id} variant="outlined" />
-                {t.model ? <Chip size="small" label={t.model} color="info" variant="outlined" /> : null}
-                <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>
-                  {t.qualified_name}
-                </Typography>
-                {t.duration_ms != null ? (
-                  <Typography variant="caption" color="text.secondary">
-                    {t.duration_ms} ms
-                  </Typography>
-                ) : null}
-              </Box>
-              {t.type === 'mcp_tool_end' && t.success === false ? (
-                <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.25 }}>
-                  {t.error || 'error'}
-                </Typography>
-              ) : null}
-              {t.result_preview ? (
-                <Typography
-                  variant="caption"
-                  color="text.secondary"
-                  sx={{
-                    display: 'block',
-                    mt: 0.35,
-                    whiteSpace: 'pre-wrap',
-                    wordBreak: 'break-word',
-                    fontFamily: 'inherit',
-                  }}
-                >
-                  {t.result_preview}
-                </Typography>
-              ) : null}
-              {t.has_image ? (
-                <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                  [вложение: изображение]
-                </Typography>
-              ) : null}
-            </Box>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          {executions.map((execution, index) => (
+            <McpToolCallCard
+              key={execution.call_id}
+              execution={execution}
+              serverLabel={serverLabels?.[execution.server_id] || execution.server_id}
+              defaultOpen={execution.status === 'running' || index === executions.length - 1}
+            />
           ))}
         </Box>
       </Collapse>

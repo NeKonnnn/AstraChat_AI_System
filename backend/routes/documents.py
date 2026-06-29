@@ -2,39 +2,55 @@
 routes/documents.py - загрузка, удаление, запросы к документам, отчеты OCR
 """
 
-import os
 import json
+import os
 from datetime import datetime
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Request, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 
-from backend.app_state import ask_agent, rag_client, minio_client, settings, get_rag_chat_top_k
-from backend.schemas import DocumentQueryRequest
-from backend.realtime.helpers import _is_structure_query
-from backend.realtime.rag_evidence import (
-    build_rag_id_to_filename,
-    filter_rag_hits_by_score,
-    format_rag_fragments,
-    rag_document_label,
-    rag_guard_env,
-    RAG_NO_RELEVANT_CONTEXT_MESSAGE,
-)
+import backend.app_state as state
+from backend.app_state import ask_agent, get_rag_chat_top_k, get_rag_chunk_index_params, minio_client, rag_client, settings
+from backend.auth.jwt_handler import get_current_user
 from backend.rag_query.post_generation import maybe_replace_ungrounded
 from backend.rag_query.prompts import RAG_STRICT_NOT_FOUND_MESSAGE, merge_strict_rag_system_prompt
 from backend.rag_query.semantic_cache import bump_rag_semantic_cache
+from backend.realtime.helpers import _is_structure_query
+from backend.realtime.rag_evidence import (
+    RAG_NO_RELEVANT_CONTEXT_MESSAGE,
+    build_rag_id_to_filename,
+    filter_rag_hits_by_score,
+    format_rag_fragments,
+    rag_guard_env,
+)
+from backend.schemas import DocumentQueryRequest
 from backend.settings.cef_logger.cef_logger import log_cef_event
-from backend.auth.jwt_handler import get_current_user
 from backend.settings.logging import get_logger
+from backend.settings.logging.errors import logged_suppress
+from backend.settings.service_toggles import require_service  # FEATURE-FLAG
 
-router = APIRouter(prefix="/api/documents", tags=["documents"])
 logger = get_logger(__name__)
 
+
+def _documents_bucket_name() -> str:
+    """Имя bucket для документов/вложений — из settings (YAML + ENV), не hardcoded default."""
+    minio_cfg = getattr(settings, "minio", None)
+    if minio_cfg is not None:
+        docs_bucket = getattr(minio_cfg, "documents_bucket_name", None)
+        if docs_bucket:
+            return str(docs_bucket)
+        main_bucket = getattr(minio_cfg, "bucket_name", None)
+        if main_bucket:
+            return str(main_bucket)
+    return os.getenv("MINIO_DOCUMENTS_BUCKET_NAME") or os.getenv("MINIO_BUCKET_NAME") or "astrachat-documents"
+
+
+router = APIRouter(prefix="/api/documents", tags=["documents"])
 INLINE_ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024
 _INLINE_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 _INLINE_DOC_EXTS = {".pdf", ".docx", ".xlsx", ".xls", ".txt"}
 _INLINE_ATTACH_SUPPORTED_EXTENSIONS = sorted(_INLINE_IMAGE_EXTS | _INLINE_DOC_EXTS)
-
 _CONTENT_TYPE_BY_EXT = {
     ".pdf": "application/pdf",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -59,10 +75,7 @@ def _unsupported_inline_attach_extension_detail(filename: str) -> str:
     supported = _inline_attach_supported_extensions_label()
     if ext:
         return f"{ext} файлы не поддерживаются, поддерживаются только следующие расширения файлов: {supported}"
-    return (
-        "файлы без расширения не поддерживаются, "
-        f"поддерживаются только следующие расширения файлов: {supported}"
-    )
+    return f"файлы без расширения не поддерживаются, поддерживаются только следующие расширения файлов: {supported}"
 
 
 def _emit_attach_info(message: str) -> None:
@@ -103,23 +116,17 @@ def _detect_inline_attachment_kind(filename: str, content_type: str) -> str:
     return "unsupported"
 
 
-async def _analyze_inline_attachment_for_model(
-    filename: str,
-    content_type: str,
-    file_size: int,
-) -> dict:
+async def _analyze_inline_attachment_for_model(filename: str, content_type: str, file_size: int) -> dict:
     from backend.app_state import get_current_model_path
 
     kind = _detect_inline_attachment_kind(filename, content_type)
     format_allowed = kind != "unsupported"
     size_allowed = file_size <= INLINE_ATTACHMENT_MAX_BYTES
-
     model_path = get_current_model_path()
     provider_id = None
     model_vision = None
     model_compatible = True
     incompatibility_reason = None
-
     if model_path:
         try:
             from backend.llm_providers import get_registry
@@ -128,22 +135,20 @@ async def _analyze_inline_attachment_for_model(
             provider, _model_id = registry.resolve(model_path)
             provider_id = provider.id
             model_vision = bool(provider.capabilities.vision)
-            if kind == "image" and not model_vision:
+            if kind == "image" and (not model_vision):
                 model_compatible = False
                 incompatibility_reason = "модель не поддерживает vision (изображения)"
-        except Exception as exc:
-            logger.debug("[ChatAttach] не удалось определить capabilities модели: %s", exc)
+        except Exception:
+            logger.exception("[ChatAttach] не удалось определить capabilities модели")
     elif kind == "image":
         model_compatible = False
         incompatibility_reason = "модель не выбрана — изображение может не обработаться"
-
     allowed = format_allowed and size_allowed
     reject_reason = None
     if not format_allowed:
         reject_reason = "Неподдерживаемый формат (PDF, DOCX, XLSX, TXT, JPEG, PNG, WEBP, GIF)"
     elif not size_allowed:
         reject_reason = f"Размер превышает {INLINE_ATTACHMENT_MAX_BYTES // (1024 * 1024)}MB"
-
     return {
         "filename": filename,
         "content_type": content_type,
@@ -193,105 +198,49 @@ def _extract_inline_payload(content: bytes, filename: str, content_type: str) ->
 
     ext = os.path.splitext(filename)[1].lower()
     ct = (content_type or "").lower()
-
     if ct.startswith("image/") or ext in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
         mime = ct if ct.startswith("image/") else _CONTENT_TYPE_BY_EXT.get(ext, "image/jpeg")
         b64 = base64.b64encode(content).decode("ascii")
         return {"type": "image", "content": f"data:{mime};base64,{b64}", "cs1": "image"}
-
     if ext == ".pdf":
         from PyPDF2 import PdfReader
+
         reader = PdfReader(io.BytesIO(content))
         pages_text = []
         for i, page in enumerate(reader.pages, 1):
             page_text = page.extract_text() or ""
             if page_text.strip():
-                pages_text.append(f"[Страница {i}]\n{page_text}")
+                pages_text.append(f"""[Страница {i}]
+{page_text}""")
         text = "\n\n".join(pages_text) if pages_text else "(PDF не содержит извлекаемого текста)"
         return {"type": "text", "content": text, "cs1": "pdf"}
-
     if ext == ".docx":
         import docx as docx_lib
+
         doc = docx_lib.Document(io.BytesIO(content))
         paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
         text = "\n".join(paragraphs) if paragraphs else "(Документ не содержит текста)"
         return {"type": "text", "content": text, "cs1": "docx"}
-
     if ext in (".xlsx", ".xls"):
         import openpyxl
+
         wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
         lines = []
         for sheet_name in wb.sheetnames:
             ws = wb[sheet_name]
             lines.append(f"=== Лист: {sheet_name} ===")
             for row in ws.iter_rows(values_only=True):
-                row_str = "\t".join("" if c is None else str(c) for c in row)
+                row_str = "\t".join(("" if c is None else str(c) for c in row))
                 if row_str.strip():
                     lines.append(row_str)
         text = "\n".join(lines) if lines else "(Таблица не содержит данных)"
         return {"type": "text", "content": text, "cs1": "xlsx"}
-
     text = content.decode("utf-8", errors="replace")
     return {"type": "text", "content": text, "cs1": "text"}
 
 
-async def _ocr_image_payload_if_needed(
-    content: bytes,
-    filename: str,
-    payload: dict,
-    model_path: str | None,
-) -> tuple[dict, str | None]:
-    """
-    llm-svc + GGUF — text-only: вместо base64 vision прогоняем OCR (Surya).
-    """
-    if payload.get("type") != "image":
-        return payload, None
-
-    use_ocr = True
-    if model_path:
-        try:
-            from backend.llm_providers import get_registry
-
-            registry = await get_registry()
-            provider, _ = registry.resolve(model_path)
-            if provider.capabilities.vision and getattr(provider, "kind", None) != "llm-svc":
-                use_ocr = False
-        except Exception as exc:
-            logger.debug("[ChatAttach] OCR routing: %s", exc)
-
-    if not use_ocr:
-        return payload, None
-
-    try:
-        from backend.agent_llm_svc import get_llm_service
-
-        svc = await get_llm_service()
-        if not svc.client.ocr_url:
-            return payload, "OCR-сервис не настроен — текстовая модель не распознает изображение"
-
-        ocr = await svc.client.recognize_text_from_image(content, filename)
-        text = (ocr.get("text") or "").strip()
-        if not text:
-            return {
-                "type": "text",
-                "content": f"[Изображение «{filename}»: OCR не нашёл текста на изображении]",
-                "cs1": "image-ocr-empty",
-            }, "На изображении не обнаружен текст (OCR)"
-        return {
-            "type": "text",
-            "content": f"[Текст с изображения «{filename}» (OCR)]:\n{text}",
-            "cs1": "image-ocr",
-        }, None
-    except Exception as exc:
-        logger.warning("[ChatAttach] OCR failed for %s: %s", filename, exc)
-        return payload, f"OCR не удался: {exc}. Текстовая модель не «видит» картинку напрямую."
-
-
 def _try_upload_bytes_to_minio(
-    request: Request,
-    content: bytes,
-    filename: str,
-    content_type: str,
+    request: Request, content: bytes, filename: str, content_type: str
 ) -> tuple[str | None, str | None]:
     """
     Пытается загрузить байты в MinIO. При недоступности MinIO возвращает (None, None)
@@ -299,138 +248,98 @@ def _try_upload_bytes_to_minio(
     """
     if not minio_client:
         logger.warning("MinIO недоступен — файл %s не сохранён в объектное хранилище", filename)
-        return None, None
-
-    documents_bucket = os.getenv("MINIO_DOCUMENTS_BUCKET_NAME", "astrachat-documents")
+        return (None, None)
+    documents_bucket = _documents_bucket_name()
     ext = os.path.splitext(filename)[1].lower()
     is_image = ext in (".jpg", ".jpeg", ".png", ".webp", ".gif") or content_type.startswith("image/")
-    file_object_name = minio_client.generate_object_name(
-        prefix="img_" if is_image else "doc_",
-        extension=ext or ".bin",
-    )
+    file_object_name = minio_client.generate_object_name(prefix="img_" if is_image else "doc_", extension=ext or ".bin")
     try:
         minio_client.upload_file(
-            content, file_object_name, content_type=content_type, bucket_name=documents_bucket
+            content,
+            file_object_name,
+            content_type=content_type,
+            bucket_name=documents_bucket,
+            cef_display_name=filename,
         )
-        log_cef_event(
-            "FS003",
-            request=request,
-            status_code=200,
-            extra={
-                "file": filename,
-                "bucket": f"minio://{documents_bucket}/{file_object_name}",
-            },
-        )
-        return file_object_name, documents_bucket
-    except Exception as e:
-        logger.warning("MinIO attach upload error (%s): %s", filename, e)
-        try:
-            log_cef_event(
-                "FS004",
-                request=request,
-                status_code=500,
-                extra={
-                    "file": filename,
-                    "bucket": f"minio://{documents_bucket}",
-                    "reason": str(e)[:300],
-                },
-            )
-        except Exception:
-            pass
-        return None, None
+        return (file_object_name, documents_bucket)
+    except Exception:
+        logger.exception("MinIO attach upload error")
+        return (None, None)
 
 
 @router.post("/upload")
-async def upload_document(request: Request, file: UploadFile = File(...)):
+async def upload_document(request: Request, file: Annotated[UploadFile, File(...)]):
+    require_service("rag")  # FEATURE-FLAG
     if not rag_client:
         raise HTTPException(status_code=503, detail="RAG service недоступен")
-
-    documents_bucket = os.getenv("MINIO_DOCUMENTS_BUCKET_NAME", "astrachat-documents")
+    documents_bucket = _documents_bucket_name()
     file_object_name = None
-
     try:
         content = await file.read()
         file_extension = os.path.splitext(file.filename)[1].lower() if file.filename else ""
         is_image = file_extension in (".jpg", ".jpeg", ".png", ".webp")
         content_type_map = {
-            ".pdf": "application/pdf", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            ".doc": "application/msword", ".txt": "text/plain",
+            ".pdf": "application/pdf",
+            ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ".doc": "application/msword",
+            ".txt": "text/plain",
             ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            ".xls": "application/vnd.ms-excel", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-            ".png": "image/png", ".webp": "image/webp",
+            ".xls": "application/vnd.ms-excel",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".webp": "image/webp",
         }
         content_type = content_type_map.get(file_extension, "application/octet-stream")
-
         if minio_client:
             try:
                 file_object_name = minio_client.generate_object_name(
                     prefix="img_" if is_image else "doc_", extension=file_extension
                 )
-                minio_client.upload_file(content, file_object_name, content_type=content_type, bucket_name=documents_bucket)
-                _fs_file = file.filename or file_object_name or "unknown"
-                _fs_bucket = f"minio://{documents_bucket}/{file_object_name}"
-                log_cef_event(
-                    "FS003",
-                    request=request,
-                    status_code=200,
-                    extra={"file": _fs_file, "bucket": _fs_bucket},
+                minio_client.upload_file(
+                    content,
+                    file_object_name,
+                    content_type=content_type,
+                    bucket_name=documents_bucket,
+                    cef_display_name=file.filename or file_object_name,
                 )
-            except Exception as e:
-                logger.warning(f"MinIO upload: {e}")
-                try:
-                    log_cef_event(
-                        "FS004",
-                        request=request,
-                        status_code=500,
-                        extra={
-                            "file": file.filename or "unknown",
-                            "bucket": f"minio://{documents_bucket}",
-                            "reason": str(e)[:300],
-                        },
-                    )
-                except Exception:
-                    pass
+            except Exception:
+                logger.exception("MinIO upload")
                 file_object_name = None
-
         try:
+            chunk_params = get_rag_chunk_index_params()
             rag_result = await rag_client.upload_document(
                 file_bytes=content,
                 filename=file.filename or file_object_name or "unknown",
                 minio_object=file_object_name,
                 minio_bucket=documents_bucket if minio_client and file_object_name else None,
                 original_path=None,
+                **chunk_params,
             )
         except Exception as e:
+            logger.exception("Ошибка операции")
             if minio_client and file_object_name:
-                try:
+                with logged_suppress(logger):
                     minio_client.delete_file(file_object_name, bucket_name=documents_bucket)
-                except Exception:
-                    pass
-            raise HTTPException(status_code=502, detail=f"Ошибка RAG-сервиса: {e}")
-
+            raise HTTPException(status_code=502, detail=f"Ошибка RAG-сервиса: {e}") from e
         if not rag_result.get("ok"):
             if minio_client and file_object_name:
-                try:
+                with logged_suppress(logger):
                     minio_client.delete_file(file_object_name, bucket_name=documents_bucket)
-                except Exception:
-                    pass
             raise HTTPException(status_code=400, detail=rag_result.get("error", "Ошибка индексации"))
-
         bump_rag_semantic_cache()
-
-        result = {"message": "Документ успешно загружен", "filename": file.filename,
-                  "success": True, "rag_document_id": rag_result.get("document_id")}
+        result = {
+            "message": "Документ успешно загружен",
+            "filename": file.filename,
+            "success": True,
+            "rag_document_id": rag_result.get("document_id"),
+        }
         _doc_id = rag_result.get("document_id")
         _ex: dict = {"fname": file.filename or "unknown", "fsize": len(content)}
         if _doc_id:
             _ex["cs2"] = str(_doc_id)
             _ex["cs2Label"] = "ObjectId"
-        log_cef_event(
-            "FS005",
-            request=request,
-            status_code=200,
-            extra=_ex,
-        )
+        log_cef_event("FS005", request=request, status_code=200, extra=_ex)
         if is_image and minio_client and file_object_name:
             result["minio_object"] = file_object_name
             result["minio_bucket"] = documents_bucket
@@ -438,58 +347,52 @@ async def upload_document(request: Request, file: UploadFile = File(...)):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Ошибка операции")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/query")
 async def query_document(request: DocumentQueryRequest):
+    require_service("rag")  # FEATURE-FLAG
     if not rag_client:
         raise HTTPException(status_code=503, detail="RAG service недоступен")
     if not ask_agent:
         raise HTTPException(status_code=503, detail="AI agent не доступен")
     try:
         from backend.app_state import current_rag_strategy
+
         min_sim, _ = rag_guard_env()
         hits = await rag_client.search(request.query, k=get_rag_chat_top_k(), strategy=current_rag_strategy)
         hits = filter_rag_hits_by_score(hits, min_sim)
         if not hits:
-            return {
-                "response": RAG_NO_RELEVANT_CONTEXT_MESSAGE,
-                "query": request.query,
-                "success": True,
-            }
-
+            return {"response": RAG_NO_RELEVANT_CONTEXT_MESSAGE, "query": request.query, "success": True}
         if _is_structure_query(request.query):
             seen = {(d, i) for _, _, d, i in hits}
             for doc_id in {d for _, _, d, _ in hits if d}:
-                try:
+                with logged_suppress(logger):
                     for c, sc, did, idx in await rag_client.get_document_start_chunks(doc_id, max_chunks=2):
                         if (did, idx) not in seen:
                             hits = [(c, sc, did, idx)] + hits
                             seen.add((did, idx))
-                except Exception:
-                    pass
-
         id_map = build_rag_id_to_filename(list(await rag_client.list_documents() or []))
-        parts, _ = format_rag_fragments(
-            hits,
-            id_map,
-            max_chars=12000,
-            store_label="global/rest-documents-search",
-        )
-
-        prompt = (
-            f"CONTEXT:\n{chr(10).join(parts)}\n\nВопрос: {request.query}\n\nОтвет:"
-        )
+        parts, _ = format_rag_fragments(hits, id_map, max_chars=12000, store_label="global/rest-documents-search")
+        prompt = f"CONTEXT:\n{chr(10).join(parts)}\nВопрос: {request.query}\n\nОтвет:"
         response_text = ask_agent(
-            prompt, system_prompt=merge_strict_rag_system_prompt(None, rag_override=getattr(state, "rag_system_prompt", None))
+            prompt,
+            system_prompt=merge_strict_rag_system_prompt(
+                None, rag_override=getattr(state, "rag_system_prompt", None)
+            ),
         )
-        response_text = await maybe_replace_ungrounded(
-            prompt[:20000], response_text, RAG_STRICT_NOT_FOUND_MESSAGE
-        )
-        return {"response": response_text, "query": request.query, "success": True, "timestamp": datetime.now().isoformat()}
+        response_text = await maybe_replace_ungrounded(prompt[:20000], response_text, RAG_STRICT_NOT_FOUND_MESSAGE)
+        return {
+            "response": response_text,
+            "query": request.query,
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+        }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Ошибка операции")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("")
@@ -502,11 +405,13 @@ async def get_documents():
         filenames = [d.get("filename") for d in docs]
         return {"documents": filenames, "count": len(filenames), "success": True}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Ошибка операции")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.delete("/{filename}")
 async def delete_document(filename: str, request: Request):
+    require_service("rag")  # FEATURE-FLAG
     if not rag_client:
         raise HTTPException(status_code=503, detail="RAG service недоступен")
     try:
@@ -514,23 +419,19 @@ async def delete_document(filename: str, request: Request):
         filenames = [d.get("filename") for d in docs]
         if filename not in filenames:
             raise HTTPException(status_code=404, detail=f"Документ {filename} не найден")
-
-        documents_bucket = os.getenv("MINIO_DOCUMENTS_BUCKET_NAME", "astrachat-documents")
         if minio_client:
             try:
                 minio_info = await rag_client.get_image_minio_info(filename)
                 if minio_info:
                     minio_client.delete_file(minio_info["minio_object"], bucket_name=minio_info["minio_bucket"])
-            except Exception as e:
-                logger.warning(f"MinIO delete: {e}")
-
+            except Exception:
+                logger.exception("MinIO delete")
         try:
             await rag_client.delete_document_by_filename(filename)
         except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Ошибка RAG-сервиса: {e}")
-
+            logger.exception("Ошибка операции")
+            raise HTTPException(status_code=502, detail=f"Ошибка RAG-сервиса: {e}") from e
         bump_rag_semantic_cache()
-
         new_docs = await rag_client.list_documents()
         _fsize = 0
         _oid = None
@@ -544,98 +445,102 @@ async def delete_document(filename: str, request: Request):
             _ex2["cs2"] = str(_oid)
             _ex2["cs2Label"] = "ObjectId"
         log_cef_event("FS006", request=request, status_code=200, extra=_ex2)
-        return {"message": f"Документ {filename} удален", "success": True,
-                "remaining_documents": [d.get("filename") for d in new_docs]}
+        return {
+            "message": f"Документ {filename} удален",
+            "success": True,
+            "remaining_documents": [d.get("filename") for d in new_docs],
+        }
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Ошибка операции")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/report/generate")
 async def generate_confidence_report():
+    require_service("rag")  # FEATURE-FLAG
     if not rag_client:
         raise HTTPException(status_code=503, detail="RAG service недоступен")
     try:
         report_data = await rag_client.get_confidence_report()
         logger.info(f"Получены данные отчета: {report_data['total_documents']} документов")
-
-        report_text = f"""
-        ОТЧЕТ О СТЕПЕНИ УВЕРЕННОСТИ МОДЕЛИ В РАСПОЗНАННОМ ТЕКСТЕ
-        {'=' * 80}
-        Дата генерации: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-        {'=' * 80}
-        
-        ОБЩАЯ ИНФОРМАЦИЯ:
-        - Всего обработано документов: {report_data['total_documents']}
-        - Средняя уверенность модели: {report_data['average_confidence']:.2f}%
-        - Всего слов: {report_data.get('total_words', 0)}
-        {'=' * 80}
-        ДЕТАЛЬНАЯ ИНФОРМАЦИЯ ПО ДОКУМЕНТАМ:
-        """
-
-        for i, doc in enumerate(report_data['documents'], 1):
-            report_text += f"""
-
-{i}. {doc['filename']}
-   Тип файла: {doc['file_type']}
-   Уверенность модели: {doc['confidence']:.2f}%
-   Длина распознанного текста: {doc['text_length']} символов
-   Количество слов: {doc.get('words_count', 0)}
-   {'-' * 80}
-   
-   РАСПОЗНАННЫЙ ТЕКСТ С УВЕРЕННОСТЬЮ:
-"""
-            formatted_text_info = next(
-                (ft for ft in report_data.get('formatted_texts', []) if ft['filename'] == doc['filename']), None
+        report_text = (
+            f"ОТЧЕТ О СТЕПЕНИ УВЕРЕННОСТИ МОДЕЛИ В РАСПОЗНАННОМ ТЕКСТЕ\n"
+            f"{'=' * 80}\n"
+            f"Дата генерации: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"{'=' * 80}\n\n"
+            f"ОБЩАЯ ИНФОРМАЦИЯ:\n"
+            f"- Всего обработано документов: {report_data['total_documents']}\n"
+            f"- Средняя уверенность модели: {report_data['average_confidence']:.2f}%\n"
+            f"- Всего слов: {report_data.get('total_words', 0)}\n"
+            f"{'=' * 80}\n"
+            f"ДЕТАЛЬНАЯ ИНФОРМАЦИЯ ПО ДОКУМЕНТАМ:\n"
+        )
+        for i, doc in enumerate(report_data["documents"], 1):
+            report_text += (
+                f"\n{i}. {doc['filename']}\n"
+                f"   Тип файла: {doc['file_type']}\n"
+                f"   Уверенность модели: {doc['confidence']:.2f}%\n"
+                f"   Длина распознанного текста: {doc['text_length']} символов\n"
+                f"   Количество слов: {doc.get('words_count', 0)}\n"
+                f"   {'-' * 80}\n\n"
+                f"   РАСПОЗНАННЫЙ ТЕКСТ С УВЕРЕННОСТЬЮ:\n"
             )
-
-            if formatted_text_info and formatted_text_info.get('words'):
-                words = formatted_text_info.get('words', [])
+            formatted_text_info = next(
+                (ft for ft in report_data.get("formatted_texts", []) if ft["filename"] == doc["filename"]), None
+            )
+            if formatted_text_info and formatted_text_info.get("words"):
+                words = formatted_text_info.get("words", [])
                 if words:
                     line_words = []
                     current_line = []
                     for word_info in words:
-                        word = word_info.get('word', '')
-                        conf = word_info.get('confidence', 0.0)
+                        word = word_info.get("word", "")
+                        conf = word_info.get("confidence", 0.0)
                         current_line.append((word, conf))
                         if len(current_line) >= 8:
                             line_words.append(current_line)
                             current_line = []
                     if current_line:
                         line_words.append(current_line)
-
                     if line_words:
                         for line in line_words:
                             import re
+
                             tokens_data = []
                             prev_is_punctuation = False
                             for word, conf in line:
-                                is_punctuation = bool(re.match(r'^[^\w\s]+$', word))
+                                is_punctuation = bool(re.match("^[^\\w\\s]+$", word))
                                 word_width = len(word)
                                 col_width = max(word_width + 2, 10)
-                                tokens_data.append({
-                                    'word': word, 'conf': conf,
-                                    'is_punctuation': is_punctuation, 'col_width': col_width,
-                                    'needs_space_before': not prev_is_punctuation and not is_punctuation and tokens_data,
-                                })
+                                tokens_data.append(
+                                    {
+                                        "word": word,
+                                        "conf": conf,
+                                        "is_punctuation": is_punctuation,
+                                        "col_width": col_width,
+                                        "needs_space_before": not prev_is_punctuation
+                                        and (not is_punctuation)
+                                        and tokens_data,
+                                    }
+                                )
                                 prev_is_punctuation = is_punctuation
-
                             percent_line = "│"
                             word_line = "│"
                             separator_line = "├"
                             for idx, token in enumerate(tokens_data):
-                                if token['needs_space_before']:
+                                if token["needs_space_before"]:
                                     word_line += "│"
                                     percent_line += "│"
                                     separator_line += "┼"
                                 percent_str = f"{token['conf']:.0f}%"
-                                word_str = token['word']
-                                percent_padded = percent_str.center(token['col_width'])
-                                word_padded = word_str.ljust(token['col_width'])
+                                word_str = token["word"]
+                                percent_padded = percent_str.center(token["col_width"])
+                                word_padded = word_str.ljust(token["col_width"])
                                 percent_line += percent_padded + "│"
                                 word_line += word_padded + "│"
-                                separator_line += "─" * token['col_width'] + (
+                                separator_line += "─" * token["col_width"] + (
                                     "┤" if idx == len(tokens_data) - 1 else "┼"
                                 )
                             report_text += f"{percent_line}\n"
@@ -647,65 +552,59 @@ async def generate_confidence_report():
                     report_text += "[Нет данных о словах]\n"
             else:
                 report_text += "[Нет отформатированного текста]\n"
-
             report_text += f"{'-' * 80}\n"
-
-        overall_conf = report_data.get('overall_confidence', report_data.get('average_confidence', 0.0))
-        report_text += f"""
-
-{'=' * 80}
-ИТОГО:
-- Итоговая уверенность по всему распознанному тексту: {overall_conf:.2f}%
-- Средняя уверенность по документам: {report_data['average_confidence']:.2f}%
-- Всего документов: {report_data['total_documents']}
-- Всего слов: {report_data.get('total_words', 0)}
-{'=' * 80}
-"""
-
+        overall_conf = report_data.get("overall_confidence", report_data.get("average_confidence", 0.0))
+        report_text += (
+            f"\n{'=' * 80}\n"
+            f"ИТОГО:\n"
+            f"- Итоговая уверенность по всему распознанному тексту: {overall_conf:.2f}%\n"
+            f"- Средняя уверенность по документам: {report_data['average_confidence']:.2f}%\n"
+            f"- Всего документов: {report_data['total_documents']}\n"
+            f"- Всего слов: {report_data.get('total_words', 0)}\n"
+            f"{'=' * 80}\n"
+        )
         report_json = {
             "generated_at": datetime.now().isoformat(),
             "summary": {
-                "total_documents": report_data['total_documents'],
-                "average_confidence": round(report_data['average_confidence'], 2),
+                "total_documents": report_data["total_documents"],
+                "average_confidence": round(report_data["average_confidence"], 2),
                 "overall_confidence": round(overall_conf, 2),
-                "total_words": report_data.get('total_words', 0),
+                "total_words": report_data.get("total_words", 0),
             },
-            "documents": report_data['documents'],
+            "documents": report_data["documents"],
         }
-
         return {
             "success": True,
             "report_text": report_text,
             "report_json": report_json,
             "summary": {
-                "total_documents": report_data['total_documents'],
-                "average_confidence": round(report_data['average_confidence'], 2),
+                "total_documents": report_data["total_documents"],
+                "average_confidence": round(report_data["average_confidence"], 2),
                 "overall_confidence": round(overall_conf, 2),
-                "total_words": report_data.get('total_words', 0),
+                "total_words": report_data.get("total_words", 0),
             },
         }
     except Exception as e:
-        logger.error(f"Ошибка при генерации отчета: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Ошибка при генерации отчета")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/report/download")
 async def download_confidence_report():
+    require_service("rag")  # FEATURE-FLAG
     if not rag_client:
         raise HTTPException(status_code=503, detail="RAG service недоступен")
     try:
-        from openpyxl import Workbook
-        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-        from openpyxl.utils import get_column_letter
         import tempfile
+
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
         report_data = await rag_client.get_confidence_report()
         logger.info(f"Получены данные отчета: {report_data['total_documents']} документов")
-
         wb = Workbook()
         ws = wb.active
         ws.title = "Отчет об уверенности"
-
         header_font = Font(bold=True, size=14, color="FFFFFF")
         header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
         header_alignment = Alignment(horizontal="center", vertical="center")
@@ -715,182 +614,158 @@ async def download_confidence_report():
         medium_confidence_fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
         low_confidence_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
         thin_border = Border(
-            left=Side(style='thin'), right=Side(style='thin'),
-            top=Side(style='thin'), bottom=Side(style='thin'),
+            left=Side(style="thin"), right=Side(style="thin"), top=Side(style="thin"), bottom=Side(style="thin")
         )
-
         current_row = 1
-
-        ws.merge_cells(f'A{current_row}:D{current_row}')
-        header_cell = ws[f'A{current_row}']
+        ws.merge_cells(f"A{current_row}:D{current_row}")
+        header_cell = ws[f"A{current_row}"]
         header_cell.value = "ОТЧЕТ О СТЕПЕНИ УВЕРЕННОСТИ МОДЕЛИ В РАСПОЗНАННОМ ТЕКСТЕ"
         header_cell.font = header_font
         header_cell.fill = header_fill
         header_cell.alignment = header_alignment
         header_cell.border = thin_border
         current_row += 1
-
-        ws.merge_cells(f'A{current_row}:D{current_row}')
-        date_cell = ws[f'A{current_row}']
+        ws.merge_cells(f"A{current_row}:D{current_row}")
+        date_cell = ws[f"A{current_row}"]
         date_cell.value = f"Дата генерации: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         date_cell.alignment = Alignment(horizontal="center")
         current_row += 2
-
-        if report_data['total_documents'] == 0:
-            ws.merge_cells(f'A{current_row}:D{current_row}')
-            warning_cell = ws[f'A{current_row}']
+        if report_data["total_documents"] == 0:
+            ws.merge_cells(f"A{current_row}:D{current_row}")
+            warning_cell = ws[f"A{current_row}"]
             warning_cell.value = "ВНИМАНИЕ: Нет обработанных документов для формирования отчета."
             warning_cell.font = Font(bold=True, color="FF0000")
             warning_cell.alignment = Alignment(horizontal="center")
             current_row += 1
         else:
             info_row = current_row
-            ws[f'A{info_row}'] = "ОБЩАЯ ИНФОРМАЦИЯ:"
-            ws[f'A{info_row}'].font = subheader_font
-            ws[f'A{info_row}'].fill = subheader_fill
+            ws[f"A{info_row}"] = "ОБЩАЯ ИНФОРМАЦИЯ:"
+            ws[f"A{info_row}"].font = subheader_font
+            ws[f"A{info_row}"].fill = subheader_fill
             current_row += 1
-
-            ws[f'A{current_row}'] = "Всего обработано документов:"
-            ws[f'B{current_row}'] = report_data['total_documents']
+            ws[f"A{current_row}"] = "Всего обработано документов:"
+            ws[f"B{current_row}"] = report_data["total_documents"]
             current_row += 1
-
-            ws[f'A{current_row}'] = "Средняя уверенность модели:"
-            ws[f'B{current_row}'] = f"{report_data['average_confidence']:.2f}%"
+            ws[f"A{current_row}"] = "Средняя уверенность модели:"
+            ws[f"B{current_row}"] = f"{report_data['average_confidence']:.2f}%"
             current_row += 1
-
-            ws[f'A{current_row}'] = "Всего слов:"
-            ws[f'B{current_row}'] = report_data.get('total_words', 0)
+            ws[f"A{current_row}"] = "Всего слов:"
+            ws[f"B{current_row}"] = report_data.get("total_words", 0)
             current_row += 2
-
-            for doc_idx, doc in enumerate(report_data.get('documents', []), 1):
-                ws.merge_cells(f'A{current_row}:D{current_row}')
-                doc_header = ws[f'A{current_row}']
+            for doc_idx, doc in enumerate(report_data.get("documents", []), 1):
+                ws.merge_cells(f"A{current_row}:D{current_row}")
+                doc_header = ws[f"A{current_row}"]
                 doc_header.value = f"{doc_idx}. {doc.get('filename', 'Неизвестный файл')}"
                 doc_header.font = subheader_font
                 doc_header.fill = subheader_fill
                 doc_header.border = thin_border
                 current_row += 1
-
-                ws[f'A{current_row}'] = "Тип файла:"
-                ws[f'B{current_row}'] = doc.get('file_type', 'unknown')
+                ws[f"A{current_row}"] = "Тип файла:"
+                ws[f"B{current_row}"] = doc.get("file_type", "unknown")
                 current_row += 1
-
-                ws[f'A{current_row}'] = "Уверенность модели:"
-                conf_value = doc.get('confidence', 0.0)
-                ws[f'B{current_row}'] = f"{conf_value:.2f}%"
+                ws[f"A{current_row}"] = "Уверенность модели:"
+                conf_value = doc.get("confidence", 0.0)
+                ws[f"B{current_row}"] = f"{conf_value:.2f}%"
                 if conf_value >= 80:
-                    ws[f'B{current_row}'].fill = high_confidence_fill
+                    ws[f"B{current_row}"].fill = high_confidence_fill
                 elif conf_value >= 50:
-                    ws[f'B{current_row}'].fill = medium_confidence_fill
+                    ws[f"B{current_row}"].fill = medium_confidence_fill
                 else:
-                    ws[f'B{current_row}'].fill = low_confidence_fill
+                    ws[f"B{current_row}"].fill = low_confidence_fill
                 current_row += 1
-
-                ws[f'A{current_row}'] = "Длина текста:"
-                ws[f'B{current_row}'] = f"{doc.get('text_length', 0)} символов"
+                ws[f"A{current_row}"] = "Длина текста:"
+                ws[f"B{current_row}"] = f"{doc.get('text_length', 0)} символов"
                 current_row += 1
-
-                ws[f'A{current_row}'] = "Количество слов:"
-                ws[f'B{current_row}'] = doc.get('words_count', 0)
+                ws[f"A{current_row}"] = "Количество слов:"
+                ws[f"B{current_row}"] = doc.get("words_count", 0)
                 current_row += 2
-
                 formatted_text_info = next(
-                    (ft for ft in report_data.get('formatted_texts', []) if ft.get('filename') == doc.get('filename')),
+                    (ft for ft in report_data.get("formatted_texts", []) if ft.get("filename") == doc.get("filename")),
                     None,
                 )
-
-                if formatted_text_info and formatted_text_info.get('words'):
-                    words = formatted_text_info.get('words', [])
+                if formatted_text_info and formatted_text_info.get("words"):
+                    words = formatted_text_info.get("words", [])
                     if words:
-                        ws[f'A{current_row}'] = "Слово"
-                        ws[f'B{current_row}'] = "Уверенность"
-                        ws[f'A{current_row}'].font = Font(bold=True)
-                        ws[f'B{current_row}'].font = Font(bold=True)
-                        ws[f'A{current_row}'].fill = subheader_fill
-                        ws[f'B{current_row}'].fill = subheader_fill
-                        ws[f'A{current_row}'].border = thin_border
-                        ws[f'B{current_row}'].border = thin_border
+                        ws[f"A{current_row}"] = "Слово"
+                        ws[f"B{current_row}"] = "Уверенность"
+                        ws[f"A{current_row}"].font = Font(bold=True)
+                        ws[f"B{current_row}"].font = Font(bold=True)
+                        ws[f"A{current_row}"].fill = subheader_fill
+                        ws[f"B{current_row}"].fill = subheader_fill
+                        ws[f"A{current_row}"].border = thin_border
+                        ws[f"B{current_row}"].border = thin_border
                         current_row += 1
-
                         for word_info in words:
-                            word = word_info.get('word', '')
-                            conf = word_info.get('confidence', 0.0)
+                            word = word_info.get("word", "")
+                            conf = word_info.get("confidence", 0.0)
                             if word:
-                                ws[f'A{current_row}'] = word
-                                ws[f'B{current_row}'] = f"{conf:.1f}%"
-                                ws[f'A{current_row}'].border = thin_border
-                                ws[f'B{current_row}'].border = thin_border
+                                ws[f"A{current_row}"] = word
+                                ws[f"B{current_row}"] = f"{conf:.1f}%"
+                                ws[f"A{current_row}"].border = thin_border
+                                ws[f"B{current_row}"].border = thin_border
                                 if conf >= 80:
-                                    ws[f'B{current_row}'].fill = high_confidence_fill
+                                    ws[f"B{current_row}"].fill = high_confidence_fill
                                 elif conf >= 50:
-                                    ws[f'B{current_row}'].fill = medium_confidence_fill
+                                    ws[f"B{current_row}"].fill = medium_confidence_fill
                                 else:
-                                    ws[f'B{current_row}'].fill = low_confidence_fill
+                                    ws[f"B{current_row}"].fill = low_confidence_fill
                                 current_row += 1
                 current_row += 1
-
-            overall_conf = report_data.get('overall_confidence', report_data.get('average_confidence', 0.0))
-            ws.merge_cells(f'A{current_row}:D{current_row}')
-            summary_header = ws[f'A{current_row}']
+            overall_conf = report_data.get("overall_confidence", report_data.get("average_confidence", 0.0))
+            ws.merge_cells(f"A{current_row}:D{current_row}")
+            summary_header = ws[f"A{current_row}"]
             summary_header.value = "ИТОГО"
             summary_header.font = subheader_font
             summary_header.fill = subheader_fill
             summary_header.border = thin_border
             current_row += 1
-
-            ws[f'A{current_row}'] = "Итоговая уверенность по всему тексту:"
-            ws[f'B{current_row}'] = f"{overall_conf:.2f}%"
+            ws[f"A{current_row}"] = "Итоговая уверенность по всему тексту:"
+            ws[f"B{current_row}"] = f"{overall_conf:.2f}%"
             if overall_conf >= 80:
-                ws[f'B{current_row}'].fill = high_confidence_fill
+                ws[f"B{current_row}"].fill = high_confidence_fill
             elif overall_conf >= 50:
-                ws[f'B{current_row}'].fill = medium_confidence_fill
+                ws[f"B{current_row}"].fill = medium_confidence_fill
             else:
-                ws[f'B{current_row}'].fill = low_confidence_fill
+                ws[f"B{current_row}"].fill = low_confidence_fill
             current_row += 1
-
-            ws[f'A{current_row}'] = "Средняя уверенность по документам:"
-            ws[f'B{current_row}'] = f"{report_data['average_confidence']:.2f}%"
+            ws[f"A{current_row}"] = "Средняя уверенность по документам:"
+            ws[f"B{current_row}"] = f"{report_data['average_confidence']:.2f}%"
             current_row += 1
-
-            ws[f'A{current_row}'] = "Всего документов:"
-            ws[f'B{current_row}'] = report_data['total_documents']
+            ws[f"A{current_row}"] = "Всего документов:"
+            ws[f"B{current_row}"] = report_data["total_documents"]
             current_row += 1
-
-            ws[f'A{current_row}'] = "Всего слов:"
-            ws[f'B{current_row}'] = report_data.get('total_words', 0)
-
-        ws.column_dimensions['A'].width = 50
-        ws.column_dimensions['B'].width = 20
-        ws.column_dimensions['C'].width = 15
-        ws.column_dimensions['D'].width = 15
-
+            ws[f"A{current_row}"] = "Всего слов:"
+            ws[f"B{current_row}"] = report_data.get("total_words", 0)
+        ws.column_dimensions["A"].width = 50
+        ws.column_dimensions["B"].width = 20
+        ws.column_dimensions["C"].width = 15
+        ws.column_dimensions["D"].width = 15
         temp_dir = tempfile.gettempdir()
         report_filename = f"confidence_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         report_path = os.path.join(temp_dir, report_filename)
-
         try:
             os.makedirs(temp_dir, exist_ok=True)
             wb.save(report_path)
             logger.info(f"Excel отчет сохранен: {report_path}")
             return FileResponse(
                 report_path,
-                media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 filename=report_filename,
                 headers={"Content-Disposition": f"attachment; filename*=UTF-8''{report_filename}"},
             )
-        except Exception as file_err:
-            logger.error(f"Ошибка при сохранении Excel: {file_err}")
-            raise HTTPException(status_code=500, detail=str(file_err))
-
+        except Exception as e:
+            logger.exception("Ошибка при сохранении Excel")
+            raise HTTPException(status_code=500, detail="Ошибка при сохранении Excel") from e
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception("Ошибка операции")
         logger.error(f"Ошибка при генерации Excel: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/extract")
-async def extract_document_inline(request: Request, file: UploadFile = File(...)):
+async def extract_document_inline(request: Request, file: Annotated[UploadFile, File(...)]):
     """
     Устаревший путь: только извлечение в памяти без MinIO.
     Предпочтительно: POST /attach (MinIO + inline для модели).
@@ -898,61 +773,42 @@ async def extract_document_inline(request: Request, file: UploadFile = File(...)
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Файл пустой")
-
     filename = file.filename or "unknown"
     content_type = _resolve_content_type(filename, file.content_type or "")
     file_size = len(content)
-
     try:
         payload = _extract_inline_payload(content, filename, content_type)
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Inline extract error ({filename}): {e}")
+        logger.exception("Inline extract error (%s)", filename)
         raise HTTPException(status_code=500, detail=f"Не удалось обработать файл: {e}") from e
-
     log_cef_event(
-        "FS007",
-        request=request,
-        status_code=200,
-        extra={"fname": filename, "fsize": file_size, "cs1": payload["cs1"]},
+        "FS007", request=request, status_code=200, extra={"fname": filename, "fsize": file_size, "cs1": payload["cs1"]}
     )
-    return {
-        "type": payload["type"],
-        "content": payload["content"],
-        "filename": filename,
-        "success": True,
-    }
+    return {"type": payload["type"], "content": payload["content"], "filename": filename, "success": True}
 
 
 @router.post("/attach")
-async def attach_document_for_message(request: Request, file: UploadFile = File(...)):
+async def attach_document_for_message(request: Request, file: Annotated[UploadFile, File(...)]):
     """
     Прикрепление к сообщению: сохранение в MinIO + извлечение содержимого для модели.
     Без RAG, эмбеддингов и PostgreSQL — только объектное хранилище и inline-контент.
     """
-    _log_chat_attach_request(
-        request,
-        upload_filename=file.filename,
-        upload_content_type=file.content_type,
-    )
-
+    _log_chat_attach_request(request, upload_filename=file.filename, upload_content_type=file.content_type)
     filename = file.filename or "unknown"
-
     try:
         content = await file.read()
     except Exception as exc:
         logger.exception("[ChatAttach] read-upload-failed filename=%s", file.filename)
         _log_inline_attach_upload_failure(filename, f"Не удалось прочитать файл: {exc}")
         raise HTTPException(status_code=400, detail=f"Не удалось прочитать файл: {exc}") from exc
-
     if not content:
         _log_inline_attachment_debug("rejected-empty", {"filename": filename})
         _log_inline_attach_upload_failure(filename, "Файл пустой")
         raise HTTPException(status_code=400, detail="Файл пустой")
     content_type = _resolve_content_type(filename, file.content_type or "")
     file_size = len(content)
-
     _log_inline_attachment_debug(
         "read-complete",
         {
@@ -963,57 +819,34 @@ async def attach_document_for_message(request: Request, file: UploadFile = File(
             "header_content_length": request.headers.get("content-length"),
         },
     )
-
     analysis = await _analyze_inline_attachment_for_model(filename, content_type, file_size)
     _log_inline_attachment_debug("validate", analysis)
-
     if not analysis["allowed"]:
         _log_inline_attachment_debug("rejected", analysis)
         if not analysis["format_allowed"]:
             failure_detail = _unsupported_inline_attach_extension_detail(filename)
         else:
             max_mb = INLINE_ATTACHMENT_MAX_BYTES // (1024 * 1024)
-            failure_detail = (
-                f"размер файла превышает допустимый лимит {max_mb} МБ, "
-                f"поддерживается максимальный размер до {max_mb} МБ"
-            )
+            failure_detail = f"размер файла превышает допустимый лимит {max_mb} МБ, поддерживается максимальный размер до {max_mb} МБ"
         _log_inline_attach_upload_failure(filename, failure_detail)
         raise HTTPException(status_code=400, detail=analysis.get("reject_reason") or "Файл не может быть прикреплён")
-
     if not analysis["model_compatible"]:
         _log_inline_attachment_debug("model-incompatible", analysis)
-
     _log_inline_attach_upload_success(filename)
-
-    minio_object, minio_bucket = _try_upload_bytes_to_minio(
-        request, content, filename, content_type
-    )
+    minio_object, minio_bucket = _try_upload_bytes_to_minio(request, content, filename, content_type)
     _log_inline_attachment_debug(
-        "minio-upload",
-        analysis,
-        minio_saved=bool(minio_object),
-        minio_object=minio_object,
-        minio_bucket=minio_bucket,
+        "minio-upload", analysis, minio_saved=bool(minio_object), minio_object=minio_object, minio_bucket=minio_bucket
     )
-
     try:
         payload = _extract_inline_payload(content, filename, content_type)
-        ocr_warning = None
-        if payload.get("type") == "image":
-            payload, ocr_warning = await _ocr_image_payload_if_needed(
-                content, filename, payload, analysis.get("model_path")
-            )
     except Exception as e:
         logger.exception("[ChatAttach] extract-error filename=%s size=%s", filename, file_size)
         _log_inline_attachment_debug("extract-error", analysis, error=str(e), error_type=type(e).__name__)
         _log_inline_attach_upload_failure(filename, f"Не удалось извлечь содержимое: {e}")
         if minio_object and minio_bucket and minio_client:
-            try:
+            with logged_suppress(logger):
                 minio_client.delete_file(minio_object, bucket_name=minio_bucket)
-            except Exception:
-                pass
         raise HTTPException(status_code=500, detail=f"Не удалось извлечь содержимое: {e}") from e
-
     inline_content = payload.get("content") or ""
     inline_content_chars = len(inline_content)
     _log_inline_attachment_debug(
@@ -1024,17 +857,11 @@ async def attach_document_for_message(request: Request, file: UploadFile = File(
         inline_content_chars=inline_content_chars,
         minio_saved=bool(minio_object),
     )
-
-    _cef_extra: dict = {
-        "fname": filename,
-        "fsize": file_size,
-        "cs1": payload["cs1"],
-    }
+    _cef_extra: dict = {"fname": filename, "fsize": file_size, "cs1": payload["cs1"]}
     if minio_object:
         _cef_extra["cs2"] = minio_object
         _cef_extra["cs2Label"] = "MinioObject"
     log_cef_event("FS007", request=request, status_code=200, extra=_cef_extra)
-
     _log_inline_attachment_debug(
         "success",
         analysis,
@@ -1042,7 +869,6 @@ async def attach_document_for_message(request: Request, file: UploadFile = File(
         minio_saved=bool(minio_object),
         response_content_chars=inline_content_chars,
     )
-
     result = {
         "success": True,
         "type": payload["type"],
@@ -1055,20 +881,14 @@ async def attach_document_for_message(request: Request, file: UploadFile = File(
         result["minio_bucket"] = minio_bucket
     if not minio_object:
         result["warning"] = "MinIO недоступен — файл прикреплён к сообщению, но не сохранён в хранилище"
-    if ocr_warning:
-        result["warning"] = (
-            f"{result['warning']} {ocr_warning}".strip()
-            if result.get("warning")
-            else ocr_warning
-        )
     return result
 
 
 @router.get("/inline-file")
 async def get_inline_attachment_file(
-    bucket: str = Query(..., min_length=1),
-    object_name: str = Query(..., min_length=1, alias="object"),
-    _current_user: dict = Depends(get_current_user),
+    bucket: Annotated[str, Query(..., min_length=1)],
+    object_name: Annotated[str, Query(..., min_length=1, alias="object")],
+    _current_user: Annotated[dict, Depends(get_current_user)],
 ):
     """Отдаёт файл вложения из MinIO для превью в UI (после перезагрузки страницы)."""
     if not minio_client:
@@ -1076,9 +896,8 @@ async def get_inline_attachment_file(
     try:
         data = minio_client.download_file(object_name, bucket_name=bucket)
     except Exception as e:
-        logger.error("inline-file download %s/%s: %s", bucket, object_name, e)
+        logger.exception("inline-file download /")
         raise HTTPException(status_code=404, detail="Файл не найден") from e
-
     ext = os.path.splitext(object_name)[1].lower()
     mime = _CONTENT_TYPE_BY_EXT.get(ext, "application/octet-stream")
     return Response(content=data, media_type=mime)

@@ -1,59 +1,74 @@
 """
-routes/chat.py - REST /api/chat, WebSocket /ws/chat, WebSocket /ws/voice
+routes/chat.py - REST /api/chat, WebSocket /ws/chat, WebSocket /ws/voice, WebSocket /ws/dictation
 """
+
 import asyncio
 import json
 import os
 import uuid
 from datetime import datetime
-from typing import Optional
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends, Request
+from typing import Annotated, Any, Dict, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+
 import backend.app_state as state
 from backend.app_state import (
-    ask_agent, save_dialog_entry, get_recent_dialog_history,
-    clear_dialog_history, rag_client, get_agent_orchestrator,
-    minio_client, speak_text, recognize_speech_from_file,
-    get_current_model_path,
-    get_rag_chat_top_k,
-    reload_model_by_path,
+    ask_agent,
+    get_agent_orchestrator,
     get_conversation_repository,
+    get_current_model_path,
     get_model_comparison_models,
+    get_rag_chat_top_k,
+    get_recent_dialog_history,
+    minio_client,
+    rag_client,
+    recognize_speech_from_file,
+    save_dialog_entry,
+    speak_text,
 )
-from backend.llm_providers import get_registry
-from backend.schemas import ChatMessage
 from backend.auth.jwt_handler import get_current_user
+from backend.database.mongodb.models import Conversation, Message as DbMessage
+from backend.llm_providers import get_registry
+from backend.rag_query.post_generation import maybe_replace_ungrounded
+from backend.rag_query.prompts import RAG_STRICT_NOT_FOUND_MESSAGE, merge_strict_rag_system_prompt
 from backend.realtime.helpers import _is_structure_query, _terminal_chat_inference_banner
 from backend.realtime.rag_evidence import (
     build_rag_id_to_filename,
     filter_rag_hits_by_score,
     format_rag_fragments,
     maybe_rag_no_evidence_message,
-    rag_document_label,
     rag_guard_env,
 )
-from backend.rag_query.post_generation import maybe_replace_ungrounded
-from backend.rag_query.prompts import RAG_STRICT_NOT_FOUND_MESSAGE, merge_strict_rag_system_prompt
+from backend.schemas import ChatMessage
 from backend.settings.cef_logger.cef_logger import log_cef_event
-from backend.database.mongodb.models import Conversation
 from backend.settings.logging import get_logger
-router = APIRouter(tags=["chat"])
+from backend.settings.logging.errors import logged_suppress
+from backend.settings.service_toggles import is_service_enabled  # FEATURE-FLAG
+
 logger = get_logger(__name__)
-# -- WebSocket connection manager
+
+router = APIRouter(tags=["chat"])
+
+
 class ConnectionManager:
+
     def __init__(self):
         self.active_connections: list[WebSocket] = []
+
     async def connect(self, ws: WebSocket):
         await ws.accept()
         self.active_connections.append(ws)
+
     def disconnect(self, ws: WebSocket):
         self.active_connections.remove(ws)
+
+
 manager = ConnectionManager()
-# -- REST /api/chat
+
+
 @router.post("/api/chat")
 async def chat_with_ai(
-    request: Request,
-    message: ChatMessage,
-    current_user: dict = Depends(get_current_user),
+    request: Request, message: ChatMessage, current_user: Annotated[dict, Depends(get_current_user)]
 ):
     if not ask_agent:
         raise HTTPException(status_code=503, detail="AI agent не доступен")
@@ -63,46 +78,17 @@ async def chat_with_ai(
 
     _audit_tok = cef_audit_set(request=request, user=current_user, socket_remote=None)
     try:
-        from backend.services.comfyui_image_generation import ComfyImageGenError
-        from backend.services.image_generation_service import (
-            handle_chat_image_generation,
-            is_image_generation_chat_request,
+        history = (
+            await get_recent_dialog_history(max_entries=state.memory_max_messages) if get_recent_dialog_history else []
         )
-
-        if is_image_generation_chat_request(message.message):
-            await save_dialog_entry("user", message.message, user_id=current_user["user_id"])
-            try:
-                img_result = await handle_chat_image_generation(
-                    message.message,
-                    preset_id=message.image_gen_preset_id,
-                )
-                response = img_result.get("response") or ""
-                meta = img_result.get("metadata") or {}
-                await save_dialog_entry(
-                    "assistant",
-                    response,
-                    meta,
-                    user_id=current_user["user_id"],
-                )
-                return {
-                    "response": response,
-                    "timestamp": datetime.now().isoformat(),
-                    "success": True,
-                    "inline_attachments": img_result.get("inline_attachments") or [],
-                    "image_generation": True,
-                }
-            except ComfyImageGenError as img_exc:
-                err_text = f"Не удалось сгенерировать изображение: {img_exc}"
-                await save_dialog_entry("assistant", err_text, user_id=current_user["user_id"])
-                raise HTTPException(status_code=502, detail=err_text) from img_exc
-
-        history = await get_recent_dialog_history(max_entries=state.memory_max_messages) if get_recent_dialog_history else []
         orchestrator = get_agent_orchestrator()
         use_agent_mode = orchestrator and orchestrator.get_mode() == "agent"
         if use_agent_mode:
             _terminal_chat_inference_banner(
-                sid="HTTP-POST-/api/chat", conversation_id=None,
-                user_preview=message.message, mode_label="REST /api/chat — оркестратор агентов",
+                sid="HTTP-POST-/api/chat",
+                conversation_id=None,
+                user_preview=message.message,
+                mode_label="REST /api/chat — оркестратор агентов",
             )
             response = await orchestrator.process_message(
                 message.message,
@@ -118,7 +104,9 @@ async def chat_with_ai(
             )
         else:
             logger.info("ПРЯМОЙ РЕЖИМ: Переключение на прямое общение с LLM")
-            logger.info(f"Запрос пользователя: '{message.message[:100]}{'...' if len(message.message) > 100 else ''}'")
+            logger.info(
+                f"Запрос пользователя: '{message.message[:100]}{('...' if len(message.message) > 100 else '')}'"
+            )
             response = None
             tool_ids = message.tool_ids or message.mcp_tool_ids or []
             current_model_path = message.model or get_current_model_path()
@@ -139,16 +127,16 @@ async def chat_with_ai(
                     if mcp_result is not None:
                         response = mcp_result.content
                         logger.info(
-                            "REST MCP agent loop: mode=%s tools=%s",
-                            mcp_result.mode,
-                            mcp_result.tool_calls_executed,
+                            "REST MCP agent loop: mode=%s tools=%s", mcp_result.mode, mcp_result.tool_calls_executed
                         )
-                except Exception as mcp_exc:
-                    logger.error("REST MCP agent loop error: %s", mcp_exc, exc_info=True)
-            if rag_client and response is None:
+                except Exception:
+                    logger.exception("REST MCP agent loop error")
+            if rag_client and response is None and is_service_enabled("rag"):  # FEATURE-FLAG
                 try:
                     min_sim, rag_block = rag_guard_env()
-                    hits = await rag_client.search(message.message, k=get_rag_chat_top_k(), strategy=state.current_rag_strategy)
+                    hits = await rag_client.search(
+                        message.message, k=get_rag_chat_top_k(), strategy=state.current_rag_strategy
+                    )
                     hits = filter_rag_hits_by_score(hits, min_sim)
                     canned = await maybe_rag_no_evidence_message(
                         rag_client,
@@ -168,29 +156,28 @@ async def chat_with_ai(
                         if _is_structure_query(message.message):
                             seen = {(d, i) for _, _, d, i in hits}
                             for doc_id in {d for _, _, d, _ in hits if d}:
-                                try:
-                                    for c, sc, did, idx in await rag_client.get_document_start_chunks(doc_id, max_chunks=2):
+                                with logged_suppress(logger):
+                                    for c, sc, did, idx in await rag_client.get_document_start_chunks(
+                                        doc_id, max_chunks=2
+                                    ):
                                         if (did, idx) not in seen:
                                             hits = [(c, sc, did, idx)] + hits
                                             seen.add((did, idx))
-                                except Exception:
-                                    pass
                         id_map = build_rag_id_to_filename(list(await rag_client.list_documents() or []))
                         parts, _ = format_rag_fragments(
-                            hits,
-                            id_map,
-                            max_chars=12000,
-                            store_label="global/rest-api-chat",
+                            hits, id_map, max_chars=12000, store_label="global/rest-api-chat"
                         )
                         doc_context = "\n".join(parts)
-                        prompt = f"""CONTEXT (фрагменты из документов):
-                        {doc_context}
-                        Вопрос пользователя: {message.message}
-                        Ответ:"""
+                        prompt = (
+                            f"CONTEXT (фрагменты из документов):\n{doc_context}\n"
+                            f"Вопрос пользователя: {message.message}\nОтвет:"
+                        )
                         current_model_path = message.model or get_current_model_path()
                         _terminal_chat_inference_banner(
-                            sid="HTTP-POST-/api/chat", conversation_id=None,
-                            user_preview=prompt, mode_label="REST /api/chat — ответ с RAG",
+                            sid="HTTP-POST-/api/chat",
+                            conversation_id=None,
+                            user_preview=prompt,
+                            mode_label="REST /api/chat — ответ с RAG",
                             model_path_for_call=current_model_path,
                         )
                         response = ask_agent(
@@ -205,14 +192,16 @@ async def chat_with_ai(
                         response = await maybe_replace_ungrounded(
                             prompt[:20000], response, RAG_STRICT_NOT_FOUND_MESSAGE
                         )
-                except Exception as e:
-                    logger.error(f"ПРЯМОЙ РЕЖИМ: ошибка при получении контекста документов через SVC-RAG: {e}")
+                except Exception:
+                    logger.exception("ПРЯМОЙ РЕЖИМ: ошибка при получении контекста документов через SVC-RAG")
             if not response:
                 logger.info("ПРЯМОЙ РЕЖИМ: Используем обычный AI agent без контекста документов")
                 current_model_path = message.model or get_current_model_path()
                 _terminal_chat_inference_banner(
-                    sid="HTTP-POST-/api/chat", conversation_id=None,
-                    user_preview=message.message, mode_label="REST /api/chat — прямой LLM (без RAG)",
+                    sid="HTTP-POST-/api/chat",
+                    conversation_id=None,
+                    user_preview=message.message,
+                    mode_label="REST /api/chat — прямой LLM (без RAG)",
                     model_path_for_call=current_model_path,
                 )
                 response = ask_agent(message.message, history=history, streaming=False, model_path=current_model_path)
@@ -222,15 +211,16 @@ async def chat_with_ai(
         await save_dialog_entry("assistant", response, user_id=current_user["user_id"])
         return {"response": response, "timestamp": datetime.now().isoformat(), "success": True}
     except Exception as e:
+        logger.exception("Ошибка операции")
         logger.error(f"/api/chat error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
     finally:
-        try:
+        with logged_suppress(logger):
             cef_audit_reset(_audit_tok)
-        except Exception:
-            pass
+
+
 @router.get("/api/conversations")
-async def get_conversations(limit: int = 200, current_user: dict = Depends(get_current_user)):
+async def get_conversations(current_user: Annotated[dict, Depends(get_current_user)], limit: int = 200):
     repo = get_conversation_repository()
     if repo is None:
         raise HTTPException(status_code=503, detail="MongoDB repository не доступен")
@@ -245,6 +235,7 @@ async def get_conversations(limit: int = 200, current_user: dict = Depends(get_c
                 "created_at": conv.created_at.isoformat() if conv.created_at else None,
                 "updated_at": conv.updated_at.isoformat() if conv.updated_at else None,
                 "project_id": conv.project_id,
+                "metadata": conv.metadata or {},
                 "messages": [
                     {
                         "message_id": msg.message_id,
@@ -253,29 +244,19 @@ async def get_conversations(limit: int = 200, current_user: dict = Depends(get_c
                         "timestamp": msg.timestamp.isoformat() if msg.timestamp else None,
                         "metadata": msg.metadata or {},
                     }
-                    for msg in (conv.messages or [])
+                    for msg in conv.messages or []
                 ],
             }
         )
     return {"conversations": result, "count": len(result)}
+
+
 @router.delete("/api/conversations")
-async def delete_all_conversations(
-    request: Request,
-    current_user: dict = Depends(get_current_user),
-):
+async def delete_all_conversations(request: Request, current_user: Annotated[dict, Depends(get_current_user)]):
     repo = get_conversation_repository()
     if repo is None:
         raise HTTPException(status_code=503, detail="MongoDB repository не доступен")
-    from backend.services.image_generation_service import persist_image_creations_from_conversation
-
-    user_id = current_user["user_id"]
-    conversations = await repo.get_user_conversations(user_id, limit=10000)
-    for conv in conversations:
-        try:
-            await persist_image_creations_from_conversation(conv)
-        except Exception:
-            pass
-    deleted = await repo.delete_user_conversations(user_id)
+    deleted = await repo.delete_user_conversations(current_user["user_id"])
     log_cef_event(
         "CNV005",
         request=request,
@@ -284,11 +265,11 @@ async def delete_all_conversations(
         extra={"cs2": "all", "cs2Label": "ConversationId"},
     )
     return {"success": True, "deleted": deleted}
+
+
 @router.delete("/api/conversations/{conversation_id}")
 async def delete_conversation(
-    conversation_id: str,
-    request: Request,
-    current_user: dict = Depends(get_current_user),
+    conversation_id: str, request: Request, current_user: Annotated[dict, Depends(get_current_user)]
 ):
     repo = get_conversation_repository()
     if repo is None:
@@ -298,12 +279,6 @@ async def delete_conversation(
         raise HTTPException(status_code=404, detail="Диалог не найден")
     if conv.user_id != current_user["user_id"]:
         raise HTTPException(status_code=403, detail="Нет доступа к этому диалогу")
-    from backend.services.image_generation_service import persist_image_creations_from_conversation
-
-    try:
-        await persist_image_creations_from_conversation(conv)
-    except Exception:
-        pass
     await repo.delete_conversation(conversation_id)
     log_cef_event(
         "CNV004",
@@ -313,11 +288,11 @@ async def delete_conversation(
         extra={"cs2": conversation_id, "cs2Label": "ConversationId"},
     )
     return {"success": True, "conversation_id": conversation_id}
+
+
 @router.put("/api/conversations/{conversation_id}/title")
 async def update_conversation_title(
-    conversation_id: str,
-    request: Request,
-    current_user: dict = Depends(get_current_user),
+    conversation_id: str, request: Request, current_user: Annotated[dict, Depends(get_current_user)]
 ):
     body = await request.json()
     title = body.get("title", "").strip()
@@ -340,11 +315,11 @@ async def update_conversation_title(
         extra={"cs2": conversation_id, "cs2Label": "ConversationId"},
     )
     return {"success": True, "conversation_id": conversation_id, "title": title}
+
+
 @router.post("/api/conversations/{conversation_id}/archive")
 async def archive_conversation(
-    conversation_id: str,
-    request: Request,
-    current_user: dict = Depends(get_current_user),
+    conversation_id: str, request: Request, current_user: Annotated[dict, Depends(get_current_user)]
 ):
     repo = get_conversation_repository()
     if repo is None:
@@ -365,11 +340,11 @@ async def archive_conversation(
         extra={"cs2": conversation_id, "cs2Label": "ConversationId"},
     )
     return {"success": True, "conversation_id": conversation_id, "archived": True}
+
+
 @router.post("/api/conversations/{conversation_id}/duplicate")
 async def duplicate_conversation(
-    conversation_id: str,
-    request: Request,
-    current_user: dict = Depends(get_current_user),
+    conversation_id: str, request: Request, current_user: Annotated[dict, Depends(get_current_user)]
 ):
     repo = get_conversation_repository()
     if repo is None:
@@ -399,10 +374,178 @@ async def duplicate_conversation(
         extra={"cs2": new_id, "cs2Label": "ConversationId"},
     )
     return {"success": True, "conversation_id": new_id}
+
+
+def _new_branch_message_id() -> str:
+    return f"msg_{uuid.uuid4().hex[:12]}"
+
+
+def _resolve_multi_llm_slot_content(slot: Dict[str, Any]) -> str:
+    alts = slot.get("alternative_responses") or slot.get("alternativeResponses")
+    if isinstance(alts, list) and alts:
+        idx = slot.get("current_response_index", slot.get("currentResponseIndex", 0))
+        if not isinstance(idx, int) or idx < 0 or idx >= len(alts):
+            idx = 0
+        return str(alts[idx])
+    return str(slot.get("content") or "")
+
+
+def _clone_message_for_branch(
+    msg: DbMessage,
+    *,
+    is_branch_point: bool,
+    multi_llm_slot_index: Optional[int] = None,
+) -> DbMessage:
+    meta = dict(msg.metadata or {})
+    content = msg.content
+    if is_branch_point and msg.role == "assistant":
+        if multi_llm_slot_index is not None:
+            slots = meta.get("multi_llm_responses") or meta.get("multiLLMResponses") or []
+            if isinstance(slots, list) and 0 <= multi_llm_slot_index < len(slots):
+                slot = slots[multi_llm_slot_index]
+                if isinstance(slot, dict):
+                    content = _resolve_multi_llm_slot_content(slot)
+                    meta = {
+                        k: v
+                        for k, v in meta.items()
+                        if k not in ("multi_llm_responses", "multiLLMResponses")
+                    }
+                    model = slot.get("model")
+                    if model:
+                        meta["model"] = model
+        else:
+            alts = meta.get("alternative_responses") or meta.get("alternativeResponses")
+            if isinstance(alts, list) and alts:
+                idx = meta.get("current_response_index", meta.get("currentResponseIndex", 0))
+                if not isinstance(idx, int) or idx < 0 or idx >= len(alts):
+                    idx = 0
+                content = str(alts[idx])
+                for key in (
+                    "alternative_responses",
+                    "alternativeResponses",
+                    "current_response_index",
+                    "currentResponseIndex",
+                ):
+                    meta.pop(key, None)
+    return DbMessage(
+        message_id=_new_branch_message_id(),
+        role=msg.role,
+        content=content,
+        timestamp=msg.timestamp or datetime.utcnow(),
+        metadata=meta,
+    )
+
+
+def _serialize_conversation_for_client(conv: Conversation) -> dict:
+    return {
+        "conversation_id": conv.conversation_id,
+        "title": conv.title,
+        "created_at": conv.created_at.isoformat() if conv.created_at else None,
+        "updated_at": conv.updated_at.isoformat() if conv.updated_at else None,
+        "project_id": conv.project_id,
+        "metadata": conv.metadata or {},
+        "messages": [
+            {
+                "message_id": item.message_id,
+                "role": item.role,
+                "content": item.content,
+                "timestamp": item.timestamp.isoformat() if item.timestamp else None,
+                "metadata": item.metadata or {},
+            }
+            for item in conv.messages or []
+        ],
+    }
+
+
+@router.post("/api/conversations/{conversation_id}/branch")
+async def branch_conversation(
+    conversation_id: str,
+    request: Request,
+    current_user: Annotated[dict, Depends(get_current_user)],
+):
+    repo = get_conversation_repository()
+    if repo is None:
+        raise HTTPException(status_code=503, detail="MongoDB repository не доступен")
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Некорректное тело запроса") from exc
+    message_id = str(body.get("message_id") or "").strip()
+    if not message_id:
+        raise HTTPException(status_code=400, detail="Поле 'message_id' обязательно")
+    multi_llm_slot_index = body.get("multi_llm_slot_index")
+    if multi_llm_slot_index is not None and not isinstance(multi_llm_slot_index, int):
+        raise HTTPException(status_code=400, detail="Поле 'multi_llm_slot_index' должно быть числом")
+
+    conv = await repo.get_conversation(conversation_id)
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Диалог не найден")
+    if conv.user_id != current_user["user_id"]:
+        raise HTTPException(status_code=403, detail="Нет доступа к этому диалогу")
+
+    source_messages = conv.messages or []
+    branch_index = next(
+        (idx for idx, item in enumerate(source_messages) if item.message_id == message_id),
+        -1,
+    )
+    if branch_index < 0:
+        raise HTTPException(status_code=404, detail="Сообщение не найдено")
+    branch_message = source_messages[branch_index]
+    if branch_message.role != "assistant":
+        raise HTTPException(status_code=400, detail="Ветку можно создать только от ответа ассистента")
+
+    branched_messages = [
+        _clone_message_for_branch(
+            item,
+            is_branch_point=(idx == branch_index),
+            multi_llm_slot_index=multi_llm_slot_index if idx == branch_index else None,
+        )
+        for idx, item in enumerate(source_messages[: branch_index + 1])
+    ]
+
+    new_id = str(uuid.uuid4())
+    base_title = (conv.title or "Чат").strip() or "Чат"
+    branch_title = f"Ветка · {base_title[:40]}"
+    now = datetime.utcnow()
+    clone = Conversation(
+        conversation_id=new_id,
+        user_id=current_user["user_id"],
+        title=branch_title,
+        messages=branched_messages,
+        metadata={
+            **(conv.metadata or {}),
+            "branched_from": conversation_id,
+            "branch_message_id": message_id,
+            "hidden_from_sidebar_until_user_message": True,
+            "branch_seeded_message_count": len(branched_messages),
+        },
+        project_id=conv.project_id,
+        created_at=now,
+        updated_at=now,
+    )
+    created_id = await repo.create_conversation(clone)
+    if not created_id:
+        raise HTTPException(status_code=500, detail="Не удалось создать ветку диалога")
+
+    log_cef_event(
+        "CNV004",
+        request=request,
+        current_user=current_user,
+        status_code=201,
+        extra={"cs2": new_id, "cs2Label": "ConversationId", "cs3": conversation_id, "cs3Label": "SourceConversationId"},
+    )
+    return {
+        "success": True,
+        "conversation_id": new_id,
+        "conversation": _serialize_conversation_for_client(clone),
+    }
+
+
 @router.put("/api/messages/{conversation_id}/{message_id}")
 async def update_message(conversation_id: str, message_id: str, request: dict):
     try:
         from backend.app_state import get_conversation_repository
+
         repo = get_conversation_repository()
         if repo is None:
             raise HTTPException(status_code=503, detail="MongoDB repository не доступен")
@@ -416,8 +559,10 @@ async def update_message(conversation_id: str, message_id: str, request: dict):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-# -- WebSocket /ws/chat
+        logger.exception("Ошибка операции")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 @router.websocket("/ws/chat")
 async def websocket_chat(websocket: WebSocket):
     if not ask_agent or not save_dialog_entry:
@@ -429,17 +574,26 @@ async def websocket_chat(websocket: WebSocket):
             data = json.loads(await websocket.receive_text())
             user_message = data.get("message", "")
             streaming = data.get("streaming", True)
-            history = await get_recent_dialog_history(max_entries=state.memory_max_messages) if get_recent_dialog_history else []
+            history = (
+                await get_recent_dialog_history(max_entries=state.memory_max_messages)
+                if get_recent_dialog_history
+                else []
+            )
             await save_dialog_entry("user", user_message)
             orchestrator = get_agent_orchestrator()
             use_multi_llm = bool(data.get("model_comparison_enabled", False))
             use_agent = orchestrator and orchestrator.get_mode() == "agent"
+
             def stream_cb(chunk, acc):
                 try:
-                    asyncio.create_task(websocket.send_text(json.dumps({"type": "chunk", "chunk": chunk, "accumulated": acc})))
+                    asyncio.create_task(
+                        websocket.send_text(json.dumps({"type": "chunk", "chunk": chunk, "accumulated": acc}))
+                    )
                     return True
                 except Exception:
+                    logger.exception("Ошибка операции")
                     return False
+
             try:
                 if use_multi_llm:
                     models = get_model_comparison_models()
@@ -447,120 +601,152 @@ async def websocket_chat(websocket: WebSocket):
                         await websocket.send_text(json.dumps({"type": "error", "error": "Модели не выбраны"}))
                         continue
                     doc_context = None
-                    if rag_client:
+                    if rag_client and is_service_enabled("rag"):  # FEATURE-FLAG
                         try:
-                            hits = await rag_client.search(user_message, k=get_rag_chat_top_k(), strategy=state.current_rag_strategy)
+                            hits = await rag_client.search(
+                                user_message, k=get_rag_chat_top_k(), strategy=state.current_rag_strategy
+                            )
                             if hits:
                                 id_map = build_rag_id_to_filename(list(await rag_client.list_documents() or []))
                                 parts, _ = format_rag_fragments(
-                                    hits,
-                                    id_map,
-                                    max_chars=12000,
-                                    store_label="global/ws-chat",
+                                    hits, id_map, max_chars=12000, store_label="global/ws-chat"
                                 )
                                 doc_context = "\n".join(parts)
-                        except Exception as e:
-                            logger.error(f"WebSocket: Ошибка при получении контекста документов через SVC-RAG: {e}")
+                        except Exception:
+                            logger.exception("WebSocket: Ошибка при получении контекста документов через SVC-RAG")
                     final_user_message = user_message
                     if doc_context:
-                        final_user_message = f"""Контекст из загруженных документов:
-                        {doc_context}
-                        Вопрос пользователя: {user_message}
-                        Пожалуйста, ответьте на вопрос пользователя, используя информацию из предоставленных документов. Если в документах нет информации для ответа, честно скажите об этом."""
-                    async def _gen_one(model_name):
+                        final_user_message = (
+                            f"Контекст из загруженных документов:\n{doc_context}\n"
+                            f"Вопрос пользователя: {user_message}\n"
+                            "Пожалуйста, ответьте на вопрос пользователя, используя информацию из предоставленных документов. "
+                            "Если в документах нет информации для ответа, честно скажите об этом."
+                        )
+
+                    async def _gen_one(
+                        model_name,
+                        *,
+                        _models=models,
+                        _final_user_message=final_user_message,
+                        _streaming=streaming,
+                    ):
                         """Одна генерация multi-LLM через ProviderRegistry (без глобальных локов)."""
-                        await websocket.send_text(json.dumps({
-                            "type": "multi_llm_start", "model": model_name,
-                            "total_models": len(models), "models": models,
-                        }))
+                        await websocket.send_text(
+                            json.dumps(
+                                {
+                                    "type": "multi_llm_start",
+                                    "model": model_name,
+                                    "total_models": len(_models),
+                                    "models": _models,
+                                }
+                            )
+                        )
                         try:
                             registry = await get_registry()
                             provider, model_id = registry.resolve(model_name)
                             if not model_id:
-                                return {"model": model_name, "response": f"Некорректный путь модели {model_name!r}", "error": True}
+                                return {
+                                    "model": model_name,
+                                    "response": f"Некорректный путь модели {model_name!r}",
+                                    "error": True,
+                                }
                             if not await provider.ensure_model_loaded(model_id):
                                 return {
                                     "model": model_name,
-                                    "response": (
-                                        f"Модель {model_id!r} недоступна на провайдере "
-                                        f"{provider.id!r}. Проверьте состояние сервера."
-                                    ),
+                                    "response": f"Модель {model_id!r} недоступна на провайдере {provider.id!r}. Проверьте состояние сервера.",
                                     "error": True,
                                 }
                             from backend.llm_client import get_llm_service
+
                             service = await get_llm_service()
                             messages = service.prepare_messages(
-                                prompt=final_user_message, history=None, system_prompt=None,
+                                prompt=_final_user_message, history=None, system_prompt=None
                             )
-                            if streaming:
+                            if _streaming:
+
                                 def _cb(chunk: str, acc: str) -> bool:
                                     try:
-                                        asyncio.create_task(websocket.send_text(json.dumps({
-                                            "type": "multi_llm_chunk", "model": model_name,
-                                            "chunk": chunk, "accumulated": acc,
-                                        })))
-                                    except Exception as e:
-                                        logger.error(f"WebSocket: ошибка отправки чанка {model_name}: {e}")
+                                        asyncio.create_task(
+                                            websocket.send_text(
+                                                json.dumps(
+                                                    {
+                                                        "type": "multi_llm_chunk",
+                                                        "model": model_name,
+                                                        "chunk": chunk,
+                                                        "accumulated": acc,
+                                                    }
+                                                )
+                                            )
+                                        )
+                                    except Exception:
+                                        logger.exception("WebSocket: ошибка отправки чанка")
                                     return True
+
                                 resp = await provider.stream_chat(
-                                    messages=messages, model=model_id, callback=_cb,
-                                    temperature=0.7, max_tokens=1024,
+                                    messages=messages, model=model_id, callback=_cb, temperature=0.7, max_tokens=1024
                                 )
                             else:
                                 resp = await provider.chat(
-                                    messages=messages, model=model_id,
-                                    temperature=0.7, max_tokens=1024,
+                                    messages=messages, model=model_id, temperature=0.7, max_tokens=1024
                                 )
                             return {"model": model_name, "response": resp}
                         except Exception as e:
                             logger.exception("multi-llm /ws/chat: ошибка для модели %s", model_name)
                             return {"model": model_name, "response": f"Ошибка: {e}", "error": True}
+
                     results = await asyncio.gather(*[_gen_one(m) for m in models], return_exceptions=True)
                     for r in results:
                         if isinstance(r, Exception):
-                            await websocket.send_text(json.dumps({
-                                "type": "multi_llm_complete", "model": "unknown",
-                                "response": str(r), "error": True,
-                            }))
+                            await websocket.send_text(
+                                json.dumps(
+                                    {
+                                        "type": "multi_llm_complete",
+                                        "model": "unknown",
+                                        "response": str(r),
+                                        "error": True,
+                                    }
+                                )
+                            )
                         else:
-                            await websocket.send_text(json.dumps({
-                                "type": "multi_llm_complete", "model": r.get("model", "unknown"),
-                                "response": r.get("response", ""), "error": r.get("error", False),
-                            }))
+                            await websocket.send_text(
+                                json.dumps(
+                                    {
+                                        "type": "multi_llm_complete",
+                                        "model": r.get("model", "unknown"),
+                                        "response": r.get("response", ""),
+                                        "error": r.get("error", False),
+                                    }
+                                )
+                            )
                     logger.info("WebSocket: Все ответы от моделей сгенерированы")
                     continue
-                # --- ЛОГИКА АГЕНТНОЙ АРХИТЕКТУРЫ (Начало) ---
                 if use_agent:
-                    # Обычная генерация
-                        response = ask_agent(
-                            user_message,
-                            history=history,
-                            streaming=False,
-                            model_path=get_current_model_path()
-                        )
-                        logger.info(f"WebSocket: получен ответ от AI agent, длина: {len(response)} символов")
+                    response = ask_agent(
+                        user_message, history=history, streaming=False, model_path=get_current_model_path()
+                    )
+                    logger.info(f"WebSocket: получен ответ от AI agent, длина: {len(response)} символов")
                 await save_dialog_entry("assistant", response)
-                await websocket.send_text(json.dumps({"type": "complete", "response": response, "timestamp": datetime.now().isoformat()}))
+                await websocket.send_text(
+                    json.dumps({"type": "complete", "response": response, "timestamp": datetime.now().isoformat()})
+                )
             except Exception as e:
+                logger.exception("Ошибка операции")
                 await websocket.send_text(json.dumps({"type": "error", "error": str(e)}))
     except WebSocketDisconnect:
         logger.info("WebSocket /ws/chat отключен")
-        try:
+        with logged_suppress(logger):
             manager.disconnect(websocket)
-        except Exception:
-            pass
-    except Exception as e:
-        logger.error(f"WebSocket /ws/chat error: {e}")
+    except Exception:
+        logger.exception("WebSocket /ws/chat error")
         manager.disconnect(websocket)
-# -- WebSocket /ws/voice
+
+
 @router.websocket("/ws/voice")
 async def websocket_voice(websocket: WebSocket):
     await manager.connect(websocket)
     if not ask_agent or not save_dialog_entry:
-        try:
+        with logged_suppress(logger):
             await websocket.send_text(json.dumps({"type": "error", "error": "AI сервисы недоступны."}))
-        except Exception:
-            pass
     try:
         while True:
             raw = await websocket.receive()
@@ -584,35 +770,131 @@ async def websocket_voice(websocket: WebSocket):
                 try:
                     await _process_audio(websocket, raw["bytes"])
                 except Exception as e:
-                    try:
+                    logger.exception("Ошибка операции")
+                    with logged_suppress(logger):
                         await websocket.send_text(json.dumps({"type": "error", "error": str(e)}))
-                    except Exception:
-                        pass
     except WebSocketDisconnect:
         pass
     except Exception as e:
+        logger.exception("Ошибка операции")
         logger.error(f"W**ebSocket /ws/voice error: {e}", exc_info=True)
     finally:
-        try:
+        with logged_suppress(logger):
             manager.disconnect(websocket)
+
+
+def _write_audio_bytes_to_file(data: bytes, *, upload_to_minio: bool = True) -> str:
+    import tempfile
+
+    if len(data) < 100:
+        msg = "Некорректные аудио данные"
+        raise ValueError(msg)
+    if data[:4] == b"RIFF" and b"WAVE" in data[:12]:
+        ext, ct = (".wav", "audio/wav")
+    elif data[:4] == b"\x1aE\xdf\xa3":
+        ext, ct = (".webm", "audio/webm")
+    elif data[:4] == b"OggS":
+        ext, ct = (".ogg", "audio/ogg")
+    else:
+        ext, ct = (".webm", "audio/webm")
+    temp_dir = tempfile.gettempdir()
+    audio_file = os.path.join(temp_dir, f"voice{datetime.now().timestamp()}{ext}")
+    if minio_client and upload_to_minio:
+        _vb = getattr(minio_client, "bucket_name", "") or "default"
+        try:
+            obj = minio_client.generate_object_name(prefix="voice_", extension=ext)
+            minio_client.upload_file(data, obj, content_type=ct, cef_display_name="voice_upload")
+            audio_file = minio_client.get_file_path(obj)
         except Exception:
-            pass
+            logger.exception("Ошибка загрузки аудио в MinIO")
+            with open(audio_file, "wb") as f:
+                f.write(data)
+    else:
+        with open(audio_file, "wb") as f:
+            f.write(data)
+    return audio_file
+
+
+async def _process_dictation_audio(websocket: WebSocket, data: bytes):
+    if not recognize_speech_from_file:
+        await websocket.send_text(json.dumps({"type": "error", "error": "STT недоступен"}))
+        return
+    if len(data) < 100:
+        await websocket.send_text(json.dumps({"type": "speech_error", "error": "Слишком короткий аудиофрагмент"}))
+        return
+    audio_file = None
+    try:
+        loop = asyncio.get_event_loop()
+        audio_file = await loop.run_in_executor(None, lambda: _write_audio_bytes_to_file(data, upload_to_minio=False))
+        text = await loop.run_in_executor(None, lambda: recognize_speech_from_file(audio_file))
+        if not (text and text.strip()):
+            await websocket.send_text(json.dumps({"type": "speech_error", "error": "Речь не распознана"}))
+            return
+        await websocket.send_text(json.dumps({"type": "speech_recognized", "text": text.strip()}))
+    except ValueError as e:
+        await websocket.send_text(json.dumps({"type": "error", "error": str(e)}))
+    except Exception as e:
+        logger.exception("Ошибка операции")
+        logger.warning(f"Dictation STT error: {e}")
+        await websocket.send_text(json.dumps({"type": "speech_error", "error": "Ошибка распознавания"}))
+    finally:
+        if audio_file:
+            with logged_suppress(logger):
+                if os.path.exists(audio_file):
+                    os.remove(audio_file)
+
+
+@router.websocket("/ws/dictation")
+async def websocket_dictation(websocket: WebSocket):
+    await manager.connect(websocket)
+    if not recognize_speech_from_file:
+        with logged_suppress(logger):
+            await websocket.send_text(json.dumps({"type": "error", "error": "STT недоступен"}))
+    try:
+        while True:
+            raw = await websocket.receive()
+            if raw.get("type") == "websocket.disconnect":
+                break
+            if "text" in raw:
+                try:
+                    cmd = json.loads(raw["text"])
+                    if cmd.get("type") == "start":
+                        await websocket.send_text(json.dumps({"type": "ready", "message": "Готов к диктовке"}))
+                except json.JSONDecodeError:
+                    pass
+            elif "bytes" in raw:
+                try:
+                    await _process_dictation_audio(websocket, raw["bytes"])
+                except Exception as e:
+                    logger.exception("Ошибка операции")
+                    with logged_suppress(logger):
+                        await websocket.send_text(json.dumps({"type": "error", "error": str(e)}))
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.exception("Ошибка операции")
+        logger.error(f"WebSocket /ws/dictation error: {e}", exc_info=True)
+    finally:
+        with logged_suppress(logger):
+            manager.disconnect(websocket)
+
+
 async def _process_audio(websocket: WebSocket, data: bytes):
     import tempfile
+
     if state.voice_chat_stop_flag:
         return
     if len(data) < 100:
         await websocket.send_text(json.dumps({"type": "error", "error": "Некорректные аудио данные"}))
         return
-    # определяем формат
     if data[:4] == b"RIFF" and b"WAVE" in data[:12]:
-        ext, ct = ".wav", "audio/wav"
-    elif data[:4] == b"\x1a\x45\xdf\xa3":
-        ext, ct = ".webm", "audio/webm"
+        ext, ct = (".wav", "audio/wav")
+    elif data[:4] == b"\x1aE\xdf\xa3":
+        ext, ct = (".webm", "audio/webm")
     elif data[:4] == b"OggS":
-        ext, ct = ".ogg", "audio/ogg"
+        ext, ct = (".ogg", "audio/ogg")
     else:
-        ext, ct = ".webm", "audio/webm"
+        ext, ct = (".webm", "audio/webm")
     temp_dir = tempfile.gettempdir()
     audio_file = os.path.join(temp_dir, f"voice{datetime.now().timestamp()}{ext}")
     try:
@@ -620,24 +902,10 @@ async def _process_audio(websocket: WebSocket, data: bytes):
             _vb = getattr(minio_client, "bucket_name", "") or "default"
             try:
                 obj = minio_client.generate_object_name(prefix="voice_", extension=ext)
-                minio_client.upload_file(data, obj, content_type=ct)
+                minio_client.upload_file(data, obj, content_type=ct, cef_display_name="voice_upload")
                 audio_file = minio_client.get_file_path(obj)
-                log_cef_event(
-                    "FS003",
-                    request=websocket,
-                    status_code=200,
-                    extra={"file": obj, "bucket": f"minio://{_vb}/{obj}"},
-                )
-            except Exception as _me:
-                try:
-                    log_cef_event(
-                        "FS004",
-                        request=websocket,
-                        status_code=500,
-                        extra={"file": "voice_upload", "bucket": f"minio://{_vb}", "reason": str(_me)[:300]},
-                    )
-                except Exception:
-                    pass
+            except Exception:
+                logger.exception("Ошибка загрузки аудио в MinIO")
                 with open(audio_file, "wb") as f:
                     f.write(data)
         else:
@@ -652,14 +920,15 @@ async def _process_audio(websocket: WebSocket, data: bytes):
             await websocket.send_text(json.dumps({"type": "speech_error", "error": "Речь не распознана"}))
             return
         await websocket.send_text(json.dumps({"type": "speech_recognized", "text": text}))
-        history = await get_recent_dialog_history(max_entries=state.memory_max_messages) if get_recent_dialog_history else []
-        voice_prompt = (
-            "Ты — голосовой AI-ассистент AstraChat. Отвечай кратко, без markdown и emoji."
+        history = (
+            await get_recent_dialog_history(max_entries=state.memory_max_messages) if get_recent_dialog_history else []
         )
+        voice_prompt = "Ты — голосовой AI-ассистент AstraChat. Отвечай кратко, без markdown и emoji."
         ai_resp = await loop.run_in_executor(
             None,
-            lambda: ask_agent(text, history=history, streaming=False,
-                               model_path=get_current_model_path(), system_prompt=voice_prompt),
+            lambda: ask_agent(
+                text, history=history, streaming=False, model_path=get_current_model_path(), system_prompt=voice_prompt
+            ),
         )
         await save_dialog_entry("user", text)
         await save_dialog_entry("assistant", ai_resp)
@@ -667,23 +936,19 @@ async def _process_audio(websocket: WebSocket, data: bytes):
         speech_file = os.path.join(temp_dir, f"speech_{datetime.now().timestamp()}.wav")
         try:
             ok = await loop.run_in_executor(
-                None,
-                lambda: speak_text(ai_resp, speaker="baya", voice_id="ru", save_to_file=speech_file),
+                None, lambda: speak_text(ai_resp, speaker="baya", voice_id="ru", save_to_file=speech_file)
             )
-            if ok and os.path.exists(speech_file) and os.path.getsize(speech_file) > 44:
+            if ok and os.path.exists(speech_file) and (os.path.getsize(speech_file) > 44):
                 with open(speech_file, "rb") as f:
                     await websocket.send_bytes(f.read())
-                try:
+                with logged_suppress(logger):
                     os.remove(speech_file)
-                except Exception:
-                    pass
             else:
                 await websocket.send_text(json.dumps({"type": "tts_error", "error": "Ошибка TTS"}))
         except Exception as e:
+            logger.exception("Ошибка операции")
             await websocket.send_text(json.dumps({"type": "tts_error", "error": str(e)}))
     finally:
-        try:
+        with logged_suppress(logger):
             if os.path.exists(audio_file):
                 os.remove(audio_file)
-        except Exception:
-            pass

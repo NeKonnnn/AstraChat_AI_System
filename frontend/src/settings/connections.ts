@@ -65,6 +65,9 @@ export class APIConnectionConfigImpl implements APIConnectionConfig {
    * Получает полный URL для API endpoint
    */
   getApiUrl(endpoint: string): string {
+    if (/^https?:\/\//i.test(endpoint)) {
+      return endpoint;
+    }
     const base = this.baseUrl.endsWith('/') ? this.baseUrl.slice(0, -1) : this.baseUrl;
     const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
     return `${base}${path}`;

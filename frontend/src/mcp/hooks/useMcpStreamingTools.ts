@@ -17,13 +17,13 @@ export function useMcpStreamingTools() {
       const detail = (e as CustomEvent<McpToolActivityDetail>).detail;
       if (!detail?.record) return;
       const { record, phase } = detail;
-      const key = `${record.qualified_name}:${record.model || ''}`;
+      const key = record.call_id || `${record.qualified_name}:${record.model || ''}`;
       setActive((prev) => {
         if (phase === 'start') {
-          if (prev.some((x) => `${x.qualified_name}:${x.model || ''}` === key)) return prev;
+          if (prev.some((x) => (x.call_id || `${x.qualified_name}:${x.model || ''}`) === key)) return prev;
           return [...prev, record];
         }
-        return prev.filter((x) => `${x.qualified_name}:${x.model || ''}` !== key);
+        return prev.filter((x) => (x.call_id || `${x.qualified_name}:${x.model || ''}`) !== key);
       });
     };
     const onClear = () => setActive([]);

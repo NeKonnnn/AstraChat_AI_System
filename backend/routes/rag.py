@@ -9,7 +9,7 @@ import httpx
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 import backend.app_state as state
-from backend.app_state import minio_client, rag_client, rag_models_client, save_app_settings, settings
+from backend.app_state import minio_client, rag_client, rag_models_client, save_app_settings, settings, get_rag_chunk_index_params
 from backend.rag_query.semantic_cache import bump_rag_semantic_cache
 from backend.schemas import RAGSettings, RagModelSelectRequest
 from backend.settings.logging import get_logger
@@ -55,6 +55,7 @@ def _rag_settings_response_dict() -> dict:
         "rag_hyde_enabled": bool(getattr(state, "rag_hyde_enabled", False)),
         "rag_chat_top_k": state.get_rag_chat_top_k(),
         "rag_chunking_strategy": str(getattr(state, "rag_chunking_strategy", "hierarchical")),
+        "rag_chunk_size": int(getattr(state, "rag_chunk_size", 1000)),
         "rag_chunk_overlap": int(getattr(state, "rag_chunk_overlap", 200)),
         "rag_similarity_threshold": float(getattr(state, "rag_similarity_threshold", 0.0)),
         "rag_reranking_enabled": bool(getattr(state, "rag_reranking_enabled", False)),
@@ -88,6 +89,7 @@ async def reset_rag_settings():
         state.rag_hyde_enabled = False
         state.rag_chat_top_k = 8
         state.rag_chunking_strategy = "hierarchical"
+        state.rag_chunk_size = 1000
         state.rag_chunk_overlap = 200
         state.rag_similarity_threshold = 0.0
         state.rag_reranking_enabled = False
@@ -107,6 +109,7 @@ async def reset_rag_settings():
                 "rag_hyde_enabled": False,
                 "rag_chat_top_k": 8,
                 "rag_chunking_strategy": "hierarchical",
+                "rag_chunk_size": 1000,
                 "rag_chunk_overlap": 200,
                 "rag_similarity_threshold": 0.0,
                 "rag_reranking_enabled": False,
@@ -149,6 +152,7 @@ async def update_rag_settings(settings_data: RAGSettings):
         and (settings_data.rag_hyde_enabled is None)
         and (settings_data.rag_chat_top_k is None)
         and (settings_data.rag_chunking_strategy is None)
+        and (settings_data.rag_chunk_size is None)
         and (settings_data.rag_chunk_overlap is None)
         and (settings_data.rag_similarity_threshold is None)
         and (settings_data.rag_reranking_enabled is None)
@@ -189,6 +193,13 @@ async def update_rag_settings(settings_data: RAGSettings):
         if chunking is not None:
             state.rag_chunking_strategy = chunking
             updates["rag_chunking_strategy"] = chunking
+        if settings_data.rag_chunk_size is not None:
+            try:
+                size = int(settings_data.rag_chunk_size)
+                state.rag_chunk_size = max(200, min(size, 8000))
+                updates["rag_chunk_size"] = state.rag_chunk_size
+            except (TypeError, ValueError) as e:
+                raise HTTPException(status_code=400, detail="rag_chunk_size: ожидается целое число 200–8000") from e
         if settings_data.rag_chunk_overlap is not None:
             try:
                 overlap = int(settings_data.rag_chunk_overlap)
@@ -349,7 +360,12 @@ async def kb_upload_document(file: Annotated[UploadFile, File(...)]):
         content = await file.read()
         if not content:
             raise HTTPException(status_code=400, detail="Файл пустой")
-        out = await rag_client.kb_upload_document(file_bytes=content, filename=file.filename or "unknown")
+        chunk_params = get_rag_chunk_index_params()
+        out = await rag_client.kb_upload_document(
+            file_bytes=content,
+            filename=file.filename or "unknown",
+            **chunk_params,
+        )
         bump_rag_semantic_cache()
         return out
     except HTTPException:
@@ -414,11 +430,13 @@ async def memory_rag_upload(file: Annotated[UploadFile, File(...)]):
                 logger.exception("MinIO memory-rag upload")
                 raise HTTPException(status_code=500, detail=f"MinIO: {e}") from e
         try:
+            chunk_params = get_rag_chunk_index_params()
             result = await rag_client.memory_rag_index_document(
                 file_bytes=content,
                 filename=fn,
                 minio_object=file_object_name,
                 minio_bucket=memory_bucket if file_object_name else None,
+                **chunk_params,
             )
         except Exception as e:
             logger.exception("Ошибка операции")

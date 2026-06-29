@@ -1389,21 +1389,13 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                         }}
                       >
                         <Box
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (e.detail === 2) {
-                              // Двойной клик - открываем страницу проекта
-                              navigate(`/project/${project.id}`);
-                            } else {
-                              // Одинарный клик - раскрываем/сворачиваем
-                              handleToggleProject(project.id);
-                            }
-                          }}
+                          onClick={() => navigate(`/project/${project.id}`)}
                           sx={{
                             display: 'flex',
                             alignItems: 'center',
                             flex: 1,
                             cursor: 'pointer',
+                            minWidth: 0,
                           }}
                         >
                           <ListItemIcon sx={SIDEBAR_LIST_LEADING_ICON_SX}>
@@ -1426,6 +1418,16 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                               </Typography>
                             }
                           />
+                        </Box>
+                        <IconButton
+                          size="small"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleToggleProject(project.id);
+                          }}
+                          sx={{ color: '#ffffff', p: 0.5, mr: 0.25, '& .MuiSvgIcon-root': { fontSize: '1.25rem' } }}
+                          aria-label={isExpanded ? 'Свернуть чаты проекта' : 'Развернуть чаты проекта'}
+                        >
                           <ExpandMoreIcon
                             sx={{
                               ...SIDEBAR_SECTION_CHEVRON_SX,
@@ -1433,7 +1435,7 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
                               transition: 'transform 0.2s ease',
                             }}
                           />
-                        </Box>
+                        </IconButton>
                         <IconButton
                           size="small"
                           onClick={(e) => {
