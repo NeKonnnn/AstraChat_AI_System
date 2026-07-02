@@ -118,6 +118,60 @@ def extract_text_from_docx(file_data: bytes) -> str:
     return "\n".join(parts)
 
 
+def _docx_image_blobs(file_data: bytes) -> list:
+    """Байты встроенных изображений .docx (для OCR)."""
+    try:
+        doc = docx.Document(BytesIO(file_data))
+        out = []
+        for rel in doc.part.rels.values():
+            if "image" in (getattr(rel, "reltype", "") or ""):
+                try:
+                    out.append(rel.target_part.blob)
+                except Exception:
+                    continue
+        return out
+    except Exception as e:
+        logger.warning("DOCX: не удалось извлечь изображения: %s", e)
+        return []
+
+
+def _xlsx_image_blobs(file_data: bytes) -> list:
+    """Байты картинок, вставленных на листы .xlsx (для OCR)."""
+    try:
+        wb = openpyxl.load_workbook(BytesIO(file_data))
+        out = []
+        for ws in wb.worksheets:
+            for img in getattr(ws, "_images", []) or []:
+                try:
+                    data = img._data() if callable(getattr(img, "_data", None)) else None
+                    if data:
+                        out.append(data)
+                except Exception:
+                    continue
+        return out
+    except Exception as e:
+        logger.warning("XLSX: не удалось извлечь изображения: %s", e)
+        return []
+
+
+async def _ocr_office_images(blobs: list, filename: str) -> str:
+    """OCR списка изображений офисного файла → склеенный текст (или '')."""
+    if not blobs:
+        return ""
+    texts = []
+    for i, blob in enumerate(blobs, 1):
+        try:
+            res = await _call_ocr_service(blob, f"{filename}.img{i}.png")
+            t = (res.get("text") or "").strip() if isinstance(res, dict) else ""
+            if t:
+                texts.append(t)
+        except Exception as e:
+            logger.warning("Office OCR картинки пропущена (%s): %s", filename, e)
+    if not texts:
+        return ""
+    return "[Текст из изображений документа (OCR)]:\n" + "\n".join(texts)
+
+
 def _pdf_magic_bytes(data: bytes) -> bool:
     return bool(data and len(data) >= 5 and data[:5] == b"%PDF-")
 
@@ -452,6 +506,9 @@ async def parse_document(file_data: bytes, filename: str) -> Optional[Dict[str, 
         if not DOCX_AVAILABLE:
             return None
         text = extract_text_from_docx(file_data)
+        img_text = await _ocr_office_images(_docx_image_blobs(file_data), filename or "document.docx")
+        if img_text:
+            text = (text + "\n\n" + img_text) if text.strip() else img_text
         return {
             "text": text,
             "confidence_info": _create_confidence_info_for_text(text, 100.0, "docx"),
@@ -467,6 +524,9 @@ async def parse_document(file_data: bytes, filename: str) -> Optional[Dict[str, 
         except Exception as e:
             logger.error("Ошибка парсинга .xlsx: %s", e)
             return None
+        img_text = await _ocr_office_images(_xlsx_image_blobs(file_data), filename or "table.xlsx")
+        if img_text:
+            text = (text + "\n\n" + img_text) if text.strip() else img_text
         return {
             "text": text,
             "confidence_info": _create_confidence_info_for_text(text, 100.0, "excel"),
