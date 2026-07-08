@@ -46,7 +46,9 @@ services:
       - DIARIZATION_CONFIG_PATH=${DIARIZATION_CONFIG_PATH}
     restart: unless-stopped
     networks:
-      - astrachat-network
+      astrachat-network:
+        aliases:
+          - llm-service
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health"]
       interval: 30s
