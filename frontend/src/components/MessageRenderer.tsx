@@ -39,6 +39,19 @@ const getFontSizeValue = (size: FontSize): string => {
   }
 };
 
+/** Markdown-заголовки: чуть крупнее body, без MUI h1–h4 (там 2–3rem). */
+const MARKDOWN_HEADING_SCALE: Record<string, number> = {
+  '1': 1.35,
+  '2': 1.2,
+  '3': 1.1,
+  '4': 1.05,
+};
+
+function markdownHeadingFontSize(level: string, baseFontSize: string): string {
+  const scale = MARKDOWN_HEADING_SCALE[level] ?? 1.1;
+  return `calc(${baseFontSize} * ${scale})`;
+}
+
 /**
  * LLM часто рвёт пары <em></em> между строками списка: на одной строке parseInlineMarkdown не видит
  * закрытие и показывает теги текстом. Снимаем только непарные открыва/закрытия (по стеку на этой строке);
@@ -1155,16 +1168,19 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
       }
 
       if (line.startsWith('<h1>') || line.startsWith('<h2>') || line.startsWith('<h3>') || line.startsWith('<h4>')) {
-        const level = line.match(/<h(\d)>/)?.[1] || '1';
+        const level = line.match(/<h(\d)>/)?.[1] || '3';
         const content = line.replace(/<h\d>(.*?)<\/h\d>/, '$1');
         return (
           <Typography
             key={`${index}-${lineIndex}`}
-            variant={`h${level}` as any}
+            component={`h${level}` as 'h1' | 'h2' | 'h3' | 'h4'}
+            variant="body1"
             sx={{
-              mt: level === '1' ? 3 : level === '2' ? 2.5 : level === '3' ? 2 : 1.5,
-              mb: 1,
-              fontWeight: 'bold',
+              mt: level === '1' ? 2 : level === '2' ? 1.75 : 1.25,
+              mb: 0.5,
+              fontWeight: 600,
+              fontSize: markdownHeadingFontSize(level, fontSizeValue),
+              lineHeight: 1.35,
               color: 'inherit',
             }}
           >
