@@ -95,13 +95,13 @@ import {
   SIDEBAR_HIDE_SCROLLBAR_SX,
   SIDEBAR_CHAT_ROW_LIST_ITEM_BUTTON_SX,
   SIDEBAR_LIST_ICON_SX,
-  getSidebarRailCollapsedListItemButtonSx,
 } from '../constants/menuStyles';
 import { getSidebarPanelBackground } from '../constants/sidebarPanelColor';
 import { ASTRA_REQUEST_DELETE_CURRENT_CHAT, ASTRA_OPEN_SETTINGS } from '../constants/hotkeys';
 import { useHotkeyBindings } from '../hooks/useHotkeyBindings';
 import HotkeysSettingsDialog from './HotkeysSettingsDialog';
 import { SidebarRailAddIcon, SidebarRailSearchIcon } from '../constants/sidebarRailIcons';
+import SidebarRailCollapsedAction, { SidebarRailShortcutTooltip } from './SidebarRailCollapsedAction';
 import { getApiUrl, getAuthFetchHeaders } from '../config/api';
 import AuthenticatedInlineImage from './AuthenticatedInlineImage';
 import { useImageCreations } from '../hooks/useImageCreations';
@@ -1090,74 +1090,40 @@ export default function Sidebar({ open, onToggle, isDarkMode, onToggleTheme, onH
       {!open && (
         <>
           <List disablePadding sx={{ px: 1, pt: 0, pb: 1, width: '100%', boxSizing: 'border-box' }}>
-            <ListItem disablePadding sx={{ mb: 0.5, display: 'block' }}>
-              <Tooltip
-                placement="right"
-                title={
-                  <Box>
-                    <Typography variant="body2" component="span" display="block">
-                      Новый чат
-                    </Typography>
-                    <Typography variant="caption" sx={{ opacity: 0.85, display: 'block', mt: 0.25 }}>
-                      {format(bindings.newChat)}
-                    </Typography>
-                  </Box>
-                }
-              >
-                {/* span + width 100%: Tooltip не сжимает кнопку; center + px:0 — иконка по центру полосы как у меню */}
-                <Box component="span" sx={{ display: 'flex', width: '100%', justifyContent: 'center' }}>
-                  <ListItemButton onClick={handleCreateChat} sx={getSidebarRailCollapsedListItemButtonSx(isDarkMode)}>
-                    <SidebarRailAddIcon sx={SIDEBAR_LIST_ICON_SX} />
-                  </ListItemButton>
-                </Box>
-              </Tooltip>
-            </ListItem>
-            <ListItem disablePadding sx={{ mb: 0.5, display: 'block' }}>
-              <Tooltip
-                placement="right"
-                title={
-                  <Box>
-                    <Typography variant="body2" component="span" display="block">
-                      Поиск в чатах
-                    </Typography>
-                    <Typography variant="caption" sx={{ opacity: 0.85, display: 'block', mt: 0.25 }}>
-                      {format(bindings.searchChats)}
-                    </Typography>
-                  </Box>
-                }
-              >
-                <Box component="span" sx={{ display: 'flex', width: '100%', justifyContent: 'center' }}>
-                  <ListItemButton
-                    onClick={() => {
-                      onToggle();
-                      setTimeout(() => {
-                        searchInputRef.current?.focus();
-                      }, 300);
-                    }}
-                    sx={getSidebarRailCollapsedListItemButtonSx(isDarkMode)}
-                  >
-                    <SidebarRailSearchIcon sx={SIDEBAR_LIST_ICON_SX} />
-                  </ListItemButton>
-                </Box>
-              </Tooltip>
-            </ListItem>
-            <ListItem disablePadding sx={{ mb: 0.5, display: 'block' }}>
-              <Tooltip placement="right" title="Моё творение">
-                <Box component="span" sx={{ display: 'flex', width: '100%', justifyContent: 'center' }}>
-                  <ListItemButton
-                    onClick={() => navigate('/creations')}
-                    sx={{
-                      ...getSidebarRailCollapsedListItemButtonSx(isDarkMode),
-                      ...(location.pathname === '/creations'
-                        ? { bgcolor: 'rgba(255,255,255,0.15)' }
-                        : {}),
-                    }}
-                  >
-                    <CollectionsBookmarkOutlinedIcon sx={SIDEBAR_LIST_ICON_SX} />
-                  </ListItemButton>
-                </Box>
-              </Tooltip>
-            </ListItem>
+            <SidebarRailCollapsedAction
+              variant="newChat"
+              isDarkMode={isDarkMode}
+              enterIndex={0}
+              onClick={handleCreateChat}
+              icon={<SidebarRailAddIcon sx={SIDEBAR_LIST_ICON_SX} />}
+              tooltipTitle={
+                <SidebarRailShortcutTooltip title="Новый чат" shortcut={format(bindings.newChat)} />
+              }
+            />
+            <SidebarRailCollapsedAction
+              variant="search"
+              isDarkMode={isDarkMode}
+              enterIndex={1}
+              onClick={() => {
+                onToggle();
+                setTimeout(() => {
+                  searchInputRef.current?.focus();
+                }, 300);
+              }}
+              icon={<SidebarRailSearchIcon sx={SIDEBAR_LIST_ICON_SX} />}
+              tooltipTitle={
+                <SidebarRailShortcutTooltip title="Поиск в чатах" shortcut={format(bindings.searchChats)} />
+              }
+            />
+            <SidebarRailCollapsedAction
+              variant="creations"
+              isDarkMode={isDarkMode}
+              enterIndex={2}
+              onClick={() => navigate('/creations')}
+              icon={<CollectionsBookmarkOutlinedIcon sx={SIDEBAR_LIST_ICON_SX} />}
+              tooltipTitle="Моё творение"
+              active={location.pathname === '/creations'}
+            />
           </List>
 
           {/* Кнопка "Скрыть панель" — та же стилистика, что на правом сайдбаре (fixed по центру высоты) */}

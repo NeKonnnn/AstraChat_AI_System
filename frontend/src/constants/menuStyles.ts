@@ -198,8 +198,22 @@ export function getSidebarRailCollapsedListItemButtonSx(isDarkMode: boolean): Sx
     borderRadius: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    transition: 'background-color 0.22s ease, transform 0.22s cubic-bezier(0.34, 1.2, 0.64, 1)',
+    '@media (prefers-reduced-motion: reduce)': {
+      transition: 'background-color 0.15s ease',
+    },
     '&:hover': {
       backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+      transform: 'scale(1.06)',
+      '@media (prefers-reduced-motion: reduce)': {
+        transform: 'none',
+      },
+    },
+    '&:active': {
+      transform: 'scale(0.94)',
+      '@media (prefers-reduced-motion: reduce)': {
+        transform: 'none',
+      },
     },
     '& .MuiTouchRipple-root': {
       borderRadius: 1,
