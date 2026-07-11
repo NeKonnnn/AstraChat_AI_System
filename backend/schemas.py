@@ -34,6 +34,16 @@ class ContextBreakdownRequest(BaseModel):
     project_instructions: Optional[str] = None
 
 
+class FollowUpHistoryMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class FollowUpSuggestionsRequest(BaseModel):
+    messages: List[FollowUpHistoryMessage]
+    model_path: Optional[str] = None
+
+
 class ModelSettings(BaseModel):
     context_size: int = 2048
     output_tokens: int = 512

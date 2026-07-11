@@ -6,6 +6,7 @@ import { normalizeMcpToolCallList } from '../mcp/utils/normalizeToolCall';
 import { buildBranchChatTitle, cloneMessagesForBranch } from '../utils/branchChat';
 import { mapServerConversationToChat } from '../utils/mapServerConversation';
 import type { MessageFeedback } from '../constants/messageFeedback';
+import type { ChatInputSuggestion } from '../chat/inputSuggestions';
 
 export type { MessageFeedback };
 
@@ -83,6 +84,9 @@ export interface Message {
     has_resource?: boolean;
     download_urls?: Array<{ url: string; label?: string; mime?: string }>;
   }>;
+  /** Динамические follow-up подсказки (генерируются фоновым LLM-запросом) */
+  followUpSuggestions?: ChatInputSuggestion[];
+  followUpSuggestionsLoading?: boolean;
 }
 
 export interface Chat {
@@ -210,6 +214,7 @@ type AppAction =
   | { type: 'DELETE_ALL_CHATS' }
   | { type: 'ADD_MESSAGE'; payload: { chatId: string; message: Message } }
   | { type: 'UPDATE_MESSAGE'; payload: { chatId: string; messageId: string; content?: string; isStreaming?: boolean; multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean; feedback?: MessageFeedback | null }>; alternativeResponses?: string[]; currentResponseIndex?: number; documentSearch?: Message['documentSearch']; reasoningContent?: string; mcpToolCalls?: Message['mcpToolCalls']; inlineAttachments?: Message['inlineAttachments']; isImageGenerating?: boolean; inlineAttachmentVariants?: Message['inlineAttachmentVariants']; feedback?: MessageFeedback | null } }
+  | { type: 'PATCH_MESSAGE_FIELDS'; payload: { chatId: string; messageId: string; fields: Partial<Pick<Message, 'followUpSuggestions' | 'followUpSuggestionsLoading'>> } }
   | { type: 'APPEND_CHUNK'; payload: { chatId: string; messageId: string; chunk: string; isStreaming?: boolean } }
   | { type: 'SET_LOADING'; payload: boolean }
   | { type: 'SET_CHAT_LOADING'; payload: { chatId: string; loading: boolean } }
@@ -460,6 +465,23 @@ function appReducer(state: AppState, action: AppAction): AppState {
       };
       
       return newState;
+    }
+
+    case 'PATCH_MESSAGE_FIELDS': {
+      const { chatId, messageId, fields } = action.payload;
+      return {
+        ...state,
+        chats: state.chats.map((chat) =>
+          chat.id === chatId
+            ? {
+                ...chat,
+                messages: chat.messages.map((msg) =>
+                  msg.id === messageId ? { ...msg, ...fields } : msg,
+                ),
+              }
+            : chat,
+        ),
+      };
     }
       
     case 'APPEND_CHUNK': {
@@ -1013,6 +1035,14 @@ export function useAppActions() {
     
     updateMessage: (chatId: string, messageId: string, content?: string, isStreaming?: boolean, multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean; feedback?: MessageFeedback | null }>, alternativeResponses?: string[], currentResponseIndex?: number, documentSearch?: Message['documentSearch'], reasoningContent?: string, mcpToolCalls?: Message['mcpToolCalls'], inlineAttachments?: Message['inlineAttachments'], isImageGenerating?: boolean, inlineAttachmentVariants?: Message['inlineAttachmentVariants'], feedback?: MessageFeedback | null) => {
       dispatch({ type: 'UPDATE_MESSAGE', payload: { chatId, messageId, content, isStreaming, multiLLMResponses, alternativeResponses, currentResponseIndex, documentSearch, reasoningContent, mcpToolCalls, inlineAttachments, isImageGenerating, inlineAttachmentVariants, feedback } });
+    },
+
+    patchMessageFields: (
+      chatId: string,
+      messageId: string,
+      fields: Partial<Pick<Message, 'followUpSuggestions' | 'followUpSuggestionsLoading'>>,
+    ) => {
+      dispatch({ type: 'PATCH_MESSAGE_FIELDS', payload: { chatId, messageId, fields } });
     },
     
     appendChunk: (chatId: string, messageId: string, chunk: string, isStreaming?: boolean) => {

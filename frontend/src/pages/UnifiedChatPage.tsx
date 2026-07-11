@@ -106,11 +106,14 @@ import McpToolCallsPanel from '../mcp/components/McpToolCallsPanel';
 import { mergeMcpToolCalls } from '../mcp/utils/mergeToolCalls';
 import McpLiveToolsIndicator from '../mcp/components/McpLiveToolsIndicator';
 import ChatInputSuggestions from '../components/ChatInputSuggestions';
+import MessageFollowUpSuggestions from '../components/MessageFollowUpSuggestions';
+import { getChatInputSuggestions } from '../chat/getChatInputSuggestions';
+import { loadFollowUpSettings } from '../chat/followUpSettings';
+import { useFollowUpSuggestions } from '../hooks/useFollowUpSuggestions';
 import {
   estimateLibraryClusterWidthPx,
   getToolsButtonInsetSp,
 } from '../components/chatInputLayout';
-import { getChatInputSuggestions } from '../chat/getChatInputSuggestions';
 import { getSidebarPanelBackground } from '../constants/sidebarPanelColor';
 import { getWorkZoneBackgroundColor, getWorkZoneCustomImage, isWorkZoneAnimatedMode } from '../constants/workZoneBackground';
 import { useWorkZoneBgMode } from '../hooks/useWorkZoneBgMode';
@@ -343,6 +346,7 @@ interface MessageCardData {
   handleEnterShareMode: () => void;
   handleBranchToNewChat: (message: Message, multiLlmSlotIndex?: number) => void;
   handleToggleMessage: (userMsgId: string, assistantMsgId: string) => void;
+  handleFollowUpSelect: (content: string) => void;
   updateMessage: (
     chatId: string,
     messageId: string,
@@ -373,11 +377,15 @@ interface MessageCardProps {
   shareMode: boolean;
   isSpeaking: boolean;
   isDarkMode: boolean;
+  /** Сообщение — последнее в чате (как history.currentId в Open WebUI). */
+  isLastChatMessage: boolean;
   interfaceSettings: {
     userNoBorder: boolean;
     assistantNoBorder: boolean;
     leftAlignMessages: boolean;
     showUserName: boolean;
+    followUpAutoGenerate: boolean;
+    followUpShowScope: 'last' | 'all';
   };
   username: string | undefined;
   dataRef: React.MutableRefObject<MessageCardData>;
@@ -584,7 +592,7 @@ const ReasoningBlock = React.memo(({
 
 const MessageCardComponent = ({
   message, index, isPairStart, isSelected, nextMessageId,
-  shareMode, isSpeaking, isDarkMode, interfaceSettings, username, dataRef,
+  shareMode, isSpeaking, isDarkMode, isLastChatMessage, interfaceSettings, username, dataRef,
 }: MessageCardProps): React.ReactElement => {
   const isUser = message.role === 'user';
   const [isHovered, setIsHovered] = useState(false);
@@ -769,6 +777,22 @@ const MessageCardComponent = ({
   }, [message.isStreaming, message.content]);
 
   const hideOuterActionBar = !isUser && (message.multiLLMResponses?.length ?? 0) > 0;
+  const showFollowUpSuggestions =
+    !isUser &&
+    !shareMode &&
+    interfaceSettings.followUpAutoGenerate &&
+    !message.multiLLMResponses?.length &&
+    Boolean(message.followUpSuggestions?.length) &&
+    (interfaceSettings.followUpShowScope === 'all' || isLastChatMessage);
+
+  const followUpBlock = showFollowUpSuggestions ? (
+    <MessageFollowUpSuggestions
+      suggestions={message.followUpSuggestions}
+      disabled={Boolean(message.isStreaming)}
+      isDarkMode={isDarkMode}
+      onSelect={(content) => dataRef.current.handleFollowUpSelect(content)}
+    />
+  ) : null;
   const multiLlmActionIconSx = {
     opacity: 0.7,
     p: 0.5,
@@ -1160,11 +1184,13 @@ const MessageCardComponent = ({
           >
             <CardContent sx={{ p: 1.2, '&:last-child': { pb: 1.2 } }}>
               {messageContent}
+              {followUpBlock}
             </CardContent>
           </Card>
         ) : (
           <Box sx={{ width: '100%', p: 1.2 }}>
             {messageContent}
+            {followUpBlock}
           </Box>
         )}
 
@@ -1354,6 +1380,7 @@ const MessageCard = React.memo(MessageCardComponent, (prev, next) =>
   prev.isSelected === next.isSelected &&
   prev.isSpeaking === next.isSpeaking &&
   prev.isDarkMode === next.isDarkMode &&
+  prev.isLastChatMessage === next.isLastChatMessage &&
   prev.interfaceSettings === next.interfaceSettings,
 );
 
@@ -1596,6 +1623,7 @@ export default function UnifiedChatPage({
     setSpeaking, 
     setRecording, 
     updateMessage, 
+    patchMessageFields,
     getCurrentMessages, 
     getCurrentChat,
     createChat,
@@ -1728,6 +1756,7 @@ export default function UnifiedChatPage({
 
   // Стабильный обработчик для MessageRenderer (НЕ меняется при ререндерах!)
   const handleSendMessageFromRendererRef = useRef<((prompt: string) => void) | null>(null);
+  const clearFollowUpSuggestionsRef = useRef<() => void>(() => {});
   
   // Обновляем ref при изменении зависимостей, но НЕ создаем новую функцию
   useEffect(() => {
@@ -1736,6 +1765,7 @@ export default function UnifiedChatPage({
         return;
       }
       if (currentChat && isConnected && !currentChatLoading) {
+        clearFollowUpSuggestionsRef.current();
         sendMessage(prompt, currentChat.id);
       }
     };
@@ -1840,7 +1870,9 @@ export default function UnifiedChatPage({
   const suggestionsDisabled =
     currentChatLoading || hasActiveChatStreaming || multiLlmInputBlocked || chatAwaitingTokens;
 
-  const renderChatInputSuggestions = (maxWidth: string | number) => (
+  const renderChatInputSuggestions = (maxWidth: string | number) => {
+    if (!interfaceSettings.followUpAutoGenerate) return null;
+    return (
     <ChatInputSuggestions
       suggestions={chatInputSuggestionsCatalog}
       inputValue={inputMessage}
@@ -1853,7 +1885,8 @@ export default function UnifiedChatPage({
         inputRef.current?.focus();
       }}
     />
-  );
+    );
+  };
 
   /** Плейсхолдер поля ввода: без dev-текста про порт 8000; при активной генерации — обычная подсказка (кнопка стоп и так видна). */
   const chatMainPlaceholder = useMemo(() => {
@@ -1983,6 +2016,7 @@ export default function UnifiedChatPage({
     const savedEnableNotification = localStorage.getItem('enable_notification');
     const savedChatInputStyle = localStorage.getItem('chat_input_style');
     const savedChatAutoscrollStreaming = localStorage.getItem('chat_autoscroll_streaming');
+    const followUpSettings = loadFollowUpSettings();
     return {
       autoGenerateTitles: savedAutoTitle !== null ? savedAutoTitle === 'true' : true,
       largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
@@ -1995,8 +2029,48 @@ export default function UnifiedChatPage({
       autoScrollWhileStreaming:
         savedChatAutoscrollStreaming !== null ? savedChatAutoscrollStreaming === 'true' : true,
       chatInputStyle: (savedChatInputStyle as 'compact' | 'classic') || 'compact',
+      followUpAutoGenerate: followUpSettings.followUpAutoGenerate,
+      followUpShowScope: followUpSettings.followUpShowScope,
+      followUpClickAction: followUpSettings.followUpClickAction,
     };
   });
+
+  const handleFollowUpSelectRef = useRef<((content: string) => void) | null>(null);
+  useEffect(() => {
+    handleFollowUpSelectRef.current = (content: string) => {
+      if (interfaceSettings.followUpClickAction === 'send') {
+        handleSendMessageFromRendererRef.current?.(content);
+        return;
+      }
+      setInputMessage(content);
+      inputRef.current?.focus();
+    };
+  }, [interfaceSettings.followUpClickAction]);
+
+  const handleFollowUpSelect = useCallback((content: string) => {
+    handleFollowUpSelectRef.current?.(content);
+  }, []);
+
+  useFollowUpSuggestions({
+    chatId: currentChat?.id,
+    messages,
+    enabled: interfaceSettings.followUpAutoGenerate,
+    showScope: interfaceSettings.followUpShowScope,
+    patchMessageFields,
+  });
+
+  const clearFollowUpSuggestions = useCallback(() => {
+    if (!currentChat?.id) return;
+    messages.forEach((m) => {
+      if (m.role === 'assistant' && m.followUpSuggestions?.length) {
+        patchMessageFields(currentChat.id, m.id, { followUpSuggestions: undefined });
+      }
+    });
+  }, [currentChat?.id, messages, patchMessageFields]);
+
+  useEffect(() => {
+    clearFollowUpSuggestionsRef.current = clearFollowUpSuggestions;
+  }, [clearFollowUpSuggestions]);
 
   const suggestionsContentInset = useMemo(() => {
     const mcpLabel =
@@ -2033,6 +2107,7 @@ export default function UnifiedChatPage({
       const savedEnableNotification = localStorage.getItem('enable_notification');
       const savedChatInputStyle = localStorage.getItem('chat_input_style');
       const savedChatAutoscrollStreaming = localStorage.getItem('chat_autoscroll_streaming');
+      const followUpSettings = loadFollowUpSettings();
       setInterfaceSettings({
         autoGenerateTitles: savedAutoTitle !== null ? savedAutoTitle === 'true' : true,
         largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
@@ -2045,6 +2120,9 @@ export default function UnifiedChatPage({
         autoScrollWhileStreaming:
           savedChatAutoscrollStreaming !== null ? savedChatAutoscrollStreaming === 'true' : true,
         chatInputStyle: (savedChatInputStyle as 'compact' | 'classic') || 'compact',
+        followUpAutoGenerate: followUpSettings.followUpAutoGenerate,
+        followUpShowScope: followUpSettings.followUpShowScope,
+        followUpClickAction: followUpSettings.followUpClickAction,
       });
     };
 
@@ -2110,20 +2188,35 @@ export default function UnifiedChatPage({
     prevMessagesLengthRef.current = len;
   }, [messages.length]);
 
-  // Автоскролл к последнему сообщению — только когда пользователь у дна
+  // Автоскролл к последнему сообщению — только когда пользователь у дна.
+  // Не реагируем на follow-up подсказки, чтобы поле ввода не «прыгало».
+  const autoscrollTrigger = useMemo(
+    () =>
+      messages
+        .map((m) => {
+          const streaming = m.isStreaming ? 1 : 0;
+          const len = (m.content || '').length;
+          const multi =
+            m.multiLLMResponses
+              ?.map((r) => `${r.isStreaming ? 1 : 0}:${(r.content || '').length}`)
+              .join(',') ?? '';
+          return `${m.id}|${streaming}|${len}|${multi}`;
+        })
+        .join(';;'),
+    [messages],
+  );
+
   useEffect(() => {
     if (!interfaceSettings.autoScrollWhileStreaming) return;
     if (Date.now() < autoScrollPauseUntilRef.current) return;
     if (!isAtBottomRef.current) return;
     const container = messagesContainerRef.current;
-    const end = messagesEndRef.current;
-    if (!container || !end) return;
+    if (!container) return;
     isProgrammaticScrollRef.current = true;
-    end.scrollIntoView({ behavior: 'smooth' });
-    // Снимаем флаг программного скролла после завершения анимации
+    container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
     const timer = setTimeout(() => { isProgrammaticScrollRef.current = false; }, 600);
     return () => clearTimeout(timer);
-  }, [messages, interfaceSettings.autoScrollWhileStreaming]);
+  }, [autoscrollTrigger, interfaceSettings.autoScrollWhileStreaming]);
 
   // Автоматический фокус на поле ввода при загрузке
   useEffect(() => {
@@ -2441,6 +2534,7 @@ export default function UnifiedChatPage({
           }
         : undefined;
       setTimeout(() => {
+        clearFollowUpSuggestions();
         sendMessage(messageText, newChatId, true, undefined, undefined, inlinePayloadNew);
         setInlineAttachments([]);
         inputRef.current?.focus();
@@ -2462,6 +2556,7 @@ export default function UnifiedChatPage({
           })),
         }
       : undefined;
+    clearFollowUpSuggestions();
     sendMessage(inputMessage.trim(), currentChat.id, true, undefined, undefined, inlinePayload);
     setInlineAttachments([]);
     setInputMessage('');
@@ -3574,6 +3669,7 @@ export default function UnifiedChatPage({
   //  но его onClick-обработчики через dataRef.current всегда получают свежие функции)
   messageCardDataRef.current = {
     handleSendMessageFromRenderer,
+    handleFollowUpSelect,
     handleCopyMessage,
     handleEditClick,
     handleRegenerate,
@@ -4010,7 +4106,10 @@ export default function UnifiedChatPage({
                  p: 0,
                }
              : {
-                 minHeight: '60vh',
+                 flex: 1,
+                 minHeight: 0,
+                 overflowY: 'auto',
+                 overflowX: 'hidden',
                  justifyContent: 'flex-start',
                  py: 4,
                }),
@@ -4099,6 +4198,7 @@ export default function UnifiedChatPage({
                     shareMode={shareMode}
                     isSpeaking={isSpeaking}
                     isDarkMode={isDarkMode}
+                    isLastChatMessage={index === messages.length - 1}
                     interfaceSettings={interfaceSettings}
                     username={user?.username}
                     dataRef={messageCardDataRef}
@@ -4277,6 +4377,7 @@ export default function UnifiedChatPage({
            className="chat-input-area"
            data-theme={isDarkMode ? 'dark' : 'light'}
                        sx={{
+              flexShrink: 0,
               position: 'relative',
               zIndex: workZoneAnimated ? 2 : undefined,
               borderColor: isDragging ? 'primary.main' : 'divider',
@@ -4426,9 +4527,6 @@ export default function UnifiedChatPage({
                extraActions={multiLlmSettingsExtraAction}
                contextCounter={chatContextCounter}
              />
-             {inputMessage.trim().length > 0 && inputMessage.length < 200
-               ? renderChatInputSuggestions(interfaceSettings.widescreenMode ? '100%' : '1000px')
-               : null}
            </>
            ) : null}
 

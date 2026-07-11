@@ -93,6 +93,7 @@ import {
   getToolsButtonInsetSp,
 } from '../components/chatInputLayout';
 import { getChatInputSuggestions } from '../chat/getChatInputSuggestions';
+import { loadFollowUpSettings } from '../chat/followUpSettings';
 import { useChatInputMcpIndicators } from '../mcp/hooks/useChatInputMcpIndicators';
 import { useMcpStreamingTools } from '../mcp/hooks/useMcpStreamingTools';
 import McpLiveToolsIndicator from '../mcp/components/McpLiveToolsIndicator';
@@ -201,6 +202,9 @@ export default function ProjectPage() {
   const { sendMessage, isConnected, isConnecting } = useSocket();
   const [chatsExpanded, setChatsExpanded] = useState(true);
   const [inputMessage, setInputMessage] = useState('');
+  const [chatSuggestionsEnabled, setChatSuggestionsEnabled] = useState(
+    () => loadFollowUpSettings().followUpAutoGenerate,
+  );
   const [isSending, setIsSending] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -209,6 +213,15 @@ export default function ProjectPage() {
     const onAttach = () => fileInputRef.current?.click();
     window.addEventListener(ASTRA_TRIGGER_ATTACH, onAttach);
     return () => window.removeEventListener(ASTRA_TRIGGER_ATTACH, onAttach);
+  }, []);
+
+  useEffect(() => {
+    const syncSuggestionsSetting = () => {
+      setChatSuggestionsEnabled(loadFollowUpSettings().followUpAutoGenerate);
+    };
+    syncSuggestionsSetting();
+    window.addEventListener('interfaceSettingsChanged', syncSuggestionsSetting);
+    return () => window.removeEventListener('interfaceSettingsChanged', syncSuggestionsSetting);
   }, []);
 
   useEffect(() => {
@@ -431,7 +444,9 @@ export default function ProjectPage() {
     chatInputStyle,
   ]);
 
-  const renderChatInputSuggestions = (maxWidth: string | number) => (
+  const renderChatInputSuggestions = (maxWidth: string | number) => {
+    if (!chatSuggestionsEnabled) return null;
+    return (
     <ChatInputSuggestions
       suggestions={chatInputSuggestionsCatalog}
       inputValue={inputMessage}
@@ -444,7 +459,8 @@ export default function ProjectPage() {
         inputRef.current?.focus();
       }}
     />
-  );
+    );
+  };
   const dropdownPanelSx = getDropdownPanelSx(isDarkMode);
   const dropdownItemSx = useMemo(() => getDropdownItemSx(isDarkMode), [isDarkMode]);
 

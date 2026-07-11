@@ -15,6 +15,7 @@ import {
   ListItem,
   ListItemText,
   Popover,
+  Switch,
 } from '@mui/material';
 import {
   Delete as DeleteIcon,
@@ -35,6 +36,10 @@ import {
 } from '../../constants/menuStyles';
 import { useAppContext, useAppActions } from '../../contexts/AppContext';
 import ManageSharesDialog from '../ManageSharesDialog';
+import {
+  loadFollowUpSettings,
+  saveFollowUpAutoGenerate,
+} from '../../chat/followUpSettings';
 
 type FontSize = 'small' | 'medium' | 'large';
 
@@ -55,6 +60,25 @@ export default function ChatSettings({ isDarkMode = false }: ChatSettingsProps =
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fontSize, setFontSize] = useState<FontSize>('medium');
   const [fontPopoverAnchor, setFontPopoverAnchor] = useState<HTMLElement | null>(null);
+  const [chatSuggestionsEnabled, setChatSuggestionsEnabled] = useState(
+    () => loadFollowUpSettings().followUpAutoGenerate,
+  );
+
+  useEffect(() => {
+    const syncSuggestionsSetting = () => {
+      setChatSuggestionsEnabled(loadFollowUpSettings().followUpAutoGenerate);
+    };
+    syncSuggestionsSetting();
+    window.addEventListener('interfaceSettingsChanged', syncSuggestionsSetting);
+    return () => window.removeEventListener('interfaceSettingsChanged', syncSuggestionsSetting);
+  }, []);
+
+  const handleChatSuggestionsToggle = (enabled: boolean) => {
+    setChatSuggestionsEnabled(enabled);
+    saveFollowUpAutoGenerate(enabled);
+    window.dispatchEvent(new Event('interfaceSettingsChanged'));
+    showNotification('success', enabled ? 'Подсказки в чате включены' : 'Подсказки в чате отключены');
+  };
 
   // Загружаем размер шрифта из localStorage
   useEffect(() => {
@@ -145,6 +169,35 @@ export default function ChatSettings({ isDarkMode = false }: ChatSettingsProps =
       <Card>
         <CardContent>
           <List sx={{ p: 0 }}>
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <ListItemText
+                primary="Подсказки в чате"
+                secondary="Динамические подсказки под ответом модели и «Предложено» в новом чате"
+                primaryTypographyProps={{
+                  variant: 'body1',
+                  fontWeight: 500,
+                }}
+                secondaryTypographyProps={{
+                  variant: 'body2',
+                  sx: { mt: 0.5 },
+                }}
+              />
+              <Switch
+                checked={chatSuggestionsEnabled}
+                onChange={(e) => handleChatSuggestionsToggle(e.target.checked)}
+              />
+            </ListItem>
+
+            <Divider />
+
             {/* Размер шрифта */}
             <ListItem
               sx={{

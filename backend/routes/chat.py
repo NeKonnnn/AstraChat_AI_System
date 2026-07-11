@@ -40,8 +40,14 @@ from backend.realtime.rag_evidence import (
     maybe_rag_no_evidence_message,
     rag_guard_env,
 )
-from backend.schemas import ChatMessage, ContextBreakdownRequest, MessageFeedbackRequest
+from backend.schemas import (
+    ChatMessage,
+    ContextBreakdownRequest,
+    FollowUpSuggestionsRequest,
+    MessageFeedbackRequest,
+)
 from backend.services.context_breakdown import build_context_overhead
+from backend.services.follow_up_suggestions import generate_follow_up_suggestions
 from backend.settings.cef_logger.cef_logger import log_cef_event
 from backend.settings.logging import get_logger
 from backend.settings.logging.errors import logged_suppress
@@ -88,6 +94,28 @@ async def chat_context_breakdown(
     except Exception as e:
         logger.exception("context-breakdown error")
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post("/api/chat/follow-up-suggestions")
+async def chat_follow_up_suggestions(
+    body: FollowUpSuggestionsRequest,
+    current_user: Annotated[dict, Depends(get_current_user)],
+):
+    """Фоновая генерация follow-up подсказок по контексту диалога."""
+    del current_user  # авторизация обязательна; данные запроса не привязаны к user_id
+    if not ask_agent:
+        raise HTTPException(status_code=503, detail="AI agent не доступен")
+    if not body.messages:
+        return {"success": True, "suggestions": []}
+
+    history = [{"role": m.role, "content": m.content} for m in body.messages]
+    model_path = body.model_path or get_current_model_path()
+    suggestions = await generate_follow_up_suggestions(
+        ask_agent=ask_agent,
+        messages=history,
+        model_path=model_path,
+    )
+    return {"success": True, "suggestions": suggestions}
 
 
 @router.post("/api/chat")

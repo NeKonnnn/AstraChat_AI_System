@@ -54,6 +54,14 @@ import {
   TAB_NOTIFICATIONS_ENABLED_KEY,
 } from '../../utils/tabNotifications';
 import LlmProvidersSection from './LlmProvidersSection';
+import {
+  loadFollowUpSettings,
+  saveFollowUpAutoGenerate,
+  saveFollowUpShowScope,
+  saveFollowUpClickAction,
+  type FollowUpClickAction,
+  type FollowUpShowScope,
+} from '../../chat/followUpSettings';
 
 const SIDEBAR_PALETTE = [
   { name: 'По умолчанию', value: '' },
@@ -146,6 +154,7 @@ export default function InterfaceSettings() {
     const savedChatInputContrastRaw = localStorage.getItem(CHAT_INPUT_CONTRAST_KEY);
     const savedSidebarColor = localStorage.getItem(SIDEBAR_PANEL_COLOR_KEY) || '';
     const savedChatInputContrast = Number(savedChatInputContrastRaw);
+    const followUpSettings = loadFollowUpSettings();
     return {
       autoGenerateTitles: savedAutoTitle !== null ? savedAutoTitle === 'true' : true,
       largeTextAsFile: savedLargeTextAsFile !== null ? savedLargeTextAsFile === 'true' : false,
@@ -167,6 +176,9 @@ export default function InterfaceSettings() {
         ? Math.min(100, Math.max(20, savedChatInputContrast))
         : 35,
       sidebarPanelColor: savedSidebarColor,
+      followUpAutoGenerate: followUpSettings.followUpAutoGenerate,
+      followUpShowScope: followUpSettings.followUpShowScope,
+      followUpClickAction: followUpSettings.followUpClickAction,
     };
   });
 
@@ -178,6 +190,8 @@ export default function InterfaceSettings() {
   const [chatInputColorPopoverAnchor, setChatInputColorPopoverAnchor] = useState<HTMLElement | null>(null);
   const [workZoneBgPopoverAnchor, setWorkZoneBgPopoverAnchor] = useState<HTMLElement | null>(null);
   const [modelModePopoverAnchor, setModelModePopoverAnchor] = useState<HTMLElement | null>(null);
+  const [followUpScopePopoverAnchor, setFollowUpScopePopoverAnchor] = useState<HTMLElement | null>(null);
+  const [followUpClickPopoverAnchor, setFollowUpClickPopoverAnchor] = useState<HTMLElement | null>(null);
   const [customSidebarHex, setCustomSidebarHex] = useState<string>(() => {
     const savedColor = localStorage.getItem(SIDEBAR_PANEL_COLOR_KEY) || '';
     return HEX_COLOR_RE.test(savedColor) ? savedColor.toUpperCase() : '#667EEA';
@@ -207,6 +221,16 @@ export default function InterfaceSettings() {
     { value: 'settings', label: 'Выбор модели в настройках' },
     { value: 'workspace', label: 'Стиль выбора модели: классический' },
     { value: 'workspace_agent', label: 'Стиль выбора модели: AtraChat' },
+  ];
+
+  const FOLLOW_UP_SCOPE_OPTIONS: { value: FollowUpShowScope; label: string }[] = [
+    { value: 'last', label: 'Скрывать после следующего сообщения' },
+    { value: 'all', label: 'Оставлять в истории чата' },
+  ];
+
+  const FOLLOW_UP_CLICK_OPTIONS: { value: FollowUpClickAction; label: string }[] = [
+    { value: 'insert', label: 'Вставить в поле ввода' },
+    { value: 'send', label: 'Отправить сразу' },
   ];
 
   const handleModelSelectorModeChange = (mode: ModelSelectorMode) => {
@@ -400,6 +424,32 @@ export default function InterfaceSettings() {
     showNotification('success', 'Настройки интерфейса сохранены');
   };
 
+  const handleFollowUpAutoGenerateChange = (value: boolean) => {
+    const newSettings = { ...interfaceSettings, followUpAutoGenerate: value };
+    setInterfaceSettings(newSettings);
+    saveFollowUpAutoGenerate(value);
+    window.dispatchEvent(new Event('interfaceSettingsChanged'));
+    showNotification('success', value ? 'Подсказки в чате включены' : 'Подсказки в чате отключены');
+  };
+
+  const handleFollowUpShowScopeChange = (value: FollowUpShowScope) => {
+    const newSettings = { ...interfaceSettings, followUpShowScope: value };
+    setInterfaceSettings(newSettings);
+    saveFollowUpShowScope(value);
+    window.dispatchEvent(new Event('interfaceSettingsChanged'));
+    showNotification('success', 'Настройки подсказок сохранены');
+    setFollowUpScopePopoverAnchor(null);
+  };
+
+  const handleFollowUpClickActionChange = (value: FollowUpClickAction) => {
+    const newSettings = { ...interfaceSettings, followUpClickAction: value };
+    setInterfaceSettings(newSettings);
+    saveFollowUpClickAction(value);
+    window.dispatchEvent(new Event('interfaceSettingsChanged'));
+    showNotification('success', 'Настройки подсказок сохранены');
+    setFollowUpClickPopoverAnchor(null);
+  };
+
   return (
     <Box sx={{ p: 3 }}>
       <Card>
@@ -461,6 +511,133 @@ export default function InterfaceSettings() {
                 onChange={(e) => handleInterfaceSettingChange('autoScrollWhileStreaming', e.target.checked)}
               />
             </ListItem>
+
+            <Divider />
+
+            <ListItem
+              sx={{
+                px: 0,
+                py: 2,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <ListItemText
+                primary="Подсказки в чате"
+                secondary="Динамические подсказки под ответом модели и «Предложено» в новом чате"
+                primaryTypographyProps={{
+                  variant: 'body1',
+                  fontWeight: 500,
+                }}
+                secondaryTypographyProps={{
+                  variant: 'body2',
+                  sx: { mt: 0.5 },
+                }}
+              />
+              <Switch
+                checked={interfaceSettings.followUpAutoGenerate}
+                onChange={(e) => handleFollowUpAutoGenerateChange(e.target.checked)}
+              />
+            </ListItem>
+
+            {interfaceSettings.followUpAutoGenerate ? (
+              <>
+                <ListItem
+                  sx={{
+                    px: 0,
+                    py: 2,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: 2,
+                  }}
+                >
+                  <ListItemText
+                    primary="Где показывать подсказки"
+                    primaryTypographyProps={{ variant: 'body1', fontWeight: 500 }}
+                  />
+                  <Box sx={{ minWidth: 220, flexShrink: 0 }}>
+                    <Box onClick={(e) => setFollowUpScopePopoverAnchor(e.currentTarget)} sx={dropdownTriggerSx}>
+                      <Typography sx={{ ...dropdownTriggerTextSx, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {FOLLOW_UP_SCOPE_OPTIONS.find((o) => o.value === interfaceSettings.followUpShowScope)?.label ?? ''}
+                      </Typography>
+                      <ExpandMoreIcon sx={{ ...dropdownChevronSx, transform: followUpScopePopoverAnchor ? 'rotate(180deg)' : 'none', flexShrink: 0 }} />
+                    </Box>
+                    <Popover
+                      open={Boolean(followUpScopePopoverAnchor)}
+                      anchorEl={followUpScopePopoverAnchor}
+                      onClose={() => setFollowUpScopePopoverAnchor(null)}
+                      anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+                      transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+                      slotProps={{ paper: { sx: getDropdownPopoverPaperSx(followUpScopePopoverAnchor, isDarkMode) } }}
+                    >
+                      <Box sx={{ py: 0.5 }}>
+                        {FOLLOW_UP_SCOPE_OPTIONS.map((opt) => (
+                          <Box
+                            key={opt.value}
+                            onClick={() => handleFollowUpShowScopeChange(opt.value)}
+                            sx={{
+                              ...dropdownItemSx,
+                              ...getDropdownItemStateSx(isDarkMode, interfaceSettings.followUpShowScope === opt.value),
+                            }}
+                          >
+                            {opt.label}
+                          </Box>
+                        ))}
+                      </Box>
+                    </Popover>
+                  </Box>
+                </ListItem>
+
+                <ListItem
+                  sx={{
+                    px: 0,
+                    py: 2,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: 2,
+                  }}
+                >
+                  <ListItemText
+                    primary="Действие при клике на подсказку"
+                    primaryTypographyProps={{ variant: 'body1', fontWeight: 500 }}
+                  />
+                  <Box sx={{ minWidth: 220, flexShrink: 0 }}>
+                    <Box onClick={(e) => setFollowUpClickPopoverAnchor(e.currentTarget)} sx={dropdownTriggerSx}>
+                      <Typography sx={{ ...dropdownTriggerTextSx, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {FOLLOW_UP_CLICK_OPTIONS.find((o) => o.value === interfaceSettings.followUpClickAction)?.label ?? ''}
+                      </Typography>
+                      <ExpandMoreIcon sx={{ ...dropdownChevronSx, transform: followUpClickPopoverAnchor ? 'rotate(180deg)' : 'none', flexShrink: 0 }} />
+                    </Box>
+                    <Popover
+                      open={Boolean(followUpClickPopoverAnchor)}
+                      anchorEl={followUpClickPopoverAnchor}
+                      onClose={() => setFollowUpClickPopoverAnchor(null)}
+                      anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+                      transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+                      slotProps={{ paper: { sx: getDropdownPopoverPaperSx(followUpClickPopoverAnchor, isDarkMode) } }}
+                    >
+                      <Box sx={{ py: 0.5 }}>
+                        {FOLLOW_UP_CLICK_OPTIONS.map((opt) => (
+                          <Box
+                            key={opt.value}
+                            onClick={() => handleFollowUpClickActionChange(opt.value)}
+                            sx={{
+                              ...dropdownItemSx,
+                              ...getDropdownItemStateSx(isDarkMode, interfaceSettings.followUpClickAction === opt.value),
+                            }}
+                          >
+                            {opt.label}
+                          </Box>
+                        ))}
+                      </Box>
+                    </Popover>
+                  </Box>
+                </ListItem>
+              </>
+            ) : null}
 
             <Divider />
 
