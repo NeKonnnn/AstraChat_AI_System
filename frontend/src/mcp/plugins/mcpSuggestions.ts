@@ -1,8 +1,9 @@
+import type { ChatInputSuggestion } from '../../chat/inputSuggestions';
 import { getAtlassianSuggestions } from './atlassianSuggestions';
 import { getWebSearchSuggestions } from './webSearchSuggestions';
 
-/** Объединённые подсказки для всех подключённых MCP-серверов. */
-export function getMcpSuggestions(enabledServerIds: string[]): string[] {
+/** Подсказки для всех включённых MCP-серверов. */
+export function getMcpSuggestions(enabledServerIds: string[]): ChatInputSuggestion[] {
   return [
     ...getAtlassianSuggestions(enabledServerIds),
     ...getWebSearchSuggestions(enabledServerIds),

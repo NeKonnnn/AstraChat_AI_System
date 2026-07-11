@@ -87,8 +87,12 @@ import ChatInputBar from '../components/ChatInputBar';
 import ChatInputStatusCluster from '../components/ChatInputStatusCluster';
 import ChatGearAgentsPanel from '../components/ChatGearAgentsPanel';
 import ChatGearMcpPanel from '../components/ChatGearMcpPanel';
-import McpSuggestionChips from '../mcp/components/McpSuggestionChips';
-import { getMcpSuggestions } from '../mcp/plugins/mcpSuggestions';
+import ChatInputSuggestions from '../components/ChatInputSuggestions';
+import {
+  estimateLibraryClusterWidthPx,
+  getToolsButtonInsetSp,
+} from '../components/chatInputLayout';
+import { getChatInputSuggestions } from '../chat/getChatInputSuggestions';
 import { useChatInputMcpIndicators } from '../mcp/hooks/useChatInputMcpIndicators';
 import { useMcpStreamingTools } from '../mcp/hooks/useMcpStreamingTools';
 import McpLiveToolsIndicator from '../mcp/components/McpLiveToolsIndicator';
@@ -391,23 +395,56 @@ export default function ProjectPage() {
   );
 
   const mcpInputSuggestions = useMemo(() => {
-    const suggestions = getMcpSuggestions(activeMcpServers.map((s) => s.id));
-    const chips =
-      suggestions.length > 0 ? (
-        <McpSuggestionChips
-          suggestions={suggestions}
-          disabled={isSending}
-          onSelect={(text) => setInputMessage((prev) => (prev.trim() ? `${prev.trim()}\n${text}` : text))}
-        />
-      ) : null;
-    if (!activeMcpTools.length && !chips) return null;
-    return (
-      <>
-        <McpLiveToolsIndicator tools={activeMcpTools} />
-        {chips}
-      </>
+    if (!activeMcpTools.length) return null;
+    return <McpLiveToolsIndicator tools={activeMcpTools} />;
+  }, [activeMcpTools]);
+
+  const enabledMcpServerIds = useMemo(
+    () => activeMcpServers.map((s) => s.id),
+    [activeMcpServers],
+  );
+
+  const chatInputSuggestionsCatalog = useMemo(
+    () => getChatInputSuggestions(enabledMcpServerIds, useKbRag),
+    [enabledMcpServerIds, useKbRag],
+  );
+
+  const suggestionsContentInset = useMemo(() => {
+    const mcpLabel =
+      activeMcpServers.length === 1
+        ? activeMcpServers[0].display_name
+        : activeMcpServers.length > 1
+          ? `${activeMcpServers.length} MCP`
+          : '';
+    const clusterWidth = estimateLibraryClusterWidthPx(
+      useKbRag,
+      orchestratorAgentsAnyActive || Boolean(myAgentSelection?.name),
+      activeMcpServers.length > 0,
+      mcpLabel,
     );
-  }, [activeMcpServers, activeMcpTools, isSending]);
+    return getToolsButtonInsetSp(chatInputStyle, clusterWidth);
+  }, [
+    useKbRag,
+    orchestratorAgentsAnyActive,
+    myAgentSelection?.name,
+    activeMcpServers,
+    chatInputStyle,
+  ]);
+
+  const renderChatInputSuggestions = (maxWidth: string | number) => (
+    <ChatInputSuggestions
+      suggestions={chatInputSuggestionsCatalog}
+      inputValue={inputMessage}
+      disabled={isSending}
+      isDarkMode={isDarkMode}
+      maxWidth={maxWidth}
+      contentInset={suggestionsContentInset}
+      onSelect={(text) => {
+        setInputMessage(text);
+        inputRef.current?.focus();
+      }}
+    />
+  );
   const dropdownPanelSx = getDropdownPanelSx(isDarkMode);
   const dropdownItemSx = useMemo(() => getDropdownItemSx(isDarkMode), [isDarkMode]);
 
@@ -818,6 +855,7 @@ export default function ProjectPage() {
           libraryBadge={libraryInputBadge}
           inputSuggestions={mcpInputSuggestions}
         />
+        {renderChatInputSuggestions('800px')}
 
         {/* Список чатов */}
         {projectChats.length > 0 && (

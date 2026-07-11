@@ -26,3 +26,6 @@ Dockerfile
 
 # Локальная конфигурация (URL API, окружение)
 public/config/config.yml
+
+# Monaco — генерируется из node_modules скриптом copy-monaco-assets.js
+public/monaco

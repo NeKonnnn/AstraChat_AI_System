@@ -218,14 +218,8 @@ def _extract_inline_payload(content: bytes, filename: str, content_type: str) ->
         import docx as docx_lib
 
         doc = docx_lib.Document(io.BytesIO(content))
-        parts = [p.text for p in doc.paragraphs if p.text.strip()]
-        # Текст внутри таблиц doc.paragraphs не отдаёт — собираем отдельно.
-        for table in doc.tables:
-            for row in table.rows:
-                line = "\t".join(c.text.strip() for c in row.cells).strip()
-                if line:
-                    parts.append(line)
-        text = "\n".join(parts) if parts else "(Документ не содержит текста)"
+        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        text = "\n".join(paragraphs) if paragraphs else "(Документ не содержит текста)"
         return {"type": "text", "content": text, "cs1": "docx"}
     if ext in (".xlsx", ".xls"):
         import openpyxl
@@ -243,245 +237,6 @@ def _extract_inline_payload(content: bytes, filename: str, content_type: str) ->
         return {"type": "text", "content": text, "cs1": "xlsx"}
     text = content.decode("utf-8", errors="replace")
     return {"type": "text", "content": text, "cs1": "text"}
-
-
-async def _ocr_image_payload_if_needed(
-    content: bytes,
-    filename: str,
-    payload: dict,
-    model_path: str | None,
-) -> tuple[dict, str | None]:
-    """
-    llm-svc + GGUF — text-only: вместо base64 vision прогоняем OCR (Surya).
-    """
-    if payload.get("type") != "image":
-        return payload, None
-
-    use_ocr = True
-    if model_path:
-        try:
-            from backend.llm_providers import get_registry
-
-            registry = await get_registry()
-            provider, _ = registry.resolve(model_path)
-            if provider.capabilities.vision and getattr(provider, "kind", None) != "llm-svc":
-                use_ocr = False
-        except Exception as exc:
-            logger.debug("[ChatAttach] OCR routing: %s", exc)
-
-    if not use_ocr:
-        return payload, None
-
-    try:
-        from backend.agent_llm_svc import get_llm_service
-
-        svc = await get_llm_service()
-        if not svc.client.ocr_url:
-            return payload, "OCR-сервис не настроен — текстовая модель не распознает изображение"
-
-        ocr = await svc.client.recognize_text_from_image(content, filename)
-        text = (ocr.get("text") or "").strip()
-        if not text:
-            return {
-                "type": "text",
-                "content": f"[Изображение «{filename}»: OCR не нашёл текста на изображении]",
-                "cs1": "image-ocr-empty",
-            }, "На изображении не обнаружен текст (OCR)"
-        return {
-            "type": "text",
-            "content": f"[Текст с изображения «{filename}» (OCR)]:\n{text}",
-            "cs1": "image-ocr",
-        }, None
-    except Exception as exc:
-        logger.warning("[ChatAttach] OCR failed for %s: %s", filename, exc)
-        return payload, f"OCR не удался: {exc}. Текстовая модель не «видит» картинку напрямую."
-
-
-async def _ocr_pdf_payload_if_needed(
-    content: bytes,
-    filename: str,
-    payload: dict,
-) -> tuple[dict, str | None]:
-    """
-    PDF всегда обрабатывается постранично: где есть текстовый слой — берём его,
-    где нет (скан/скриншот) — рендерим страницу через pypdfium2 и распознаём OCR-сервисом.
-    Так корректно читаются чисто текстовые, сканированные и смешанные PDF.
-    """
-    if payload.get("cs1") != "pdf":
-        return payload, None
-
-    try:
-        import io
-        import pypdfium2 as pdfium
-        from PyPDF2 import PdfReader
-        from backend.agent_llm_svc import get_llm_service
-
-        svc = await get_llm_service()
-        if not svc.client.ocr_url:
-            return payload, "OCR-сервис не настроен — PDF-скан не распознать"
-
-        reader = PdfReader(io.BytesIO(content))
-        pdf = pdfium.PdfDocument(content)
-        pages_out: list[str] = []
-        ocr_used = False
-        try:
-            for idx in range(len(pdf)):
-                try:
-                    layer = (reader.pages[idx].extract_text() or "").strip()
-                except Exception:
-                    layer = ""
-                if layer:
-                    pages_out.append(f"[Страница {idx + 1}]\n{layer}")
-                    continue
-                # Текстового слоя на странице нет → OCR.
-                pil_image = pdf.get_page(idx).render(scale=2.0).to_pil()
-                buf = io.BytesIO()
-                pil_image.save(buf, format="PNG")
-                ocr = await svc.client.recognize_text_from_image(
-                    buf.getvalue(), f"{filename}.p{idx + 1}.png"
-                )
-                page_text = (ocr.get("text") or "").strip()
-                if page_text:
-                    ocr_used = True
-                    pages_out.append(f"[Страница {idx + 1} (OCR)]\n{page_text}")
-        finally:
-            pdf.close()
-
-        if not pages_out:
-            return {
-                "type": "text",
-                "content": f"[PDF «{filename}»: не удалось извлечь текст (ни слоя, ни OCR)]",
-                "cs1": "pdf-ocr-empty",
-            }, "В PDF не обнаружен текст"
-
-        text = "\n\n".join(pages_out)
-        return {
-            "type": "text",
-            "content": f"[Текст из PDF «{filename}»]:\n{text}",
-            "cs1": "pdf-ocr" if ocr_used else "pdf",
-        }, None
-    except Exception as exc:
-        logger.warning("[ChatAttach] PDF OCR failed for %s: %s", filename, exc)
-        return payload, f"OCR PDF не удался: {exc}"
-
-
-async def _ocr_docx_payload_if_needed(
-    content: bytes,
-    filename: str,
-    payload: dict,
-) -> tuple[dict, str | None]:
-    """
-    DOCX: распознаём встроенные изображения (сканы/скриншоты внутри документа) через OCR
-    и добавляем их текст к уже извлечённым параграфам и таблицам.
-    """
-    if payload.get("cs1") != "docx":
-        return payload, None
-
-    try:
-        import io
-        import docx as docx_lib
-        from backend.agent_llm_svc import get_llm_service
-
-        doc = docx_lib.Document(io.BytesIO(content))
-        image_blobs: list[bytes] = []
-        for rel in doc.part.rels.values():
-            if "image" in (rel.reltype or ""):
-                try:
-                    image_blobs.append(rel.target_part.blob)
-                except Exception:
-                    continue
-        if not image_blobs:
-            return payload, None
-
-        svc = await get_llm_service()
-        if not svc.client.ocr_url:
-            return payload, None
-
-        ocr_texts: list[str] = []
-        for i, blob in enumerate(image_blobs, 1):
-            try:
-                ocr = await svc.client.recognize_text_from_image(blob, f"{filename}.img{i}.png")
-                t = (ocr.get("text") or "").strip()
-                if t:
-                    ocr_texts.append(t)
-            except Exception as exc:
-                logger.debug("[ChatAttach] DOCX image OCR skipped (%s): %s", filename, exc)
-
-        if not ocr_texts:
-            return payload, None
-
-        base = payload.get("content") or ""
-        if base.strip() == "(Документ не содержит текста)":
-            base = ""
-        joined = "\n".join(ocr_texts)
-        new_content = (f"{base}\n\n" if base else "") + (
-            f"[Текст из изображений документа «{filename}» (OCR)]:\n{joined}"
-        )
-        return {"type": "text", "content": new_content.strip(), "cs1": "docx-ocr"}, None
-    except Exception as exc:
-        logger.warning("[ChatAttach] DOCX OCR failed for %s: %s", filename, exc)
-        return payload, None
-
-
-async def _ocr_xlsx_payload_if_needed(
-    content: bytes,
-    filename: str,
-    payload: dict,
-) -> tuple[dict, str | None]:
-    """
-    XLSX: распознаём картинки, вставленные на листы, через OCR и добавляем их текст
-    к уже извлечённым значениям ячеек.
-    """
-    if payload.get("cs1") != "xlsx":
-        return payload, None
-
-    try:
-        import io
-        import openpyxl
-        from backend.agent_llm_svc import get_llm_service
-
-        # read_only=True не грузит картинки — открываем в обычном режиме.
-        wb = openpyxl.load_workbook(io.BytesIO(content))
-        image_blobs: list[bytes] = []
-        for ws in wb.worksheets:
-            for img in getattr(ws, "_images", []) or []:
-                try:
-                    data = img._data() if callable(getattr(img, "_data", None)) else None
-                    if data:
-                        image_blobs.append(data)
-                except Exception:
-                    continue
-        if not image_blobs:
-            return payload, None
-
-        svc = await get_llm_service()
-        if not svc.client.ocr_url:
-            return payload, None
-
-        ocr_texts: list[str] = []
-        for i, blob in enumerate(image_blobs, 1):
-            try:
-                ocr = await svc.client.recognize_text_from_image(blob, f"{filename}.img{i}.png")
-                t = (ocr.get("text") or "").strip()
-                if t:
-                    ocr_texts.append(t)
-            except Exception as exc:
-                logger.debug("[ChatAttach] XLSX image OCR skipped (%s): %s", filename, exc)
-
-        if not ocr_texts:
-            return payload, None
-
-        base = payload.get("content") or ""
-        if base.strip() == "(Таблица не содержит данных)":
-            base = ""
-        joined = "\n".join(ocr_texts)
-        new_content = (f"{base}\n\n" if base else "") + (
-            f"[Текст из изображений таблицы «{filename}» (OCR)]:\n{joined}"
-        )
-        return {"type": "text", "content": new_content.strip(), "cs1": "xlsx-ocr"}, None
-    except Exception as exc:
-        logger.warning("[ChatAttach] XLSX OCR failed for %s: %s", filename, exc)
-        return payload, None
 
 
 def _try_upload_bytes_to_minio(
@@ -1084,17 +839,6 @@ async def attach_document_for_message(request: Request, file: Annotated[UploadFi
     )
     try:
         payload = _extract_inline_payload(content, filename, content_type)
-        ocr_warning = None
-        if payload.get("type") == "image":
-            payload, ocr_warning = await _ocr_image_payload_if_needed(
-                content, filename, payload, analysis.get("model_path")
-            )
-        elif payload.get("cs1") == "pdf":
-            payload, ocr_warning = await _ocr_pdf_payload_if_needed(content, filename, payload)
-        elif payload.get("cs1") == "docx":
-            payload, ocr_warning = await _ocr_docx_payload_if_needed(content, filename, payload)
-        elif payload.get("cs1") == "xlsx":
-            payload, ocr_warning = await _ocr_xlsx_payload_if_needed(content, filename, payload)
     except Exception as e:
         logger.exception("[ChatAttach] extract-error filename=%s size=%s", filename, file_size)
         _log_inline_attachment_debug("extract-error", analysis, error=str(e), error_type=type(e).__name__)
@@ -1137,12 +881,6 @@ async def attach_document_for_message(request: Request, file: Annotated[UploadFi
         result["minio_bucket"] = minio_bucket
     if not minio_object:
         result["warning"] = "MinIO недоступен — файл прикреплён к сообщению, но не сохранён в хранилище"
-    if ocr_warning:
-        result["warning"] = (
-            f"{result['warning']} {ocr_warning}".strip()
-            if result.get("warning")
-            else ocr_warning
-        )
     return result
 
 

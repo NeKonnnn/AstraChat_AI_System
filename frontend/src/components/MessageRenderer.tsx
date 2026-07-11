@@ -6,7 +6,7 @@ import * as XLSX from 'xlsx';
 import CodeSelectionMenu from './CodeSelectionMenu';
 
 // Monaco загружается как статические файлы (не через webpack-бандл).
-// Файлы копируются из node_modules в /app/public/monaco при docker-сборке.
+// Файлы копируются в public/monaco через scripts/copy-monaco-assets.js (prestart/prebuild).
 loader.config({
   paths: { vs: `${process.env.PUBLIC_URL || ''}/monaco/vs` },
 });

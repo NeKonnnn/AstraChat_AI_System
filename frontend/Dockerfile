@@ -25,6 +25,9 @@ RUN npm install && npm install -g serve
 # Копирование исходного кода
 COPY . .
 
+# Monaco static assets для подсветки кода в чате (офлайн, без CDN)
+RUN node scripts/copy-monaco-assets.js
+
 # Сборка приложения
 RUN npm run build
 

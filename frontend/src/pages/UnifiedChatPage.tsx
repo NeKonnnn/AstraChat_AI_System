@@ -107,8 +107,12 @@ import { useMcpStreamingTools } from '../mcp/hooks/useMcpStreamingTools';
 import McpToolCallsPanel from '../mcp/components/McpToolCallsPanel';
 import { mergeMcpToolCalls } from '../mcp/utils/mergeToolCalls';
 import McpLiveToolsIndicator from '../mcp/components/McpLiveToolsIndicator';
-import McpSuggestionChips from '../mcp/components/McpSuggestionChips';
-import { getMcpSuggestions } from '../mcp/plugins/mcpSuggestions';
+import ChatInputSuggestions from '../components/ChatInputSuggestions';
+import {
+  estimateLibraryClusterWidthPx,
+  getToolsButtonInsetSp,
+} from '../components/chatInputLayout';
+import { getChatInputSuggestions } from '../chat/getChatInputSuggestions';
 import { getSidebarPanelBackground } from '../constants/sidebarPanelColor';
 import { getWorkZoneBackgroundColor, getWorkZoneCustomImage, isWorkZoneAnimatedMode } from '../constants/workZoneBackground';
 import { useWorkZoneBgMode } from '../hooks/useWorkZoneBgMode';
@@ -1695,6 +1699,18 @@ export default function UnifiedChatPage({
     return false;
   }, [messages, currentChatLoading]);
 
+  const lastStreamingAssistant = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const message = messages[i];
+      if (message.role !== 'assistant') continue;
+      if (message.isStreaming || (message.multiLLMResponses?.some((r) => r.isStreaming) ?? false)) {
+        return message;
+      }
+      break;
+    }
+    return null;
+  }, [messages]);
+
   const dropdownPanelSx = getDropdownPanelSx(isDarkMode);
   const dropdownItemSx = useMemo(() => getDropdownItemSx(isDarkMode), [isDarkMode]);
 
@@ -1800,27 +1816,20 @@ export default function UnifiedChatPage({
   const { activeMcpTools } = useMcpStreamingTools();
 
   const mcpInputSuggestions = useMemo(() => {
-    const enabledServerIds = activeMcpServers.map((s) => s.id);
-    const suggestions = getMcpSuggestions(enabledServerIds);
-    const chips =
-      suggestions.length > 0 ? (
-        <McpSuggestionChips
-          suggestions={suggestions}
-          disabled={currentChatLoading || hasActiveChatStreaming}
-          onSelect={(text) => {
-            setInputMessage((prev) => (prev.trim() ? `${prev.trim()}\n${text}` : text));
-            inputRef.current?.focus();
-          }}
-        />
-      ) : null;
-    if (!activeMcpTools.length && !chips) return null;
-    return (
-      <>
-        <McpLiveToolsIndicator tools={activeMcpTools} />
-        {chips}
-      </>
-    );
-  }, [activeMcpServers, activeMcpTools, currentChatLoading, hasActiveChatStreaming]);
+    if (!activeMcpTools.length) return null;
+    return <McpLiveToolsIndicator tools={activeMcpTools} />;
+  }, [activeMcpTools]);
+
+  const enabledMcpServerIds = useMemo(
+    () => activeMcpServers.map((s) => s.id),
+    [activeMcpServers],
+  );
+
+  const chatInputSuggestionsCatalog = useMemo(
+    () => getChatInputSuggestions(enabledMcpServerIds, useKbRag),
+    [enabledMcpServerIds, useKbRag],
+  );
+
   const [availableModels, setAvailableModels] = useState<
     Array<{
       name: string;
@@ -1882,8 +1891,33 @@ export default function UnifiedChatPage({
     ),
     [chatContextUsage, isDarkMode, chatContextModelLabel],
   );
-  const chatAwaitingTokens =
-    currentChatLoading && !hasActiveChatStreaming && !hasRunningMcpTools;
+  const chatAwaitingTokens = useMemo(() => {
+    if (!currentChatLoading || hasRunningMcpTools) return false;
+    if (!lastStreamingAssistant) return true;
+    const parsed = extractReasoningBlock(lastStreamingAssistant.content || '', true);
+    if (parsed.reasoningContent?.trim()) return false;
+    if (parsed.visibleContent.trim()) return false;
+    return true;
+  }, [currentChatLoading, hasRunningMcpTools, lastStreamingAssistant]);
+
+  const suggestionsDisabled =
+    currentChatLoading || hasActiveChatStreaming || multiLlmInputBlocked || chatAwaitingTokens;
+
+  const renderChatInputSuggestions = (maxWidth: string | number) => (
+    <ChatInputSuggestions
+      suggestions={chatInputSuggestionsCatalog}
+      inputValue={inputMessage}
+      disabled={suggestionsDisabled}
+      isDarkMode={isDarkMode}
+      maxWidth={maxWidth}
+      contentInset={suggestionsContentInset}
+      onSelect={(text) => {
+        setInputMessage(text);
+        inputRef.current?.focus();
+      }}
+    />
+  );
+
   /** Плейсхолдер поля ввода: без dev-текста про порт 8000; при активной генерации — обычная подсказка (кнопка стоп и так видна). */
   const chatMainPlaceholder = useMemo(() => {
     if (!isConnected) {
@@ -2026,6 +2060,28 @@ export default function UnifiedChatPage({
       chatInputStyle: (savedChatInputStyle as 'compact' | 'classic') || 'compact',
     };
   });
+
+  const suggestionsContentInset = useMemo(() => {
+    const mcpLabel =
+      activeMcpServers.length === 1
+        ? activeMcpServers[0].display_name
+        : activeMcpServers.length > 1
+          ? `${activeMcpServers.length} MCP`
+          : '';
+    const clusterWidth = estimateLibraryClusterWidthPx(
+      useKbRag,
+      orchestratorAgentsAnyActive || Boolean(myAgentSelection?.name),
+      activeMcpServers.length > 0,
+      mcpLabel,
+    );
+    return getToolsButtonInsetSp(interfaceSettings.chatInputStyle, clusterWidth);
+  }, [
+    useKbRag,
+    orchestratorAgentsAnyActive,
+    myAgentSelection?.name,
+    activeMcpServers,
+    interfaceSettings.chatInputStyle,
+  ]);
 
   // Слушаем изменения настроек интерфейса в localStorage
   useEffect(() => {
@@ -4075,12 +4131,18 @@ export default function UnifiedChatPage({
               {messages.map((message, index) => {
                 const isEmptyAssistantPlaceholder =
                   message.role === 'assistant' &&
-                  !message.isStreaming &&
                   !message.content.trim() &&
                   !message.mcpToolCalls?.length &&
                   !message.multiLLMResponses?.length &&
                   !message.documentSearch;
-                if (isEmptyAssistantPlaceholder && currentChatLoading) {
+                const parsedAssistant = isEmptyAssistantPlaceholder
+                  ? extractReasoningBlock(message.content || '', message.isStreaming)
+                  : null;
+                if (
+                  isEmptyAssistantPlaceholder &&
+                  currentChatLoading &&
+                  !parsedAssistant?.reasoningContent?.trim()
+                ) {
                   return null;
                 }
                 const isUserMsg = message.role === 'user';
@@ -4374,6 +4436,9 @@ export default function UnifiedChatPage({
                            extraActions={multiLlmSettingsExtraAction}
                            contextCounter={chatContextCounter}
                          />
+                         {renderChatInputSuggestions(
+                           interfaceSettings.widescreenMode ? '100%' : '800px',
+                         )}
                        </Box>
                      ) : null}
 
@@ -4424,6 +4489,9 @@ export default function UnifiedChatPage({
                extraActions={multiLlmSettingsExtraAction}
                contextCounter={chatContextCounter}
              />
+             {inputMessage.trim().length > 0 && inputMessage.length < 200
+               ? renderChatInputSuggestions(interfaceSettings.widescreenMode ? '100%' : '1000px')
+               : null}
            </>
            ) : null}
 
