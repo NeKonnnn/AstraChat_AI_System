@@ -7,14 +7,13 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 from backend.rag_query.prompts import RAG_STRICT_NOT_FOUND_MESSAGE
 from backend.settings.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Единая формулировка с strict-промптом и REST/агентами
 RAG_NO_RELEVANT_CONTEXT_MESSAGE = RAG_STRICT_NOT_FOUND_MESSAGE
 
 
@@ -72,6 +71,7 @@ def rag_guard_env() -> Tuple[float, bool]:
 
         min_sim = float(getattr(state, "rag_similarity_threshold", 0.0))
     except Exception:
+        logger.exception("RAG similarity threshold state read")
         min_sim = None
     if min_sim is None:
         try:
@@ -80,12 +80,11 @@ def rag_guard_env() -> Tuple[float, bool]:
             min_sim = 0.0
     min_sim = max(0.0, min(min_sim, 1.0))
     block = os.getenv("RAG_BLOCK_ON_NO_EVIDENCE", "1").strip().lower() not in ("0", "false", "no", "off")
-    return min_sim, block
+    return (min_sim, block)
 
 
 def filter_rag_hits_by_score(
-    hits: Optional[List[Tuple[str, float, Optional[int], Optional[int]]]],
-    min_score: float,
+    hits: Optional[List[Tuple[str, float, Optional[int], Optional[int]]]], min_score: float
 ) -> List[Tuple[str, float, Optional[int], Optional[int]]]:
     if not hits:
         return []
@@ -104,36 +103,29 @@ def filter_rag_hits_by_score(
     if not out and raw_scores:
         mx = max(raw_scores)
         if mx < min_score and mx < 0.0:
-            logger.info(
-                "[RAG] Порог RAG_MIN_SIMILARITY=%s не применён: шкала похожа на реранк (max score=%.4f < 0). "
-                "Оставляем хиты как отдал SVC-RAG; при необходимости задайте RAG_RERANK_MIN_SCORE в svc-rag.",
+            logger.debug(
+                "[RAG] Порог RAG_MIN_SIMILARITY=%s не применён: шкала похожа на реранк (max score=%.4f < 0). Оставляем хиты как отдал SVC-RAG; при необходимости задайте RAG_RERANK_MIN_SCORE в svc-rag.",
                 min_score,
                 mx,
             )
             return list(hits)
-        # Слабый cosine: всё ниже порога, но скоры положительные — отдаём лучшие N (иначе «тишина» в чате).
         if 0.0 <= mx < min_score:
             try:
                 rescue = int(os.getenv("RAG_RESCUE_LOW_SCORE_TOP", "10"))
             except ValueError:
                 rescue = 10
             rescue = max(4, min(rescue, 24))
-            ranked = sorted(
-                [h for h in hits if len(h) > 1],
-                key=lambda h: float(h[1]),
-                reverse=True,
-            )
+            ranked = sorted([h for h in hits if len(h) > 1], key=lambda h: float(h[1]), reverse=True)
             if ranked:
-                logger.info(
+                logger.debug(
                     "[RAG] max score=%.4f < RAG_MIN_SIMILARITY=%s — спасение recall: топ-%s чанков.",
                     mx,
                     min_score,
                     rescue,
                 )
                 return ranked[:rescue]
-        logger.info(
-            "[RAG] Все %s хитов отсечены порогом RAG_MIN_SIMILARITY=%s (макс. score до фильтра: %.4f). "
-            "Уменьшите RAG_MIN_SIMILARITY в окружении, если ответы есть в документах, но контекст пуст.",
+        logger.debug(
+            "[RAG] Все %s хитов отсечены порогом RAG_MIN_SIMILARITY=%s (макс. score до фильтра: %.4f). Уменьшите RAG_MIN_SIMILARITY в окружении, если ответы есть в документах, но контекст пуст.",
             len(hits),
             min_score,
             mx,
@@ -158,10 +150,7 @@ def _format_single_fragment(
             sc = float(score)
         except (TypeError, ValueError):
             sc = 0.0
-        return (
-            f"Фрагмент {number} (документ «{title}», чанк {chunk_idx}, "
-            f"релевантность: {sc:.2f}):\n{content}\n"
-        )
+        return f"Фрагмент {number} (документ «{title}», чанк {chunk_idx}, релевантность: {sc:.2f}):\n{content}\n"
     return f"Фрагмент {number} (документ «{title}»): {content}\n"
 
 
@@ -211,10 +200,7 @@ def format_rag_fragments(
         "documents_in_prompt": 0,
     }
     if not hits:
-        return [], metrics
-
-    # Стабильный порядок документов по первому появлению в hits.
-    # dict в Python 3.7+ сохраняет порядок вставки — используем это.
+        return ([], metrics)
     doc_order: List[Optional[int]] = []
     doc_seen: set = set()
     for row in hits:
@@ -226,11 +212,6 @@ def format_rag_fragments(
             doc_seen.add(d_id)
             doc_order.append(d_id)
     metrics["documents_input"] = len(doc_order)
-
-    # Индексированный список: [(номер_1based, document_id, row_idx, row), ...].
-    # row_idx — стабильный индекс hit в исходном списке, используется как ключ
-    # «добавлен ли уже в выборку». Это безопаснее, чем id(row): хиты могут быть
-    # дубликатами-кортежами, у которых id() совпадает.
     indexed: List[Tuple[int, Optional[int], Tuple[str, float, Optional[int], Optional[int]]]] = []
     for i, row in enumerate(hits):
         try:
@@ -238,12 +219,9 @@ def format_rag_fragments(
         except (TypeError, ValueError):
             continue
         indexed.append((i + 1, d_id, row))
-
     by_doc: Dict[Optional[int], List[int]] = {}
     for num, d_id, _row in indexed:
-        by_doc.setdefault(d_id, []).append(num - 1)  # 0-based index
-
-    # selected_entries[idx] = готовая текстовая часть (или None, если не выбрана).
+        by_doc.setdefault(d_id, []).append(num - 1)
     selected_entries: List[Optional[str]] = [None] * len(indexed)
     selected_doc_ids: set = set()
     total = 0
@@ -255,10 +233,7 @@ def format_rag_fragments(
         if selected_entries[idx] is not None:
             return True
         num, d_id, row = indexed[idx]
-        frag = _format_single_fragment(
-            row, number=num, id_to_name=id_to_name,
-            include_chunk_meta=include_chunk_meta,
-        )
+        frag = _format_single_fragment(row, number=num, id_to_name=id_to_name, include_chunk_meta=include_chunk_meta)
         if frag is None:
             return False
         if total + len(frag) + reserve_for_marker > max_chars:
@@ -268,27 +243,19 @@ def format_rag_fragments(
         total += len(frag)
         return True
 
-    # Проход 1: по одному чанку на каждый документ (coverage).
     for d_id in doc_order:
         idxs = by_doc.get(d_id) or []
         for idx in idxs:
             if _try_add(idx):
-                break  # один на документ в этом проходе
-            # Если первый чанк документа не влез — пробуем следующий того же
-            # документа (он может быть короче). Это полезно, когда у первого
-            # чанка огромный текст, а у второго — компактный заголовок.
-
-    # Проход 2: добираем остальное по исходному порядку hits.
+                break
     for idx, (num, d_id, row) in enumerate(indexed):
         if selected_entries[idx] is not None:
             continue
         if _try_add(idx):
             continue
-        # Бюджет кончился на этом кандидате: обрежем и вставим маркер.
         if total + reserve_for_marker < max_chars:
             frag = _format_single_fragment(
-                row, number=num, id_to_name=id_to_name,
-                include_chunk_meta=include_chunk_meta,
+                row, number=num, id_to_name=id_to_name, include_chunk_meta=include_chunk_meta
             )
             if frag is not None:
                 tail = max(0, max_chars - total - reserve_for_marker)
@@ -297,20 +264,15 @@ def format_rag_fragments(
                 total += len(selected_entries[idx])
                 truncated_last = True
         break
-
     parts: List[str] = [p for p in selected_entries if p is not None]
     used_count = len(parts)
-
     metrics["used_full"] = used_count - (1 if truncated_last else 0)
     metrics["truncated_last"] = 1 if truncated_last else 0
     metrics["dropped"] = max(0, len(indexed) - used_count)
     metrics["total_chars"] = total
     metrics["documents_in_prompt"] = len(selected_doc_ids)
-
-    logger.info(
-        "[RAG/fragments] store=%s: получено=%d, попало_в_промпт_целиком=%d, "
-        "документов_в_промпт=%d/%d, последний_обрезан=%d, "
-        "отброшено_после_лимита=%d, длина=%d/%d",
+    logger.debug(
+        "[RAG/fragments] store=%s: получено=%d, попало_в_промпт_целиком=%d, документов_в_промпт=%d/%d, последний_обрезан=%d, отброшено_после_лимита=%d, длина=%d/%d",
         store_label,
         metrics["received"],
         metrics["used_full"],
@@ -321,7 +283,7 @@ def format_rag_fragments(
         metrics["total_chars"],
         max_chars,
     )
-    return parts, metrics
+    return (parts, metrics)
 
 
 async def fetch_rag_store_counts(
@@ -340,14 +302,14 @@ async def fetch_rag_store_counts(
     try:
         docs = await rag_client.list_documents()
         out["global"] = len(docs) if isinstance(docs, list) else 0
-    except Exception as e:
-        logger.debug("list_documents: %s", e)
+    except Exception:
+        logger.exception("list_documents")
     if project_id:
         try:
             docs = await rag_client.project_rag_list_documents(project_id)
             out["project"] = len(docs) if isinstance(docs, list) else 0
-        except Exception as e:
-            logger.debug("project_rag_list_documents: %s", e)
+        except Exception:
+            logger.exception("project_rag_list_documents")
     kb_list: List[dict] = []
     if use_kb_rag or use_agent_scoped_kb:
         try:
@@ -355,8 +317,8 @@ async def fetch_rag_store_counts(
             if not isinstance(kb_list, list):
                 kb_list = []
             out["kb"] = len(kb_list)
-        except Exception as e:
-            logger.debug("kb_list_documents: %s", e)
+        except Exception:
+            logger.exception("kb_list_documents")
     if use_agent_scoped_kb and agent_kb_doc_ids and kb_list:
         want = {int(x) for x in agent_kb_doc_ids if str(x).isdigit() or isinstance(x, int)}
         n = 0
@@ -371,8 +333,8 @@ async def fetch_rag_store_counts(
         try:
             docs = await rag_client.memory_rag_list_documents()
             out["memory"] = len(docs) if isinstance(docs, list) else 0
-        except Exception as e:
-            logger.debug("memory_rag_list_documents: %s", e)
+        except Exception:
+            logger.exception("memory_rag_list_documents")
     return out
 
 
@@ -396,7 +358,6 @@ async def maybe_rag_no_evidence_message(
     """
     if not block_when_no_evidence or context_added or not rag_client:
         return None
-
     counts = await fetch_rag_store_counts(
         rag_client,
         project_id=project_id,
@@ -405,7 +366,6 @@ async def maybe_rag_no_evidence_message(
         agent_kb_doc_ids=agent_kb_doc_ids,
         use_memory_library_rag=use_memory_library_rag,
     )
-
     doc_backed = (
         (project_id and counts["project"] > 0)
         or (use_kb_rag and counts["kb"] > 0)
@@ -418,10 +378,18 @@ async def maybe_rag_no_evidence_message(
             and (project_id or use_kb_rag or use_agent_scoped_kb or use_memory_library_rag)
         )
     )
-
     if not doc_backed:
         return None
     logger.info(
-        "[RAG] Блок ответа без опоры: корпус непустой, но после порога релевантности контекст пуст"
+        "[RAG-NO-EVIDENCE] Блок ответа без опоры: контекст пуст при непустом корпусе. "
+        "counts=%s project_id=%s use_kb_rag=%s use_agent_scoped_kb=%s "
+        "use_memory_library_rag=%s global_attempted=%s implicit_global_corpus=%s",
+        counts,
+        project_id,
+        use_kb_rag,
+        use_agent_scoped_kb,
+        use_memory_library_rag,
+        global_attempted,
+        implicit_global_corpus,
     )
     return RAG_NO_RELEVANT_CONTEXT_MESSAGE

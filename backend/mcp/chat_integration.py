@@ -8,11 +8,29 @@ from backend.context_prompts import merge_context_prompt_into_system
 from backend.mcp.agent_loop import get_mcp_agent_loop
 from backend.mcp.events import McpEventCallback
 from backend.mcp.platform import get_mcp_platform
-from backend.mcp.resolvers import build_chat_messages, parse_mcp_server_ids
+from backend.mcp.resolvers import build_chat_messages, parse_mcp_server_ids, resolve_chat_tool_ids
 from backend.mcp.types import AgentLoopResult, McpCallContext
 from backend.settings.logging import get_logger
 
 log = get_logger(__name__)
+
+
+async def _ensure_mcp_model_loaded(model_path: str) -> bool:
+    """MCP FC требует готовую модель; иначе llm-svc отвечает 503 и чат падает в plain LLM."""
+    from backend.llm_providers import get_registry
+
+    registry = await get_registry()
+    provider, model_id = registry.resolve(model_path)
+    if not model_id:
+        models = await provider.list_models()
+        model_id = models[0].model_id if models else ""
+    if not model_id:
+        log.warning("MCP: не удалось определить model_id для %s", model_path)
+        return False
+    if not await provider.ensure_model_loaded(model_id):
+        log.warning("MCP: модель %s недоступна на провайдере %s", model_id, provider.id)
+        return False
+    return True
 
 
 def build_mcp_context_from_user(
@@ -56,7 +74,14 @@ async def maybe_run_mcp_agent(
         log.warning("MCP blocked: provider not in MCP_LLM_PROVIDER_ALLOWLIST model=%s", model_path)
         return None
 
-    server_ids = parse_mcp_server_ids(tool_ids)
+    resolved_tool_ids = resolve_chat_tool_ids(tool_ids)
+    if resolved_tool_ids and resolved_tool_ids != (tool_ids or []):
+        log.info("MCP chat_default applied: %s", resolved_tool_ids)
+
+    if not await _ensure_mcp_model_loaded(model_path):
+        return None
+
+    server_ids = parse_mcp_server_ids(resolved_tool_ids)
     if not server_ids:
         return None
 

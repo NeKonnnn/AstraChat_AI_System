@@ -36,9 +36,7 @@ class KbDocumentRepository:
                     updated_at TIMESTAMP DEFAULT NOW()
                 )
             """)
-            await conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_kb_documents_filename ON kb_documents(filename)"
-            )
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_kb_documents_filename ON kb_documents(filename)")
         logger.info("Таблица kb_documents готова")
 
     async def create_document(self, document: Document) -> Optional[int]:
@@ -165,9 +163,7 @@ class KbVectorRepository:
                 CREATE INDEX IF NOT EXISTS idx_kb_vectors_embedding_hnsw
                 ON kb_vectors USING hnsw (embedding vector_cosine_ops)
             """)
-            await conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_kb_vectors_document_id ON kb_vectors(document_id)"
-            )
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_kb_vectors_document_id ON kb_vectors(document_id)")
             await ensure_fts_columns(conn, "kb_vectors")
         logger.info("Таблица kb_vectors готова (dim=%s)", self.embedding_dim)
 
@@ -392,9 +388,7 @@ class KbVectorRepository:
             )
         return out
 
-    async def get_chunk_contents_by_indices(
-        self, document_id: int, chunk_indices: List[int]
-    ) -> Dict[int, str]:
+    async def get_chunk_contents_by_indices(self, document_id: int, chunk_indices: List[int]) -> Dict[int, str]:
         if not chunk_indices:
             return {}
         uniq = sorted({int(i) for i in chunk_indices if i is not None and int(i) >= 0})
@@ -444,14 +438,18 @@ class KbVectorRepository:
     async def get_all_document_ids(self) -> List[int]:
         """Уникальные document_id в KB."""
         async with await self.db.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT DISTINCT document_id FROM kb_vectors ORDER BY document_id"
-            )
+            rows = await conn.fetch("SELECT DISTINCT document_id FROM kb_vectors ORDER BY document_id")
         return [r["document_id"] for r in rows]
 
-    async def get_vector_by_document_and_chunk(
-        self, document_id: int, chunk_index: int
-    ) -> Optional[DocumentVector]:
+    async def get_all_contents_for_bm25(self) -> List[Tuple[int, int, str]]:
+        """Возвращает (document_id, chunk_index, content) для всех чанков KB — для BM25."""
+        async with await self.db.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT document_id, chunk_index, content FROM kb_vectors ORDER BY document_id, chunk_index"
+            )
+        return [(r["document_id"], r["chunk_index"], r["content"]) for r in rows]
+
+    async def get_vector_by_document_and_chunk(self, document_id: int, chunk_index: int) -> Optional[DocumentVector]:
         """Точечный запрос одного вектора по (document_id, chunk_index)."""
         async with await self.db.acquire() as conn:
             row = await conn.fetchrow(

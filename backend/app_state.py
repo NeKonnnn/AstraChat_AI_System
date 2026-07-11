@@ -239,8 +239,11 @@ _model_comparison_models: list[str] = []
 _model_comparison_models_lock = threading.Lock()
 
 
-def get_rag_chunk_index_params() -> dict[str, int]:
-    """Параметры нарезки чанков для передачи в SVC-RAG при индексации."""
+def get_library_chunk_index_params() -> dict:
+    """Чанкинг для Библиотеки (KB + memory-rag): всегда universal, без UI-стратегии.
+
+    Size/overlap — из настроек размера (не из strategy dropdown).
+    """
     try:
         size = int(rag_chunk_size)
     except (TypeError, ValueError):
@@ -252,6 +255,27 @@ def get_rag_chunk_index_params() -> dict[str, int]:
     return {
         "chunk_size": max(200, min(size, 8000)),
         "chunk_overlap": max(0, min(overlap, 2000)),
+        "chunking_strategy": "universal",
+    }
+
+
+def get_rag_chunk_index_params() -> dict:
+    """Параметры нарезки для project-rag и agent KB: size/overlap + UI-стратегия."""
+    try:
+        size = int(rag_chunk_size)
+    except (TypeError, ValueError):
+        size = 1000
+    try:
+        overlap = int(rag_chunk_overlap)
+    except (TypeError, ValueError):
+        overlap = 200
+    strategy = str(rag_chunking_strategy or "hierarchical").strip().lower()
+    if strategy not in {"hierarchical", "fixed", "markdown", "separators", "semantic", "universal"}:
+        strategy = "hierarchical"
+    return {
+        "chunk_size": max(200, min(size, 8000)),
+        "chunk_overlap": max(0, min(overlap, 2000)),
+        "chunking_strategy": strategy,
     }
 
 
@@ -357,6 +381,10 @@ def load_app_settings() -> dict:
                 current_rag_strategy = "hybrid"
                 data["rag_strategy"] = "hybrid"
                 save_app_settings({"rag_strategy": "hybrid"})
+            elif current_rag_strategy == "standard":
+                current_rag_strategy = "vector"
+                data["rag_strategy"] = "vector"
+                save_app_settings({"rag_strategy": "vector"})
             if "agentic_rag_enabled" in data:
                 agentic_rag_enabled = bool(data["agentic_rag_enabled"])
             try:

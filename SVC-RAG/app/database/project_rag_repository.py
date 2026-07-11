@@ -78,6 +78,14 @@ class ProjectRagDocumentRepository:
             return None
         return self._row_to_dict(row)
 
+    async def get_all_project_ids(self) -> List[str]:
+        """Все project_id, у которых есть документы (для массовой перечанкировки)."""
+        async with await self.db.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT DISTINCT project_id FROM project_rag_documents"
+            )
+        return [r["project_id"] for r in rows if r["project_id"]]
+
     async def get_documents_by_project(self, project_id: str) -> List[dict]:
         async with await self.db.acquire() as conn:
             rows = await conn.fetch(
@@ -122,9 +130,7 @@ class ProjectRagDocumentRepository:
     async def delete_documents_by_project(self, project_id: str) -> int:
         """Удаляет все документы проекта. Возвращает количество удалённых."""
         async with await self.db.acquire() as conn:
-            result = await conn.execute(
-                "DELETE FROM project_rag_documents WHERE project_id = $1", project_id
-            )
+            result = await conn.execute("DELETE FROM project_rag_documents WHERE project_id = $1", project_id)
         # asyncpg возвращает "DELETE N"
         try:
             return int(result.split()[-1])
@@ -189,9 +195,7 @@ class ProjectRagVectorRepository:
         flat = []
         for i, (doc_id, idx, emb, content, meta) in enumerate(values):
             base = i * 5
-            placeholders.append(
-                f"(${base+1}, ${base+2}, ${base+3}::vector, ${base+4}, ${base+5}::jsonb)"
-            )
+            placeholders.append(f"(${base+1}, ${base+2}, ${base+3}::vector, ${base+4}, ${base+5}::jsonb)")
             flat.extend([doc_id, idx, emb, content, meta])
         async with await self.db.acquire() as conn:
             await conn.execute(
@@ -432,9 +436,7 @@ class ProjectRagVectorRepository:
             float(row["similarity"]),
         )
 
-    async def get_chunk_contents_by_indices(
-        self, document_id: int, chunk_indices: List[int]
-    ) -> Dict[int, str]:
+    async def get_chunk_contents_by_indices(self, document_id: int, chunk_indices: List[int]) -> Dict[int, str]:
         if not chunk_indices:
             return {}
         uniq = sorted({int(i) for i in chunk_indices if i is not None and int(i) >= 0})
@@ -479,9 +481,7 @@ class ProjectRagVectorRepository:
 
     async def delete_vectors_by_document(self, document_id: int) -> bool:
         async with await self.db.acquire() as conn:
-            await conn.execute(
-                "DELETE FROM project_rag_vectors WHERE document_id = $1", document_id
-            )
+            await conn.execute("DELETE FROM project_rag_vectors WHERE document_id = $1", document_id)
         return True
 
     async def get_all_document_ids(self, project_id: Optional[str] = None) -> List[int]:
@@ -499,10 +499,29 @@ class ProjectRagVectorRepository:
                     project_id,
                 )
             else:
-                rows = await conn.fetch(
-                    "SELECT DISTINCT document_id FROM project_rag_vectors ORDER BY document_id"
-                )
+                rows = await conn.fetch("SELECT DISTINCT document_id FROM project_rag_vectors ORDER BY document_id")
         return [r["document_id"] for r in rows]
+
+    async def get_all_contents_for_bm25(self, project_id: Optional[str] = None) -> List[Tuple[int, int, str]]:
+        """Возвращает (document_id, chunk_index, content) для BM25 (опционально в рамках project_id)."""
+        async with await self.db.acquire() as conn:
+            if project_id is not None:
+                rows = await conn.fetch(
+                    """
+                    SELECT v.document_id, v.chunk_index, v.content
+                    FROM project_rag_vectors v
+                    JOIN project_rag_documents d ON d.id = v.document_id
+                    WHERE d.project_id = $1
+                    ORDER BY v.document_id, v.chunk_index
+                    """,
+                    project_id,
+                )
+            else:
+                rows = await conn.fetch(
+                    "SELECT document_id, chunk_index, content FROM project_rag_vectors "
+                    "ORDER BY document_id, chunk_index"
+                )
+        return [(r["document_id"], r["chunk_index"], r["content"]) for r in rows]
 
     async def get_vector_by_document_and_chunk(
         self, document_id: int, chunk_index: int
@@ -522,6 +541,7 @@ class ProjectRagVectorRepository:
         if isinstance(meta, str):
             meta = json.loads(meta) if meta else {}
         from app.database.models import DocumentVector
+
         return DocumentVector(
             id=row["id"],
             document_id=row["document_id"],

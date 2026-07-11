@@ -2,7 +2,7 @@
 import os
 import yaml
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from pydantic import BaseModel, Field
 
 _settings = None
@@ -78,6 +78,13 @@ def _apply_urls_section(data: dict) -> dict:
             llm["base_url"] = bu
     out["llm_service"] = llm
 
+    be = dict(out.get("backend") or {})
+    if not str(be.get("base_url") or "").strip():
+        bu = _pick_service_url(urls, "backend_service_docker", "backend_service_port")
+        if bu:
+            be["base_url"] = bu
+    out["backend"] = be
+
     cors = dict(out.get("cors") or {})
     ao = cors.get("allowed_origins")
     if not ao or ao == ["*"]:
@@ -118,6 +125,21 @@ def _apply_postgres_env_overrides(data: dict) -> dict:
     return out
 
 
+def _apply_backend_service_env(data: dict) -> dict:
+    """env backend_service_port (или BACKEND_SERVICE_PORT) перекрывает urls.backend_service_port."""
+    out = dict(data)
+    url = (
+        os.environ.get("backend_service_port")
+        or os.environ.get("BACKEND_SERVICE_PORT")
+        or ""
+    ).strip()
+    if url:
+        be = dict(out.get("backend") or {})
+        be["base_url"] = url.rstrip("/")
+        out["backend"] = be
+    return out
+
+
 class ServerConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8000
@@ -127,7 +149,7 @@ class ServerConfig(BaseModel):
 
 
 class CorsConfig(BaseModel):
-    allowed_origins: List[str] = []
+    allowed_origins: List[str] = Field(default_factory=list)
     allow_credentials: bool = True
     allow_methods: List[str] = ["*"]
     allow_headers: List[str] = ["*"]
@@ -180,6 +202,14 @@ class RagServiceConfig(BaseModel):
     # Гибридный поиск: вектор + BM25
     use_hybrid_search: bool = os.environ.get("RAG_USE_HYBRID_SEARCH", "true").lower() == "true"
     hybrid_bm25_weight: float = float(os.environ.get("RAG_HYBRID_BM25_WEIGHT", "0.3"))
+    # Диверсификация применяется только после weighted RRF и не использует
+    # cosine-пороги (RRF и cosine имеют разные шкалы).
+    hybrid_diversify_results: bool = (
+        os.environ.get("RAG_HYBRID_DIVERSIFY_RESULTS", "true").lower() == "true"
+    )
+    hybrid_max_chunks_per_document: int = int(
+        os.environ.get("RAG_HYBRID_MAX_CHUNKS_PER_DOCUMENT", "2")
+    )
     # Реранкинг через SVC-RAG-MODELS
     use_reranking: bool = os.environ.get("RAG_USE_RERANKING", "false").lower() == "true"
     rerank_top_k: int = int(os.environ.get("RAG_RERANK_TOP_K", "20"))
@@ -197,7 +227,7 @@ class RagServiceConfig(BaseModel):
     # Минимальная длина чанка для low_signal-фильтра; 0 = не фильтровать.
     min_chunk_length: int = int(os.environ.get("RAG_MIN_CHUNK_LENGTH", "40"))
 
-    # Иерархическое индексирование 
+    # Иерархическое индексирование
     use_hierarchical_indexing: bool = os.environ.get("RAG_USE_HIERARCHICAL", "true").lower() == "true"
     hierarchical_threshold: int = int(os.environ.get("RAG_HIERARCHICAL_THRESHOLD", "10000"))
     hierarchical_chunk_size: int = int(os.environ.get("RAG_HIERARCHICAL_CHUNK_SIZE", "1500"))
@@ -215,17 +245,28 @@ class LLMServiceConfig(BaseModel):
     default_model: str = Field(...)
 
 
+class BackendServiceConfig(BaseModel):
+    base_url: str = ""
+    timeout: float = 120.0
+
+
 class Settings(BaseModel):
-    server: ServerConfig = ServerConfig()
-    cors: CorsConfig = CorsConfig()
-    app: AppConfig = AppConfig()
-    logging: LoggingConfig = LoggingConfig()
+    server: ServerConfig = Field(default_factory=ServerConfig)
+    cors: CorsConfig = Field(default_factory=CorsConfig)
+    app: AppConfig = Field(default_factory=AppConfig)
+    logging: LoggingConfig = Field(default_factory=LoggingConfig)
+
+    # Эти секции содержат обязательные адреса/учётные данные. Не создаём их
+    # пустыми при импорте модуля: значения сначала загружаются из config.yml/env,
+    # затем Pydantic валидирует готовый словарь в ``from_yaml``.
     rag_models_client: RagModelsClientConfig
     postgresql: PostgreSQLConfig
     minio: MinioConfig
     ocr: OcrConfig
-    rag: RagServiceConfig = RagServiceConfig()
     llm_service: LLMServiceConfig
+
+    rag: RagServiceConfig = Field(default_factory=RagServiceConfig)
+    backend: BackendServiceConfig = Field(default_factory=BackendServiceConfig)
 
     @classmethod
     def from_yaml(cls, config_path: Optional[str] = None):
@@ -248,6 +289,7 @@ class Settings(BaseModel):
                 data = yaml.safe_load(f) or {}
             data = _apply_urls_section(data)
             data = _apply_postgres_env_overrides(data)
+            data = _apply_backend_service_env(data)
             return cls(**data)
         except Exception as e:
             raise ValueError(f"Ошибка загрузки конфига {config_path}: {e}")
@@ -258,6 +300,55 @@ def get_settings() -> Settings:
     if _settings is None:
         _settings = Settings.from_yaml(os.environ.get("CONFIG_PATH", ""))
     return _settings
+
+
+def get_settings_diagnostics(settings_obj: Optional[Settings] = None) -> Dict[str, Any]:
+    """Безопасная сводка фактически загруженной конфигурации для startup-логов.
+
+    Функция намеренно не возвращает пароли, access/secret keys и другие секреты.
+    Необязательный аргумент сохраняет совместимость с вызовами как
+    ``get_settings_diagnostics()``, так и ``get_settings_diagnostics(settings)``.
+    """
+    cfg = settings_obj or get_settings()
+    configured_path = (os.environ.get("CONFIG_PATH") or "").strip()
+    return {
+        "config_source": configured_path or "auto-discovered config.yml",
+        "docker_runtime": _docker_runtime(),
+        "server": {
+            "host": cfg.server.host,
+            "port": cfg.server.port,
+        },
+        "rag_models": {
+            "base_url": cfg.rag_models_client.base_url,
+            "timeout": cfg.rag_models_client.timeout,
+            "embed_batch_size": cfg.rag_models_client.embed_batch_size,
+        },
+        "postgresql": {
+            "host": cfg.postgresql.host,
+            "port": cfg.postgresql.port,
+            "database": cfg.postgresql.database,
+            "user": cfg.postgresql.user,
+            "embedding_dim": cfg.postgresql.embedding_dim,
+        },
+        "ocr": {
+            "url": cfg.ocr.url,
+            "timeout": cfg.ocr.timeout,
+        },
+        "llm_service": {
+            "base_url": cfg.llm_service.base_url,
+            "timeout": cfg.llm_service.timeout,
+            "default_model": cfg.llm_service.default_model,
+        },
+        "backend": {
+            "base_url": cfg.backend.base_url,
+            "timeout": cfg.backend.timeout,
+        },
+        "rag": {
+            "enabled": cfg.rag.enabled,
+            "use_hybrid_search": cfg.rag.use_hybrid_search,
+            "enable_graph_rag": cfg.rag.enable_graph_rag,
+        },
+    }
 
 
 settings = get_settings()

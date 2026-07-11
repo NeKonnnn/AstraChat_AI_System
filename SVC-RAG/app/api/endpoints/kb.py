@@ -2,7 +2,17 @@
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+import asyncio
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    UploadFile,
+)
+
 from pydantic import BaseModel
 
 from app.api.rag_common import (
@@ -62,6 +72,7 @@ async def kb_index_document(
     file: UploadFile = File(...),
     chunk_size: Optional[int] = Form(None),
     chunk_overlap: Optional[int] = Form(None),
+    chunking_strategy: Optional[str] = Form(None),
     kb: KbService = Depends(get_kb_service),
 ):
     """Загрузить документ в постоянную Базу Знаний (PDF, DOCX, XLSX, TXT)."""
@@ -71,7 +82,13 @@ async def kb_index_document(
     if not data:
         raise HTTPException(status_code=400, detail="Файл пустой")
 
-    result = await kb.index_document(data, file.filename, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+    result = await kb.index_document(
+        data,
+        file.filename,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        chunking_strategy=chunking_strategy or "universal",
+    )
     if not result.get("ok"):
         raise HTTPException(status_code=422, detail=result.get("error", "Ошибка индексации"))
     return KbIndexResponse(
@@ -135,3 +152,51 @@ async def kb_search(
         ],
         trace=trace.to_dict() if body.debug_trace else None,
     )
+
+
+class KbReindexRequest(BaseModel):
+    chunk_size: Optional[int] = None
+    chunk_overlap: Optional[int] = None
+    chunking_strategy: Optional[str] = None
+
+
+_kb_reindex_lock = asyncio.Lock()
+
+
+async def _kb_reindex_bg(
+    kb: KbService,
+    chunk_size: Optional[int],
+    chunk_overlap: Optional[int],
+    chunking_strategy: Optional[str],
+) -> None:
+    if _kb_reindex_lock.locked():
+        logger.info(
+            "[REINDEX kb] уже идёт — новый запуск дождётся завершения предыдущего"
+        )
+    async with _kb_reindex_lock:
+        try:
+            res = await kb.reindex_all(
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                chunking_strategy=chunking_strategy,
+            )
+            logger.info("[REINDEX kb] фоновая перечанкировка завершена: %s", res)
+        except Exception:
+            logger.exception("[REINDEX kb] фоновая перечанкировка упала")
+
+            
+@router.post("/reindex")
+async def kb_reindex(
+    body: KbReindexRequest,
+    background: BackgroundTasks,
+    kb: KbService = Depends(get_kb_service),
+):
+    """Запустить перечанкировку всей БЗ В ФОНЕ. Отвечает сразу, не дожидаясь конца."""
+    background.add_task(
+        _kb_reindex_bg,
+        kb,
+        body.chunk_size,
+        body.chunk_overlap,
+        body.chunking_strategy,
+    )
+    return {"ok": True, "status": "started"}

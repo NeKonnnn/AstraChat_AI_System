@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+import json
+import re
 from typing import Any, List
 
 from backend.mcp.types import ParsedMcpResult
+
+# Лимит текста tool-result в follow-up LLM (иначе n_ctx переполняется на fetchWebContent)
+DEFAULT_TOOL_RESULT_MAX_CHARS = 6000
+_SEARCH_RESULT_LIMIT = 5
+_FETCH_CONTENT_MAX_CHARS = 3500
 
 
 def parse_mcp_result(content: Any) -> str:
@@ -87,7 +94,7 @@ def format_parsed_for_llm(parsed: ParsedMcpResult, *, max_resource_chars: int = 
     """Текст для LLM follow-up с кратким описанием non-text content."""
     lines: List[str] = []
     if parsed.text:
-        lines.append(parsed.text)
+        lines.append(compact_tool_result_for_llm(parsed.text))
     for img in parsed.images:
         mime = img.get("mimeType") or "image"
         lines.append(f"[MCP image attachment: {mime}]")
@@ -103,6 +110,84 @@ def format_parsed_for_llm(parsed: ParsedMcpResult, *, max_resource_chars: int = 
         else:
             lines.append(f"[MCP resource: {uri}]")
     return "\n".join(lines).strip()
+
+
+def _strip_html(text: str) -> str:
+    return re.sub(r"<[^>]+>", "", text or "").strip()
+
+
+def _truncate(text: str, limit: int) -> str:
+    s = (text or "").strip()
+    if len(s) <= limit:
+        return s
+    return s[: max(0, limit - 1)] + "…"
+
+
+def _compact_web_search_payload(data: dict) -> dict:
+    results = data.get("results")
+    if not isinstance(results, list):
+        return data
+    compact_results = []
+    for row in results[:_SEARCH_RESULT_LIMIT]:
+        if not isinstance(row, dict):
+            continue
+        compact_results.append(
+            {
+                "title": row.get("title"),
+                "url": row.get("url"),
+                "description": _truncate(_strip_html(str(row.get("description") or "")), 500),
+                "source": row.get("source"),
+            }
+        )
+    out = {
+        "query": data.get("query"),
+        "engines": data.get("engines"),
+        "totalResults": data.get("totalResults"),
+        "results": compact_results,
+    }
+    if data.get("partialFailures"):
+        out["partialFailures"] = data.get("partialFailures")
+    return out
+
+
+def _compact_fetch_web_payload(data: dict) -> dict:
+    content = str(data.get("content") or data.get("excerpt") or "")
+    content = _truncate(_strip_html(content), _FETCH_CONTENT_MAX_CHARS)
+    return {
+        "url": data.get("url") or data.get("finalUrl"),
+        "title": data.get("title"),
+        "content": content,
+        "excerpt": _truncate(_strip_html(str(data.get("excerpt") or "")), 800),
+    }
+
+
+def compact_tool_result_for_llm(text: str, *, max_chars: int = DEFAULT_TOOL_RESULT_MAX_CHARS) -> str:
+    """
+    Ужимает JSON/HTML из MCP (websearch) перед передачей в LLM.
+    Убирает readableHtml, links и прочие тяжёлые поля.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return _truncate(raw, max_chars)
+
+    if isinstance(data, dict):
+        if "results" in data and isinstance(data.get("results"), list):
+            data = _compact_web_search_payload(data)
+        elif data.get("url") and ("content" in data or "readableHtml" in data):
+            data = _compact_fetch_web_payload(data)
+        else:
+            data = {k: v for k, v in data.items() if k not in ("readableHtml", "links", "html")}
+        compact = json.dumps(data, ensure_ascii=False)
+        return _truncate(compact, max_chars)
+
+    if isinstance(data, list):
+        return _truncate(json.dumps(data, ensure_ascii=False), max_chars)
+
+    return _truncate(str(data), max_chars)
 
 
 def preview_parsed_for_ui(parsed: ParsedMcpResult, *, max_len: int = 320) -> str:

@@ -88,7 +88,7 @@ import ChatInputStatusCluster from '../components/ChatInputStatusCluster';
 import ChatGearAgentsPanel from '../components/ChatGearAgentsPanel';
 import ChatGearMcpPanel from '../components/ChatGearMcpPanel';
 import McpSuggestionChips from '../mcp/components/McpSuggestionChips';
-import { getAtlassianSuggestions } from '../mcp/plugins/atlassianSuggestions';
+import { getMcpSuggestions } from '../mcp/plugins/mcpSuggestions';
 import { useChatInputMcpIndicators } from '../mcp/hooks/useChatInputMcpIndicators';
 import { useMcpStreamingTools } from '../mcp/hooks/useMcpStreamingTools';
 import McpLiveToolsIndicator from '../mcp/components/McpLiveToolsIndicator';
@@ -391,7 +391,7 @@ export default function ProjectPage() {
   );
 
   const mcpInputSuggestions = useMemo(() => {
-    const suggestions = getAtlassianSuggestions(activeMcpServers.map((s) => s.id));
+    const suggestions = getMcpSuggestions(activeMcpServers.map((s) => s.id));
     const chips =
       suggestions.length > 0 ? (
         <McpSuggestionChips

@@ -9,10 +9,12 @@ from app.database.search_filters import DocumentVectorSearchFilters
 from app.database.memory_rag_repository import MemoryRagDocumentRepository, MemoryRagVectorRepository
 from app.database.models import Document, DocumentVector
 from app.database.graph_repository import GraphRepository
+from app.services.bm25_index import InMemoryBm25Index
 from app.services.chunker import split_into_chunks_with_meta
 from app.services.document_parser import parse_document
 from app.services.retrieval_pipeline import RetrievalTrace, run_retrieval_pipeline
 from app.text_sanitize import strip_null_bytes
+from app.services.hierarchical_indexing import index_document_hierarchically
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,7 @@ class MemoryRagService:
         self.vector_repo = vector_repo
         self.rag_client = rag_models_client
         self.graph_repo = graph_repo
+        self._bm25 = InMemoryBm25Index(self.vector_repo.get_all_contents_for_bm25)
 
     async def index_document(
         self,
@@ -39,6 +42,7 @@ class MemoryRagService:
         *,
         chunk_size: Optional[int] = None,
         chunk_overlap: Optional[int] = None,
+        chunking_strategy: Optional[str] = None,
     ) -> Dict[str, Any]:
         parsed = await parse_document(file_data, filename)
         if not parsed:
@@ -75,7 +79,45 @@ class MemoryRagService:
         if doc_id is None:
             return {"ok": False, "error": "Ошибка сохранения документа в БД", "document_id": None}
 
-        chunks_with_meta = split_into_chunks_with_meta(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        if (chunking_strategy or "").strip().lower() == "hierarchical":
+            try:
+                count = await index_document_hierarchically(
+                    text,
+                    doc_id,
+                    filename=filename,
+                    vector_repo=self.vector_repo,
+                    rag_client=self.rag_client,
+                    chunk_size=chunk_size,
+                    chunk_overlap=chunk_overlap,
+                )
+            except Exception as e:
+                logger.error("memory-rag иерархическая индексация не удалась: %s", e)
+                await self.doc_repo.delete_document(doc_id)
+                return {
+                    "ok": False,
+                    "error": f"Иерархическая индексация: {e}",
+                    "document_id": None,
+                }
+            self._bm25.mark_dirty()
+            logger.info(
+                "memory-rag: иерархически проиндексирован '%s' (id=%s), %s чанков",
+                filename,
+                doc_id,
+                count,
+            )
+            return {
+                "ok": True,
+                "document_id": doc_id,
+                "filename": filename,
+                "chunks_count": count,
+            }
+        
+        chunks_with_meta = split_into_chunks_with_meta(
+            text,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            chunking_strategy=chunking_strategy or "universal",
+        )
         if not chunks_with_meta:
             await self.doc_repo.delete_document(doc_id)
             return {"ok": False, "error": "Не удалось нарезать чанки", "document_id": None}
@@ -103,6 +145,7 @@ class MemoryRagService:
             )
 
         created = await self.vector_repo.create_vectors_batch(vectors)
+        self._bm25.mark_dirty()
         if self.graph_repo:
             try:
                 await self.graph_repo.rebuild_document_graph(
@@ -182,6 +225,7 @@ class MemoryRagService:
             fetch_document_chunks=_fetch_doc,
             find_docs_by_filename=_find_docs_by_filename,
             vector_repo_for_window=self.vector_repo,
+            bm25_index=self._bm25,
             eval_gold_document_ids=eval_gold_document_ids,
             eval_gold_chunks=eval_gold_chunks,
             eval_llm_judge=eval_llm_judge,
@@ -216,6 +260,7 @@ class MemoryRagService:
                 pass
         await self.vector_repo.delete_vectors_by_document(document_id)
         await self.doc_repo.delete_document(document_id)
+        self._bm25.mark_dirty()
         logger.info("memory_rag: удалён документ id=%s", document_id)
         return {
             "ok": True,

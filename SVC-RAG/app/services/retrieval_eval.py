@@ -21,11 +21,7 @@ def _gold_chunk_metrics(
     gset = set(gold_chunks)
     k_eff = max(k, 1)
     top = hits[:k]
-    rset = {
-        (d, c)
-        for _, _, d, c in top
-        if d is not None and c is not None
-    }
+    rset = {(d, c) for _, _, d, c in top if d is not None and c is not None}
     tp = len(rset & gset)
     hit = 1.0 if tp > 0 else 0.0
     prec = tp / k_eff

@@ -2,7 +2,17 @@
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+import asyncio
+from fastapi import (
+    APIRouter, 
+    BackgroundTasks,
+    Depends, 
+    File, 
+    Form, 
+    HTTPException, 
+    UploadFile
+)
+
 from pydantic import BaseModel
 
 from app.api.rag_common import (
@@ -67,6 +77,7 @@ async def project_rag_upload(
     minio_bucket: Optional[str] = Form(None),
     chunk_size: Optional[int] = Form(None),
     chunk_overlap: Optional[int] = Form(None),
+    chunking_strategy: Optional[str] = Form(None),
     svc: ProjectRagService = Depends(get_project_rag_service),
 ):
     """Загрузить документ в RAG-хранилище проекта."""
@@ -84,6 +95,7 @@ async def project_rag_upload(
         minio_bucket=minio_bucket,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
+        chunking_strategy=chunking_strategy,
     )
     if not result.get("ok"):
         raise HTTPException(status_code=422, detail=result.get("error", "Ошибка индексации"))
@@ -166,3 +178,91 @@ async def project_rag_search(
         ],
         trace=trace.to_dict() if body.debug_trace else None,
     )
+
+
+class ProjectRagReindexRequest(BaseModel):
+    chunk_size: Optional[int] = None
+    chunk_overlap: Optional[int] = None
+    chunking_strategy: Optional[str] = None
+
+_project_reindex_lock = asyncio.Lock()
+
+async def _project_reindex_all_bg(
+    svc: ProjectRagService,
+    chunk_size: Optional[int],
+    chunk_overlap: Optional[int],
+    chunking_strategy: Optional[str],
+) -> None:
+    if _project_reindex_lock.locked():
+        logger.info("[REINDEX project ALL] уже идёт — дождёмся завершения предыдущего")
+    async with _project_reindex_lock:
+        try:
+            res = await svc.reindex_all_projects(
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                chunking_strategy=chunking_strategy,
+            )
+            logger.info(
+                "[REINDEX project ALL] фоновая перечанкировка завершена: %s", res
+            )
+        except Exception:
+            logger.exception("[REINDEX project ALL] фоновая перечанкировка упала")
+
+async def _project_reindex_one_bg(
+    svc: ProjectRagService,
+    project_id: str,
+    chunk_size: Optional[int],
+    chunk_overlap: Optional[int],
+    chunking_strategy: Optional[str],
+) -> None:
+    async with _project_reindex_lock:
+        try:
+            res = await svc.reindex_all(
+                project_id,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                chunking_strategy=chunking_strategy,
+            )
+            logger.info(
+                "[REINDEX project=%s] фоновая перечанкировка завершена: %s",
+                project_id,
+                res,
+            )
+        except Exception:
+            logger.exception(
+                "[REINDEX project=%s] фоновая перечанкировка упала", project_id
+            )
+
+@router.post("/reindex")
+async def project_rag_reindex_all(
+    body: ProjectRagReindexRequest,
+    background: BackgroundTasks,
+    svc: ProjectRagService = Depends(get_project_rag_service),
+):
+    """Перечанкировать ВСЕ проекты В ФОНЕ. Отвечает сразу."""
+    background.add_task(
+        _project_reindex_all_bg,
+        svc,
+        body.chunk_size,
+        body.chunk_overlap,
+        body.chunking_strategy,
+    )
+    return {"ok": True, "status": "started"}
+
+@router.post("/projects/{project_id}/reindex")
+async def project_rag_reindex_one(
+    project_id: str,
+    body: ProjectRagReindexRequest,
+    background: BackgroundTasks,
+    svc: ProjectRagService = Depends(get_project_rag_service),
+):
+    """Перечанкировать один проект В ФОНЕ. Отвечает сразу."""
+    background.add_task(
+        _project_reindex_one_bg,
+        svc,
+        project_id,
+        body.chunk_size,
+        body.chunk_overlap,
+        body.chunking_strategy,
+    )
+    return {"ok": True, "status": "started"}

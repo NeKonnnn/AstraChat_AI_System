@@ -53,10 +53,15 @@ async def judge_chunk_relevance(query: str, passages: List[str]) -> tuple[List[b
         "ответить на запрос (содержит по смыслу нужную информацию, не обязательно полный ответ).\n\n"
         f"Запрос:\n{query.strip()}\n\nФрагменты:\n"
         + "\n".join(lines)
-        + "\n\nВерни ТОЛЬКО JSON вида {\"relevant\": [true/false, ...]} — массив ровно из "
+        + '\n\nВерни ТОЛЬКО JSON вида {"relevant": [true/false, ...]} — массив ровно из '
         f"{len(passages)} булевых значений в порядке индексов 0..{len(passages) - 1}."
     )
 
+    logger.debug(
+        "[judge] запуск: passages=%s query=%s",
+        len(passages),
+        (query or "")[:120],
+    )
     try:
         async with httpx.AsyncClient(timeout=llm_cfg.timeout) as client:
             r = await client.post(

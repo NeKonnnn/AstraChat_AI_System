@@ -80,7 +80,7 @@ function ragModelRowLabel(label: string, tooltip: string) {
   );
 }
 
-type RAGStrategy = 'auto' | 'hybrid' | 'standard' | 'graph' | 'lexical';
+type RAGStrategy = 'auto' | 'hybrid' | 'vector' | 'graph' | 'lexical';
 type ChunkingStrategy = 'hierarchical' | 'fixed' | 'markdown' | 'separators' | 'semantic';
 const RAG_STRATEGY_STORAGE_KEY = 'rag_strategy';
 const RAG_CHUNKING_STORAGE_KEY = 'rag_chunking_strategy';
@@ -90,7 +90,9 @@ const DEFAULT_RAG_SYSTEM_PROMPT =
 function normalizeStoredStrategy(raw: string | null): RAGStrategy {
   const s = (raw || 'auto').trim().toLowerCase();
   if (s === 'reranking') return 'hybrid';
-  if (s === 'auto' || s === 'hybrid' || s === 'standard' || s === 'graph' || s === 'lexical') {
+  // Однократная миграция старого внутреннего имени; новые запросы его не используют.
+  if (s === 'standard') return 'vector';
+  if (s === 'auto' || s === 'hybrid' || s === 'vector' || s === 'graph' || s === 'lexical') {
     return s;
   }
   return 'auto';
@@ -153,10 +155,9 @@ export default function RAGSettings({}: RAGSettingsProps) {
     }
 
     const timeoutId = setTimeout(() => {
-      saveRAGSettings().then(() => {
-        // После сохранения обновляем информацию о применяемом методе
-        loadRAGSettings();
-      });
+      // Не перечитываем настройки сразу после PUT: при ошибке/старой версии
+      // backend это возвращало прежнее ``auto`` и визуально отменяло выбор.
+      void saveRAGSettings();
     }, 300); // Небольшая задержка для "дребезга" изменений
 
     return () => clearTimeout(timeoutId);
@@ -183,7 +184,14 @@ export default function RAGSettings({}: RAGSettingsProps) {
       if (response.ok) {
         const data = await response.json();
         if (data.strategy) {
-          const next = normalizeStoredStrategy(String(data.strategy));
+          // Для чата стратегия является пользовательским выбором этого браузера:
+          // SocketContext тоже читает её из localStorage. Не затираем её старым
+          // серверным ``auto`` при открытии настроек или временной ошибке сохранения.
+          const localStrategy =
+            typeof localStorage !== 'undefined'
+              ? localStorage.getItem(RAG_STRATEGY_STORAGE_KEY)
+              : null;
+          const next = normalizeStoredStrategy(localStrategy ?? String(data.strategy));
           setSelectedStrategy(next);
           if (typeof localStorage !== 'undefined') {
             localStorage.setItem(RAG_STRATEGY_STORAGE_KEY, next);
@@ -242,7 +250,7 @@ export default function RAGSettings({}: RAGSettingsProps) {
     }
   };
 
-  const saveRAGSettings = async (): Promise<void> => {
+  const saveRAGSettings = async (): Promise<boolean> => {
     try {
       const response = await fetch(getApiUrl('/api/rag/settings'), {
         method: 'PUT',
@@ -270,12 +278,15 @@ export default function RAGSettings({}: RAGSettingsProps) {
         } else {
           showNotification('success', 'Настройки RAG сохранены');
         }
+        return true;
       } else {
-        throw new Error(`Ошибка сохранения настроек RAG: ${response.status}`);
+        const details = await response.text().catch(() => '');
+        throw new Error(`Ошибка сохранения настроек RAG: ${response.status}${details ? ` — ${details}` : ''}`);
       }
     } catch (error) {
       console.error('Ошибка сохранения настроек RAG:', error);
-      showNotification('error', 'Ошибка сохранения настроек RAG');
+      showNotification('error', 'Не удалось сохранить настройки на сервере. Локальный выбор сохранён.');
+      return false;
     }
   };
 
@@ -286,6 +297,9 @@ export default function RAGSettings({}: RAGSettingsProps) {
         throw new Error(`reset ${response.status}`);
       }
       skipNextRagSaveToastRef.current = true;
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(RAG_STRATEGY_STORAGE_KEY, 'auto');
+      }
       await loadRAGSettings();
       showNotification('success', 'Настройки RAG восстановлены по умолчанию');
     } catch (error) {
@@ -299,13 +313,13 @@ export default function RAGSettings({}: RAGSettingsProps) {
       case 'auto':
         return 'Автоматический выбор';
       case 'hybrid':
-        return 'Гибридный поиск';
-      case 'standard':
+        return 'Гибридный';
+      case 'vector':
         return 'Векторный';
       case 'lexical':
-        return 'Ключевой/Лексический (BM25)';
+        return 'Лексический';
       case 'graph':
-        return 'Graph RAG (графовый поиск)';
+        return 'Графовый';
       default:
         return 'Автоматический выбор';
     }
@@ -314,15 +328,15 @@ export default function RAGSettings({}: RAGSettingsProps) {
   const getStrategyDescription = (strategy: RAGStrategy): string => {
     switch (strategy) {
       case 'auto':
-        return 'Сервер автоматически подбирает оптимальный режим среди доступных стратегий (гибрид, векторный, графовый) по типу запроса.';
+        return 'Анализирует формулировку вопроса и сам выбирает одну из четырёх стратегий. Точные фразы и коды направляет в лексический поиск, вопросы по смыслу — в векторный, связи между фактами — в графовый, а для остальных запросов использует гибридный.';
       case 'hybrid':
-        return 'Комбинирует векторный поиск (семантический) и BM25 (ключевые слова), объединяет кандидатов; при RAG_USE_RERANKING в SVC-RAG — cross-encoder переупорядочивает фрагменты под запрос. Так легче попасть в нужный абзац (например, место работы в резюме).';
-      case 'standard':
-        return 'Чистый векторный поиск через pgvector (cosine similarity). Хорошо работает на смысловых запросах и перефразах.';
+        return 'Одновременно ищет и по смыслу, и по точным словам. Хорошо подходит для большинства обычных вопросов, когда заранее неизвестно, какой способ поиска даст лучший результат.';
+      case 'vector':
+        return 'Ищет фрагменты, близкие к вопросу по смыслу, даже если в документе использованы другие слова. Лучше выбирать для пересказов, объяснений и вопросов со свободной формулировкой.';
       case 'lexical':
-        return 'Ключевой/лексический поиск работает по BM25. Полезен для точных совпадений терминов, кодов, артикулов, ФИО и формулировок без смыслового расширения.';
+        return 'Ищет точные слова и формулировки из вопроса. Лучше выбирать для кодов, номеров, артикулов, имён, цитат и терминов, которые должны совпасть с текстом документа.';
       case 'graph':
-        return 'Графовый RAG: сначала находит релевантные seed-чанки, затем расширяет контекст по связям между фрагментами (соседние чанки, семантические связи, общие сущности) и ранжирует итоговый набор. Полезно для многошаговых вопросов и длинных документов.';
+        return 'Находит подходящие фрагменты и добавляет связанный с ними контекст из документа. Лучше выбирать для сравнений, причин и последствий, цепочек событий и вопросов, ответ на которые расположен в нескольких связанных фрагментах.';
       default:
         return '';
     }
@@ -331,15 +345,15 @@ export default function RAGSettings({}: RAGSettingsProps) {
   const getStrategyUseCase = (strategy: RAGStrategy): string => {
     switch (strategy) {
       case 'auto':
-        return 'Используйте для большинства случаев - система сама выберет оптимальную стратегию.';
+        return 'Выбирайте, если не уверены, какая стратегия лучше подходит к вопросу.';
       case 'hybrid':
-        return 'Используйте когда нужен баланс между точностью и скоростью, особенно для поиска по ключевым словам и датам.';
-      case 'standard':
-        return 'Используйте как основной семантический режим: хороший баланс точности и скорости.';
+        return 'Выбирайте как универсальный режим для повседневной работы с документами.';
+      case 'vector':
+        return 'Выбирайте, когда смысл важнее совпадения конкретных слов.';
       case 'lexical':
-        return 'Используйте для строгих запросов по словам: коды, номера, имена, артикулы, точные термины.';
+        return 'Выбирайте, когда в документе нужно найти конкретное слово, имя, номер или выражение.';
       case 'graph':
-        return 'Используйте для сложных запросов, где ответ требует объединять факты из нескольких связанных фрагментов.';
+        return 'Выбирайте для сложных вопросов, требующих собрать несколько связанных фактов.';
       default:
         return '';
     }
@@ -363,17 +377,34 @@ export default function RAGSettings({}: RAGSettingsProps) {
   };
 
   const getChunkingDescription = (strategy: ChunkingStrategy): string => {
+    const scope =
+      ' Применяется к RAG проектов и документов агента. Библиотека (кнопка в чате / KB / memory) всегда режется универсальным структурным чанкером.';
     switch (strategy) {
       case 'hierarchical':
-        return 'Документ сначала делится на крупные смысловые блоки, затем на более мелкие фрагменты. Это обычно дает лучший баланс между полнотой контекста и точностью поиска.';
+        return (
+          'Документ сначала делится на крупные смысловые блоки, затем на более мелкие фрагменты. Это обычно дает лучший баланс между полнотой контекста и точностью поиска.' +
+          scope
+        );
       case 'fixed':
-        return 'Текст режется на чанки фиксированной длины. Предсказуемо по размеру и скорости, но может разрывать мысль на границах.';
+        return (
+          'Текст режется на чанки фиксированной длины. Предсказуемо по размеру и скорости, но может разрывать мысль на границах.' +
+          scope
+        );
       case 'markdown':
-        return 'Чанкование ориентируется на структуру разметки (заголовки, списки, секции). Хорошо подходит для технической документации и markdown-файлов.';
+        return (
+          'Чанкование ориентируется на структуру разметки (заголовки, списки, секции). Хорошо подходит для технической документации и markdown-файлов.' +
+          scope
+        );
       case 'separators':
-        return 'Разделение по естественным разделителям (абзацы, переносы, знаки, служебные маркеры). Менее жесткое, чем fixed, и обычно более читабельное.';
+        return (
+          'Разделение по естественным разделителям (абзацы, переносы, знаки, служебные маркеры). Менее жесткое, чем fixed, и обычно более читабельное.' +
+          scope
+        );
       case 'semantic':
-        return 'Смысловое чанкование пытается сохранять цельные идеи внутри чанка. Обычно дает лучшее качество retrieval, но требует больше вычислений.';
+        return (
+          'Смысловое чанкование пытается сохранять цельные идеи внутри чанка (абзацный режим). Обычно дает лучшее качество retrieval.' +
+          scope
+        );
       default:
         return '';
     }
@@ -585,7 +616,7 @@ export default function RAGSettings({}: RAGSettingsProps) {
                   slotProps={{ paper: { sx: getDropdownPopoverPaperSx(strategyPopoverAnchor) } }}
                 >
                   <Box sx={{ py: 0.5 }}>
-                    {(['auto', 'hybrid', 'standard', 'lexical', 'graph'] as const).map((strategy) => (
+                    {(['auto', 'vector', 'lexical', 'hybrid', 'graph'] as const).map((strategy) => (
                       <Box
                         key={strategy}
                         onClick={() => {

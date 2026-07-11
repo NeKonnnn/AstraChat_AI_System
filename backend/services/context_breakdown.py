@@ -145,6 +145,8 @@ async def build_context_overhead(
             context_eff = ""
 
     if context_eff:
+        # В websocket-пути без агента context prompt может не уйти в API (registry).
+        # Показываем как настроенный сегмент; active=False если перекрыт агентом.
         segments.append(
             {
                 "id": "context_instructions",

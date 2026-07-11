@@ -24,10 +24,6 @@ logger = logging.getLogger(__name__)
 
 TVec = TypeVar("TVec", bound=DocumentVector)
 
-
-import os as _os
-import re as _re
-
 # Текущий reranker в SVC-RAG-MODELS (ms-marco-MiniLM-L-6-v2) тренирован на ЧИСТО английском
 # MS MARCO датасете и на кириллических запросах выдаёт случайные/шумовые скоры.
 # При формуле ``final = 0.7*rerank + 0.3*cosine`` этот шум АКТИВНО ПОДАВЛЯЕТ рабочий
@@ -36,8 +32,8 @@ import re as _re
 # Пока модель не заменена на мультиязычную (bge-reranker-v2-m3 / jina-reranker-v2 / BAAI),
 # авто-отключаем реранк, если запрос преимущественно кириллический.
 # Можно принудительно включить через ``RAG_FORCE_RERANK_CYRILLIC=1``.
-_CYRILLIC_RE = _re.compile(r"[\u0400-\u04FF]")
-_LATIN_RE = _re.compile(r"[A-Za-z]")
+_CYRILLIC_RE = re.compile(r"[\u0400-\u04FF]")
+_LATIN_RE = re.compile(r"[A-Za-z]")
 
 
 def _is_primarily_cyrillic(text: str) -> bool:
@@ -59,9 +55,7 @@ def reranker_is_english_only() -> bool:
     (bge-reranker-v2-m3 / jina-reranker-v2) — экспортируйте
     ``RAG_RERANKER_ENGLISH_ONLY=0`` и reranking снова будет применяться ко всем запросам.
     """
-    return _os.environ.get("RAG_RERANKER_ENGLISH_ONLY", "1").strip().lower() not in (
-        "0", "false", "no", "off", ""
-    )
+    return os.environ.get("RAG_RERANKER_ENGLISH_ONLY", "1").strip().lower() not in ("0", "false", "no", "off", "")
 
 
 def should_disable_rerank_for_query(query: str) -> bool:
@@ -73,7 +67,7 @@ def should_disable_rerank_for_query(query: str) -> bool:
     """
     if not reranker_is_english_only():
         return False
-    if _os.environ.get("RAG_FORCE_RERANK_CYRILLIC", "").strip().lower() in ("1", "true", "yes", "on"):
+    if os.environ.get("RAG_FORCE_RERANK_CYRILLIC", "").strip().lower() in ("1", "true", "yes", "on"):
         return False
     return _is_primarily_cyrillic(query or "")
 
@@ -85,8 +79,8 @@ def effective_use_reranking(
     *,
     query_text: Optional[str] = None,
 ) -> bool:
-    """standard — только вектор (без реранка).
-    hybrid    — BM25+вектор (global) или вектор+реранк (non-global); включает реранк если он в конфиге.
+    """vector / lexical / raw_cosine — без реранка.
+    hybrid    — вектор+BM25; реранк включается только если он разрешён в конфиге.
     reranking — только реранк по конфигу.
     auto      — по конфигу и флагу запроса.
 
@@ -95,7 +89,7 @@ def effective_use_reranking(
     раз повышает качество на русскоязычном корпусе без замены модели.
     """
     st = (strategy or "auto").lower()
-    if st in ("standard", "raw_cosine", "flat", "lexical", "keyword", "bm25"):
+    if st in ("vector", "raw_cosine", "flat", "lexical", "keyword", "bm25"):
         return False
     base = False
     if st in ("hybrid", "reranking"):
@@ -108,6 +102,7 @@ def effective_use_reranking(
 
     if base and query_text is not None and should_disable_rerank_for_query(query_text):
         import logging as _logging
+
         _logging.getLogger(__name__).info(
             "[RAG] Реранк отключён для этого запроса: текущий reranker — английский "
             "(ms-marco-MiniLM-L-6-v2), а запрос на кириллице. Задайте "
@@ -128,60 +123,96 @@ def resolve_auto_pipeline_strategy(
     hybrid_available: bool,
 ) -> str:
     """
-    Для strategy=auto выбирает фактический режим: hierarchical | graph | reranking | standard.
+    Для strategy=auto выбирает фактический режим: lexical | graph | hybrid | vector.
 
     - RAG_AUTO_MODE=heuristic (по умолчанию): эвристики по тексту запроса + доступности.
     - RAG_AUTO_MODE=priority: первый доступный из списка приоритетов.
 
     Примечания:
     - Иерархический — только глобальное хранилище и без ограничения одним document_id.
-    - Hybrid (BM25+вектор) — только global. Для KB/memory/project выбирается "reranking"
-      (вектор + cross-encoder реранк) вместо "hybrid", т.к. BM25 там не поддерживается.
+    - Lexical и hybrid доступны при наличии BM25-индекса.
     """
-    q = (query or "").strip().lower()
+    raw_query = (query or "").strip()
+    q = raw_query.lower()
     qlen = len(q)
+    words = re.findall(r"\b\w+\b", q)
     mode = (os.environ.get("RAG_AUTO_MODE") or "heuristic").strip().lower()
 
     can_h = bool(hierarchical_available and document_id is None and store == "global")
     can_g = bool(graph_available)
-    # Гибрид с BM25 только в global; для остальных хранилищ доступен "reranking"
-    can_hybrid_bm25 = bool(hybrid_available and store == "global")
-    can_reranking = bool(hybrid_available and store != "global")
+    can_hybrid_bm25 = bool(hybrid_available)
+    can_lexical = can_hybrid_bm25
     if document_id is not None:
         can_h = False
 
     if mode == "priority":
-        if store == "global":
-            order = ["hybrid", "graph", "hierarchical", "standard"]
-        else:
-            order = ["reranking", "graph", "standard"]
+        order = ["hybrid", "graph", "lexical", "hierarchical", "vector"]
         avail = {
             "hybrid": can_hybrid_bm25,
-            "reranking": can_reranking,
             "graph": can_g,
+            "lexical": can_lexical,
             "hierarchical": can_h,
-            "standard": True,
+            "vector": True,
         }
         for choice in order:
             if avail.get(choice):
+                logger.info(
+                    "[RAG-AUTO] store=%s mode=priority selected=%s query=%r available=%s",
+                    store,
+                    choice,
+                    raw_query[:160],
+                    {name: enabled for name, enabled in avail.items()},
+                )
                 return choice
-        return "standard"
+        logger.info(
+            "[RAG-AUTO] store=%s mode=priority selected=vector query=%r reason=no_available_strategy",
+            store,
+            raw_query[:160],
+        )
+        return "vector"
 
     # --- heuristic ---
-    scores: Dict[str, float] = {"standard": 0.5}
+    # Hybrid — безопасный режим по умолчанию, когда запрос не даёт явного сигнала.
+    scores: Dict[str, float] = {"vector": 1.0}
     if can_hybrid_bm25:
         scores["hybrid"] = 2.0
-        if qlen < 72 and q.count(" ") <= 10:
-            scores["hybrid"] += 1.5
-        if any(ch.isdigit() for ch in q) and qlen < 100:
-            scores["hybrid"] += 0.8
-    if can_reranking:
-        scores["reranking"] = 1.8
-        if qlen < 72 and q.count(" ") <= 10:
-            scores["reranking"] += 1.2
+    if can_lexical:
+        scores["lexical"] = 0.8
+
+        # Строго лексические запросы: цитаты, коды, артикулы, номера,
+        # аббревиатуры и явная просьба искать точное совпадение.
+        quoted_phrase = bool(re.search(r'["«][^"»]{2,}["»]', raw_query))
+        mixed_code = bool(
+            re.search(
+                r"\b(?=[\w./-]*[A-Za-zА-Яа-я])(?=[\w./-]*\d)[\w./-]{3,}\b",
+                raw_query,
+            )
+        )
+        uppercase_code = bool(
+            re.search(r"\b[А-ЯA-Z]{2,}(?:[-_/][А-ЯA-Z0-9]+)*\b", raw_query)
+        )
+        lexical_intent = any(
+            token in q
+            for token in (
+                "точное совпад",
+                "дослов",
+                "точную фразу",
+                "артикул",
+                "идентификатор",
+                "код ",
+                "номер ",
+                "инн",
+                "снилс",
+            )
+        )
+        if quoted_phrase or mixed_code or uppercase_code or lexical_intent:
+            scores["lexical"] += 4.0
+        elif len(words) <= 3:
+            scores["lexical"] += 0.4
+
     if can_g:
-        scores["graph"] = 1.2
-        if any(
+        scores["graph"] = 1.0
+        graph_intent = any(
             tok in q
             for tok in (
                 "связ",
@@ -196,12 +227,36 @@ def resolve_auto_pipeline_strategy(
                 "граф",
                 "нескольк",
             )
-        ):
-            scores["graph"] += 2.2
-        if "?" in q and qlen > 35:
-            scores["graph"] += 0.6
-        if qlen > 140:
-            scores["graph"] += 0.4
+        )
+        filename_mention = bool(
+            re.search(r"\b[^\s/\\]+\.(?:pdf|docx?|xlsx?|txt|md|csv)\b", q)
+        )
+        if graph_intent:
+            scores["graph"] += 4.0
+        if filename_mention:
+            # Filename anchor и чтение связанных чанков реализованы в full/graph path.
+            scores["graph"] += 4.5
+
+    # Vector выбираем для явно смысловых/перефразированных вопросов, когда точное
+    # совпадение слов менее важно, чем семантическая близость.
+    semantic_intent = any(
+        token in q
+        for token in (
+            "объясни",
+            "что означает",
+            "в чем смысл",
+            "по смыслу",
+            "похож",
+            "перефраз",
+            "другими словами",
+            "о чем говорится",
+        )
+    )
+    if semantic_intent:
+        scores["vector"] += 3.0
+    elif qlen > 180:
+        scores["vector"] += 0.8
+
     if can_h:
         scores["hierarchical"] = 1.0
         if any(
@@ -221,8 +276,19 @@ def resolve_auto_pipeline_strategy(
         if qlen > 220:
             scores["hierarchical"] += 0.8
 
-    tie = ("hybrid", "reranking", "graph", "hierarchical", "standard")
+    tie = ("lexical", "graph", "hybrid", "vector", "hierarchical")
     best = min(scores.keys(), key=lambda s: (-scores[s], tie.index(s) if s in tie else 99))
+    logger.info(
+        "[RAG-AUTO] store=%s mode=heuristic selected=%s query=%r scores=%s "
+        "available={lexical:%s, hybrid:%s, graph:%s, vector:true}",
+        store,
+        best,
+        raw_query[:160],
+        {name: round(score, 3) for name, score in scores.items()},
+        can_lexical,
+        can_hybrid_bm25,
+        can_g,
+    )
     return best
 
 
@@ -304,10 +370,52 @@ def should_diversify_hits(
 
 
 _KEYWORD_STOPWORDS = {
-    "и", "в", "на", "по", "из", "с", "к", "у", "о", "а", "но", "что", "как",
-    "это", "не", "он", "она", "они", "мы", "вы", "я", "его", "её", "их", "был",
-    "для", "или", "при", "за", "до", "без", "то", "бы", "ли", "уже", "ещё",
-    "the", "is", "in", "of", "to", "and", "for", "are", "was", "with",
+    "и",
+    "в",
+    "на",
+    "по",
+    "из",
+    "с",
+    "к",
+    "у",
+    "о",
+    "а",
+    "но",
+    "что",
+    "как",
+    "это",
+    "не",
+    "он",
+    "она",
+    "они",
+    "мы",
+    "вы",
+    "я",
+    "его",
+    "её",
+    "их",
+    "был",
+    "для",
+    "или",
+    "при",
+    "за",
+    "до",
+    "без",
+    "то",
+    "бы",
+    "ли",
+    "уже",
+    "ещё",
+    "the",
+    "is",
+    "in",
+    "of",
+    "to",
+    "and",
+    "for",
+    "are",
+    "was",
+    "with",
 }
 
 
@@ -325,11 +433,7 @@ def keyword_boost_hits(
     """
     if not hits or not query.strip():
         return hits
-    query_words = {
-        w.lower()
-        for w in re.findall(r"\b\w{3,}\b", query)
-        if w.lower() not in _KEYWORD_STOPWORDS
-    }
+    query_words = {w.lower() for w in re.findall(r"\b\w{3,}\b", query) if w.lower() not in _KEYWORD_STOPWORDS}
     if not query_words:
         return hits
     boosted = []
@@ -383,54 +487,133 @@ def filter_low_signal_chunks(
     return sorted(hits, key=lambda x: float(x[1]), reverse=True)[:rescue_n]
 
 
+async def fuse_seed_and_graph_hits(
+    seed_hits: List[Tuple[DocumentVector, float]],
+    graph_scores: Dict[Tuple[int, int], float],
+    *,
+    fetch_chunk: Any,
+    graph_weight: float = 0.35,
+    rrf_k: int = 60,
+    limit: int = 40,
+) -> List[Tuple[DocumentVector, float]]:
+    """Сливает seed (vector) и graph-соседей через weighted RRF + подтягивает missing nodes.
+
+    Старый ``0.7*cosine + 0.3*gscore``:
+      - не добавлял соседей, которых нет в seed-пуле (graph expand почти бесполезен);
+      - смешивал разные шкалы без нормализации graph по max.
+    """
+    if not seed_hits and not graph_scores:
+        return []
+
+    w_g = max(0.0, min(float(graph_weight), 0.95))
+    w_v = 1.0 - w_g
+
+    vec_rank: Dict[Tuple[int, int], int] = {}
+    vec_obj: Dict[Tuple[int, int], DocumentVector] = {}
+    for rank, (dv, _sc) in enumerate(sorted(seed_hits, key=lambda x: float(x[1]), reverse=True)):
+        if dv.document_id is None:
+            continue
+        key = (int(dv.document_id), int(dv.chunk_index))
+        if key in vec_rank:
+            continue
+        vec_rank[key] = rank
+        vec_obj[key] = dv
+
+    # Graph ranks по убыванию graph_score
+    g_sorted = sorted(graph_scores.items(), key=lambda x: float(x[1]), reverse=True)
+    g_rank: Dict[Tuple[int, int], int] = {}
+    for rank, (key, _gs) in enumerate(g_sorted):
+        g_rank[(int(key[0]), int(key[1]))] = rank
+
+    all_keys = set(vec_rank.keys()) | set(g_rank.keys())
+    out: List[Tuple[DocumentVector, float]] = []
+    for key in all_keys:
+        score = 0.0
+        if key in vec_rank:
+            score += w_v / float(rrf_k + vec_rank[key] + 1)
+        if key in g_rank:
+            score += w_g / float(rrf_k + g_rank[key] + 1)
+
+        dv = vec_obj.get(key)
+        if dv is None and fetch_chunk is not None:
+            try:
+                fetched = await fetch_chunk(key[0], key[1])
+            except Exception:
+                fetched = None
+            if isinstance(fetched, tuple):
+                fetched = fetched[0]
+            dv = fetched
+        if dv is None:
+            continue
+        out.append((dv, float(score)))
+
+    out.sort(key=lambda x: x[1], reverse=True)
+    return out[: max(1, limit)]
+
+
 def merge_vector_and_keyword_hits(
     vector_hits: List[Tuple[DocumentVector, float]],
     keyword_hits: List[Tuple[DocumentVector, float]],
     *,
     keyword_weight: float = 0.30,
+    rrf_k: int = 60,
 ) -> List[Tuple[DocumentVector, float]]:
     """
-    Сливает dense-кандидаты с keyword-кандидатами:
-    final = (1-keyword_weight)*norm_vector + keyword_weight*norm_keyword.
+    Сливает dense- и keyword-кандидаты через weighted RRF по рангам.
+
+    Нельзя смешивать max-norm cosine и FTS/BM25 линейно: шкалы несопоставимы,
+    а keyword-only hit получает потолок ``keyword_weight`` и проигрывает
+    любому top-1 vector-шуму. RRF работает по рангам и не зависит от абсолютных
+    значений скоров.
     """
     if not vector_hits and not keyword_hits:
         return []
     if not keyword_hits:
         return sorted(vector_hits, key=lambda x: float(x[1]), reverse=True)
     if not vector_hits:
-        # Нет dense-кандидатов — оставляем keyword-порядок как запасной режим.
-        max_kw = max(float(sc) for _, sc in keyword_hits) or 1.0
-        return sorted(
-            [(dv, float(sc) / max_kw) for dv, sc in keyword_hits],
-            key=lambda x: x[1],
-            reverse=True,
-        )
+        return sorted(keyword_hits, key=lambda x: float(x[1]), reverse=True)
 
-    max_vec = max(float(sc) for _, sc in vector_hits) or 1.0
-    max_kw = max(float(sc) for _, sc in keyword_hits) or 1.0
-    merged: Dict[Tuple[Optional[int], Optional[int]], Dict[str, Any]] = {}
+    w = max(0.0, min(float(keyword_weight), 0.95))
+    w_vec = 1.0 - w
 
-    for dv, sc in vector_hits:
+    vec_rank: Dict[Tuple[Optional[int], Optional[int]], int] = {}
+    vec_obj: Dict[Tuple[Optional[int], Optional[int]], DocumentVector] = {}
+    vec_raw: Dict[Tuple[Optional[int], Optional[int]], float] = {}
+    for rank, (dv, sc) in enumerate(sorted(vector_hits, key=lambda x: float(x[1]), reverse=True)):
         key = (dv.document_id, dv.chunk_index)
-        merged[key] = {
-            "dv": dv,
-            "vec": float(sc) / max_vec if max_vec > 0 else 0.0,
-            "kw": 0.0,
-        }
+        if key in vec_rank:
+            continue
+        vec_rank[key] = rank
+        vec_obj[key] = dv
+        vec_raw[key] = float(sc)
 
-    for dv, sc in keyword_hits:
+    kw_rank: Dict[Tuple[Optional[int], Optional[int]], int] = {}
+    kw_raw: Dict[Tuple[Optional[int], Optional[int]], float] = {}
+    for rank, (dv, sc) in enumerate(sorted(keyword_hits, key=lambda x: float(x[1]), reverse=True)):
         key = (dv.document_id, dv.chunk_index)
-        nkw = float(sc) / max_kw if max_kw > 0 else 0.0
-        if key in merged:
-            merged[key]["kw"] = max(merged[key]["kw"], nkw)
-        else:
-            merged[key] = {"dv": dv, "vec": 0.0, "kw": nkw}
+        if key in kw_rank:
+            continue
+        kw_rank[key] = rank
+        kw_raw[key] = float(sc)
+        if key not in vec_obj:
+            vec_obj[key] = dv
+
+    max_vec = max(vec_raw.values(), default=1.0) or 1.0
+    max_kw = max(kw_raw.values(), default=1.0) or 1.0
 
     out: List[Tuple[DocumentVector, float]] = []
-    w = max(0.0, min(keyword_weight, 0.95))
-    for item in merged.values():
-        final = (1.0 - w) * float(item["vec"]) + w * float(item["kw"])
-        out.append((item["dv"], final))
+    for key, dv in vec_obj.items():
+        score = 0.0
+        if key in vec_rank:
+            score += w_vec / float(rrf_k + vec_rank[key] + 1)
+        if key in kw_rank:
+            score += w / float(rrf_k + kw_rank[key] + 1)
+        tie = 0.0
+        if key in vec_raw:
+            tie += w_vec * (vec_raw[key] / max_vec)
+        if key in kw_raw:
+            tie += w * (kw_raw[key] / max_kw)
+        out.append((dv, score + 1e-6 * tie))
     out.sort(key=lambda x: x[1], reverse=True)
     return out
 
@@ -471,6 +654,56 @@ def diversify_result_rows(
             seen.add(key)
 
     return merged
+
+
+def diversify_hybrid_rrf_hits(
+    hits: List[Tuple[DocumentVector, float]],
+    *,
+    candidate_limit: int,
+    max_chunks_per_document: int,
+    min_results: int,
+) -> List[Tuple[DocumentVector, float]]:
+    """Диверсификация только для hybrid после weighted RRF.
+
+    RRF-score имеет собственную шкалу (~0.01), поэтому здесь нет cosine-порогов
+    и эвристик, рассчитанных на cosine similarity. Сохраняем RRF-порядок, но
+    пропускаем чанки сверх лимита на документ, пока хватает других документов.
+    Если кандидатов недостаточно, возвращаем лучшие пропущенные строки, чтобы
+    не отдать меньше запрошенного ``min_results``.
+    """
+    if not hits or candidate_limit <= 0:
+        return []
+
+    ordered = sorted(hits, key=lambda x: float(x[1]), reverse=True)
+    limit = min(int(candidate_limit), len(ordered))
+    per_doc_limit = max(0, int(max_chunks_per_document))
+    if per_doc_limit <= 0:
+        return ordered[:limit]
+
+    unique_docs = {dv.document_id for dv, _ in ordered if dv.document_id is not None}
+    if len(unique_docs) < 2:
+        return ordered[:limit]
+
+    selected: List[Tuple[DocumentVector, float]] = []
+    overflow: List[Tuple[DocumentVector, float]] = []
+    counts: Dict[int, int] = {}
+    for item in ordered:
+        dv, _score = item
+        doc_id = dv.document_id
+        if doc_id is None:
+            selected.append(item)
+        elif counts.get(doc_id, 0) < per_doc_limit:
+            selected.append(item)
+            counts[doc_id] = counts.get(doc_id, 0) + 1
+        else:
+            overflow.append(item)
+        if len(selected) >= limit:
+            break
+
+    required = min(max(1, int(min_results)), limit)
+    if len(selected) < required:
+        selected.extend(overflow[: required - len(selected)])
+    return selected[:limit]
 
 
 def diversify_hits_by_document(
@@ -534,7 +767,6 @@ def diversify_hits_by_document(
             seen.add(key)
 
     return merged
-
 
 
 BANNER_WIDTH = 72
@@ -623,9 +855,7 @@ def log_rag_retrieval_report(
         for line in extra_lines:
             _emit(f"[SVC-RAG] {line}")
     if search_seconds is not None:
-        _emit(
-            f"[SVC-RAG] время_поиска_с={search_seconds:.4f} (retrieval, постобработка, опционально LLM-judge)"
-        )
+        _emit(f"[SVC-RAG] время_поиска_с={search_seconds:.4f} (retrieval, постобработка, опционально LLM-judge)")
     _emit("[SVC-RAG] --- Метрики retrieval (финальная выдача) ---")
     for line in build_retrieval_metrics_lines(final_hits, k_requested):
         _emit(f"[SVC-RAG]   {line}")

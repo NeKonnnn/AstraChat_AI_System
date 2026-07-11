@@ -27,6 +27,7 @@ from backend.app_state import (
     speak_text,
 )
 from backend.auth.jwt_handler import get_current_user
+from backend.mcp.resolvers import resolve_chat_tool_ids
 from backend.database.mongodb.models import Conversation, Message as DbMessage
 from backend.llm_providers import get_registry
 from backend.rag_query.post_generation import maybe_replace_ungrounded
@@ -131,7 +132,7 @@ async def chat_with_ai(
                     "history": history,
                     "user_message": message.message,
                     "selected_model": message.model or get_current_model_path(),
-                    "tool_ids": message.tool_ids or message.mcp_tool_ids or [],
+                    "tool_ids": resolve_chat_tool_ids(message.tool_ids or message.mcp_tool_ids),
                     "current_user": current_user,
                     "conversation_id": message.conversation_id,
                     "message_id": message.message_id,
@@ -144,7 +145,7 @@ async def chat_with_ai(
                 f"Запрос пользователя: '{message.message[:100]}{('...' if len(message.message) > 100 else '')}'"
             )
             response = None
-            tool_ids = message.tool_ids or message.mcp_tool_ids or []
+            tool_ids = resolve_chat_tool_ids(message.tool_ids or message.mcp_tool_ids)
             current_model_path = message.model or get_current_model_path()
             rest_system_prompt = merge_feedback_into_system_prompt(None, feedback_block)
             if tool_ids:

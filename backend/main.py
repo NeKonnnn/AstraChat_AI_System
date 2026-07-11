@@ -98,6 +98,7 @@ from backend.routes.voice import router as voice_router
 from backend.routes.documents import router as documents_router
 from backend.routes.transcription import router as transcription_router
 from backend.routes.rag import router as rag_router
+from backend.routes.internal_rag import router as internal_rag_router
 from backend.routes.agents import router as agents_router
 from backend.routes.context_prompts import router as context_prompts_router
 from backend.routes.project_rag import router as project_rag_router
@@ -107,7 +108,7 @@ from backend.routes.image_generation import router as image_generation_router
 for _r in (
     system_router, chat_router, models_router, llm_router, llm_providers_router,
     memory_router, voice_router, documents_router, transcription_router,
-    rag_router, agents_router, context_prompts_router,
+    rag_router, internal_rag_router, agents_router, context_prompts_router,
     project_rag_router, model_comparison_router,
     mcp_router, image_generation_router,
 ):

@@ -42,6 +42,7 @@ from backend.services.user_feedback_context import (
 from backend.auth.jwt_handler import decode_token, decode_token_signature_only
 from backend.settings.cef_logger.cef_audit_context import cef_socket_remote_from_environ
 from backend.settings.logging import get_logger
+from backend.mcp.resolvers import resolve_chat_tool_ids
 logger = get_logger(__name__)
 
 
@@ -63,7 +64,7 @@ def _make_ctx_runner(factory):
     def _runner():
         return _ctx.run(factory)
     return _runner
-_VALID_RAG_STRATEGIES = {"auto", "hierarchical", "hybrid", "standard", "graph"}
+_VALID_RAG_STRATEGIES = {"auto", "hierarchical", "hybrid", "vector", "lexical", "graph"}
 
 
 def _extract_socket_token(auth: Any, environ: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -785,7 +786,7 @@ async def _handle_multi_llm(
             )
         return
     n_models = len(multi_llm_models)
-    tool_ids = data.get("tool_ids") or data.get("mcp_tool_ids") or []
+    tool_ids = resolve_chat_tool_ids(data.get("tool_ids") or data.get("mcp_tool_ids"))
     mcp_enabled = bool(tool_ids and current_user and not inline_imgs)
     mcp_temperature = float(data.get("temperature") or 0.7)
     mcp_max_tokens = int(data.get("max_tokens") or 1024)
@@ -975,7 +976,7 @@ async def _handle_agent_mode(
         "agentic_rag_enabled": agentic_rag_enabled,
         "agentic_max_iterations": int(getattr(state, "agentic_max_iterations", 2)),
         "enable_thinking": enable_thinking,
-        "tool_ids": data.get("tool_ids") or data.get("mcp_tool_ids") or [],
+        "tool_ids": resolve_chat_tool_ids(data.get("tool_ids") or data.get("mcp_tool_ids")),
         "current_user": current_user,
         "conversation_id": conversation_id,
         "message_id": data.get("message_id"),
@@ -1436,7 +1437,9 @@ model_path_for_call=eff_model_path,
         enable_thinking=enable_thinking,
     )
 
-    tool_ids = data.get("tool_ids") or data.get("mcp_tool_ids") or []
+    tool_ids = resolve_chat_tool_ids(data.get("tool_ids") or data.get("mcp_tool_ids"))
+    if tool_ids:
+        logger.info("[MCP] direct chat tool_ids=%s", tool_ids)
     mcp_result = None
     if not canned and tool_ids and current_user:
         try:

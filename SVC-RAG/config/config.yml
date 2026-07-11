@@ -30,6 +30,8 @@ urls:
   ocr_service_docker: "http://ocr-service:8000"
   rag_models_service_port: "http://localhost:8010"
   rag_models_service_docker: "http://rag-models:8000"
+  backend_service_port: "http://localhost:8000"
+  backend_service_docker: "http://astrachat-backend:8000"
 
 app:
   title: "astrachat RAG Service"
@@ -77,9 +79,14 @@ minio:
 rag:
   enabled: true
 
-  # --- Гибридный поиск (BM25 + вектор, только global store) ---
+  # --- Гибридный поиск (BM25 + вектор через weighted RRF) ---
   use_hybrid_search: true
   hybrid_bm25_weight: 0.35
+  # Отдельная диверсификация после RRF. Не зависит от cosine-порогов:
+  # сначала сохраняет не более N чанков одного документа, при нехватке
+  # кандидатов ослабляет лимит, чтобы вернуть запрошенный top-k.
+  hybrid_diversify_results: true
+  hybrid_max_chunks_per_document: 2
 
   # --- Реранкинг (cross-encoder через SVC-RAG-MODELS) ---
   use_reranking: true
@@ -120,3 +127,4 @@ rag:
 
   # --- Graph RAG ---
   enable_graph_rag: true
+  eval_llm_judge_allowed: true

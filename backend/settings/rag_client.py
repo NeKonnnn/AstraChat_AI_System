@@ -12,6 +12,7 @@ import httpx
 from backend.settings.config import get_settings
 from backend.settings.logging import get_logger
 from backend.settings.logging.errors import logged_suppress
+from backend.rag_query.llm_judge import judge_and_filter_hits
 
 logger = get_logger(__name__)
 
@@ -36,11 +37,14 @@ def _with_chunk_index_form_data(
     *,
     chunk_size: Optional[int] = None,
     chunk_overlap: Optional[int] = None,
+    chunking_strategy: Optional[str] = None,
 ) -> Dict[str, Any]:
     if chunk_size is not None:
         data["chunk_size"] = str(int(chunk_size))
     if chunk_overlap is not None:
         data["chunk_overlap"] = str(int(chunk_overlap))
+    if chunking_strategy is not None and str(chunking_strategy).strip():
+        data["chunking_strategy"] = str(chunking_strategy).strip().lower()
     return data
 
 
@@ -82,20 +86,20 @@ def _log_backend_rag_strategy_banner(
 ) -> None:
     """Видно в `docker compose logs -f astrachat-backend` без svc-rag."""
     bar = "*" * 72
-    logger.info(bar)
-    logger.info("[astrachat-backend RAG] Использована стратегия в запросе к SVC-RAG: %s", strategy or "(default)")
-    logger.info(
+    logger.debug(bar)
+    logger.debug("[astrachat-backend RAG] Использована стратегия в запросе к SVC-RAG: %s", strategy or "(default)")
+    logger.debug(
         "[astrachat-backend RAG] endpoint=%s k=%s document_id=%s use_reranking=%s", path, k, document_id, use_reranking
     )
-    logger.info("[astrachat-backend RAG] хитов после ответа=%s %s", hits, "(из кэша)" if from_cache else "")
-    logger.info("[astrachat-backend RAG] запрос: %s", query_preview)
+    logger.debug("[astrachat-backend RAG] хитов после ответа=%s %s", hits, "(из кэша)" if from_cache else "")
+    logger.debug("[astrachat-backend RAG] запрос: %s", query_preview)
     if prep_suffix:
-        logger.info("[astrachat-backend RAG] %s", prep_suffix.strip())
-    logger.info(
+        logger.debug("[astrachat-backend RAG] %s", prep_suffix.strip())
+    logger.debug(
         "[astrachat-backend RAG] Реальный пайплайн (косинус / BM25 / реранк / graph) смотрите в логах контейнера svc-rag — блок из %s звёздочек «Использована стратегия поиска».",
         len(bar),
     )
-    logger.info(bar)
+    logger.debug(bar)
 
 
 class RagClient:
@@ -287,6 +291,20 @@ class RagClient:
             rerank_top_n = 0
         rerank_top_n = max(0, min(rerank_top_n, 64))
         body["use_reranking"] = effective_reranking
+        logger.debug(
+            "[RAG-SEARCH] mode=%s strategy=%s k=%s reranking=%s rerank_top_n=%s"
+            "fix_typos=%s multi_query=%s hyde=%s document_id=%s project_id=%s",
+            path,
+            strategy,
+            k,
+            effective_reranking,
+            rerank_top_n,
+            _fix,
+            _multi,
+            _hyde,
+            document_id,
+            project_id,
+        )
         if strategy is not None:
             body["strategy"] = strategy
         if pq.vector_query:
@@ -331,6 +349,7 @@ class RagClient:
         if effective_reranking:
             if rerank_top_n > 0:
                 hits = hits[: max(1, min(rerank_top_n, k))]
+        hits = await judge_and_filter_hits(pq.query_for_search, hits)
         if semantic_cache_enabled():
             cache_set(cache_key, hits)
         prep_bits: List[str] = []
@@ -435,10 +454,16 @@ class RagClient:
         filename: str,
         chunk_size: Optional[int] = None,
         chunk_overlap: Optional[int] = None,
+        chunking_strategy: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Загрузить документ в постоянную Базу Знаний."""
         files = {"file": (filename, file_bytes, "application/octet-stream")}
-        data = _with_chunk_index_form_data({}, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        data = _with_chunk_index_form_data(
+            {},
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            chunking_strategy=chunking_strategy,
+        )
         return await self._request(
             "POST", "/kb/documents", files=files, data=data, http_timeout=_svc_rag_document_index_timeout()
         )
@@ -475,6 +500,27 @@ class RagClient:
             project_id=None,
         )
 
+    async def kb_reindex(
+        self,
+        chunk_size: Optional[int] = None,
+        chunk_overlap: Optional[int] = None,
+        chunking_strategy: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Перечанкировать всю Базу Знаний."""
+        body: Dict[str, Any] = {}
+        if chunk_size is not None:
+            body["chunk_size"] = int(chunk_size)
+        if chunk_overlap is not None:
+            body["chunk_overlap"] = int(chunk_overlap)
+        if chunking_strategy is not None:
+            body["chunking_strategy"] = str(chunking_strategy)
+        return await self._request(
+            "POST",
+            "/kb/reindex",
+            json=body,
+            http_timeout=_svc_rag_document_index_timeout(),
+        )
+
     async def memory_rag_index_document(
         self,
         file_bytes: bytes,
@@ -483,6 +529,7 @@ class RagClient:
         minio_bucket: Optional[str] = None,
         chunk_size: Optional[int] = None,
         chunk_overlap: Optional[int] = None,
+        chunking_strategy: Optional[str] = None,
     ) -> Dict[str, Any]:
         files = {"file": (filename, file_bytes, "application/octet-stream")}
         data: Dict[str, Any] = {}
@@ -490,7 +537,12 @@ class RagClient:
             data["minio_object"] = minio_object
         if minio_bucket:
             data["minio_bucket"] = minio_bucket
-        data = _with_chunk_index_form_data(data, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        data = _with_chunk_index_form_data(
+            data,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            chunking_strategy=chunking_strategy,
+        )
         return await self._request(
             "POST", "/memory-rag/documents", files=files, data=data, http_timeout=_svc_rag_document_index_timeout()
         )
@@ -530,6 +582,7 @@ class RagClient:
         minio_bucket: Optional[str] = None,
         chunk_size: Optional[int] = None,
         chunk_overlap: Optional[int] = None,
+        chunking_strategy: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Загрузить документ в RAG-хранилище проекта."""
         files = {"file": (filename, file_bytes, "application/octet-stream")}
@@ -538,7 +591,12 @@ class RagClient:
             data["minio_object"] = minio_object
         if minio_bucket:
             data["minio_bucket"] = minio_bucket
-        data = _with_chunk_index_form_data(data, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        data = _with_chunk_index_form_data(
+            data,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            chunking_strategy=chunking_strategy,
+        )
         return await self._request(
             "POST",
             f"/project-rag/projects/{project_id}/documents",
@@ -581,6 +639,27 @@ class RagClient:
             strategy=strategy,
             project_id=project_id,
         )
+
+    async def project_rag_reindex_all(
+            self,
+            chunk_size: Optional[int] = None,
+            chunk_overlap: Optional[int] = None,
+            chunking_strategy: Optional[str] = None,
+        ) -> Dict[str, Any]:
+            """Перечанкировать все проекты."""
+            body: Dict[str, Any] = {}
+            if chunk_size is not None:
+                body["chunk_size"] = int(chunk_size)
+            if chunk_overlap is not None:
+                body["chunk_overlap"] = int(chunk_overlap)
+            if chunking_strategy is not None:
+                body["chunking_strategy"] = str(chunking_strategy)
+            return await self._request(
+                "POST",
+                "/project-rag/reindex",
+                json=body,
+                http_timeout=_svc_rag_document_index_timeout(),
+            )
 
 
 _rag_client_singleton: Optional[RagClient] = None

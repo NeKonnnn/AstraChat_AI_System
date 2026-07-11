@@ -38,6 +38,8 @@ auth:
 # ========================================================
 mcp:
   enabled: true
+  # Авто-подключение MCP в чате, если фронт не передал tool_ids (none | all | websearch | id1,id2)
+  chat_default: websearch
   tools_cache_ttl_seconds: 60
   pool:
     max_size: 4
@@ -55,6 +57,24 @@ mcp:
       timeout_seconds: 120
       credential_provider: atlassian
       tool_name_prefix: mcp_atlassian_
+      auth_mode: service_account
+      auth_type: none
+    # Open-WebSearch — веб-поиск без API-ключей (https://github.com/Aas-ee/open-webSearch)
+    # Локально: stdio через npx. В Docker: MCP_SERVER_WEBSEARCH_TRANSPORT=streamable-http
+    - id: websearch
+      display_name: "Поиск в интернете"
+      enabled: true
+      transport: stdio
+      command: npx
+      args:
+        - "-y"
+        - "open-websearch@latest"
+      env:
+        MODE: stdio
+        DEFAULT_SEARCH_ENGINE: duckduckgo
+        ALLOWED_SEARCH_ENGINES: duckduckgo,bing,exa,brave
+      timeout_seconds: 180
+      tool_name_prefix: mcp_websearch_
       auth_mode: service_account
       auth_type: none
   forward_headers:
@@ -300,3 +320,7 @@ urls:
   # MCP Atlassian (8012 — 8011 занят svc-rag)
   mcp_atlassian_service_port: "http://localhost:8012"
   mcp_atlassian_service_docker: "http://mcp-atlassian:8000"
+
+  # MCP Open-WebSearch (8013 — веб-поиск для LLM)
+  mcp_websearch_service_port: "http://localhost:8013"
+  mcp_websearch_service_docker: "http://mcp-websearch:3000"

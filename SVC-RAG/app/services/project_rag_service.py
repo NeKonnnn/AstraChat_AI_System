@@ -13,9 +13,11 @@ from app.database.project_rag_repository import (
 )
 from app.database.models import Document, DocumentVector
 from app.database.graph_repository import GraphRepository
+from app.services.bm25_index import InMemoryBm25Index
 from app.services.chunker import split_into_chunks_with_meta
 from app.services.document_parser import parse_document
 from app.services.retrieval_pipeline import RetrievalTrace, run_retrieval_pipeline
+from app.services.hierarchical_indexing import index_document_hierarchically
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,25 @@ class ProjectRagService:
         self.vector_repo = vector_repo
         self.rag_client = rag_models_client
         self.graph_repo = graph_repo
+        # BM25 индексы по project_id (чтобы lexical/hybrid не тянули чужие проекты).
+        self._bm25_by_project: Dict[str, InMemoryBm25Index] = {}
+
+    def _bm25_for_project(self, project_id: str) -> InMemoryBm25Index:
+        idx = self._bm25_by_project.get(project_id)
+        if idx is None:
+            async def _fetch():
+                return await self.vector_repo.get_all_contents_for_bm25(project_id=project_id)
+
+            idx = InMemoryBm25Index(_fetch)
+            self._bm25_by_project[project_id] = idx
+        return idx
+
+    def _mark_bm25_dirty(self, project_id: Optional[str] = None) -> None:
+        if project_id and project_id in self._bm25_by_project:
+            self._bm25_by_project[project_id].mark_dirty()
+            return
+        for idx in self._bm25_by_project.values():
+            idx.mark_dirty()
 
     async def index_document(
         self,
@@ -43,6 +64,7 @@ class ProjectRagService:
         *,
         chunk_size: Optional[int] = None,
         chunk_overlap: Optional[int] = None,
+        chunking_strategy: Optional[str] = None,
     ) -> Dict[str, Any]:
         parsed = await parse_document(file_data, filename)
         if not parsed:
@@ -79,7 +101,47 @@ class ProjectRagService:
         if doc_id is None:
             return {"ok": False, "error": "Ошибка сохранения документа в БД", "document_id": None}
 
-        chunks_with_meta = split_into_chunks_with_meta(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        if (chunking_strategy or "").strip().lower() == "hierarchical":
+            try:
+                count = await index_document_hierarchically(
+                    text,
+                    doc_id,
+                    filename=filename,
+                    vector_repo=self.vector_repo,
+                    rag_client=self.rag_client,
+                    chunk_size=chunk_size,
+                    chunk_overlap=chunk_overlap,
+                )
+            except Exception as e:
+                logger.error("project_rag иерархическая индексация не удалась: %s", e)
+                await self.doc_repo.delete_document(doc_id)
+                return {
+                    "ok": False,
+                    "error": f"Иерархическая индексация: {e}",
+                    "document_id": None,
+                }
+            self._mark_bm25_dirty(project_id)
+            logger.info(
+                "project_rag: иерархически проиндексирован '%s' (project=%s, id=%s), %s чанков",
+                filename,
+                project_id,
+                doc_id,
+                count,
+            )
+            return {
+                "ok": True,
+                "document_id": doc_id,
+                "filename": filename,
+                "chunks_count": count,
+                "project_id": project_id,
+            }
+        
+        chunks_with_meta = split_into_chunks_with_meta(
+            text,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            chunking_strategy=chunking_strategy,
+        )
         if not chunks_with_meta:
             await self.doc_repo.delete_document(doc_id)
             return {"ok": False, "error": "Не удалось нарезать чанки", "document_id": None}
@@ -107,6 +169,7 @@ class ProjectRagService:
             )
 
         created = await self.vector_repo.create_vectors_batch(vectors)
+        self._mark_bm25_dirty(project_id)
         if self.graph_repo:
             try:
                 await self.graph_repo.rebuild_document_graph(
@@ -129,6 +192,134 @@ class ProjectRagService:
             "filename": filename,
             "chunks_count": created,
             "project_id": project_id,
+        }
+
+    async def reindex_document(
+        self,
+        document: dict,
+        *,
+        chunk_size: Optional[int] = None,
+        chunk_overlap: Optional[int] = None,
+        chunking_strategy: Optional[str] = None,
+    ) -> int:
+        """Заново нарезать один документ проекта (dict с content) и заменить вектора."""
+        document_id = document["id"]
+        project_id = document.get("project_id")
+        filename = document.get("filename") or "unknown"
+        text = document.get("content") or ""
+        if not text.strip():
+            return 0
+        await self.vector_repo.delete_vectors_by_document(document_id)
+        strategy = (chunking_strategy or "universal").strip().lower()
+        if strategy == "hierarchical":
+            from app.services.hierarchical_indexing import index_document_hierarchically
+
+            count = await index_document_hierarchically(
+                text,
+                document_id,
+                filename=filename,
+                vector_repo=self.vector_repo,
+                rag_client=self.rag_client,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+            )
+            self._mark_bm25_dirty(project_id)
+            return count
+        chunks_with_meta = split_into_chunks_with_meta(
+            text,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            chunking_strategy=strategy,
+        )
+        chunks = [c for c, _m in chunks_with_meta]
+        if not chunks:
+            return 0
+        embeddings = await self.rag_client.embed(chunks)
+        vectors = []
+        for idx, ((chunk, cmeta), embedding) in enumerate(
+            zip(chunks_with_meta, embeddings)
+        ):
+            vmeta = {"chunk_index": idx, "document_filename": filename}
+            vmeta.update(cmeta)
+            vectors.append(
+                DocumentVector(
+                    document_id=document_id,
+                    chunk_index=idx,
+                    embedding=embedding,
+                    content=chunk,
+                    metadata=vmeta,
+                )
+            )
+        created = await self.vector_repo.create_vectors_batch(vectors)
+        self._mark_bm25_dirty(project_id)
+        return created
+
+    async def reindex_all(
+        self,
+        project_id: str,
+        *,
+        chunk_size: Optional[int] = None,
+        chunk_overlap: Optional[int] = None,
+        chunking_strategy: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Перечанкировать все документы одного проекта."""
+        docs = await self.doc_repo.get_documents_by_project(project_id)
+        n_docs = 0
+        n_chunks = 0
+        for d in docs:
+            try:
+                c = await self.reindex_document(
+                    d,
+                    chunk_size=chunk_size,
+                    chunk_overlap=chunk_overlap,
+                    chunking_strategy=chunking_strategy,
+                )
+                n_docs += 1
+                n_chunks += c
+                logger.info(
+                    "[REINDEX project=%s] doc=%s чанков=%s", project_id, d.get("id"), c
+                )
+            except Exception as e:
+                logger.error(
+                    "[REINDEX project=%s] doc=%s ошибка: %s", project_id, d.get("id"), e
+                )
+        return {"project_id": project_id, "documents": n_docs, "chunks": n_chunks}
+
+    async def reindex_all_projects(
+        self,
+        *,
+        chunk_size: Optional[int] = None,
+        chunk_overlap: Optional[int] = None,
+        chunking_strategy: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Перечанкировать все проекты (svc-rag сам перечисляет project_id)."""
+        project_ids = await self.doc_repo.get_all_project_ids()
+        total_docs = 0
+        total_chunks = 0
+        for pid in project_ids:
+            try:
+                r = await self.reindex_all(
+                    pid,
+                    chunk_size=chunk_size,
+                    chunk_overlap=chunk_overlap,
+                    chunking_strategy=chunking_strategy,
+                )
+                total_docs += r["documents"]
+                total_chunks += r["chunks"]
+            except Exception as e:
+                logger.error(
+                    "[REINDEX project ALL] проект %s упал, пропускаем: %s", pid, e
+                )
+        logger.info(
+            "[REINDEX project ALL] проектов=%s документов=%s чанков=%s",
+            len(project_ids),
+            total_docs,
+            total_chunks,
+        )
+        return {
+            "projects": len(project_ids),
+            "documents": total_docs,
+            "chunks": total_chunks,
         }
 
     async def search(
@@ -204,6 +395,7 @@ class ProjectRagService:
             fetch_document_chunks=_fetch_doc,
             find_docs_by_filename=_find_docs_by_filename,
             vector_repo_for_window=self.vector_repo,
+            bm25_index=self._bm25_for_project(project_id),
             eval_gold_document_ids=eval_gold_document_ids,
             eval_gold_chunks=eval_gold_chunks,
             eval_llm_judge=eval_llm_judge,
@@ -239,6 +431,7 @@ class ProjectRagService:
                 pass
         await self.vector_repo.delete_vectors_by_document(document_id)
         await self.doc_repo.delete_document(document_id)
+        self._mark_bm25_dirty(str(meta.get("project_id") or "") or None)
         logger.info("project_rag: удалён документ id=%s", document_id)
         return {
             "ok": True,
@@ -262,6 +455,7 @@ class ProjectRagService:
             if (d["metadata"] or {}).get("minio_object")
         ]
         deleted_count = await self.doc_repo.delete_documents_by_project(project_id)
+        self._bm25_by_project.pop(project_id, None)
         logger.info(
             "project_rag: удалено %s документов для project_id=%s",
             deleted_count,

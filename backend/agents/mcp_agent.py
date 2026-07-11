@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 from backend.agents.base_agent import BaseAgent
 from backend.mcp.chat_integration import build_mcp_context_from_user, run_mcp_for_chat
 from backend.mcp.platform import get_mcp_platform
-from backend.mcp.resolvers import parse_mcp_server_ids
+from backend.mcp.resolvers import parse_mcp_server_ids, resolve_chat_tool_ids
 from backend.settings.logging import get_logger
 
 logger = get_logger(__name__)
@@ -108,7 +108,7 @@ class MCPAgent(BaseAgent):
 
     def _resolve_tool_ids(self, context: Dict[str, Any]) -> List[str]:
         raw = context.get("tool_ids") or context.get("mcp_tool_ids") or []
-        return parse_mcp_server_ids(raw if isinstance(raw, list) else [raw])
+        return parse_mcp_server_ids(resolve_chat_tool_ids(raw if isinstance(raw, list) else [raw]))
 
     def _no_servers_hint(self) -> str:
         platform = get_mcp_platform()

@@ -64,6 +64,7 @@ async def index_memory_rag_document(
     minio_bucket: Optional[str] = Form(None),
     chunk_size: Optional[int] = Form(None),
     chunk_overlap: Optional[int] = Form(None),
+    chunking_strategy: Optional[str] = Form(None),
     svc: MemoryRagService = Depends(get_memory_rag_service),
 ):
     if not file.filename:
@@ -79,6 +80,7 @@ async def index_memory_rag_document(
         minio_bucket=minio_bucket,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
+        chunking_strategy=chunking_strategy or "universal",
     )
     if not result.get("ok"):
         raise HTTPException(status_code=422, detail=result.get("error", "Ошибка индексации"))

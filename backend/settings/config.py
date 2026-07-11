@@ -385,6 +385,7 @@ class McpServerConfig(BaseModel):
     command: Optional[str] = None
     args: List[str] = Field(default_factory=list)
     cwd: Optional[str] = None
+    env: Dict[str, str] = Field(default_factory=dict)
     custom_headers: Dict[str, str] = Field(default_factory=dict)
 
 
@@ -501,6 +502,13 @@ class McpPlatformConfig(BaseModel):
                             srv["timeout_seconds"] = int(timeout_env)
                         except ValueError:
                             pass
+                    # В Docker нет npx/node — websearch подключается по HTTP к контейнеру mcp-websearch
+                    if sid == "websearch" and _docker_runtime():
+                        if os.getenv(f"{env_prefix}TRANSPORT") is None:
+                            if str(srv.get("transport") or "").strip() == "stdio":
+                                srv["transport"] = "streamable-http"
+                                srv.setdefault("base_path", "/mcp")
+                                srv.setdefault("health_path", "/mcp")
                 patched.append(srv)
             data["servers"] = patched
         return data

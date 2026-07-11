@@ -20,6 +20,7 @@ vector cosine с запросом — 0.08 у лучшего (эмбеддинг
 
 Endpoint readonly — только чтение.
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
@@ -37,7 +38,6 @@ from app.dependencies import (
     get_kb_service,
     get_memory_rag_service,
     get_project_rag_service,
-    get_rag_service,
 )
 from app.services.kb_service import KbService
 from app.services.memory_rag_service import MemoryRagService
@@ -46,14 +46,12 @@ from app.services.rag_search_helpers import (
     reranker_is_english_only,
     should_disable_rerank_for_query,
 )
-from app.services.rag_service import RagService
-
 router = APIRouter()
 
 
 class DiagRequest(BaseModel):
     query: str
-    store: str = "global"  # "global" | "kb" | "memory" | "project"
+    store: str = "kb"  # "kb" | "memory" | "project"
     project_id: Optional[str] = None
     document_id: Optional[int] = None
     top_k: int = 12
@@ -97,15 +95,12 @@ def _as_stage_hit(dv, score: float) -> StageHit:
 
 async def _get_repo_for_store(
     store: str,
-    rag: RagService,
     kb: KbService,
     mem: MemoryRagService,
     prj: ProjectRagService,
 ):
     """Вернуть vector_repo для запрошенного стора (без вызова поиска — только доступ к БД)."""
     s = (store or "").lower()
-    if s == "global":
-        return rag.vector_repo
     if s == "kb":
         return kb.vector_repo
     if s == "memory":
@@ -118,7 +113,6 @@ async def _get_repo_for_store(
 @router.post("/search", response_model=DiagResponse)
 async def diag_search(
     body: DiagRequest,
-    rag: RagService = Depends(get_rag_service),
     kb: KbService = Depends(get_kb_service),
     mem: MemoryRagService = Depends(get_memory_rag_service),
     prj: ProjectRagService = Depends(get_project_rag_service),
@@ -134,7 +128,7 @@ async def diag_search(
       * ``reranker.active_for_this_query == false, but expected`` → проверь
         RAG_RERANKER_ENGLISH_ONLY / RAG_FORCE_RERANK_CYRILLIC.
     """
-    store = (body.store or "global").lower()
+    store = (body.store or "kb").lower()
     q = (body.query or "").strip()
     if not q:
         raise HTTPException(status_code=400, detail="query пустой")
@@ -154,19 +148,21 @@ async def diag_search(
         "english_only": reranker_is_english_only(),
         "disabled_for_this_query": should_disable_rerank_for_query(q),
         "note": (
-            "reranker_is_english_only=true → cross-encoder ms-marco-MiniLM шумит на "
-            "кириллических запросах. Для русского корпуса установите "
-            "bge-reranker-v2-m3 и выставите RAG_RERANKER_ENGLISH_ONLY=0."
-        ) if reranker_is_english_only() else None,
+            (
+                "reranker_is_english_only=true → cross-encoder ms-marco-MiniLM шумит на "
+                "кириллических запросах. Для русского корпуса установите "
+                "bge-reranker-v2-m3 и выставите RAG_RERANKER_ENGLISH_ONLY=0."
+            )
+            if reranker_is_english_only()
+            else None
+        ),
     }
 
-    vector_repo = await _get_repo_for_store(store, rag, kb, mem, prj)
+    vector_repo = await _get_repo_for_store(store, kb, mem, prj)
 
     # ── Filename anchor: упоминал ли пользователь конкретный файл, и что мы про него знаем ──
     doc_repo = None
-    if store == "global":
-        doc_repo = rag.doc_repo
-    elif store == "kb":
+    if store == "kb":
         doc_repo = kb.doc_repo
     elif store == "memory":
         doc_repo = mem.doc_repo
@@ -178,9 +174,7 @@ async def diag_search(
         for fn in filenames_in_query:
             try:
                 if store == "project":
-                    doc_ids = await doc_repo.find_document_ids_by_filename(
-                        fn, project_id=body.project_id
-                    )
+                    doc_ids = await doc_repo.find_document_ids_by_filename(fn, project_id=body.project_id)
                 else:
                     doc_ids = await doc_repo.find_document_ids_by_filename(fn)
             except Exception as e:
@@ -194,12 +188,8 @@ async def diag_search(
                     chunk_counts[int(did)] = len(chunks)
                 except Exception as e:
                     chunk_counts[int(did)] = -1
-                    filename_entries.append(
-                        {"filename": fn, "error": f"get_vectors_by_document({did}): {e}"}
-                    )
-            filename_entries.append(
-                {"filename": fn, "document_ids": doc_ids, "chunk_counts": chunk_counts}
-            )
+                    filename_entries.append({"filename": fn, "error": f"get_vectors_by_document({did}): {e}"})
+            filename_entries.append({"filename": fn, "document_ids": doc_ids, "chunk_counts": chunk_counts})
     filename_anchor_info = {
         "filenames_detected": filenames_in_query,
         "resolved": filename_entries,
@@ -258,7 +248,8 @@ async def diag_search(
     emb_hits: List = []
     vec_error = None
     try:
-        emb = await rag.rag_client.embed_single(q) if rag.rag_client else None
+        # Все store-сервисы используют общий RagModelsClient.
+        emb = await kb.rag_client.embed_single(q) if kb.rag_client else None
         if emb is None:
             vec_error = "rag_client недоступен / не вернул эмбеддинг"
         else:
@@ -359,7 +350,8 @@ async def diag_search(
                 "Проверьте, что документ реально загружен в этот store/project_id."
             )
         zero_chunks = [
-            e for e in filename_entries
+            e
+            for e in filename_entries
             if e.get("document_ids") and not any(c > 0 for c in (e.get("chunk_counts") or {}).values())
         ]
         if zero_chunks:
@@ -391,6 +383,7 @@ async def diag_search(
 # что парсинг/чанкинг этот файл разломал, и retrieval тут бессилен. Это первый
 # вопрос, который надо закрыть перед тюнингом поиска.
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class DocDiagRequest(BaseModel):
     filename: str  # точное или частичное имя файла (ILIKE %name%)
@@ -456,7 +449,6 @@ def _chunk_verdict(chunk_count: int, lengths: Dict[str, int], very_short: int, e
 @router.post("/document", response_model=DocDiagResponse)
 async def diag_document(
     body: DocDiagRequest,
-    rag: RagService = Depends(get_rag_service),
     kb: KbService = Depends(get_kb_service),
     mem: MemoryRagService = Depends(get_memory_rag_service),
     prj: ProjectRagService = Depends(get_project_rag_service),
@@ -477,10 +469,7 @@ async def diag_document(
         raise HTTPException(status_code=400, detail="filename пустой")
     store = (body.store or "memory").lower()
 
-    if store == "global":
-        doc_repo = rag.doc_repo
-        vector_repo = rag.vector_repo
-    elif store == "kb":
+    if store == "kb":
         doc_repo = kb.doc_repo
         vector_repo = kb.vector_repo
     elif store == "memory":
@@ -512,7 +501,8 @@ async def diag_document(
         # filename из БД (может быть None, если get_document не поддерживается — тогда отдаём запрос).
         real_filename = (
             (doc.get("filename") if isinstance(doc, dict) else getattr(doc, "filename", None))
-            if doc is not None else fname
+            if doc is not None
+            else fname
         ) or fname
         try:
             chunks = await vector_repo.get_vectors_by_document(did)

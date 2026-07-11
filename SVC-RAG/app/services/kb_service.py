@@ -3,13 +3,14 @@
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union
-
+from app.services.hierarchical_indexing import index_document_hierarchically
 from app.clients.rag_models_client import RagModelsClient
 from app.core.config import get_settings
 from app.database.search_filters import DocumentVectorSearchFilters
 from app.database.kb_repository import KbDocumentRepository, KbVectorRepository
 from app.database.models import Document, DocumentVector
 from app.database.graph_repository import GraphRepository
+from app.services.bm25_index import InMemoryBm25Index
 from app.services.chunker import split_into_chunks_with_meta
 from app.services.document_parser import parse_document
 from app.services.retrieval_pipeline import RetrievalTrace, run_retrieval_pipeline
@@ -31,6 +32,7 @@ class KbService:
         self.vector_repo = vector_repo
         self.rag_client = rag_models_client
         self.graph_repo = graph_repo
+        self._bm25 = InMemoryBm25Index(self.vector_repo.get_all_contents_for_bm25)
 
     # ─── Индексация ─────────────────────────────────────────────────────────────
 
@@ -41,6 +43,7 @@ class KbService:
         *,
         chunk_size: Optional[int] = None,
         chunk_overlap: Optional[int] = None,
+        chunking_strategy: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Парсим файл, режем на чанки, получаем эмбеддинги и сохраняем в kb_documents/kb_vectors."""
         parsed = await parse_document(file_data, filename)
@@ -70,7 +73,45 @@ class KbService:
         if doc_id is None:
             return {"ok": False, "error": "Ошибка сохранения документа в БД", "document_id": None}
 
-        chunks_with_meta = split_into_chunks_with_meta(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        if (chunking_strategy or "").strip().lower() == "hierarchical":
+            try:
+                count = await index_document_hierarchically(
+                    text,
+                    doc_id,
+                    filename=filename,
+                    vector_repo=self.vector_repo,
+                    rag_client=self.rag_client,
+                    chunk_size=chunk_size,
+                    chunk_overlap=chunk_overlap,
+                )
+            except Exception as e:
+                logger.error("KB иерархическая индексация не удалась: %s", e)
+                await self.doc_repo.delete_document(doc_id)
+                return {
+                    "ok": False,
+                    "error": f"Иерархическая индексация: {e}",
+                    "document_id": None,
+                }
+            self._bm25.mark_dirty()
+            logger.info(
+                "KB: иерархически проиндексирован '%s' (id=%s), %s чанков",
+                filename,
+                doc_id,
+                count,
+            )
+            return {
+                "ok": True,
+                "document_id": doc_id,
+                "filename": filename,
+                "chunks_count": count,
+            }
+
+        chunks_with_meta = split_into_chunks_with_meta(
+            text,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            chunking_strategy=chunking_strategy or "universal",
+        )
         if not chunks_with_meta:
             return {"ok": False, "error": "Не удалось нарезать чанки", "document_id": doc_id}
         chunks = [c for c, _m in chunks_with_meta]
@@ -97,6 +138,7 @@ class KbService:
             )
 
         created = await self.vector_repo.create_vectors_batch(vectors)
+        self._bm25.mark_dirty()
         if self.graph_repo:
             try:
                 await self.graph_repo.rebuild_document_graph(
@@ -113,6 +155,95 @@ class KbService:
             "filename": filename,
             "chunks_count": created,
         }
+    
+    async def reindex_document(
+        self,
+        document_id: int,
+        *,
+        chunk_size: Optional[int] = None,
+        chunk_overlap: Optional[int] = None,
+        chunking_strategy: Optional[str] = None,
+    ) -> int:
+        """Заново нарезать один документ KB из сохранённого текста и заменить его вектора."""
+        doc = await self.doc_repo.get_document(document_id)
+        if doc is None:
+            return 0
+        text = doc.content or ""
+        if not text.strip():
+            return 0
+        await self.vector_repo.delete_vectors_by_document(document_id)
+        strategy = (chunking_strategy or "universal").strip().lower()
+        if strategy == "hierarchical":
+            from app.services.hierarchical_indexing import index_document_hierarchically
+
+            count = await index_document_hierarchically(
+                text,
+                document_id,
+                filename=doc.filename,
+                vector_repo=self.vector_repo,
+                rag_client=self.rag_client,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+            )
+            self._bm25.mark_dirty()
+            return count
+        chunks_with_meta = split_into_chunks_with_meta(
+            text,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            chunking_strategy=strategy,
+        )
+        chunks = [c for c, _m in chunks_with_meta]
+        if not chunks:
+            return 0
+        embeddings = await self.rag_client.embed(chunks)
+        vectors = []
+        for idx, ((chunk, cmeta), embedding) in enumerate(
+            zip(chunks_with_meta, embeddings)
+        ):
+            meta = {"start": idx}
+            meta.update(cmeta)
+            vectors.append(
+                DocumentVector(
+                    document_id=document_id,
+                    chunk_index=idx,
+                    embedding=embedding,
+                    content=chunk,
+                    metadata=meta,
+                )
+            )
+        created = await self.vector_repo.create_vectors_batch(vectors)
+        self._bm25.mark_dirty()
+        return created
+
+    async def reindex_all(
+        self,
+        *,
+        chunk_size: Optional[int] = None,
+        chunk_overlap: Optional[int] = None,
+        chunking_strategy: Optional[str] = None,
+    ) -> Dict[str, int]:
+        """Перечанкировать все документы KB. Возвращает {documents, chunks}."""
+        docs = await self.doc_repo.get_all_documents()
+        n_docs = 0
+        n_chunks = 0
+        for doc in docs:
+            try:
+                c = await self.reindex_document(
+                    doc.id,
+                    chunk_size=chunk_size,
+                    chunk_overlap=chunk_overlap,
+                    chunking_strategy=chunking_strategy,
+                )
+                n_docs += 1
+                n_chunks += c
+                logger.info("[REINDEX kb] doc=%s чанков=%s", doc.id, c)
+            except Exception as e:
+                logger.error(
+                    "[REINDEX kb] doc=%s ошибка: %s", getattr(doc, "id", "?"), e
+                )
+        logger.info("[REINDEX kb] готово: документов=%s чанков=%s", n_docs, n_chunks)
+        return {"documents": n_docs, "chunks": n_chunks}
 
     # ─── Поиск ──────────────────────────────────────────────────────────────────
 
@@ -183,6 +314,7 @@ class KbService:
             fetch_document_chunks=_fetch_doc,
             find_docs_by_filename=_find_docs_by_filename,
             vector_repo_for_window=self.vector_repo,
+            bm25_index=self._bm25,
             eval_gold_document_ids=eval_gold_document_ids,
             eval_gold_chunks=eval_gold_chunks,
             eval_llm_judge=eval_llm_judge,
@@ -217,6 +349,7 @@ class KbService:
                 pass
         await self.vector_repo.delete_vectors_by_document(document_id)
         await self.doc_repo.delete_document(document_id)
+        self._bm25.mark_dirty()
         logger.info("KB: удалён документ id=%s ('%s')", document_id, doc.filename)
         return True
 

@@ -1,42 +1,50 @@
 """Разбиение текста на чанки для RAG.
 
-Два уровня нарезки:
-1. Структурный: сначала делим по заголовкам, номерам разделов, разрывам страниц,
-   чтобы один чанк не охватывал два разных смысловых блока. Таблицы и списки
-   по возможности не дробим на середине строки.
-2. Размерный: если секция слишком большая — доразбиваем её
-   ``RecursiveCharacterTextSplitter`` с приоритетом естественных границ.
-
-API:
-- ``split_into_chunks(text)`` — обратно совместимый список строк (использовался прежде).
-- ``split_into_chunks_with_meta(text)`` — список (text, metadata), где metadata
-  содержит связь чанка с разделом/заголовком (пригодится для атрибуции источников
-  и для small-to-big retrieval в будущем, без миграции БД).
+Стратегии:
+- ``universal`` — структурный чанкер (страницы/заголовки/таблицы + RecursiveCharacter).
+  Используется для Библиотеки (KB + memory-rag): единый стабильный режим.
+- ``fixed`` — только RecursiveCharacterTextSplitter по размеру.
+- ``markdown`` — приоритет markdown-заголовков, затем размерный сплит.
+- ``separators`` — сплит по явным разделителям (\\n\\n, \\n, . ).
+- ``semantic`` — укрупнённые абзацы с мягким лимитом (без эмбеддинг-сегментации).
+- ``hierarchical`` — как universal (иерархия уровней — отдельно в hierarchical.py для global).
 """
 
 from __future__ import annotations
 
-import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.core.config import get_settings
+from app.core.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
+_VALID_STRATEGIES = frozenset(
+    {"universal", "fixed", "markdown", "separators", "semantic", "hierarchical"}
+)
 
-# Распознавание структурных границ. Порядок важен: от «крупных» разделителей к «мелким».
 _HEADING_PATTERNS: List[re.Pattern] = [
-    re.compile(r"^\s*#{1,6}\s+.+$", re.MULTILINE),  # Markdown-заголовки
+    re.compile(r"^\s*#{1,6}\s+.+$", re.MULTILINE),
     re.compile(r"^\s*(?:Глава|Раздел|Часть)\s+\S.+$", re.MULTILINE | re.IGNORECASE),
-    re.compile(r"^\s*\d{1,3}(?:\.\d{1,3}){0,4}\s+\S.+$", re.MULTILINE),  # 1.2.3 Заголовок
-    re.compile(r"^\s*[IVXLC]{1,6}\.\s+\S.+$", re.MULTILINE),  # Римские цифры: II. Title
+    re.compile(r"^\s*\d{1,3}(?:\.\d{1,3}){0,4}\s+\S.+$", re.MULTILINE),
+    re.compile(r"^\s*[IVXLC]{1,6}\.\s+\S.+$", re.MULTILINE),
 ]
 
 _PAGE_BREAK_PATTERN = re.compile(r"\n?-{2,}\s*Страница.*?-{2,}\s*\n?", re.IGNORECASE)
 _TABLE_LINE_PATTERN = re.compile(r"^\s*\|.+\|\s*$")
+_MD_HEADING = re.compile(r"^\s*#{1,6}\s+.+$", re.MULTILINE)
+
+
+def normalize_chunking_strategy(raw: Optional[str]) -> str:
+    s = (raw or "universal").strip().lower()
+    if s in {"structure", "structural", "default", "library"}:
+        return "universal"
+    if s in _VALID_STRATEGIES:
+        return s
+    return "universal"
 
 
 def _split_by_page_breaks(text: str) -> List[str]:
@@ -44,25 +52,20 @@ def _split_by_page_breaks(text: str) -> List[str]:
     return [p for p in parts if p and p.strip()]
 
 
-def _find_heading_positions(text: str) -> List[int]:
-    """Позиции начала всех найденных заголовков, отсортированные."""
+def _find_heading_positions(text: str, patterns: Optional[List[re.Pattern]] = None) -> List[int]:
     positions: set = {0}
-    for pat in _HEADING_PATTERNS:
+    for pat in patterns or _HEADING_PATTERNS:
         for m in pat.finditer(text):
             positions.add(m.start())
     return sorted(positions)
 
 
-def _split_by_headings(text: str) -> List[str]:
-    """Делит текст на секции по заголовкам. Пустые/коротенькие заголовки-строки
-    склеиваются с последующим контентом, чтобы в секции всегда было тело.
-    """
+def _split_by_headings(text: str, patterns: Optional[List[re.Pattern]] = None) -> List[str]:
     if not text:
         return []
-    positions = _find_heading_positions(text)
+    positions = _find_heading_positions(text, patterns)
     if len(positions) <= 1:
         return [text]
-
     sections: List[str] = []
     for i, pos in enumerate(positions):
         end = positions[i + 1] if i + 1 < len(positions) else len(text)
@@ -73,12 +76,6 @@ def _split_by_headings(text: str) -> List[str]:
 
 
 def _protect_tables(section: str) -> List[str]:
-    """Разбивает секцию на «блоки»: обычный текст и цельные таблицы.
-
-    Цельная таблица — последовательность ≥ 2 строк, начинающихся и заканчивающихся "|".
-    Таблицы не дробятся по размеру чанка; разбиваются только если сама таблица больше
-    двух chunk_size (очень редкий случай).
-    """
     lines = section.split("\n")
     blocks: List[str] = []
     buf: List[str] = []
@@ -103,9 +100,6 @@ def _protect_tables(section: str) -> List[str]:
             table_buf.append(ln)
         else:
             if in_table:
-                # Строка-разделитель/пустая в середине таблицы тоже считаем её частью,
-                # если предыдущая и следующая строки — таблица. Здесь простая эвристика:
-                # «пустая/разделитель ---» — добавляем в таблицу, иначе закрываем.
                 if ln.strip() == "" or re.match(r"^\s*[-:|]+\s*$", ln):
                     table_buf.append(ln)
                     continue
@@ -117,12 +111,17 @@ def _protect_tables(section: str) -> List[str]:
     return [b for b in blocks if b]
 
 
-def _make_splitter(chunk_size: int, chunk_overlap: int) -> RecursiveCharacterTextSplitter:
+def _make_splitter(
+    chunk_size: int,
+    chunk_overlap: int,
+    separators: Optional[List[str]] = None,
+) -> RecursiveCharacterTextSplitter:
     return RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         length_function=len,
-        separators=[
+        separators=separators
+        or [
             "\n\n\n",
             "\n\n",
             "\n",
@@ -142,7 +141,6 @@ def resolve_chunk_params(
     chunk_size: Optional[int] = None,
     chunk_overlap: Optional[int] = None,
 ) -> Tuple[int, int]:
-    """Эффективные chunk_size/chunk_overlap: из запроса или из конфига SVC-RAG."""
     cfg = get_settings().rag
     cs = max(200, int(chunk_size)) if chunk_size is not None else max(200, int(getattr(cfg, "chunk_size", 1000)))
     co = (
@@ -155,28 +153,57 @@ def resolve_chunk_params(
     return cs, co
 
 
-def split_into_chunks_with_meta(
+def _pack_plain(
+    parts: List[str],
+    *,
+    chunk_size: int,
+    chunk_overlap: int,
+    strategy: str,
+    splitter: RecursiveCharacterTextSplitter,
+) -> List[Tuple[str, Dict[str, Any]]]:
+    out: List[Tuple[str, Dict[str, Any]]] = []
+    for s_idx, part in enumerate(parts):
+        head_line = part.split("\n", 1)[0].strip()[:200]
+        if len(part) <= chunk_size:
+            out.append(
+                (
+                    part,
+                    {
+                        "section_index": s_idx,
+                        "section_heading": head_line,
+                        "chunk_of_section": 0,
+                        "is_table": False,
+                        "chunking_strategy": strategy,
+                    },
+                )
+            )
+            continue
+        for j, sub in enumerate(splitter.split_text(part)):
+            sub_clean = sub.strip()
+            if not sub_clean:
+                continue
+            out.append(
+                (
+                    sub_clean,
+                    {
+                        "section_index": s_idx,
+                        "section_heading": head_line,
+                        "chunk_of_section": j,
+                        "is_table": False,
+                        "chunking_strategy": strategy,
+                    },
+                )
+            )
+    return out
+
+
+def _split_universal(
     text: str,
     *,
-    chunk_size: Optional[int] = None,
-    chunk_overlap: Optional[int] = None,
+    chunk_size: int,
+    chunk_overlap: int,
 ) -> List[Tuple[str, Dict[str, Any]]]:
-    """Возвращает [(chunk_text, metadata)] со связью с разделом.
-
-    metadata содержит:
-      - ``section_index``   — порядковый номер секции (разделённой по заголовку/странице);
-      - ``section_heading`` — первая строка секции (обычно заголовок);
-      - ``chunk_of_section``— индекс этого чанка внутри своей секции;
-      - ``is_table``        — True, если чанк — целая таблица.
-    """
-    if not text or not text.strip():
-        return []
-
-    cfg = get_settings().rag
-    chunk_size, chunk_overlap = resolve_chunk_params(chunk_size, chunk_overlap)
     splitter = _make_splitter(chunk_size, chunk_overlap)
-
-    # 1. Крупная структура: страницы → заголовки.
     pages = _split_by_page_breaks(text.strip())
     sections: List[str] = []
     for page in pages:
@@ -188,11 +215,9 @@ def split_into_chunks_with_meta(
     for s_idx, section in enumerate(sections):
         head_line = section.split("\n", 1)[0].strip()[:200]
         blocks = _protect_tables(section)
-
         chunk_of_sec = 0
         for block in blocks:
             is_table = block.startswith("|") and "\n|" in block
-            # Очень большие таблицы всё-таки делим, но реже — удваиваем chunk_size.
             effective_limit = chunk_size * 2 if is_table else chunk_size
             if len(block) <= effective_limit:
                 out.append(
@@ -203,6 +228,7 @@ def split_into_chunks_with_meta(
                             "section_heading": head_line,
                             "chunk_of_section": chunk_of_sec,
                             "is_table": is_table,
+                            "chunking_strategy": "universal",
                         },
                     )
                 )
@@ -220,14 +246,106 @@ def split_into_chunks_with_meta(
                             "section_heading": head_line,
                             "chunk_of_section": chunk_of_sec,
                             "is_table": is_table,
+                            "chunking_strategy": "universal",
                         },
                     )
                 )
                 chunk_of_sec += 1
+    return out
 
-    # Фильтр совсем мелких/пустых фрагментов, чтобы они не засоряли индекс.
+
+def _split_fixed(text: str, *, chunk_size: int, chunk_overlap: int) -> List[Tuple[str, Dict[str, Any]]]:
+    splitter = _make_splitter(chunk_size, chunk_overlap)
+    return _pack_plain([text.strip()], chunk_size=chunk_size, chunk_overlap=chunk_overlap, strategy="fixed", splitter=splitter)
+
+
+def _split_markdown(text: str, *, chunk_size: int, chunk_overlap: int) -> List[Tuple[str, Dict[str, Any]]]:
+    sections = _split_by_headings(text.strip(), patterns=[_MD_HEADING])
+    if len(sections) <= 1:
+        sections = _split_by_headings(text.strip())
+    splitter = _make_splitter(chunk_size, chunk_overlap)
+    return _pack_plain(sections, chunk_size=chunk_size, chunk_overlap=chunk_overlap, strategy="markdown", splitter=splitter)
+
+
+def _split_separators(text: str, *, chunk_size: int, chunk_overlap: int) -> List[Tuple[str, Dict[str, Any]]]:
+    splitter = _make_splitter(
+        chunk_size,
+        chunk_overlap,
+        separators=["\n\n\n", "\n\n", "\n", ". ", " ", ""],
+    )
+    return _pack_plain([text.strip()], chunk_size=chunk_size, chunk_overlap=chunk_overlap, strategy="separators", splitter=splitter)
+
+
+def _split_semantic(text: str, *, chunk_size: int, chunk_overlap: int) -> List[Tuple[str, Dict[str, Any]]]:
+    """Абзацный semantic-like сплит без эмбеддингов: держим абзацы целыми, пока влезают."""
+    paras = [p.strip() for p in re.split(r"\n\s*\n", text.strip()) if p.strip()]
+    if not paras:
+        return []
+    soft = max(chunk_size, int(chunk_size * 1.25))
+    chunks: List[str] = []
+    buf = ""
+    for p in paras:
+        if not buf:
+            buf = p
+            continue
+        if len(buf) + 2 + len(p) <= soft:
+            buf = f"{buf}\n\n{p}"
+        else:
+            chunks.append(buf)
+            # overlap: хвост предыдущего абзаца
+            if chunk_overlap > 0 and len(buf) > chunk_overlap:
+                tail = buf[-chunk_overlap:]
+                buf = f"{tail}\n\n{p}" if len(p) < soft else p
+            else:
+                buf = p
+    if buf:
+        chunks.append(buf)
+    # Доразбиваем слишком длинные
+    splitter = _make_splitter(chunk_size, chunk_overlap)
+    return _pack_plain(chunks, chunk_size=chunk_size, chunk_overlap=chunk_overlap, strategy="semantic", splitter=splitter)
+
+
+def split_into_chunks_with_meta(
+    text: str,
+    *,
+    chunk_size: Optional[int] = None,
+    chunk_overlap: Optional[int] = None,
+    chunking_strategy: Optional[str] = None,
+) -> List[Tuple[str, Dict[str, Any]]]:
+    """Возвращает [(chunk_text, metadata)]."""
+    if not text or not text.strip():
+        return []
+
+    cfg = get_settings().rag
+    chunk_size, chunk_overlap = resolve_chunk_params(chunk_size, chunk_overlap)
+    strategy = normalize_chunking_strategy(chunking_strategy)
+    logger.debug(
+        "[chunker] strategy=%s chunk_size=%s chunk_overlap=%s, длина текста: %s",
+        strategy,
+        chunk_size,
+        chunk_overlap,
+        len(text),
+    )
+
+    if strategy in {"universal", "hierarchical"}:
+        out = _split_universal(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        if strategy == "hierarchical":
+            for _, meta in out:
+                meta["chunking_strategy"] = "hierarchical"
+    elif strategy == "fixed":
+        out = _split_fixed(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+    elif strategy == "markdown":
+        out = _split_markdown(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+    elif strategy == "separators":
+        out = _split_separators(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+    elif strategy == "semantic":
+        out = _split_semantic(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+    else:
+        out = _split_universal(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+
     min_useful = max(20, int(getattr(cfg, "min_chunk_length", 40)) // 2)
     out = [(t, m) for t, m in out if len(t) >= min_useful]
+    logger.debug("[chunker] strategy=%s → чанков=%s (min_useful=%s)", strategy, len(out), min_useful)
     return out
 
 
@@ -236,11 +354,14 @@ def split_into_chunks(
     *,
     chunk_size: Optional[int] = None,
     chunk_overlap: Optional[int] = None,
+    chunking_strategy: Optional[str] = None,
 ) -> List[str]:
-    """Обратно совместимый API — только тексты чанков (без metadata).
-
-    Внутри используется новый структурный чанкер: заголовки, страницы, таблицы
-    распознаются и не дробятся посередине. Если текст простой — поведение близко
-    к прежнему ``RecursiveCharacterTextSplitter``.
-    """
-    return [t for t, _m in split_into_chunks_with_meta(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)]
+    return [
+        t
+        for t, _m in split_into_chunks_with_meta(
+            text,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            chunking_strategy=chunking_strategy,
+        )
+    ]

@@ -91,7 +91,7 @@ class DocumentQueryRequest(BaseModel):
 
 
 class RAGSettings(BaseModel):
-    strategy: Optional[str] = None  # auto | hybrid | standard | lexical | raw_cosine | graph
+    strategy: Optional[str] = None  # auto | hybrid | vector | lexical | raw_cosine | graph
     agentic_rag_enabled: Optional[bool] = None
     agentic_max_iterations: Optional[int] = None
     # Препроцесс запроса перед поиском в SVC-RAG (доп. вызовы LLM при включении)
@@ -104,6 +104,8 @@ class RAGSettings(BaseModel):
     rag_chunking_strategy: Optional[str] = None  # hierarchical | fixed | markdown | separators | semantic
     # Размер перекрытия соседних чанков при индексации
     rag_chunk_overlap: Optional[int] = None
+    # Целевой размер чанка при индексации (символы)
+    rag_chunk_size: Optional[int] = None
     # Порог похожести retrieval [0..1]
     rag_similarity_threshold: Optional[float] = None
     # Включить cross-encoder reranking

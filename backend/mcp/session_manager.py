@@ -144,6 +144,7 @@ class McpSessionManager:
                     command=server.command,
                     args=server.args,
                     cwd=server.cwd,
+                    env=getattr(server, "env", None) or None,
                     timeout=timeout,
                 )
             else:

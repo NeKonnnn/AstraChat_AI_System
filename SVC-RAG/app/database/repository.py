@@ -132,8 +132,7 @@ class DocumentRepository:
             return []
         async with await self.db.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT id FROM documents WHERE filename ILIKE $1 "
-                "ORDER BY updated_at DESC LIMIT $2",
+                "SELECT id FROM documents WHERE filename ILIKE $1 " "ORDER BY updated_at DESC LIMIT $2",
                 f"%{needle}%",
                 limit,
             )
@@ -164,7 +163,9 @@ class VectorRepository:
                 CREATE INDEX IF NOT EXISTS idx_document_vectors_embedding_hnsw
                 ON document_vectors USING hnsw (embedding vector_cosine_ops)
             """)
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_document_vectors_document_id ON document_vectors(document_id)")
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_document_vectors_document_id ON document_vectors(document_id)"
+            )
             await ensure_fts_columns(conn, "document_vectors")
         logger.info("Таблица document_vectors готова (dim=%s)", self.embedding_dim)
 
@@ -384,9 +385,7 @@ class VectorRepository:
             )
         return out
 
-    async def get_chunk_contents_by_indices(
-        self, document_id: int, chunk_indices: List[int]
-    ) -> Dict[int, str]:
+    async def get_chunk_contents_by_indices(self, document_id: int, chunk_indices: List[int]) -> Dict[int, str]:
         if not chunk_indices:
             return {}
         uniq = sorted({int(i) for i in chunk_indices if i is not None and int(i) >= 0})
@@ -443,14 +442,10 @@ class VectorRepository:
     async def get_all_document_ids(self) -> List[int]:
         """Уникальные document_id в хранилище."""
         async with await self.db.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT DISTINCT document_id FROM document_vectors ORDER BY document_id"
-            )
+            rows = await conn.fetch("SELECT DISTINCT document_id FROM document_vectors ORDER BY document_id")
         return [r["document_id"] for r in rows]
 
-    async def get_vector_by_document_and_chunk(
-        self, document_id: int, chunk_index: int
-    ) -> Optional["DocumentVector"]:
+    async def get_vector_by_document_and_chunk(self, document_id: int, chunk_index: int) -> Optional["DocumentVector"]:
         """Точечный запрос одного вектора по (document_id, chunk_index) - для BM25-only хитов."""
         async with await self.db.acquire() as conn:
             row = await conn.fetchrow(
@@ -462,6 +457,7 @@ class VectorRepository:
         if not row:
             return None
         import json as _json
+
         emb = [float(x.strip()) for x in row["embedding"].strip("[]").split(",")]
         meta = row["metadata"]
         if isinstance(meta, str):

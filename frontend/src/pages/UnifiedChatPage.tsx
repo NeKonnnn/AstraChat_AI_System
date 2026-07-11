@@ -108,7 +108,7 @@ import McpToolCallsPanel from '../mcp/components/McpToolCallsPanel';
 import { mergeMcpToolCalls } from '../mcp/utils/mergeToolCalls';
 import McpLiveToolsIndicator from '../mcp/components/McpLiveToolsIndicator';
 import McpSuggestionChips from '../mcp/components/McpSuggestionChips';
-import { getAtlassianSuggestions } from '../mcp/plugins/atlassianSuggestions';
+import { getMcpSuggestions } from '../mcp/plugins/mcpSuggestions';
 import { getSidebarPanelBackground } from '../constants/sidebarPanelColor';
 import { getWorkZoneBackgroundColor, getWorkZoneCustomImage, isWorkZoneAnimatedMode } from '../constants/workZoneBackground';
 import { useWorkZoneBgMode } from '../hooks/useWorkZoneBgMode';
@@ -1801,7 +1801,7 @@ export default function UnifiedChatPage({
 
   const mcpInputSuggestions = useMemo(() => {
     const enabledServerIds = activeMcpServers.map((s) => s.id);
-    const suggestions = getAtlassianSuggestions(enabledServerIds);
+    const suggestions = getMcpSuggestions(enabledServerIds);
     const chips =
       suggestions.length > 0 ? (
         <McpSuggestionChips

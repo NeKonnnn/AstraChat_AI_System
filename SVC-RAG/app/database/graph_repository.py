@@ -31,8 +31,7 @@ class GraphRepository:
 
     async def create_tables(self):
         async with await self.db.acquire() as conn:
-            await conn.execute(
-                """
+            await conn.execute("""
                 CREATE TABLE IF NOT EXISTS rag_graph_nodes (
                     id BIGSERIAL PRIMARY KEY,
                     store_type VARCHAR(32) NOT NULL,
@@ -43,10 +42,8 @@ class GraphRepository:
                     created_at TIMESTAMP DEFAULT NOW(),
                     UNIQUE(store_type, document_id, chunk_index)
                 )
-                """
-            )
-            await conn.execute(
-                """
+                """)
+            await conn.execute("""
                 CREATE TABLE IF NOT EXISTS rag_graph_edges (
                     id BIGSERIAL PRIMARY KEY,
                     store_type VARCHAR(32) NOT NULL,
@@ -58,8 +55,7 @@ class GraphRepository:
                     created_at TIMESTAMP DEFAULT NOW(),
                     UNIQUE(store_type, from_node_id, to_node_id, edge_type)
                 )
-                """
-            )
+                """)
             await conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_rag_graph_nodes_store_doc ON rag_graph_nodes(store_type, document_id)"
             )
@@ -193,10 +189,7 @@ class GraphRepository:
                     chunk_idxs,
                 )
                 valid_pairs = set(seed_doc_chunk_pairs)
-                rows = [
-                    r for r in candidate_rows
-                    if (int(r["document_id"]), int(r["chunk_index"])) in valid_pairs
-                ]
+                rows = [r for r in candidate_rows if (int(r["document_id"]), int(r["chunk_index"])) in valid_pairs]
             else:
                 # Устаревший fallback — может смешивать документы
                 rows = await conn.fetch(

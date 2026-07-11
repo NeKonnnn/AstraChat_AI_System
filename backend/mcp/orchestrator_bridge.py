@@ -91,10 +91,11 @@ def sync_chat_via_registry(
 
 async def attach_mcp_tools_to_orchestrator(orchestrator, context: Dict[str, Any]) -> int:
     """Подключает MCP tools из tool_ids к orchestrator (tier-3, generic)."""
-    from backend.mcp.langgraph_tools import load_mcp_langgraph_tools
-    from backend.mcp.resolvers import parse_mcp_server_ids
+    from backend.mcp.resolvers import parse_mcp_server_ids, resolve_chat_tool_ids
 
-    tool_ids = context.get("tool_ids") or context.get("mcp_tool_ids") or []
+    tool_ids = resolve_chat_tool_ids(context.get("tool_ids") or context.get("mcp_tool_ids"))
+    from backend.mcp.langgraph_tools import load_mcp_langgraph_tools
+
     server_ids = parse_mcp_server_ids(tool_ids if isinstance(tool_ids, list) else [tool_ids])
     if not server_ids:
         return 0

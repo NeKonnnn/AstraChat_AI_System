@@ -113,8 +113,7 @@ class MemoryRagDocumentRepository:
             return []
         async with await self.db.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT id FROM memory_rag_documents WHERE filename ILIKE $1 "
-                "ORDER BY updated_at DESC LIMIT $2",
+                "SELECT id FROM memory_rag_documents WHERE filename ILIKE $1 " "ORDER BY updated_at DESC LIMIT $2",
                 f"%{needle}%",
                 limit,
             )
@@ -367,9 +366,7 @@ class MemoryRagVectorRepository:
             )
         return out
 
-    async def get_chunk_contents_by_indices(
-        self, document_id: int, chunk_indices: List[int]
-    ) -> Dict[int, str]:
+    async def get_chunk_contents_by_indices(self, document_id: int, chunk_indices: List[int]) -> Dict[int, str]:
         if not chunk_indices:
             return {}
         uniq = sorted({int(i) for i in chunk_indices if i is not None and int(i) >= 0})
@@ -420,14 +417,19 @@ class MemoryRagVectorRepository:
     async def get_all_document_ids(self) -> List[int]:
         """Уникальные document_id в memory RAG."""
         async with await self.db.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT DISTINCT document_id FROM memory_rag_vectors ORDER BY document_id"
-            )
+            rows = await conn.fetch("SELECT DISTINCT document_id FROM memory_rag_vectors ORDER BY document_id")
         return [r["document_id"] for r in rows]
 
-    async def get_vector_by_document_and_chunk(
-        self, document_id: int, chunk_index: int
-    ) -> Optional[DocumentVector]:
+    async def get_all_contents_for_bm25(self) -> List[Tuple[int, int, str]]:
+        """Возвращает (document_id, chunk_index, content) для всех чанков memory — для BM25."""
+        async with await self.db.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT document_id, chunk_index, content FROM memory_rag_vectors "
+                "ORDER BY document_id, chunk_index"
+            )
+        return [(r["document_id"], r["chunk_index"], r["content"]) for r in rows]
+
+    async def get_vector_by_document_and_chunk(self, document_id: int, chunk_index: int) -> Optional[DocumentVector]:
         """Точечный запрос одного вектора по (document_id, chunk_index)."""
         async with await self.db.acquire() as conn:
             row = await conn.fetchrow(

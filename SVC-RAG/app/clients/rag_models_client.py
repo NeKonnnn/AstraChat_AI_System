@@ -40,9 +40,7 @@ class RagModelsClient:
                 data = resp.json()
                 part = data.get("embeddings", [])
                 if len(part) != len(batch):
-                    raise ValueError(
-                        f"Число эмбеддингов ({len(part)}) не совпадает с размером батча ({len(batch)})"
-                    )
+                    raise ValueError(f"Число эмбеддингов ({len(part)}) не совпадает с размером батча ({len(batch)})")
                 all_embeddings.extend(part)
         return all_embeddings
 

@@ -3,13 +3,21 @@ routes/rag.py - настройки RAG, База Знаний (KB), библио
 """
 
 import os
-from typing import Annotated
-
+from typing import Annotated, Optional
+import asyncio
 import httpx
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 import backend.app_state as state
-from backend.app_state import minio_client, rag_client, rag_models_client, save_app_settings, settings, get_rag_chunk_index_params
+from backend.app_state import (
+    minio_client,
+    rag_client,
+    rag_models_client,
+    save_app_settings,
+    settings,
+    get_library_chunk_index_params,
+    get_rag_chunk_index_params,
+)
 from backend.rag_query.semantic_cache import bump_rag_semantic_cache
 from backend.schemas import RAGSettings, RagModelSelectRequest
 from backend.settings.logging import get_logger
@@ -19,7 +27,7 @@ from backend.settings.service_toggles import require_service
 logger = get_logger(__name__)
 
 router = APIRouter(tags=["rag"])
-_VALID_STRATEGIES = {"auto", "hierarchical", "hybrid", "standard", "lexical", "raw_cosine", "graph"}
+_VALID_STRATEGIES = {"auto", "hierarchical", "hybrid", "vector", "lexical", "raw_cosine", "graph"}
 _VALID_CHUNKING_STRATEGIES = {"hierarchical", "fixed", "markdown", "separators", "semantic"}
 
 
@@ -42,8 +50,8 @@ def _rag_settings_response_dict() -> dict:
         "method_description": {
             "auto": "Автоматический выбор стратегии.",
             "hierarchical": "Иерархический поиск по суммаризациям.",
-            "hybrid": "Гибридный поиск: вектор + BM25.",
-            "standard": "Векторный поиск по semantic similarity.",
+            "hybrid": "Гибридный поиск: вектор + BM25 (weighted RRF по рангам).",
+            "vector": "Чистый поиск по cosine distance без изменения порядка результатов.",
             "lexical": "Лексический поиск BM25 (без семантического расширения).",
             "raw_cosine": "Сырой cosine-поиск (без постобработки).",
             "graph": "Графовый RAG: расширение по связям между чанками.",
@@ -81,6 +89,7 @@ async def get_rag_settings():
 async def reset_rag_settings():
     """Сброс всех настроек RAG из UI к значениям по умолчанию (как после чистой установки)."""
     try:
+        logger.debug("[RAG-CFG] сброс настроек RAG к значениям по умолчанию")
         state.current_rag_strategy = "auto"
         state.agentic_rag_enabled = True
         state.agentic_max_iterations = 2
@@ -126,11 +135,44 @@ async def reset_rag_settings():
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+def _rechunk_on_settings_change() -> bool:
+    v = os.getenv("RAG_RECHUNK_ON_SETTINGS_CHANGE", "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+async def _run_background_rechunk() -> None:
+    """Фоновая перечанкировка project + kb из сохранённого текста (memory/global не трогаем)."""
+    if not rag_client:
+        return
+    params = get_rag_chunk_index_params()
+    cs = params.get("chunk_size")
+    co = params.get("chunk_overlap")
+    strat = params.get("chunking_strategy")
+    logger.info("[RECHUNK] старт: strategy=%s chunk_size=%s overlap=%s", strat, cs, co)
+    try:
+        kb_res = await rag_client.kb_reindex(
+            chunk_size=cs, chunk_overlap=co, chunking_strategy=strat
+        )
+        logger.info("[RECHUNK] kb готово: %s", kb_res)
+    except Exception:
+        logger.exception("[RECHUNK] kb ошибка")
+    try:
+        proj_res = await rag_client.project_rag_reindex_all(
+            chunk_size=cs, chunk_overlap=co, chunking_strategy=strat
+        )
+        logger.info("[RECHUNK] projects готово: %s", proj_res)
+    except Exception:
+        logger.exception("[RECHUNK] projects ошибка")
+    logger.info("[RECHUNK] финиш")
+
+
 @router.put("/api/rag/settings")
 async def update_rag_settings(settings_data: RAGSettings):
     strat = settings_data.strategy
     if strat is not None and strat == "reranking":
         strat = "hybrid"
+    if strat is not None and strat == "standard":
+        # Миграция старых сохранённых настроек; API больше не публикует standard.
+        strat = "vector"
     if strat is not None and strat == "lexical":
         strat = "lexical"
     if strat is not None and strat not in _VALID_STRATEGIES:
@@ -239,9 +281,19 @@ async def update_rag_settings(settings_data: RAGSettings):
             state.rag_reranker_model_path = str(settings_data.rag_reranker_model_path or "").strip()
             updates["rag_reranker_model_path"] = state.rag_reranker_model_path
         if updates:
+            logger.debug("[RAG-CFG] Изменение настроек RAG из UI: %s", updates)
             save_app_settings(updates)
             if "rag_chat_top_k" in updates or "rag_rerank_top_n" in updates:
                 bump_rag_semantic_cache()
+            if _rechunk_on_settings_change() and (
+                "rag_chunking_strategy" in updates
+                or "rag_chunk_size" in updates
+                or "rag_chunk_overlap" in updates
+            ):
+                logger.info(
+                    "[RECHUNK] настройки чанкинга изменились → запуск фоновой перечанкировки"
+                )
+                asyncio.create_task(_run_background_rechunk())
         return {"message": "Настройки RAG обновлены", "success": True, **_rag_settings_response_dict()}
     except HTTPException:
         raise
@@ -331,6 +383,7 @@ async def select_rag_model(body: RagModelSelectRequest):
     model_path = str(body.model_path or "").strip()
     if not model_path:
         raise HTTPException(status_code=400, detail="model_path обязателен")
+    logger.debug("[RAG-CFG] Выбор RAG-модели: type=%s, path=%s", model_type, model_path)
     try:
         result = await rag_models_client.select_model(model_type, model_path)
         updates: dict = {}
@@ -352,7 +405,15 @@ async def select_rag_model(body: RagModelSelectRequest):
 
 
 @router.post("/api/kb/documents")
-async def kb_upload_document(file: Annotated[UploadFile, File(...)]):
+async def kb_upload_document(
+    file: Annotated[UploadFile, File(...)],
+    chunking_strategy: Annotated[Optional[str], Form()] = None,
+):
+    """Загрузка в KB.
+
+    Библиотека (страница KB / memory): без strategy → universal.
+    Агент (конструктор): передаёт chunking_strategy из настроек RAG.
+    """
     require_service("rag")
     if not rag_client:
         raise HTTPException(status_code=503, detail="RAG service недоступен")
@@ -360,7 +421,13 @@ async def kb_upload_document(file: Annotated[UploadFile, File(...)]):
         content = await file.read()
         if not content:
             raise HTTPException(status_code=400, detail="Файл пустой")
-        chunk_params = get_rag_chunk_index_params()
+        strategy = (chunking_strategy or "").strip().lower()
+        if strategy and strategy in _VALID_CHUNKING_STRATEGIES | {"universal"}:
+            chunk_params = get_rag_chunk_index_params()
+            chunk_params["chunking_strategy"] = strategy
+        else:
+            # Библиотека: всегда universal, UI-стратегия не применяется
+            chunk_params = get_library_chunk_index_params()
         out = await rag_client.kb_upload_document(
             file_bytes=content,
             filename=file.filename or "unknown",
@@ -430,7 +497,8 @@ async def memory_rag_upload(file: Annotated[UploadFile, File(...)]):
                 logger.exception("MinIO memory-rag upload")
                 raise HTTPException(status_code=500, detail=f"MinIO: {e}") from e
         try:
-            chunk_params = get_rag_chunk_index_params()
+            # Библиотека памяти: всегда universal chunking
+            chunk_params = get_library_chunk_index_params()
             result = await rag_client.memory_rag_index_document(
                 file_bytes=content,
                 filename=fn,

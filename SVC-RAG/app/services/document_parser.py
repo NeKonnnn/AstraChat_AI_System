@@ -80,7 +80,7 @@ def _create_confidence_info_for_text(text: str, confidence_per_word: float, file
 
 
 async def _call_ocr_service(image_bytes: bytes, filename: str, languages: str = "ru,en") -> Dict[str, Any]:
-    """Вызов OCR (Surya) по URL из config.yml """
+    """Вызов OCR (Surya) по URL из config.yml"""
     settings = get_settings()
     ocr_url = settings.ocr.url.rstrip("/")
     timeout = settings.ocr.timeout
@@ -96,7 +96,9 @@ async def _call_ocr_service(image_bytes: bytes, filename: str, languages: str = 
     try:
         req_timeout = httpx.Timeout(timeout, connect=10.0, read=timeout, write=10.0)
         async with httpx.AsyncClient(timeout=req_timeout) as client:
-            resp = await client.post(f"{ocr_url}/v1/ocr", files=files, data=data, headers={"Accept": "application/json"})
+            resp = await client.post(
+                f"{ocr_url}/v1/ocr", files=files, data=data, headers={"Accept": "application/json"}
+            )
             resp.raise_for_status()
             return resp.json()
     except Exception as e:
@@ -421,7 +423,9 @@ async def extract_text_from_image_bytes(file_data: bytes) -> Dict[str, Any]:
             },
         }
 
-    print(f"Surya OCR успешно извлек {len(text)} символов, {len(words)} слов, средняя уверенность: {avg_confidence:.2f}%")
+    print(
+        f"Surya OCR успешно извлек {len(text)} символов, {len(words)} слов, средняя уверенность: {avg_confidence:.2f}%"
+    )
 
     confidence_info = {
         "confidence": avg_confidence,

@@ -15,10 +15,10 @@ from app.database.project_rag_repository import (
     ProjectRagVectorRepository,
 )
 from app.database.graph_repository import GraphRepository
-from app.services.rag_service import RagService
 from app.services.kb_service import KbService
 from app.services.memory_rag_service import MemoryRagService
 from app.services.project_rag_service import ProjectRagService
+from app.services.rag_service import RagService
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +50,7 @@ async def get_db():
         if not ok:
             raise RuntimeError("Не удалось подключиться к PostgreSQL")
         from app.core.config import get_settings
+
         dim = get_settings().postgresql.embedding_dim
         _doc_repo = DocumentRepository(_pg)
         _vector_repo = VectorRepository(_pg, embedding_dim=dim)
@@ -72,17 +73,6 @@ async def get_db():
     return _pg
 
 
-async def get_rag_service() -> RagService:
-    """RagService с репозиториями и клиентом к RAG-MODELS."""
-    global _rag_service, _rag_client
-    if _rag_service is None:
-        await get_db()
-        if _rag_client is None:
-            _rag_client = RagModelsClient()
-        _rag_service = RagService(_doc_repo, _vector_repo, _rag_client, _graph_repo)
-    return _rag_service
-
-
 async def get_kb_service() -> KbService:
     """KbService для постоянной Базы Знаний."""
     global _kb_service, _rag_client
@@ -94,15 +84,24 @@ async def get_kb_service() -> KbService:
     return _kb_service
 
 
+async def get_rag_service() -> RagService:
+    """RagService для глобальной библиотеки документов и поиска."""
+    global _rag_service, _rag_client
+    if _rag_service is None:
+        await get_db()
+        if _rag_client is None:
+            _rag_client = RagModelsClient()
+        _rag_service = RagService(_doc_repo, _vector_repo, _rag_client, _graph_repo)
+    return _rag_service
+
+
 async def get_memory_rag_service() -> MemoryRagService:
     global _memory_rag_service, _rag_client
     if _memory_rag_service is None:
         await get_db()
         if _rag_client is None:
             _rag_client = RagModelsClient()
-        _memory_rag_service = MemoryRagService(
-            _mem_doc_repo, _mem_vector_repo, _rag_client, _graph_repo
-        )
+        _memory_rag_service = MemoryRagService(_mem_doc_repo, _mem_vector_repo, _rag_client, _graph_repo)
     return _memory_rag_service
 
 
@@ -112,7 +111,5 @@ async def get_project_rag_service() -> ProjectRagService:
         await get_db()
         if _rag_client is None:
             _rag_client = RagModelsClient()
-        _project_rag_service = ProjectRagService(
-            _proj_doc_repo, _proj_vector_repo, _rag_client, _graph_repo
-        )
+        _project_rag_service = ProjectRagService(_proj_doc_repo, _proj_vector_repo, _rag_client, _graph_repo)
     return _project_rag_service

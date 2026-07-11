@@ -47,6 +47,7 @@ async def project_rag_upload(project_id: str, file: Annotated[UploadFile, File(.
                 logger.exception("MinIO загрузка project-rag")
                 raise HTTPException(status_code=500, detail=f"MinIO: {e}") from e
         try:
+            # Project RAG: UI-стратегия чанкования применяется
             chunk_params = get_rag_chunk_index_params()
             result = await rag_client.project_rag_upload_document(
                 file_bytes=content,
