@@ -201,6 +201,72 @@ class ConversationRepository:
             logger.error(f"Ошибка при обновлении сообщения: {e}")
             return False
 
+    async def update_message_feedback(
+        self,
+        conversation_id: str,
+        message_id: str,
+        feedback: Optional[Dict[str, Any]],
+        *,
+        multi_llm_slot_index: Optional[int] = None,
+    ) -> bool:
+        """
+        Сохраняет/очищает feedback (like/dislike) в metadata сообщения.
+        Для multi-LLM — в metadata.multi_llm_responses[slot].feedback.
+        """
+        try:
+            collection = self._get_collection()
+            conversation = await self.get_conversation(conversation_id)
+            if not conversation or not conversation.messages:
+                return False
+
+            msg_index = None
+            for i, msg in enumerate(conversation.messages):
+                if getattr(msg, "message_id", None) == message_id:
+                    msg_index = i
+                    break
+            if msg_index is None:
+                logger.warning(f"Сообщение {message_id} не найдено в диалоге {conversation_id}")
+                return False
+
+            msg = conversation.messages[msg_index]
+            meta = dict(msg.metadata or {})
+
+            if multi_llm_slot_index is not None:
+                slots = list(meta.get("multi_llm_responses") or meta.get("multiLLMResponses") or [])
+                if not isinstance(slots, list) or multi_llm_slot_index < 0 or multi_llm_slot_index >= len(slots):
+                    logger.warning(
+                        "Некорректный multi_llm_slot_index=%s для сообщения %s",
+                        multi_llm_slot_index,
+                        message_id,
+                    )
+                    return False
+                slot = dict(slots[multi_llm_slot_index] or {})
+                if feedback is None:
+                    slot.pop("feedback", None)
+                else:
+                    slot["feedback"] = feedback
+                slots[multi_llm_slot_index] = slot
+                meta["multi_llm_responses"] = slots
+            else:
+                if feedback is None:
+                    meta.pop("feedback", None)
+                else:
+                    meta["feedback"] = feedback
+
+            result = await collection.update_one(
+                {"conversation_id": conversation_id},
+                {
+                    "$set": {
+                        f"messages.{msg_index}.metadata": meta,
+                        "updated_at": datetime.utcnow(),
+                    }
+                },
+            )
+            return result.matched_count > 0
+        except Exception as e:
+            logger.error(f"Ошибка при сохранении feedback сообщения: {e}")
+            return False
+
     async def update_assistant_message(
         self,
         conversation_id: str,

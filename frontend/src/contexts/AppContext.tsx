@@ -5,6 +5,9 @@ import { useAuth } from './AuthContext';
 import { normalizeMcpToolCallList } from '../mcp/utils/normalizeToolCall';
 import { buildBranchChatTitle, cloneMessagesForBranch } from '../utils/branchChat';
 import { mapServerConversationToChat } from '../utils/mapServerConversation';
+import type { MessageFeedback } from '../constants/messageFeedback';
+
+export type { MessageFeedback };
 
 /** Один столбец ответа в режиме multi-LLM (на карточке — свои кнопки и варианты перегенерации). */
 export interface MultiLLMResponseSlot {
@@ -14,6 +17,8 @@ export interface MultiLLMResponseSlot {
   error?: boolean;
   alternativeResponses?: string[];
   currentResponseIndex?: number;
+  /** Лайк/дизлайк для конкретного слота multi-LLM */
+  feedback?: MessageFeedback | null;
 }
 
 // Типы данных
@@ -28,6 +33,8 @@ export interface Message {
   // Для хранения нескольких вариантов ответов (при перегенерации)
   alternativeResponses?: string[];
   currentResponseIndex?: number; // Индекс текущего отображаемого варианта (0-based)
+  /** Лайк/дизлайк ответа ассистента */
+  feedback?: MessageFeedback | null;
   /** Трейс поиска по базе знаний / библиотеке (с бэкенда при «Подключить базу знаний») */
   documentSearch?: {
     query: string;
@@ -202,7 +209,7 @@ type AppAction =
   | { type: 'DELETE_CHAT'; payload: string }
   | { type: 'DELETE_ALL_CHATS' }
   | { type: 'ADD_MESSAGE'; payload: { chatId: string; message: Message } }
-  | { type: 'UPDATE_MESSAGE'; payload: { chatId: string; messageId: string; content?: string; isStreaming?: boolean; multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>; alternativeResponses?: string[]; currentResponseIndex?: number; documentSearch?: Message['documentSearch']; reasoningContent?: string; mcpToolCalls?: Message['mcpToolCalls']; inlineAttachments?: Message['inlineAttachments']; isImageGenerating?: boolean; inlineAttachmentVariants?: Message['inlineAttachmentVariants'] } }
+  | { type: 'UPDATE_MESSAGE'; payload: { chatId: string; messageId: string; content?: string; isStreaming?: boolean; multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean; feedback?: MessageFeedback | null }>; alternativeResponses?: string[]; currentResponseIndex?: number; documentSearch?: Message['documentSearch']; reasoningContent?: string; mcpToolCalls?: Message['mcpToolCalls']; inlineAttachments?: Message['inlineAttachments']; isImageGenerating?: boolean; inlineAttachmentVariants?: Message['inlineAttachmentVariants']; feedback?: MessageFeedback | null } }
   | { type: 'APPEND_CHUNK'; payload: { chatId: string; messageId: string; chunk: string; isStreaming?: boolean } }
   | { type: 'SET_LOADING'; payload: boolean }
   | { type: 'SET_CHAT_LOADING'; payload: { chatId: string; loading: boolean } }
@@ -406,7 +413,7 @@ function appReducer(state: AppState, action: AppAction): AppState {
     }
       
     case 'UPDATE_MESSAGE': {
-      const { chatId, messageId, content, isStreaming, multiLLMResponses, alternativeResponses, currentResponseIndex, documentSearch, reasoningContent, mcpToolCalls, inlineAttachments, isImageGenerating, inlineAttachmentVariants } = action.payload;
+      const { chatId, messageId, content, isStreaming, multiLLMResponses, alternativeResponses, currentResponseIndex, documentSearch, reasoningContent, mcpToolCalls, inlineAttachments, isImageGenerating, inlineAttachmentVariants, feedback } = action.payload;
       
       const currentChat = state.chats.find(chat => chat.id === chatId);
       const updatedMessage = currentChat?.messages.find(msg => msg.id === messageId);
@@ -433,6 +440,7 @@ function appReducer(state: AppState, action: AppAction): AppState {
                         ...(inlineAttachments !== undefined ? { inlineAttachments } : {}),
                         ...(isImageGenerating !== undefined ? { isImageGenerating } : {}),
                         ...(inlineAttachmentVariants !== undefined ? { inlineAttachmentVariants } : {}),
+                        ...(feedback !== undefined ? { feedback } : {}),
                       }
                     : msg
                 ),
@@ -1003,8 +1011,8 @@ export function useAppActions() {
       return messageId;
     },
     
-    updateMessage: (chatId: string, messageId: string, content?: string, isStreaming?: boolean, multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean }>, alternativeResponses?: string[], currentResponseIndex?: number, documentSearch?: Message['documentSearch'], reasoningContent?: string, mcpToolCalls?: Message['mcpToolCalls'], inlineAttachments?: Message['inlineAttachments'], isImageGenerating?: boolean, inlineAttachmentVariants?: Message['inlineAttachmentVariants']) => {
-      dispatch({ type: 'UPDATE_MESSAGE', payload: { chatId, messageId, content, isStreaming, multiLLMResponses, alternativeResponses, currentResponseIndex, documentSearch, reasoningContent, mcpToolCalls, inlineAttachments, isImageGenerating, inlineAttachmentVariants } });
+    updateMessage: (chatId: string, messageId: string, content?: string, isStreaming?: boolean, multiLLMResponses?: Array<{ model: string; content: string; isStreaming?: boolean; error?: boolean; feedback?: MessageFeedback | null }>, alternativeResponses?: string[], currentResponseIndex?: number, documentSearch?: Message['documentSearch'], reasoningContent?: string, mcpToolCalls?: Message['mcpToolCalls'], inlineAttachments?: Message['inlineAttachments'], isImageGenerating?: boolean, inlineAttachmentVariants?: Message['inlineAttachmentVariants'], feedback?: MessageFeedback | null) => {
+      dispatch({ type: 'UPDATE_MESSAGE', payload: { chatId, messageId, content, isStreaming, multiLLMResponses, alternativeResponses, currentResponseIndex, documentSearch, reasoningContent, mcpToolCalls, inlineAttachments, isImageGenerating, inlineAttachmentVariants, feedback } });
     },
     
     appendChunk: (chatId: string, messageId: string, chunk: string, isStreaming?: boolean) => {

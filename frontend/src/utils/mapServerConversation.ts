@@ -1,6 +1,27 @@
 import { getApiUrl } from '../config/api';
-import type { Chat, Message, MultiLLMResponseSlot } from '../contexts/AppContext';
+import type { Chat, Message, MessageFeedback, MultiLLMResponseSlot } from '../contexts/AppContext';
 import { normalizeMcpToolCallList } from '../mcp/utils/normalizeToolCall';
+
+function mapFeedbackFromMeta(raw: unknown): MessageFeedback | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const fb = raw as Record<string, unknown>;
+  const rating = fb.rating === 'like' || fb.rating === 'dislike' ? fb.rating : null;
+  if (!rating) return undefined;
+  const tags = Array.isArray(fb.tags) ? fb.tags.map((t) => String(t)) : [];
+  const comment = typeof fb.comment === 'string' ? fb.comment : undefined;
+  const updatedAt =
+    typeof fb.updated_at === 'string'
+      ? fb.updated_at
+      : typeof fb.updatedAt === 'string'
+        ? fb.updatedAt
+        : undefined;
+  return {
+    rating,
+    ...(tags.length ? { tags } : {}),
+    ...(comment ? { comment } : {}),
+    ...(updatedAt ? { updatedAt } : {}),
+  };
+}
 
 export function mapInlineAttachmentRecords(
   raw: unknown,
@@ -86,6 +107,7 @@ export function mapServerConversationToChat(conversation: any): Chat {
                 : typeof slot.current_response_index === 'number'
                   ? slot.current_response_index
                   : undefined;
+            const slotFeedback = mapFeedbackFromMeta(slot.feedback);
             return {
               model: String(slot.model || 'unknown'),
               content: String(slot.content || ''),
@@ -97,8 +119,11 @@ export function mapServerConversationToChat(conversation: any): Chat {
               ...(typeof currentResponseIndexRaw === 'number'
                 ? { currentResponseIndex: currentResponseIndexRaw }
                 : {}),
+              ...(slotFeedback ? { feedback: slotFeedback } : {}),
             };
           });
+
+        const messageFeedback = mapFeedbackFromMeta(metadata?.feedback);
 
         return {
           id: String(msg?.message_id || `msg_${Math.random().toString(36).slice(2, 14)}`),
@@ -115,6 +140,7 @@ export function mapServerConversationToChat(conversation: any): Chat {
             : {}),
           ...(mcpToolCalls.length ? { mcpToolCalls } : {}),
           ...(multiLLMResponses.length ? { multiLLMResponses } : {}),
+          ...(messageFeedback ? { feedback: messageFeedback } : {}),
         } as Message;
       })
     : [];

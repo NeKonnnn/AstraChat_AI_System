@@ -65,6 +65,7 @@ export const API_ENDPOINTS = {
   
   // Сообщения
   UPDATE_MESSAGE: '/api/messages',
+  MESSAGE_FEEDBACK: '/api/messages',
 
   // Аутентификация (политики — источник правды на backend)
   AUTH_LOGIN_LOCKOUT_POLICY: '/api/auth/login-lockout-policy',

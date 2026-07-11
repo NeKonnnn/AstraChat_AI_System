@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 # Распознавание структурных границ. Порядок важен: от «крупных» разделителей к «мелким».
 _HEADING_PATTERNS: List[re.Pattern] = [
-    re.compile(r"^\s*#{1,6}\s+.+$", re.MULTILINE),           # Markdown-заголовки
+    re.compile(r"^\s*#{1,6}\s+.+$", re.MULTILINE),  # Markdown-заголовки
     re.compile(r"^\s*(?:Глава|Раздел|Часть)\s+\S.+$", re.MULTILINE | re.IGNORECASE),
     re.compile(r"^\s*\d{1,3}(?:\.\d{1,3}){0,4}\s+\S.+$", re.MULTILINE),  # 1.2.3 Заголовок
     re.compile(r"^\s*[IVXLC]{1,6}\.\s+\S.+$", re.MULTILINE),  # Римские цифры: II. Title
@@ -138,7 +138,29 @@ def _make_splitter(chunk_size: int, chunk_overlap: int) -> RecursiveCharacterTex
     )
 
 
-def split_into_chunks_with_meta(text: str) -> List[Tuple[str, Dict[str, Any]]]:
+def resolve_chunk_params(
+    chunk_size: Optional[int] = None,
+    chunk_overlap: Optional[int] = None,
+) -> Tuple[int, int]:
+    """Эффективные chunk_size/chunk_overlap: из запроса или из конфига SVC-RAG."""
+    cfg = get_settings().rag
+    cs = max(200, int(chunk_size)) if chunk_size is not None else max(200, int(getattr(cfg, "chunk_size", 1000)))
+    co = (
+        max(0, int(chunk_overlap))
+        if chunk_overlap is not None
+        else max(0, int(getattr(cfg, "chunk_overlap", 200)))
+    )
+    if co >= cs:
+        co = max(0, cs // 4)
+    return cs, co
+
+
+def split_into_chunks_with_meta(
+    text: str,
+    *,
+    chunk_size: Optional[int] = None,
+    chunk_overlap: Optional[int] = None,
+) -> List[Tuple[str, Dict[str, Any]]]:
     """Возвращает [(chunk_text, metadata)] со связью с разделом.
 
     metadata содержит:
@@ -151,8 +173,7 @@ def split_into_chunks_with_meta(text: str) -> List[Tuple[str, Dict[str, Any]]]:
         return []
 
     cfg = get_settings().rag
-    chunk_size = max(200, int(getattr(cfg, "chunk_size", 1000)))
-    chunk_overlap = max(0, int(getattr(cfg, "chunk_overlap", 200)))
+    chunk_size, chunk_overlap = resolve_chunk_params(chunk_size, chunk_overlap)
     splitter = _make_splitter(chunk_size, chunk_overlap)
 
     # 1. Крупная структура: страницы → заголовки.
@@ -210,11 +231,16 @@ def split_into_chunks_with_meta(text: str) -> List[Tuple[str, Dict[str, Any]]]:
     return out
 
 
-def split_into_chunks(text: str) -> List[str]:
+def split_into_chunks(
+    text: str,
+    *,
+    chunk_size: Optional[int] = None,
+    chunk_overlap: Optional[int] = None,
+) -> List[str]:
     """Обратно совместимый API — только тексты чанков (без metadata).
 
     Внутри используется новый структурный чанкер: заголовки, страницы, таблицы
     распознаются и не дробятся посередине. Если текст простой — поведение близко
     к прежнему ``RecursiveCharacterTextSplitter``.
     """
-    return [t for t, _m in split_into_chunks_with_meta(text)]
+    return [t for t, _m in split_into_chunks_with_meta(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)]

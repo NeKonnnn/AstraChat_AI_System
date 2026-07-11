@@ -8,40 +8,93 @@ import json
 from typing import Dict, List, Optional, Any
 from pathlib import Path
 
+def merge_context_prompt_into_system(
+    system_prompt: Optional[str],
+    model_path: Optional[str] = None,
+    custom_prompt_id: Optional[str] = None,
+    manager: Optional["ContextPromptManager"] = None,
+) -> Optional[str]:
+    """Добавляет глобальный/модельный промпт из Настройки → Модели к системным инструкциям."""
+    mgr = manager or context_prompt_manager
+    context_block = ""
+    if mgr:
+        try:
+            if model_path:
+                context_block = (mgr.get_effective_prompt(model_path, custom_prompt_id) or "").strip()
+            else:
+                context_block = (mgr.get_global_prompt() or "").strip()
+        except Exception:
+            context_block = ""
+
+    extra = (system_prompt or "").strip()
+    if context_block and extra:
+        return f"{context_block}\n\n{extra}"
+    if context_block:
+        return context_block
+    return extra or None
+
+
 class ContextPromptManager:
     """Менеджер контекстных промптов для моделей"""
     
     def __init__(self):
-        # Путь к файлу с контекстными промптами
-        self.prompts_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "context_prompts.json")
-        # Путь к файлу настроек моделей
-        self.settings_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "backend", "settings.json")
+        backend_dir = os.path.dirname(__file__)
+        project_root = os.path.dirname(backend_dir)
+        # Канонический путь — рядом с settings.json; legacy — корень репозитория
+        self.prompts_file = os.path.join(backend_dir, "context_prompts.json")
+        self._legacy_prompts_file = os.path.join(project_root, "context_prompts.json")
+        self.settings_file = os.path.join(backend_dir, "settings.json")
         
         # Загружаем существующие промпты
         self.context_prompts = self.load_context_prompts()
+        self._migrate_legacy_prompts_file()
     
+    def _read_prompts_file(self, file_path: str) -> Optional[Dict[str, Any]]:
+        if not os.path.exists(file_path):
+            return None
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+
+    def _prompts_payload_nonempty(self, data: Optional[Dict[str, Any]]) -> bool:
+        if not data:
+            return False
+        if str(data.get("global_prompt") or "").strip():
+            return True
+        model_prompts = data.get("model_prompts") or {}
+        if isinstance(model_prompts, dict) and any(str(v or "").strip() for v in model_prompts.values()):
+            return True
+        custom_prompts = data.get("custom_prompts") or {}
+        return isinstance(custom_prompts, dict) and len(custom_prompts) > 0
+
+    def _migrate_legacy_prompts_file(self) -> None:
+        """Если промпты лежат только в корне репозитория — переносим в backend/context_prompts.json."""
+        legacy = self._read_prompts_file(self._legacy_prompts_file)
+        if not legacy or not self._prompts_payload_nonempty(legacy):
+            return
+        current = self.context_prompts or {}
+        if self._prompts_payload_nonempty(current):
+            return
+        self.context_prompts = legacy
+        self.save_context_prompts()
+
     def load_context_prompts(self) -> Dict[str, Any]:
         """Загрузка контекстных промптов из файла"""
+        default_prompts = {
+            "global_prompt": "",
+            "model_prompts": {},
+            "custom_prompts": {},
+        }
         try:
-            if os.path.exists(self.prompts_file):
-                with open(self.prompts_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            else:
-                # Создаем файл с базовой структурой
-                default_prompts = {
-                    "global_prompt": "",
-                    "model_prompts": {},
-                    "custom_prompts": {}
-                }
-                self.save_context_prompts(default_prompts)
-                return default_prompts
+            for candidate in (self.prompts_file, self._legacy_prompts_file):
+                data = self._read_prompts_file(candidate)
+                if data is not None:
+                    return data
+            self.save_context_prompts(default_prompts)
+            return default_prompts
         except Exception as e:
             print(f"Ошибка при загрузке контекстных промптов: {e}")
-            return {
-                "global_prompt": "",
-                "model_prompts": {},
-                "custom_prompts": {}
-            }
+            return default_prompts
     
     def save_context_prompts(self, prompts: Optional[Dict[str, Any]] = None) -> bool:
         """Сохранение контекстных промптов в файл"""

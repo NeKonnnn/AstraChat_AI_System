@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
+from backend.context_prompts import merge_context_prompt_into_system
 from backend.mcp.agent_loop import get_mcp_agent_loop
 from backend.mcp.events import McpEventCallback
 from backend.mcp.platform import get_mcp_platform
@@ -118,11 +119,12 @@ async def run_mcp_for_chat(
     ``model`` в ``emit_event`` callback на стороне handler.
     """
     mcp_ctx = build_mcp_context_from_user(user, chat_id=chat_id, message_id=message_id)
+    eff_system_prompt = merge_context_prompt_into_system(system_prompt, model_path=model_path)
     return await maybe_run_mcp_agent(
         tool_ids=tool_ids,
         user_message=user_message,
         history=history,
-        system_prompt=system_prompt,
+        system_prompt=eff_system_prompt,
         model_path=model_path,
         mcp_context=mcp_ctx,
         temperature=temperature,

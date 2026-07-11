@@ -18,6 +18,7 @@ import {
   isValidSelectedModelPath,
   LAST_SELECTED_MODEL_PATH_STORAGE_KEY,
 } from '../utils/modelThinking';
+import { MODEL_PATH_CHANGED_EVENT } from '../utils/contextTokens';
 
 
 interface Model {
@@ -157,6 +158,9 @@ export default function ModelSelector({ isDarkMode, onModelSelect }: ModelSelect
         if (data.success) {
           setSelectedModelPath(modelPath);
           localStorage.setItem(LAST_SELECTED_MODEL_PATH_STORAGE_KEY, modelPath);
+          window.dispatchEvent(
+            new CustomEvent(MODEL_PATH_CHANGED_EVENT, { detail: { path: modelPath } }),
+          );
           await loadCurrentModel();
           showNotification('success', 'Модель успешно загружена!');
           handleClose();

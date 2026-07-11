@@ -5,7 +5,12 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from app.api.rag_common import RagSearchEvalBody, RagSearchFiltersBody, eval_search_kwargs_from_body, filters_body_to_domain
+from app.api.rag_common import (
+    RagSearchEvalBody,
+    RagSearchFiltersBody,
+    eval_search_kwargs_from_body,
+    filters_body_to_domain,
+)
 from app.dependencies import get_project_rag_service
 from app.services.project_rag_service import ProjectRagService
 
@@ -60,6 +65,8 @@ async def project_rag_upload(
     file: UploadFile = File(...),
     minio_object: Optional[str] = Form(None),
     minio_bucket: Optional[str] = Form(None),
+    chunk_size: Optional[int] = Form(None),
+    chunk_overlap: Optional[int] = Form(None),
     svc: ProjectRagService = Depends(get_project_rag_service),
 ):
     """Загрузить документ в RAG-хранилище проекта."""
@@ -75,6 +82,8 @@ async def project_rag_upload(
         project_id=project_id,
         minio_object=minio_object,
         minio_bucket=minio_bucket,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
     )
     if not result.get("ok"):
         raise HTTPException(status_code=422, detail=result.get("error", "Ошибка индексации"))

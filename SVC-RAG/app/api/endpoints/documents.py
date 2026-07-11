@@ -62,6 +62,8 @@ async def index_document(
     minio_object: Optional[str] = Form(None),
     minio_bucket: Optional[str] = Form(None),
     original_path: Optional[str] = Form(None),
+    chunk_size: Optional[int] = Form(None),
+    chunk_overlap: Optional[int] = Form(None),
     rag: RagService = Depends(get_rag_service),
 ):
     """Загрузить файл (PDF, DOCX, XLSX, TXT), распарсить, нарезать чанки, получить эмбеддинги и сохранить в БД.
@@ -85,7 +87,13 @@ async def index_document(
             "path": original_path,
         }
 
-    result = await rag.index_document(data, file.filename, image_meta=image_meta)
+    result = await rag.index_document(
+        data,
+        file.filename,
+        image_meta=image_meta,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+    )
     if not result.get("ok"):
         raise HTTPException(status_code=422, detail=result.get("error", "Ошибка индексации"))
     return IndexResponse(
@@ -100,10 +108,7 @@ async def index_document(
 async def list_documents(rag: RagService = Depends(get_rag_service)):
     """Список проиндексированных документов."""
     docs = await rag.list_documents()
-    return [
-        DocumentItem(id=d["id"], filename=d["filename"], created_at=d.get("created_at"))
-        for d in docs
-    ]
+    return [DocumentItem(id=d["id"], filename=d["filename"], created_at=d.get("created_at")) for d in docs]
 
 
 @router.get("/report/confidence", response_model=ConfidenceReport)
@@ -162,10 +167,7 @@ async def get_document_chunks(
     """Получить первые (или с заданного смещения) чанки документа по порядку. Нужно для запросов про оглавление/структуру."""
     result = await rag.get_document_chunks(document_id, start=start, limit=limit)
     return DocumentChunksResponse(
-        chunks=[
-            DocumentChunkHit(content=c, document_id=doc_id, chunk_index=idx)
-            for c, doc_id, idx in result
-        ]
+        chunks=[DocumentChunkHit(content=c, document_id=doc_id, chunk_index=idx) for c, doc_id, idx in result]
     )
 
 

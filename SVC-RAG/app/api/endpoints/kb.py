@@ -2,10 +2,15 @@
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from app.api.rag_common import RagSearchEvalBody, RagSearchFiltersBody, eval_search_kwargs_from_body, filters_body_to_domain
+from app.api.rag_common import (
+    RagSearchEvalBody,
+    RagSearchFiltersBody,
+    eval_search_kwargs_from_body,
+    filters_body_to_domain,
+)
 from app.dependencies import get_kb_service
 from app.services.kb_service import KbService
 
@@ -55,6 +60,8 @@ class KbSearchResponse(BaseModel):
 @router.post("/documents", response_model=KbIndexResponse)
 async def kb_index_document(
     file: UploadFile = File(...),
+    chunk_size: Optional[int] = Form(None),
+    chunk_overlap: Optional[int] = Form(None),
     kb: KbService = Depends(get_kb_service),
 ):
     """Загрузить документ в постоянную Базу Знаний (PDF, DOCX, XLSX, TXT)."""
@@ -64,7 +71,7 @@ async def kb_index_document(
     if not data:
         raise HTTPException(status_code=400, detail="Файл пустой")
 
-    result = await kb.index_document(data, file.filename)
+    result = await kb.index_document(data, file.filename, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     if not result.get("ok"):
         raise HTTPException(status_code=422, detail=result.get("error", "Ошибка индексации"))
     return KbIndexResponse(

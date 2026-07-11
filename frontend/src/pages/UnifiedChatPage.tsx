@@ -56,7 +56,6 @@ import {
   ChevronRight as ChevronRightIcon,
   Add as AddIcon,
   Share as ShareIcon,
-  CallSplit as BranchIcon,
   AutoStories as KbIcon,
   Check as CheckIcon,
   YouTube as YouTubeIcon,
@@ -89,6 +88,7 @@ import TopErrorBanner from '../components/TopErrorBanner';
 import { logChatAttach, logChatAttachError } from '../utils/chatAttachDebug';
 import InlineAttachmentsList from '../components/InlineAttachmentsList';
 import InlineImageLightbox from '../components/InlineImageLightbox';
+import SplitArrowIcon from '../components/SplitArrowIcon';
 import ImageGenerationPlaceholder from '../components/ImageGenerationPlaceholder';
 import { incrementTabNotification } from '../utils/tabNotifications';
 import ChatGearAgentsPanel from '../components/ChatGearAgentsPanel';
@@ -97,7 +97,11 @@ import VoiceChatDialog from '../components/VoiceChatDialog';
 import AgentConstructorPanel from '../components/AgentConstructorPanel';
 import AgentSelector from '../components/AgentSelector';
 import ChatInputStatusCluster from '../components/ChatInputStatusCluster';
+import ChatContextUsagePopover from '../components/ChatContextUsagePopover';
+import MessageFeedbackBar from '../components/MessageFeedbackBar';
+import type { MessageFeedback } from '../constants/messageFeedback';
 import { useMyAgentSelection, useOrchestratorAgentsAnyActive } from '../hooks/useChatInputAgentIndicators';
+import { useChatContextUsage } from '../hooks/useChatContextUsage';
 import { useChatInputMcpIndicators } from '../mcp/hooks/useChatInputMcpIndicators';
 import { useMcpStreamingTools } from '../mcp/hooks/useMcpStreamingTools';
 import McpToolCallsPanel from '../mcp/components/McpToolCallsPanel';
@@ -324,6 +328,15 @@ interface MessageCardData {
   handleRegenerate: (message: Message) => void;
   handleEditMultiLlmColumn: (message: Message, slotIndex: number) => void;
   handleRegenerateMultiLlmColumn: (message: Message, slotIndex: number) => void;
+  handleMessageFeedback: (
+    message: Message,
+    payload: {
+      rating: 'like' | 'dislike' | null;
+      tags?: string[];
+      comment?: string;
+      multiLlmSlotIndex?: number;
+    },
+  ) => void | Promise<void>;
   synthesizeSpeech: (text: string) => void;
   handleEnterShareMode: () => void;
   handleBranchToNewChat: (message: Message, multiLlmSlotIndex?: number) => void;
@@ -342,6 +355,7 @@ interface MessageCardData {
     inlineAttachments?: Message['inlineAttachments'],
     isImageGenerating?: boolean,
     inlineAttachmentVariants?: Message['inlineAttachmentVariants'],
+    feedback?: MessageFeedback | null,
   ) => void;
   formatTimestamp: (ts: string) => string;
   currentChatId: string | undefined;
@@ -1030,6 +1044,34 @@ const MessageCardComponent = ({
                           </IconButton>
                         </span>
                       </Tooltip>
+                      {!response.error && !response.isStreaming ? (
+                        <MessageFeedbackBar
+                          feedback={response.feedback}
+                          disabled={Boolean(message.isStreaming)}
+                          isDarkMode={isDarkMode}
+                          compact
+                          onLike={() =>
+                            dataRef.current.handleMessageFeedback(message, {
+                              rating: 'like',
+                              multiLlmSlotIndex: respIndex,
+                            })
+                          }
+                          onDislikeSubmit={({ tags, comment }: { tags: string[]; comment: string }) =>
+                            dataRef.current.handleMessageFeedback(message, {
+                              rating: 'dislike',
+                              tags,
+                              comment,
+                              multiLlmSlotIndex: respIndex,
+                            })
+                          }
+                          onClear={() =>
+                            dataRef.current.handleMessageFeedback(message, {
+                              rating: null,
+                              multiLlmSlotIndex: respIndex,
+                            })
+                          }
+                        />
+                      ) : null}
                       <Tooltip title="Прочесть вслух">
                         <IconButton
                           size="small"
@@ -1061,7 +1103,7 @@ const MessageCardComponent = ({
                                 disabled={Boolean(response.isStreaming)}
                                 sx={multiLlmActionIconSx}
                               >
-                                <BranchIcon />
+                                <SplitArrowIcon />
                               </IconButton>
                             </span>
                           </Tooltip>
@@ -1268,6 +1310,27 @@ const MessageCardComponent = ({
             </Tooltip>
           )}
 
+          {!isUser && !message.isStreaming && (
+            <MessageFeedbackBar
+              feedback={message.feedback}
+              disabled={Boolean(message.isStreaming)}
+              isDarkMode={isDarkMode}
+              onLike={() =>
+                dataRef.current.handleMessageFeedback(message, { rating: 'like' })
+              }
+              onDislikeSubmit={({ tags, comment }: { tags: string[]; comment: string }) =>
+                dataRef.current.handleMessageFeedback(message, {
+                  rating: 'dislike',
+                  tags,
+                  comment,
+                })
+              }
+              onClear={() =>
+                dataRef.current.handleMessageFeedback(message, { rating: null })
+              }
+            />
+          )}
+
           <Tooltip title="Прочесть вслух">
             <IconButton
               size="small"
@@ -1322,7 +1385,7 @@ const MessageCardComponent = ({
                       '&:disabled': { opacity: 0.4 },
                       '& .MuiSvgIcon-root': { fontSize: '18px !important', width: '18px !important', height: '18px !important' } }}
                   >
-                    <BranchIcon />
+                    <SplitArrowIcon />
                   </IconButton>
                 </span>
               </Tooltip>
@@ -1779,6 +1842,46 @@ export default function UnifiedChatPage({
     [modelWindows],
   );
   const multiLlmInputBlocked = isMultiLlmMode && !multiLlmHasSelection;
+  const multiLlmSelectedPaths = useMemo(
+    () => modelWindows.map((w) => w.selectedModel).filter(Boolean),
+    [modelWindows],
+  );
+  const chatContextUsage = useChatContextUsage({
+    messages,
+    draftText: inputMessage,
+    inlineAttachments,
+    availableModels,
+    configuredContextSize: state.modelSettings.context_size,
+    configuredOutputTokens: state.modelSettings.output_tokens,
+    loadedModelCtx: state.currentModel?.n_ctx,
+    isMultiLlmMode,
+    multiLlmModelPaths: multiLlmSelectedPaths,
+    chatId: state.currentChatId,
+    useKbRag,
+    projectInstructions: project?.instructions ?? null,
+  });
+  const chatContextModelLabel = useMemo(() => {
+    if (isMultiLlmMode && multiLlmSelectedPaths.length > 0) {
+      if (multiLlmSelectedPaths.length === 1) {
+        const row = availableModels.find((m) => m.path === multiLlmSelectedPaths[0]);
+        return row?.display_name || row?.name || multiLlmSelectedPaths[0];
+      }
+      return `${multiLlmSelectedPaths.length} модели (мин. лимит)`;
+    }
+    const path = localStorage.getItem(LAST_SELECTED_MODEL_PATH_STORAGE_KEY) || '';
+    const row = availableModels.find((m) => m.path === path);
+    return row?.display_name || row?.name || (path ? path.split('/').pop() : null);
+  }, [isMultiLlmMode, multiLlmSelectedPaths, availableModels]);
+  const chatContextCounter = useMemo(
+    () => (
+      <ChatContextUsagePopover
+        usage={chatContextUsage}
+        isDarkMode={isDarkMode}
+        modelLabel={chatContextModelLabel}
+      />
+    ),
+    [chatContextUsage, isDarkMode, chatContextModelLabel],
+  );
   const chatAwaitingTokens =
     currentChatLoading && !hasActiveChatStreaming && !hasRunningMcpTools;
   /** Плейсхолдер поля ввода: без dev-текста про порт 8000; при активной генерации — обычная подсказка (кнопка стоп и так видна). */
@@ -2589,6 +2692,111 @@ export default function UnifiedChatPage({
     setEditDialogOpen(true);
   };
 
+  const handleMessageFeedback = useCallback(
+    async (
+      message: Message,
+      payload: {
+        rating: 'like' | 'dislike' | null;
+        tags?: string[];
+        comment?: string;
+        multiLlmSlotIndex?: number;
+      },
+    ): Promise<void> => {
+      if (!currentChat?.id || message.role !== 'assistant') return;
+
+      const authToken = token || localStorage.getItem('auth_token') || localStorage.getItem('token');
+      if (!authToken) {
+        showNotification('error', 'Нужна авторизация, чтобы отправить отзыв');
+        return;
+      }
+
+      const body: Record<string, unknown> = {
+        rating: payload.rating,
+        tags: payload.rating === 'dislike' ? payload.tags || [] : [],
+        comment: payload.rating === 'dislike' ? payload.comment || '' : '',
+      };
+      if (typeof payload.multiLlmSlotIndex === 'number') {
+        body.multi_llm_slot_index = payload.multiLlmSlotIndex;
+      }
+
+      try {
+        const response = await fetch(
+          getApiUrl(`${API_ENDPOINTS.MESSAGE_FEEDBACK}/${currentChat.id}/${message.id}/feedback`),
+          {
+            method: 'PUT',
+            headers: {
+              Authorization: `Bearer ${authToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(body),
+          },
+        );
+
+        if (!response.ok) {
+          let detail = 'Не удалось сохранить отзыв';
+          try {
+            const errData = await response.json();
+            if (errData?.detail) detail = String(errData.detail);
+          } catch {
+            /* ignore */
+          }
+          showNotification('error', detail);
+          return;
+        }
+
+        const resData = await response.json();
+        const saved = resData?.feedback as
+          | { rating?: string; tags?: string[]; comment?: string; updated_at?: string }
+          | null
+          | undefined;
+
+        const nextFeedback: MessageFeedback | null =
+          saved && (saved.rating === 'like' || saved.rating === 'dislike')
+            ? {
+                rating: saved.rating,
+                tags: Array.isArray(saved.tags) ? saved.tags.map(String) : [],
+                comment: typeof saved.comment === 'string' ? saved.comment : undefined,
+                updatedAt: typeof saved.updated_at === 'string' ? saved.updated_at : undefined,
+              }
+            : null;
+
+        if (typeof payload.multiLlmSlotIndex === 'number' && message.multiLLMResponses) {
+          const idx = payload.multiLlmSlotIndex;
+          const newCols = message.multiLLMResponses.map((slot, i) =>
+            i === idx ? { ...slot, feedback: nextFeedback } : slot,
+          );
+          updateMessage(currentChat.id, message.id, undefined, false, newCols);
+        } else {
+          updateMessage(
+            currentChat.id,
+            message.id,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            nextFeedback,
+          );
+        }
+
+        if (payload.rating === 'like') {
+          showNotification('success', 'Спасибо! Отметили как хороший ответ');
+        } else if (payload.rating === 'dislike') {
+          showNotification('success', 'Спасибо за отзыв — учтём в следующих ответах');
+        }
+      } catch {
+        showNotification('error', 'Не удалось сохранить отзыв');
+      }
+    },
+    [currentChat?.id, token, showNotification, updateMessage],
+  );
+
   // Функция для сохранения отредактированного сообщения
   const handleSaveEdit = async (): Promise<void> => {
     if (!editingMessage || !currentChat || !editText.trim()) {
@@ -3378,6 +3586,7 @@ export default function UnifiedChatPage({
     handleRegenerate,
     handleEditMultiLlmColumn,
     handleRegenerateMultiLlmColumn,
+    handleMessageFeedback,
     synthesizeSpeech,
     handleEnterShareMode,
     handleBranchToNewChat,
@@ -4163,6 +4372,7 @@ export default function UnifiedChatPage({
                            libraryBadge={libraryInputBadge}
                            inputSuggestions={mcpInputSuggestions}
                            extraActions={multiLlmSettingsExtraAction}
+                           contextCounter={chatContextCounter}
                          />
                        </Box>
                      ) : null}
@@ -4212,6 +4422,7 @@ export default function UnifiedChatPage({
                libraryBadge={libraryInputBadge}
                inputSuggestions={mcpInputSuggestions}
                extraActions={multiLlmSettingsExtraAction}
+               contextCounter={chatContextCounter}
              />
            </>
            ) : null}

@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 def _tokenize_ru_en(text: str) -> List[str]:
     """Простая токенизация для BM25: по пробелам и пунктуации."""
     import re
+
     text = (text or "").lower()
     return re.findall(r"\b\w+\b", text)
 
@@ -58,7 +59,7 @@ class RagService:
         self.graph_repo = graph_repo
         self.graph_enabled: bool = bool(getattr(cfg, "enable_graph_rag", True))
 
-        # BM25 / гибридный поиск 
+        # BM25 / гибридный поиск
         self.use_hybrid_search: bool = cfg.use_hybrid_search
         self.hybrid_bm25_weight: float = cfg.hybrid_bm25_weight
         self.bm25_index: Optional[BM25Okapi] = None
@@ -71,6 +72,7 @@ class RagService:
         self._optimized_index: Optional[OptimizedDocumentIndex] = None
         if cfg.use_hierarchical_indexing:
             llm_cfg = get_settings().llm_service
+
             async def _llm_summarize(prompt: str) -> str:
                 try:
                     async with httpx.AsyncClient(timeout=llm_cfg.timeout) as client:
@@ -111,9 +113,7 @@ class RagService:
         try:
             await self._build_bm25_index()
             self._bm25_needs_rebuild = False
-            logger.info(
-                "[SVC-RAG] warm_up: BM25-индекс готов (chunks=%d)", len(self.bm25_texts)
-            )
+            logger.info("[SVC-RAG] warm_up: BM25-индекс готов (chunks=%d)", len(self.bm25_texts))
         except Exception as e:
             logger.warning("[SVC-RAG] warm_up: BM25 не построен: %s", e)
 
@@ -136,6 +136,9 @@ class RagService:
         file_data: bytes,
         filename: str,
         image_meta: Optional[Dict[str, Any]] = None,
+        *,
+        chunk_size: Optional[int] = None,
+        chunk_overlap: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Парсим файл, режем на чанки, получаем эмбеддинги из SVC-RAG-MODELS, пишем в БД.
 
@@ -173,11 +176,18 @@ class RagService:
         )
 
         if use_hierarchical:
-            hierarchical_doc = await self._summarizer.create_hierarchical_summary_async(
-                text,
-                filename,
-                create_full_summary=self._cfg.create_full_summary_via_llm,
-            )
+            summarizer_restore = None
+            if self._summarizer is not None and (chunk_size is not None or chunk_overlap is not None):
+                summarizer_restore = self._summarizer.apply_chunk_params(chunk_size, chunk_overlap)
+            try:
+                hierarchical_doc = await self._summarizer.create_hierarchical_summary_async(
+                    text,
+                    filename,
+                    create_full_summary=self._cfg.create_full_summary_via_llm,
+                )
+            finally:
+                if summarizer_restore is not None and self._summarizer is not None:
+                    self._summarizer.restore_chunk_params(summarizer_restore)
             meta: Dict[str, Any] = {
                 "chunks_count": hierarchical_doc["metadata"]["total_chunks"],
                 "source": "svc-rag",
@@ -214,7 +224,7 @@ class RagService:
                 "chunks_count": hierarchical_doc["metadata"]["total_chunks"],
             }
 
-        chunks_with_meta = split_into_chunks_with_meta(text)
+        chunks_with_meta = split_into_chunks_with_meta(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
         if not chunks_with_meta:
             return {"ok": False, "error": "После разбиения чанков не осталось", "document_id": None}
         chunks = [c for c, _m in chunks_with_meta]
@@ -308,6 +318,7 @@ class RagService:
         - "standard" - векторный поиск с постобработкой качества (без BM25/rerank).
         - "raw_cosine" - сырой векторный поиск (pgvector cosine) без постобработки.
         - "graph" - seed retrieval + расширение по графу связей чанков.
+        - "lexical" - только BM25 (без векторного поиска и без rerank).
         Также поддерживается "flat" как синоним "standard".
 
         Возвращает список (content, score, document_id, chunk_index), где score - комбинированный
@@ -445,9 +456,7 @@ class RagService:
             return final_lexical
 
         cfg_rerank_enabled = self._cfg.use_reranking
-        use_rerank = effective_use_reranking(
-            use_reranking, cfg_rerank_enabled, rerank_key, query_text=q_text
-        )
+        use_rerank = effective_use_reranking(use_reranking, cfg_rerank_enabled, rerank_key, query_text=q_text)
 
         # Как в KB/project/memory: широкий пул из pgvector + диверсификация по document_id.
         # Иначе при rerank_top_k=20 весь пул забивают чанки 1–2 больших DOCX, а PDF (напр. CV) не попадает в реранк.
@@ -571,7 +580,8 @@ class RagService:
             if filename_doc_ids:
                 logger.info(
                     "[global] filename_anchor: %s → document_ids=%s",
-                    filename_mentions, filename_doc_ids,
+                    filename_mentions,
+                    filename_doc_ids,
                 )
 
         # Имена файлов в запросе → включаем режим enumeration (широкий пул, без диверсификации).
@@ -624,7 +634,8 @@ class RagService:
                     if ilike_hits:
                         logger.info(
                             "[global] entity_lane ILIKE(raw): %s → %d чанков",
-                            lookup_tokens, len(ilike_hits),
+                            lookup_tokens,
+                            len(ilike_hits),
                         )
                 except Exception as e:
                     logger.warning("entity_ilike_raw(global) failed: %s", e)
@@ -632,9 +643,8 @@ class RagService:
             # (3) Entity-in-filename: имена героев часто зашиты в имя файла
             # («..._Некрасов_СК0050629.pdf»). Если у документа имя совпадает
             # с extracted entity — тянем первые 4 чанка как entity-хиты.
-            if (
-                hasattr(self.doc_repo, "find_document_ids_by_filename")
-                and hasattr(self.vector_repo, "get_vectors_by_document")
+            if hasattr(self.doc_repo, "find_document_ids_by_filename") and hasattr(
+                self.vector_repo, "get_vectors_by_document"
             ):
                 filename_probe = [t for t in entity_tokens if len(t) >= 4 and not t.isdigit()]
                 matched_docs: set = set()
@@ -657,9 +667,7 @@ class RagService:
                             continue
                         if not chunks:
                             continue
-                        chunks_sorted = sorted(
-                            chunks, key=lambda d: int(getattr(d, "chunk_index", 0) or 0)
-                        )
+                        chunks_sorted = sorted(chunks, key=lambda d: int(getattr(d, "chunk_index", 0) or 0))
                         for dv in chunks_sorted[:4]:
                             key = (dv.document_id, dv.chunk_index)
                             if key in existing:
@@ -670,7 +678,9 @@ class RagService:
                     if added:
                         logger.info(
                             "[global] entity_lane filename-match: %s → docs %s → +%d chunks",
-                            entity_tokens, matched_docs_list, added,
+                            entity_tokens,
+                            matched_docs_list,
+                            added,
                         )
 
             entity_keys = {(dv.document_id, dv.chunk_index) for dv, _ in entity_hits}
@@ -721,15 +731,11 @@ class RagService:
         # у CV останется только чанк с «Газпромбанк», а «МФТИ» и «Тинькофф»
         # из соседних чанков потеряются, даже если документ попал в entity-hits.
         entity_anchor_docs_preview = {
-            v.document_id for v, _ in pairs
+            v.document_id
+            for v, _ in pairs
             if (v.document_id, v.chunk_index) in entity_keys and v.document_id is not None
         }
-        if (
-            document_id is None
-            and pairs
-            and not enumeration
-            and should_diversify_hits(pairs)
-        ):
+        if document_id is None and pairs and not enumeration and should_diversify_hits(pairs):
             pool_div = max(int(self._cfg.rerank_top_k or 20), k * 6, 56)
             pairs = diversify_hits_by_document(
                 pairs,
@@ -796,13 +802,9 @@ class RagService:
             # Средний score entity-чанков — используем как базу для siblings
             # entity-anchor документов (чтобы сиблинги разделов типа «Тинькофф»
             # не тонули в финальной сортировке).
-            entity_scores_global = [
-                float(sc) for v, sc in pairs
-                if (v.document_id, v.chunk_index) in entity_keys
-            ]
+            entity_scores_global = [float(sc) for v, sc in pairs if (v.document_id, v.chunk_index) in entity_keys]
             avg_entity_score_global = (
-                sum(entity_scores_global) / len(entity_scores_global)
-                if entity_scores_global else 0.1
+                sum(entity_scores_global) / len(entity_scores_global) if entity_scores_global else 0.1
             )
             entity_sib_score = max(avg_entity_score_global * 0.7, base_sib_score)
 
@@ -849,7 +851,8 @@ class RagService:
                 if not doc_chunks:
                     continue
                 entity_chunk_indices = {
-                    int(getattr(v, "chunk_index", 0) or 0) for v in doc_chunks
+                    int(getattr(v, "chunk_index", 0) or 0)
+                    for v in doc_chunks
                     if (v.document_id, v.chunk_index) in entity_keys
                 }
 
@@ -890,8 +893,7 @@ class RagService:
                     taken += 1
             if sibling_rows_by_key:
                 logger.info(
-                    "[global] parent-expansion: +%s sibling-чанков "
-                    "(pin_whole=%s, entity_anchor=%s, enum_anchor=%s)",
+                    "[global] parent-expansion: +%s sibling-чанков " "(pin_whole=%s, entity_anchor=%s, enum_anchor=%s)",
                     len(sibling_rows_by_key),
                     sorted(list(pin_whole_doc_ids)),
                     sorted(list(entity_anchor_doc_ids)),
@@ -916,7 +918,9 @@ class RagService:
         sibling_keys_global = set(sibling_rows_by_key.keys())
         entity_and_sibling_keys = entity_keys | sibling_keys_global
 
-        def _cut_with_entity_pin(rows: List[Tuple[str, float, Optional[int], Optional[int]]]) -> List[Tuple[str, float, Optional[int], Optional[int]]]:
+        def _cut_with_entity_pin(
+            rows: List[Tuple[str, float, Optional[int], Optional[int]]],
+        ) -> List[Tuple[str, float, Optional[int], Optional[int]]]:
             """Срезает до ``final_limit`` и пиннит anchor-чанки с учётом cap'ов:
 
               * filename-anchor документ — до ``filename_whole_cap`` чанков целиком;
@@ -973,11 +977,7 @@ class RagService:
                 _, sc, d_id, c_idx = row
                 ci = int(c_idx or 0)
                 key = (d_id, c_idx)
-                is_head = (
-                    ci == 0
-                    and d_id is not None
-                    and d_id in (entity_anchor_doc_ids | enum_anchor_doc_ids)
-                )
+                is_head = ci == 0 and d_id is not None and d_id in (entity_anchor_doc_ids | enum_anchor_doc_ids)
                 if is_head:
                     group = 0
                 elif key in entity_keys:
@@ -1067,7 +1067,9 @@ class RagService:
 
         out_pairs_all = [(v.content, score, v.document_id, v.chunk_index) for v, score in pairs]
         out_pairs = _cut_with_entity_pin(out_pairs_all)
-        logger.info("[SVC-RAG] search store=global done hits=%s (final order без rerank или после сбоя rerank)", len(out_pairs))
+        logger.info(
+            "[SVC-RAG] search store=global done hits=%s (final order без rerank или после сбоя rerank)", len(out_pairs)
+        )
         final_pairs = await self._finalize_hit_rows(out_pairs, used_rerank=False)
         await log_retrieval_with_eval(
             store="global (глобальные документы)",
@@ -1085,7 +1087,7 @@ class RagService:
         return final_pairs
 
     async def _build_bm25_index(self) -> None:
-        """Построение BM25 индекса из всех документов """
+        """Построение BM25 индекса из всех документов"""
         if not self.use_hybrid_search:
             return
 
@@ -1271,9 +1273,7 @@ class RagService:
             return []
 
         seed_pairs = [
-            (v.document_id, v.chunk_index)
-            for v, _ in pairs[: min(12, len(pairs))]
-            if v.document_id is not None
+            (v.document_id, v.chunk_index) for v, _ in pairs[: min(12, len(pairs))] if v.document_id is not None
         ]
         seed_chunk_indexes = [p[1] for p in seed_pairs]
         graph_scores: Dict[Tuple[int, int], float] = {}
@@ -1477,9 +1477,7 @@ class RagService:
             # Средняя уверенность по документу
             doc_avg_confidence = float(info.get("confidence", 0.0))
             if words:
-                doc_avg_confidence = (
-                    sum(float(w.get("confidence", 0.0)) for w in words) / len(words)
-                )
+                doc_avg_confidence = sum(float(w.get("confidence", 0.0)) for w in words) / len(words)
 
             documents_info.append(
                 {
@@ -1501,15 +1499,11 @@ class RagService:
 
             total_confidence += doc_avg_confidence
             if words:
-                total_weighted_confidence += sum(
-                    float(w.get("confidence", 0.0)) for w in words
-                )
+                total_weighted_confidence += sum(float(w.get("confidence", 0.0)) for w in words)
                 total_words += len(words)
 
         avg_confidence = total_confidence / len(documents_info) if documents_info else 0.0
-        overall_confidence = (
-            total_weighted_confidence / total_words if total_words > 0 else avg_confidence
-        )
+        overall_confidence = total_weighted_confidence / total_words if total_words > 0 else avg_confidence
 
         return {
             "total_documents": len(documents_info),

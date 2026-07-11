@@ -44,7 +44,7 @@ import AgentArchitectureSettings from '../components/AgentArchitectureSettings';
 import MemoryRagLibraryModal from '../components/MemoryRagLibraryModal';
 
 // Backend URL
-import { getApiUrl } from '../config/api';
+import { getApiUrl, getAuthFetchHeaders } from '../config/api';
 import {
   isKnowledgeRagEnabled,
   setKnowledgeRagEnabled,
@@ -164,15 +164,16 @@ export default function SettingsPage() {
   // Функции для работы с контекстными промптами
   const loadContextPrompts = async () => {
     try {
+      const authHeaders = getAuthFetchHeaders();
       // Загружаем глобальный промпт
-      const globalResponse = await fetch(getApiUrl('/api/context-prompts/global'));
+      const globalResponse = await fetch(getApiUrl('/api/context-prompts/global'), { headers: authHeaders });
       if (globalResponse.ok) {
         const globalData = await globalResponse.json();
         setContextPrompts(prev => ({ ...prev, globalPrompt: globalData.prompt }));
       }
 
       // Загружаем модели с промптами
-      const modelsResponse = await fetch(getApiUrl('/api/context-prompts/models'));
+      const modelsResponse = await fetch(getApiUrl('/api/context-prompts/models'), { headers: authHeaders });
       if (modelsResponse.ok) {
         const modelsData = await modelsResponse.json();
         setModelsWithPrompts(modelsData.models || []);
@@ -188,7 +189,7 @@ export default function SettingsPage() {
       }
 
       // Загружаем пользовательские промпты
-      const customResponse = await fetch(getApiUrl('/api/context-prompts/custom'));
+      const customResponse = await fetch(getApiUrl('/api/context-prompts/custom'), { headers: authHeaders });
       if (customResponse.ok) {
         const customData = await customResponse.json();
         setContextPrompts(prev => ({ ...prev, customPrompts: customData.prompts || {} }));
@@ -203,17 +204,17 @@ export default function SettingsPage() {
     try {
       const response = await fetch(getApiUrl('/api/context-prompts/global'), {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt })
+        headers: getAuthFetchHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ prompt }),
       });
       
       if (response.ok) {
         setContextPrompts(prev => ({ ...prev, globalPrompt: prompt }));
         showNotification('success', 'Глобальный промпт сохранен');
         return true;
-      } else {
-        throw new Error('Ошибка сохранения глобального промпта');
       }
+      const detail = await response.text();
+      throw new Error(detail || `HTTP ${response.status}`);
     } catch (error) {
       console.error('Ошибка сохранения глобального промпта:', error);
       showNotification('error', 'Ошибка сохранения глобального промпта');
@@ -225,8 +226,8 @@ export default function SettingsPage() {
     try {
       const response = await fetch(getApiUrl(`/api/context-prompts/model/${encodeURIComponent(modelPath)}`), {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt })
+        headers: getAuthFetchHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ prompt }),
       });
       
       if (response.ok) {
@@ -236,9 +237,9 @@ export default function SettingsPage() {
         }));
         showNotification('success', 'Промпт модели сохранен');
         return true;
-      } else {
-        throw new Error('Ошибка сохранения промпта модели');
       }
+      const detail = await response.text();
+      throw new Error(detail || `HTTP ${response.status}`);
     } catch (error) {
       console.error('Ошибка сохранения промпта модели:', error);
       showNotification('error', 'Ошибка сохранения промпта модели');

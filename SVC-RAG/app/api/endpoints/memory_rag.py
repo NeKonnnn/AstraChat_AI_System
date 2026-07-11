@@ -5,7 +5,12 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from app.api.rag_common import RagSearchEvalBody, RagSearchFiltersBody, eval_search_kwargs_from_body, filters_body_to_domain
+from app.api.rag_common import (
+    RagSearchEvalBody,
+    RagSearchFiltersBody,
+    eval_search_kwargs_from_body,
+    filters_body_to_domain,
+)
 from app.dependencies import get_memory_rag_service
 from app.services.memory_rag_service import MemoryRagService
 
@@ -57,6 +62,8 @@ async def index_memory_rag_document(
     file: UploadFile = File(...),
     minio_object: Optional[str] = Form(None),
     minio_bucket: Optional[str] = Form(None),
+    chunk_size: Optional[int] = Form(None),
+    chunk_overlap: Optional[int] = Form(None),
     svc: MemoryRagService = Depends(get_memory_rag_service),
 ):
     if not file.filename:
@@ -70,6 +77,8 @@ async def index_memory_rag_document(
         file.filename,
         minio_object=minio_object,
         minio_bucket=minio_bucket,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
     )
     if not result.get("ok"):
         raise HTTPException(status_code=422, detail=result.get("error", "Ошибка индексации"))

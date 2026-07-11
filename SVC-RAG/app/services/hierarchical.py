@@ -34,6 +34,34 @@ class DocumentSummarizer:
             separators=["\n\n", "\n", ". ", " ", ""],
         )
 
+    def apply_chunk_params(
+        self,
+        chunk_size: Optional[int] = None,
+        chunk_overlap: Optional[int] = None,
+    ) -> Optional[tuple]:
+        """Временно переопределить размер чанка для одной индексации."""
+        if chunk_size is None and chunk_overlap is None:
+            return None
+        cs = max(200, int(chunk_size)) if chunk_size is not None else self.max_chunk_size
+        co = max(0, int(chunk_overlap)) if chunk_overlap is not None else self.chunk_overlap
+        if co >= cs:
+            co = max(0, cs // 4)
+        backup = (self.max_chunk_size, self.chunk_overlap, self.text_splitter)
+        self.max_chunk_size = cs
+        self.chunk_overlap = co
+        self.text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=cs,
+            chunk_overlap=co,
+            length_function=len,
+            separators=["\n\n", "\n", ". ", " ", ""],
+        )
+        return backup
+
+    def restore_chunk_params(self, backup: Optional[tuple]) -> None:
+        if not backup:
+            return
+        self.max_chunk_size, self.chunk_overlap, self.text_splitter = backup
+
     async def create_hierarchical_summary_async(
         self,
         text: str,
@@ -45,8 +73,7 @@ class DocumentSummarizer:
             chunks = [text] if text else [f"[Документ: {doc_name}]"]
 
         level_0_chunks = [
-            {"content": chunk, "chunk_index": i, "level": 0, "doc_name": doc_name}
-            for i, chunk in enumerate(chunks)
+            {"content": chunk, "chunk_index": i, "level": 0, "doc_name": doc_name} for i, chunk in enumerate(chunks)
         ]
 
         level_1_summaries = []
@@ -56,13 +83,15 @@ class DocumentSummarizer:
             combined_text = "\n\n".join([c["content"] for c in batch])
             chunk_range = f"чанки {batch[0]['chunk_index']}-{batch[-1]['chunk_index']}"
             content = f"[РАЗДЕЛ ДОКУМЕНТА '{doc_name}' ({chunk_range})]\n\n{combined_text[:3000]}..."
-            level_1_summaries.append({
-                "content": content,
-                "summary_index": len(level_1_summaries),
-                "level": 1,
-                "chunk_range": (batch[0]["chunk_index"], batch[-1]["chunk_index"]),
-                "doc_name": doc_name,
-            })
+            level_1_summaries.append(
+                {
+                    "content": content,
+                    "summary_index": len(level_1_summaries),
+                    "level": 1,
+                    "chunk_range": (batch[0]["chunk_index"], batch[-1]["chunk_index"]),
+                    "doc_name": doc_name,
+                }
+            )
 
         level_2_summary = ""
         if create_full_summary and self.llm_function:
@@ -97,6 +126,7 @@ class DocumentSummarizer:
                 fn = self.llm_function
                 if hasattr(fn, "__call__"):
                     import asyncio
+
                     if asyncio.iscoroutinefunction(fn):
                         level_2_summary = await fn(prompt)
                     else:
@@ -109,9 +139,7 @@ class DocumentSummarizer:
                 logger.warning("Ошибка LLM суммаризации: %s", e)
                 level_2_summary = f"[КРАТКОЕ СОДЕРЖАНИЕ '{doc_name}']\n\n" + text[:2000] + "..."
         else:
-            level_2_summary = (
-                f"[ДОКУМЕНТ '{doc_name}' - {len(text)} символов, {len(chunks)} чанков]\n\n" + text[:2000]
-            )
+            level_2_summary = f"[ДОКУМЕНТ '{doc_name}' - {len(text)} символов, {len(chunks)} чанков]\n\n" + text[:2000]
 
         return {
             "full_text": text,
@@ -148,33 +176,39 @@ class OptimizedDocumentIndex:
             vectors_to_save: List[Dict[str, Any]] = []
 
             level_2_summary = hierarchical_doc["level_2_summary"]
-            vectors_to_save.append({
-                "content": level_2_summary,
-                "chunk_index": -1,
-                "metadata": {"level": 2, "doc_name": doc_name, "type": "full_summary", "source": doc_name},
-            })
+            vectors_to_save.append(
+                {
+                    "content": level_2_summary,
+                    "chunk_index": -1,
+                    "metadata": {"level": 2, "doc_name": doc_name, "type": "full_summary", "source": doc_name},
+                }
+            )
 
             for summary in hierarchical_doc["level_1_summaries"]:
-                vectors_to_save.append({
-                    "content": summary["content"],
-                    "chunk_index": -2 - summary["summary_index"],
-                    "metadata": {
-                        "level": 1,
-                        "doc_name": doc_name,
-                        "summary_index": summary["summary_index"],
-                        "chunk_range": summary["chunk_range"],
-                        "type": "intermediate_summary",
-                        "source": doc_name,
-                    },
-                })
+                vectors_to_save.append(
+                    {
+                        "content": summary["content"],
+                        "chunk_index": -2 - summary["summary_index"],
+                        "metadata": {
+                            "level": 1,
+                            "doc_name": doc_name,
+                            "summary_index": summary["summary_index"],
+                            "chunk_range": summary["chunk_range"],
+                            "type": "intermediate_summary",
+                            "source": doc_name,
+                        },
+                    }
+                )
 
             level_0_chunks = hierarchical_doc["level_0_chunks"]
             for chunk in level_0_chunks:
-                vectors_to_save.append({
-                    "content": chunk["content"],
-                    "chunk_index": chunk["chunk_index"],
-                    "metadata": {"level": 0, "doc_name": doc_name, "type": "detail_chunk", "source": doc_name},
-                })
+                vectors_to_save.append(
+                    {
+                        "content": chunk["content"],
+                        "chunk_index": chunk["chunk_index"],
+                        "metadata": {"level": 0, "doc_name": doc_name, "type": "detail_chunk", "source": doc_name},
+                    }
+                )
 
             texts = [v["content"] if len(v["content"]) <= 10000 else v["content"][:10000] for v in vectors_to_save]
             embeddings = await self.rag_client.embed(texts)
@@ -209,8 +243,14 @@ class OptimizedDocumentIndex:
         if search_strategy == "auto":
             query_lower = query.lower()
             summary_keywords = [
-                "саммари", "summary", "краткое содержание", "обзор", "резюме",
-                "о чем документ", "основная тема", "содержание документа",
+                "саммари",
+                "summary",
+                "краткое содержание",
+                "обзор",
+                "резюме",
+                "о чем документ",
+                "основная тема",
+                "содержание документа",
             ]
             if any(kw in query_lower for kw in summary_keywords):
                 search_strategy = "summary"
@@ -242,7 +282,4 @@ class OptimizedDocumentIndex:
             detail_only = [(v, s) for v, s in pairs if v.metadata.get("type", "") == "detail_chunk"]
             all_results = detail_only if detail_only else pairs
 
-        return [
-            (v.content, float(score), v.document_id, v.chunk_index)
-            for v, score in all_results[:k]
-        ]
+        return [(v.content, float(score), v.document_id, v.chunk_index) for v, score in all_results[:k]]

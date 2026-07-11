@@ -36,6 +36,9 @@ class MemoryRagService:
         filename: str,
         minio_object: Optional[str] = None,
         minio_bucket: Optional[str] = None,
+        *,
+        chunk_size: Optional[int] = None,
+        chunk_overlap: Optional[int] = None,
     ) -> Dict[str, Any]:
         parsed = await parse_document(file_data, filename)
         if not parsed:
@@ -72,7 +75,7 @@ class MemoryRagService:
         if doc_id is None:
             return {"ok": False, "error": "Ошибка сохранения документа в БД", "document_id": None}
 
-        chunks_with_meta = split_into_chunks_with_meta(text)
+        chunks_with_meta = split_into_chunks_with_meta(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
         if not chunks_with_meta:
             await self.doc_repo.delete_document(doc_id)
             return {"ok": False, "error": "Не удалось нарезать чанки", "document_id": None}
@@ -109,9 +112,7 @@ class MemoryRagService:
                 )
             except Exception as e:
                 logger.warning("memory graph индекс не собран для документа %s: %s", doc_id, e)
-        logger.info(
-            "memory_rag: проиндексирован '%s' (id=%s), %s чанков", filename, doc_id, created
-        )
+        logger.info("memory_rag: проиндексирован '%s' (id=%s), %s чанков", filename, doc_id, created)
         return {
             "ok": True,
             "document_id": doc_id,
@@ -155,9 +156,7 @@ class MemoryRagService:
             )
 
         async def _substring(tokens, lim):
-            return await self.vector_repo.substring_search(
-                tokens, limit=lim, document_id=document_id
-            )
+            return await self.vector_repo.substring_search(tokens, limit=lim, document_id=document_id)
 
         async def _fetch_doc(doc_id: int):
             return await self.vector_repo.get_vectors_by_document(doc_id)

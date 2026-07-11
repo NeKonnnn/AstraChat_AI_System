@@ -2,9 +2,9 @@
 schemas.py - Pydantic-модели запросов/ответов
 """
 
-from typing import List, Optional
+from typing import List, Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ChatMessage(BaseModel):
@@ -15,6 +15,23 @@ class ChatMessage(BaseModel):
     model: Optional[str] = None
     conversation_id: Optional[str] = None
     message_id: Optional[str] = None
+
+
+class MessageFeedbackRequest(BaseModel):
+    """Лайк / дизлайк ответа ассистента."""
+
+    rating: Optional[Literal["like", "dislike"]] = None
+    tags: Optional[List[str]] = Field(default_factory=list)
+    comment: Optional[str] = None
+    multi_llm_slot_index: Optional[int] = None
+
+
+class ContextBreakdownRequest(BaseModel):
+    model_path: Optional[str] = None
+    agent_id: Optional[int] = None
+    use_kb_rag: bool = False
+    tool_ids: Optional[List[str]] = None
+    project_instructions: Optional[str] = None
 
 
 class ModelSettings(BaseModel):

@@ -39,7 +39,8 @@ from backend.realtime.rag_evidence import (
     maybe_rag_no_evidence_message,
     rag_guard_env,
 )
-from backend.schemas import ChatMessage
+from backend.schemas import ChatMessage, ContextBreakdownRequest, MessageFeedbackRequest
+from backend.services.context_breakdown import build_context_overhead
 from backend.settings.cef_logger.cef_logger import log_cef_event
 from backend.settings.logging import get_logger
 from backend.settings.logging.errors import logged_suppress
@@ -66,6 +67,28 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+@router.post("/api/chat/context-breakdown")
+async def chat_context_breakdown(
+    body: ContextBreakdownRequest,
+    current_user: Annotated[dict, Depends(get_current_user)],
+):
+    """Оценка сегментов контекста (системные промпты, RAG, MCP) для UI-счётчика."""
+    try:
+        payload = await build_context_overhead(
+            model_path=body.model_path,
+            project_instructions=body.project_instructions,
+            agent_id=body.agent_id,
+            use_kb_rag=body.use_kb_rag,
+            tool_ids=body.tool_ids,
+            user=current_user,
+        )
+        payload["success"] = True
+        return payload
+    except Exception as e:
+        logger.exception("context-breakdown error")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 @router.post("/api/chat")
 async def chat_with_ai(
     request: Request, message: ChatMessage, current_user: Annotated[dict, Depends(get_current_user)]
@@ -81,9 +104,21 @@ async def chat_with_ai(
         history = (
             await get_recent_dialog_history(max_entries=state.memory_max_messages) if get_recent_dialog_history else []
         )
+        from backend.services.user_feedback_context import (
+            build_user_feedback_system_block,
+            merge_feedback_into_system_prompt,
+        )
+
+        feedback_block = await build_user_feedback_system_block(
+            current_user.get("user_id"),
+            conversation_id=message.conversation_id,
+        )
         orchestrator = get_agent_orchestrator()
         use_agent_mode = orchestrator and orchestrator.get_mode() == "agent"
         if use_agent_mode:
+            agent_message = message.message
+            if feedback_block:
+                agent_message = f"{feedback_block}\n\n{message.message}"
             _terminal_chat_inference_banner(
                 sid="HTTP-POST-/api/chat",
                 conversation_id=None,
@@ -91,7 +126,7 @@ async def chat_with_ai(
                 mode_label="REST /api/chat — оркестратор агентов",
             )
             response = await orchestrator.process_message(
-                message.message,
+                agent_message,
                 context={
                     "history": history,
                     "user_message": message.message,
@@ -100,6 +135,7 @@ async def chat_with_ai(
                     "current_user": current_user,
                     "conversation_id": message.conversation_id,
                     "message_id": message.message_id,
+                    "user_feedback_block": feedback_block,
                 },
             )
         else:
@@ -110,6 +146,7 @@ async def chat_with_ai(
             response = None
             tool_ids = message.tool_ids or message.mcp_tool_ids or []
             current_model_path = message.model or get_current_model_path()
+            rest_system_prompt = merge_feedback_into_system_prompt(None, feedback_block)
             if tool_ids:
                 try:
                     from backend.mcp.chat_integration import run_mcp_for_chat
@@ -118,7 +155,7 @@ async def chat_with_ai(
                         tool_ids=tool_ids,
                         user_message=message.message,
                         history=history,
-                        system_prompt=None,
+                        system_prompt=rest_system_prompt,
                         model_path=current_model_path,
                         user=current_user,
                         chat_id=message.conversation_id,
@@ -560,6 +597,88 @@ async def update_message(conversation_id: str, message_id: str, request: dict):
         raise
     except Exception as e:
         logger.exception("Ошибка операции")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.put("/api/messages/{conversation_id}/{message_id}/feedback")
+async def upsert_message_feedback(
+    conversation_id: str,
+    message_id: str,
+    body: MessageFeedbackRequest,
+    current_user: Annotated[dict, Depends(get_current_user)],
+):
+    """Сохранить или сбросить лайк/дизлайк ответа ассистента."""
+    try:
+        from backend.app_state import get_conversation_repository
+
+        repo = get_conversation_repository()
+        if repo is None:
+            raise HTTPException(status_code=503, detail="MongoDB repository не доступен")
+
+        conversation = await repo.get_conversation(conversation_id)
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Диалог не найден")
+        if getattr(conversation, "user_id", None) and conversation.user_id != current_user.get("user_id"):
+            raise HTTPException(status_code=403, detail="Нет доступа к этому диалогу")
+
+        msg = next(
+            (m for m in (conversation.messages or []) if getattr(m, "message_id", None) == message_id),
+            None,
+        )
+        if not msg:
+            raise HTTPException(status_code=404, detail="Сообщение не найдено")
+        if getattr(msg, "role", None) != "assistant":
+            raise HTTPException(status_code=400, detail="Оценку можно ставить только ответам ассистента")
+
+        allowed_tags = {
+            "did_not_follow_instructions",
+            "dislike_style",
+            "inaccurate",
+            "too_verbose",
+            "too_short",
+            "irrelevant",
+            "biased",
+            "safety_or_legal",
+            "other",
+        }
+        rating = body.rating
+        if rating is None:
+            feedback_payload = None
+        else:
+            raw_tags = [t for t in (body.tags or []) if t in allowed_tags]
+            comment = (body.comment or "").strip()
+            if len(comment) > 2000:
+                comment = comment[:2000]
+            if rating == "dislike" and not raw_tags and not comment:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Для дизлайка укажите причину (тег) или комментарий",
+                )
+            feedback_payload = {
+                "rating": rating,
+                "tags": raw_tags if rating == "dislike" else [],
+                "comment": comment,
+                "user_id": current_user.get("user_id"),
+                "updated_at": datetime.now().isoformat(),
+            }
+
+        success = await repo.update_message_feedback(
+            conversation_id,
+            message_id,
+            feedback_payload,
+            multi_llm_slot_index=body.multi_llm_slot_index,
+        )
+        if not success:
+            raise HTTPException(status_code=404, detail="Не удалось сохранить отзыв")
+        return {
+            "success": True,
+            "feedback": feedback_payload,
+            "timestamp": datetime.now().isoformat(),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Ошибка сохранения feedback")
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 

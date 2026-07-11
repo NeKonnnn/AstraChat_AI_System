@@ -99,6 +99,9 @@ export interface ChatInputBarProps {
   /** Подсказки над полем ввода (MCP chips и т.п.) */
   inputSuggestions?: React.ReactNode;
 
+  /** Счётчик контекста (справа над кнопками отправки) */
+  contextCounter?: React.ReactNode;
+
   /** 'compact' — текущий пилюльный стиль (по умолчанию);
    *  'classic' — прямоугольник с тулбаром кнопок снизу */
   styleVariant?: 'compact' | 'classic';
@@ -162,6 +165,7 @@ export default function ChatInputBar({
   extraActions,
   libraryBadge,
   inputSuggestions,
+  contextCounter,
   styleVariant = 'compact',
   solidWorkZoneBackground = false,
   toolsMenuAnchorRef,
@@ -733,6 +737,16 @@ export default function ChatInputBar({
     </Tooltip>
   ) : null;
 
+  const rightActions = (
+    <>
+      {isDictating ? null : reportBtn}
+      {isDictating ? null : stopOrSendBtn}
+      {contextCounter}
+      {isDictating ? null : voiceBtn}
+      {dictationBtn}
+    </>
+  );
+
   const dictationPanel = isDictating ? (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minHeight: 42, width: '100%' }}>
       <IconButton
@@ -995,12 +1009,9 @@ export default function ChatInputBar({
             {extraActions}
           </Box>
 
-          {/* Правая группа: отчёт, отправить/стоп, голос */}
+          {/* Правая группа: отчёт, отправить/стоп, контекст, голос */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
-            {isDictating ? null : reportBtn}
-            {isDictating ? null : stopOrSendBtn}
-            {isDictating ? null : voiceBtn}
-            {dictationBtn}
+            {rightActions}
           </Box>
         </Box>
       </Box>
@@ -1087,10 +1098,7 @@ export default function ChatInputBar({
               {extraActions}
             </Box>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
-              {reportBtn}
-              {stopOrSendBtn}
-              {voiceBtn}
-              {dictationBtn}
+              {rightActions}
             </Box>
           </Box>
         ) : (
@@ -1102,10 +1110,7 @@ export default function ChatInputBar({
               {extraActions}
             </Box>
             <Box sx={{ order: 2, display: 'flex', alignItems: 'center', gap: 0.25 }}>
-              {reportBtn}
-              {stopOrSendBtn}
-              {voiceBtn}
-              {dictationBtn}
+              {rightActions}
             </Box>
           </>
         )}

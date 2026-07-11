@@ -31,7 +31,7 @@ from config import get_path
 try:
     from backend.config import get_path
     MODEL_PATH = get_path("model_path")
-    from backend.context_prompts import context_prompt_manager
+    from backend.context_prompts import context_prompt_manager, merge_context_prompt_into_system
     from backend.llm_client import (
         ask_agent_llm_svc,
         get_llm_service,
@@ -41,7 +41,7 @@ try:
 except ImportError:
     from config import get_path
     MODEL_PATH = get_path("model_path")
-    from context_prompts import context_prompt_manager
+    from context_prompts import context_prompt_manager, merge_context_prompt_into_system
     from llm_client import (
         ask_agent_llm_svc,
         get_llm_service,
@@ -431,12 +431,9 @@ def get_model_info():
 
 def prepare_prompt(text, system_prompt=None, history=None, model_path=None, custom_prompt_id=None):
     """Подготовка промпта в правильном формате с поддержкой истории диалога и контекстных промптов"""
-    if system_prompt is None:
-        # Используем контекстный промпт для модели, если доступен
-        if model_path:
-            system_prompt = context_prompt_manager.get_effective_prompt(model_path, custom_prompt_id)
-        else:
-            system_prompt = context_prompt_manager.get_global_prompt()
+    system_prompt = merge_context_prompt_into_system(
+        system_prompt, model_path=model_path, custom_prompt_id=custom_prompt_id
+    )
     
     # Базовый шаблон для чата
     prompt_parts = []
@@ -488,6 +485,9 @@ def ask_agent(
 
     eff_max_tokens = max_tokens or (model_settings.get("output_tokens") if model_settings else 1024)
     eff_temperature = float(temperature if temperature is not None else (model_settings.get("temperature") or 0.7))
+    eff_system_prompt = merge_context_prompt_into_system(
+        system_prompt, model_path=model_path, custom_prompt_id=custom_prompt_id
+    )
 
     if not should_use_llm_svc_direct(model_path=model_path, images=images):
         try:
@@ -501,7 +501,7 @@ def ask_agent(
                 stream_callback=stream_callback,
                 max_tokens=eff_max_tokens,
                 temperature=eff_temperature,
-                system_prompt=system_prompt,
+                system_prompt=eff_system_prompt,
                 enable_thinking=bool(enable_thinking),
             )
             if registry_response_usable(registry_response):
@@ -530,7 +530,7 @@ def ask_agent(
                 model_path=model_path,
                 custom_prompt_id=custom_prompt_id,
                 images=images,
-                system_prompt=system_prompt,
+                system_prompt=eff_system_prompt,
                 temperature=temperature,
                 enable_thinking=enable_thinking,
             )

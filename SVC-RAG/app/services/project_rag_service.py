@@ -40,6 +40,9 @@ class ProjectRagService:
         project_id: str,
         minio_object: Optional[str] = None,
         minio_bucket: Optional[str] = None,
+        *,
+        chunk_size: Optional[int] = None,
+        chunk_overlap: Optional[int] = None,
     ) -> Dict[str, Any]:
         parsed = await parse_document(file_data, filename)
         if not parsed:
@@ -76,7 +79,7 @@ class ProjectRagService:
         if doc_id is None:
             return {"ok": False, "error": "Ошибка сохранения документа в БД", "document_id": None}
 
-        chunks_with_meta = split_into_chunks_with_meta(text)
+        chunks_with_meta = split_into_chunks_with_meta(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
         if not chunks_with_meta:
             await self.doc_repo.delete_document(doc_id)
             return {"ok": False, "error": "Не удалось нарезать чанки", "document_id": None}
@@ -115,7 +118,10 @@ class ProjectRagService:
                 logger.warning("project graph индекс не собран для документа %s: %s", doc_id, e)
         logger.info(
             "project_rag: проиндексирован '%s' (project=%s, id=%s), %s чанков",
-            filename, project_id, doc_id, created,
+            filename,
+            project_id,
+            doc_id,
+            created,
         )
         return {
             "ok": True,
@@ -178,9 +184,7 @@ class ProjectRagService:
             # В проектных RAG запросы всегда скоупятся к project_id —
             # иначе саммари по одному файлу могло бы «склеиваться» с тем же
             # именем из другого проекта.
-            return await self.doc_repo.find_document_ids_by_filename(
-                name, project_id=project_id
-            )
+            return await self.doc_repo.find_document_ids_by_filename(name, project_id=project_id)
 
         hits, trace = await run_retrieval_pipeline(
             store="project",
@@ -260,7 +264,8 @@ class ProjectRagService:
         deleted_count = await self.doc_repo.delete_documents_by_project(project_id)
         logger.info(
             "project_rag: удалено %s документов для project_id=%s",
-            deleted_count, project_id,
+            deleted_count,
+            project_id,
         )
         return {
             "ok": True,
