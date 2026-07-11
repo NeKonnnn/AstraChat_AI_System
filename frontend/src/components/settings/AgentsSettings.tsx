@@ -34,7 +34,7 @@ import {
   ExpandLess as ExpandLessIcon,
   HelpOutline as HelpOutlineIcon,
 } from '@mui/icons-material';
-import { getApiUrl } from '../../config/api';
+import { getApiUrl, getAuthFetchHeaders } from '../../config/api';
 import {
   MENU_ICON_MIN_WIDTH,
   MENU_ICON_TO_TEXT_GAP_PX,
@@ -262,14 +262,14 @@ export default function AgentsSettings({ onOpenMcpSettings }: AgentsSettingsProp
       if (next) {
         const mr = await fetch(getApiUrl('/api/agent/mode'), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getAuthFetchHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ mode: 'agent' }),
         });
         if (!mr.ok) throw new Error((await mr.text()) || 'Не удалось включить агентный режим');
       }
       const ar = await fetch(getApiUrl(`/api/agent/agents/${encodeURIComponent(agentId)}/status`), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthFetchHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ is_active: next }),
       });
       if (!ar.ok) throw new Error((await ar.text()) || 'Не удалось изменить статус агента');

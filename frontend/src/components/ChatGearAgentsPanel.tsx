@@ -3,7 +3,6 @@ import {
   Box,
   Typography,
   Switch,
-  FormControlLabel,
   CircularProgress,
   IconButton,
   Collapse,
@@ -23,7 +22,7 @@ import {
   ExpandMore as ExpandMoreIcon,
   HelpOutline as HelpOutlineIcon,
 } from '@mui/icons-material';
-import { getApiUrl } from '../config/api';
+import { getApiUrl, getAuthFetchHeaders } from '../config/api';
 import { useAppActions } from '../contexts/AppContext';
 import {
   getDropdownItemSx,
@@ -207,14 +206,14 @@ export default function ChatGearAgentsPanel({ isDarkMode, canUseAgents }: ChatGe
         if (next) {
           const mr = await fetch(getApiUrl('/api/agent/mode'), {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getAuthFetchHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ mode: 'agent' }),
           });
           if (!mr.ok) throw new Error((await mr.text()) || 'Режим агента');
         }
         const ar = await fetch(getApiUrl(`/api/agent/agents/${encodeURIComponent(agentId)}/status`), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getAuthFetchHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ is_active: next }),
         });
         if (!ar.ok) throw new Error((await ar.text()) || 'Статус агента');
@@ -541,18 +540,13 @@ export default function ChatGearAgentsPanel({ isDarkMode, canUseAgents }: ChatGe
                           }}
                         />
                       </Box>
-                      <FormControlLabel
+                      <Switch
+                        size="small"
+                        checked={agent.is_active}
                         onClick={(e) => e.stopPropagation()}
-                        control={
-                          <Switch
-                            size="small"
-                            checked={agent.is_active}
-                            onChange={(_e, checked) => void applyAgentStatus(aid, checked)}
-                            color="primary"
-                          />
-                        }
-                        label=""
-                        sx={{ m: 0, flexShrink: 0 }}
+                        onChange={(_e, checked) => void applyAgentStatus(aid, checked)}
+                        color="primary"
+                        sx={{ flexShrink: 0, m: 0 }}
                       />
                     </Box>
                     <Collapse in={expanded}>
