@@ -39,11 +39,12 @@ import {
   MENU_ICON_MIN_WIDTH,
   MENU_ICON_TO_TEXT_GAP_PX,
   MENU_ICON_FONT_SIZE_PX,
-  DROPDOWN_TRIGGER_BUTTON_SX,
-  DROPDOWN_CHEVRON_SX,
   getDropdownPopoverPaperSx,
   getDropdownItemSx,
-  DROPDOWN_ITEM_HOVER_BG,
+  getDropdownTriggerButtonSx,
+  getDropdownTriggerTextSx,
+  getDropdownChevronSx,
+  getDropdownItemStateSx,
 } from '../../constants/menuStyles';
 
 
@@ -102,7 +103,11 @@ interface LangGraphStatus {
 
 export default function AgentsSettings({ onOpenMcpSettings }: AgentsSettingsProps) {
   const theme = useTheme();
-  const dropdownItemSx = useMemo(() => getDropdownItemSx(theme.palette.mode === 'dark'), [theme.palette.mode]);
+  const isDarkMode = theme.palette.mode === 'dark';
+  const dropdownItemSx = useMemo(() => getDropdownItemSx(isDarkMode), [isDarkMode]);
+  const dropdownTriggerSx = useMemo(() => getDropdownTriggerButtonSx(isDarkMode), [isDarkMode]);
+  const dropdownTriggerTextSx = useMemo(() => getDropdownTriggerTextSx(isDarkMode), [isDarkMode]);
+  const dropdownChevronSx = useMemo(() => getDropdownChevronSx(isDarkMode), [isDarkMode]);
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
   const [availableAgents, setAvailableAgents] = useState<Agent[]>([]);
   const [mcpStatus, setMcpStatus] = useState<MCPStatus | null>(null);
@@ -489,15 +494,15 @@ export default function AgentsSettings({ onOpenMcpSettings }: AgentsSettingsProp
                     <Box
                       onClick={(e) => !isLoading && setModePopoverAnchor(e.currentTarget)}
                       sx={{
-                        ...DROPDOWN_TRIGGER_BUTTON_SX,
+                        ...dropdownTriggerSx,
                         opacity: isLoading ? 0.7 : 1,
                         pointerEvents: isLoading ? 'none' : 'auto',
                       }}
                     >
-                      <Typography sx={{ color: 'white', fontWeight: 500, fontSize: '0.875rem' }}>
+                      <Typography sx={dropdownTriggerTextSx}>
                         {getModeLabel(agentStatus.mode as AgentMode)}
                       </Typography>
-                      <ExpandMoreIcon sx={{ ...DROPDOWN_CHEVRON_SX, transform: modePopoverAnchor ? 'rotate(180deg)' : 'none' }} />
+                      <ExpandMoreIcon sx={{ ...dropdownChevronSx, transform: modePopoverAnchor ? 'rotate(180deg)' : 'none' }} />
                     </Box>
                     <Popover
                       open={Boolean(modePopoverAnchor)}
@@ -505,7 +510,7 @@ export default function AgentsSettings({ onOpenMcpSettings }: AgentsSettingsProp
                       onClose={() => setModePopoverAnchor(null)}
                       anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
                       transformOrigin={{ vertical: 'top', horizontal: 'left' }}
-                      slotProps={{ paper: { sx: getDropdownPopoverPaperSx(modePopoverAnchor) } }}
+                      slotProps={{ paper: { sx: getDropdownPopoverPaperSx(modePopoverAnchor, isDarkMode) } }}
                     >
                       <Box sx={{ py: 0.5 }}>
                         {(['direct', 'agent'] as const).map((mode) => (
@@ -514,9 +519,7 @@ export default function AgentsSettings({ onOpenMcpSettings }: AgentsSettingsProp
                             onClick={() => { switchMode(mode); setModePopoverAnchor(null); }}
                             sx={{
                               ...dropdownItemSx,
-                              color: agentStatus.mode === mode ? 'white' : 'rgba(255,255,255,0.9)',
-                              fontWeight: agentStatus.mode === mode ? 600 : 400,
-                              bgcolor: agentStatus.mode === mode ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
+                              ...getDropdownItemStateSx(isDarkMode, agentStatus.mode === mode),
                             }}
                           >
                             {getModeLabel(mode)}

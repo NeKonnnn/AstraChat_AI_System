@@ -25,11 +25,12 @@ import {
   ExpandMore as ExpandMoreIcon,
 } from '@mui/icons-material';
 import {
-  DROPDOWN_TRIGGER_BUTTON_SX,
-  DROPDOWN_CHEVRON_SX,
   getDropdownPopoverPaperSx,
   getDropdownItemSx,
-  DROPDOWN_ITEM_HOVER_BG,
+  getDropdownTriggerButtonSx,
+  getDropdownTriggerTextSx,
+  getDropdownChevronSx,
+  getDropdownItemStateSx,
 } from '../../constants/menuStyles';
 import { useAppActions } from '../../contexts/AppContext';
 import { getApiUrl } from '../../config/api';
@@ -39,7 +40,11 @@ type Language = 'ru' | 'en' | 'auto';
 
 export default function TranscriptionSettings() {
   const theme = useTheme();
-  const dropdownItemSx = useMemo(() => getDropdownItemSx(theme.palette.mode === 'dark'), [theme.palette.mode]);
+  const isDarkMode = theme.palette.mode === 'dark';
+  const dropdownItemSx = useMemo(() => getDropdownItemSx(isDarkMode), [isDarkMode]);
+  const dropdownTriggerSx = useMemo(() => getDropdownTriggerButtonSx(isDarkMode), [isDarkMode]);
+  const dropdownTriggerTextSx = useMemo(() => getDropdownTriggerTextSx(isDarkMode), [isDarkMode]);
+  const dropdownChevronSx = useMemo(() => getDropdownChevronSx(isDarkMode), [isDarkMode]);
   const [transcriptionSettings, setTranscriptionSettings] = useState({
     engine: 'whisperx' as Engine,
     language: 'ru' as Language,
@@ -188,15 +193,15 @@ export default function TranscriptionSettings() {
                 <Box
                   onClick={(e) => !isLoading && setEnginePopoverAnchor(e.currentTarget)}
                   sx={{
-                    ...DROPDOWN_TRIGGER_BUTTON_SX,
+                    ...dropdownTriggerSx,
                     opacity: isLoading ? 0.7 : 1,
                     pointerEvents: isLoading ? 'none' : 'auto',
                   }}
                 >
-                  <Typography sx={{ color: 'white', fontWeight: 500, fontSize: '0.875rem' }}>
+                  <Typography sx={dropdownTriggerTextSx}>
                     WhisperX
                   </Typography>
-                  <ExpandMoreIcon sx={{ ...DROPDOWN_CHEVRON_SX, transform: enginePopoverAnchor ? 'rotate(180deg)' : 'none' }} />
+                  <ExpandMoreIcon sx={{ ...dropdownChevronSx, transform: enginePopoverAnchor ? 'rotate(180deg)' : 'none' }} />
                 </Box>
                 <Popover
                   open={Boolean(enginePopoverAnchor)}
@@ -204,7 +209,7 @@ export default function TranscriptionSettings() {
                   onClose={() => setEnginePopoverAnchor(null)}
                   anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
                   transformOrigin={{ vertical: 'top', horizontal: 'left' }}
-                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(enginePopoverAnchor) } }}
+                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(enginePopoverAnchor, isDarkMode) } }}
                 >
                   <Box sx={{ py: 0.5 }}>
                     {(['whisperx'] as const).map((engine) => (
@@ -213,9 +218,7 @@ export default function TranscriptionSettings() {
                         onClick={() => { handleSettingChange('engine', engine); setEnginePopoverAnchor(null); }}
                         sx={{
                           ...dropdownItemSx,
-                          color: transcriptionSettings.engine === engine ? 'white' : 'rgba(255,255,255,0.9)',
-                          fontWeight: transcriptionSettings.engine === engine ? 600 : 400,
-                          bgcolor: transcriptionSettings.engine === engine ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
+                          ...getDropdownItemStateSx(isDarkMode, transcriptionSettings.engine === engine),
                         }}
                       >
                         WhisperX
@@ -269,15 +272,15 @@ export default function TranscriptionSettings() {
                 <Box
                   onClick={(e) => !isLoading && setLanguagePopoverAnchor(e.currentTarget)}
                   sx={{
-                    ...DROPDOWN_TRIGGER_BUTTON_SX,
+                    ...dropdownTriggerSx,
                     opacity: isLoading ? 0.7 : 1,
                     pointerEvents: isLoading ? 'none' : 'auto',
                   }}
                 >
-                  <Typography sx={{ color: 'white', fontWeight: 500, fontSize: '0.875rem' }}>
+                  <Typography sx={dropdownTriggerTextSx}>
                     {transcriptionSettings.language === 'ru' ? 'Русский' : transcriptionSettings.language === 'en' ? 'English' : 'Автоопределение'}
                   </Typography>
-                  <ExpandMoreIcon sx={{ ...DROPDOWN_CHEVRON_SX, transform: languagePopoverAnchor ? 'rotate(180deg)' : 'none' }} />
+                  <ExpandMoreIcon sx={{ ...dropdownChevronSx, transform: languagePopoverAnchor ? 'rotate(180deg)' : 'none' }} />
                 </Box>
                 <Popover
                   open={Boolean(languagePopoverAnchor)}
@@ -285,7 +288,7 @@ export default function TranscriptionSettings() {
                   onClose={() => setLanguagePopoverAnchor(null)}
                   anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
                   transformOrigin={{ vertical: 'top', horizontal: 'left' }}
-                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(languagePopoverAnchor) } }}
+                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(languagePopoverAnchor, isDarkMode) } }}
                 >
                   <Box sx={{ py: 0.5 }}>
                     {(['ru', 'en', 'auto'] as const).map((lang) => (
@@ -294,9 +297,7 @@ export default function TranscriptionSettings() {
                         onClick={() => { handleSettingChange('language', lang); setLanguagePopoverAnchor(null); }}
                         sx={{
                           ...dropdownItemSx,
-                          color: transcriptionSettings.language === lang ? 'white' : 'rgba(255,255,255,0.9)',
-                          fontWeight: transcriptionSettings.language === lang ? 600 : 400,
-                          bgcolor: transcriptionSettings.language === lang ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
+                          ...getDropdownItemStateSx(isDarkMode, transcriptionSettings.language === lang),
                         }}
                       >
                         {lang === 'ru' ? 'Русский' : lang === 'en' ? 'English' : 'Автоопределение'}

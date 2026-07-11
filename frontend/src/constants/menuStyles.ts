@@ -438,6 +438,62 @@ export const DROPDOWN_CHEVRON_SX = {
   transition: 'transform 0.2s',
 };
 
+/** Кнопка-триггер выпадающего списка с учётом темы (настройки, светлая/тёмная схема). */
+export function getDropdownTriggerButtonSx(isDarkMode: boolean): Record<string, unknown> {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    px: 1.5,
+    py: 1,
+    borderRadius: '10px',
+    bgcolor: isDarkMode ? DROPDOWN_TRIGGER_BG : 'rgba(0,0,0,0.04)',
+    border: isDarkMode ? DROPDOWN_TRIGGER_BORDER : '1px solid rgba(0,0,0,0.12)',
+    cursor: 'pointer',
+    userSelect: 'none' as const,
+    transition: 'background 0.15s, border-color 0.15s',
+    '&:hover': {
+      bgcolor: isDarkMode ? DROPDOWN_TRIGGER_BG_HOVER : 'rgba(0,0,0,0.06)',
+    },
+  };
+}
+
+/** Текст на кнопке-триггере выпадающего списка. */
+export function getDropdownTriggerTextSx(isDarkMode: boolean): Record<string, unknown> {
+  return {
+    color: isDarkMode ? '#fff' : 'rgba(0,0,0,0.87)',
+    fontWeight: 500,
+    fontSize: '0.875rem',
+  };
+}
+
+/** Шеврон на кнопке-триггере с учётом темы. */
+export function getDropdownChevronSx(isDarkMode: boolean): Record<string, unknown> {
+  return {
+    ...DROPDOWN_CHEVRON_SX,
+    color: isDarkMode ? DROPDOWN_CHEVRON_COLOR : 'rgba(0,0,0,0.45)',
+  };
+}
+
+/** Цвет/фон пункта выпадающего списка (выбран / не выбран). */
+export function getDropdownItemStateSx(isDarkMode: boolean, selected: boolean): Record<string, unknown> {
+  return {
+    color: selected
+      ? isDarkMode
+        ? '#fff'
+        : 'rgba(0,0,0,0.87)'
+      : isDarkMode
+        ? 'rgba(255,255,255,0.9)'
+        : 'rgba(0,0,0,0.7)',
+    fontWeight: selected ? 600 : 400,
+    bgcolor: selected
+      ? isDarkMode
+        ? DROPDOWN_ITEM_HOVER_BG_DARK
+        : DROPDOWN_ITEM_HOVER_BG_LIGHT
+      : 'transparent',
+  };
+}
+
 /** Фон бумаги (Popover) выпадающего списка — чёрный, не серый (theme.paper = #1e1e1e). */
 export const DROPDOWN_PAPER_BG = '#0f1116';
 /** Рамка бумаги выпадающего списка. */
@@ -484,15 +540,19 @@ export function getDropdownPanelSx(isDarkMode: boolean): Record<string, unknown>
 }
 
 /**
- * Стиль для slotProps.paper выпадающего Popover (Агенты, Категория, поиск в конструкторе).
+ * Стиль для slotProps.paper выпадающего Popover (Агенты, Категория, настройки).
  * Ширина подстраивается под ширину якоря (кнопки).
- * background/backgroundColor с !important перебивают theme.palette.background.paper.
  */
-export function getDropdownPopoverPaperSx(anchorEl: HTMLElement | null): Record<string, unknown> {
+export function getDropdownPopoverPaperSx(
+  anchorEl: HTMLElement | null,
+  isDarkMode = true,
+): Record<string, unknown> {
+  const panel = isDarkMode ? DROPDOWN_PANEL_SX : getDropdownPanelSx(false);
+  const bg = isDarkMode ? DROPDOWN_PAPER_BG : 'rgba(255,255,255,0.97)';
   return {
-    ...DROPDOWN_PANEL_SX,
-    background: `${DROPDOWN_PAPER_BG} !important`,
-    backgroundColor: `${DROPDOWN_PAPER_BG} !important`,
+    ...panel,
+    background: `${bg} !important`,
+    backgroundColor: `${bg} !important`,
     mt: DROPDOWN_PAPER_MARGIN_TOP,
     minWidth: DROPDOWN_PAPER_MIN_WIDTH_PX,
     width: anchorEl ? `${anchorEl.getBoundingClientRect().width}px` : DROPDOWN_PAPER_DEFAULT_WIDTH_PX,

@@ -28,11 +28,12 @@ import {
 import { useAppActions } from '../../contexts/AppContext';
 import { getApiUrl } from '../../config/api';
 import {
-  DROPDOWN_TRIGGER_BUTTON_SX,
-  DROPDOWN_CHEVRON_SX,
   getDropdownPopoverPaperSx,
   getDropdownItemSx,
-  DROPDOWN_ITEM_HOVER_BG,
+  getDropdownTriggerButtonSx,
+  getDropdownTriggerTextSx,
+  getDropdownChevronSx,
+  getDropdownItemStateSx,
 } from '../../constants/menuStyles';
 import MemoryRagLibraryModal from '../MemoryRagLibraryModal';
 import RagModelSelector from '../RagModelSelector';
@@ -110,7 +111,11 @@ interface RAGSettingsProps {}
 
 export default function RAGSettings({}: RAGSettingsProps) {
   const theme = useTheme();
-  const dropdownItemSx = useMemo(() => getDropdownItemSx(theme.palette.mode === 'dark'), [theme.palette.mode]);
+  const isDarkMode = theme.palette.mode === 'dark';
+  const dropdownItemSx = useMemo(() => getDropdownItemSx(isDarkMode), [isDarkMode]);
+  const dropdownTriggerSx = useMemo(() => getDropdownTriggerButtonSx(isDarkMode), [isDarkMode]);
+  const dropdownTriggerTextSx = useMemo(() => getDropdownTriggerTextSx(isDarkMode), [isDarkMode]);
+  const dropdownChevronSx = useMemo(() => getDropdownChevronSx(isDarkMode), [isDarkMode]);
   const [selectedStrategy, setSelectedStrategy] = useState<RAGStrategy>(() => {
     const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(RAG_STRATEGY_STORAGE_KEY) : null;
     return normalizeStoredStrategy(saved);
@@ -597,15 +602,15 @@ export default function RAGSettings({}: RAGSettingsProps) {
                 <Box
                   onClick={(e) => !isLoading && setStrategyPopoverAnchor(e.currentTarget)}
                   sx={{
-                    ...DROPDOWN_TRIGGER_BUTTON_SX,
+                    ...dropdownTriggerSx,
                     opacity: isLoading ? 0.7 : 1,
                     pointerEvents: isLoading ? 'none' : 'auto',
                   }}
                 >
-                  <Typography sx={{ color: 'white', fontWeight: 500, fontSize: '0.875rem' }}>
+                  <Typography sx={dropdownTriggerTextSx}>
                     {getStrategyLabel(selectedStrategy)}
                   </Typography>
-                  <ExpandMoreIcon sx={{ ...DROPDOWN_CHEVRON_SX, transform: strategyPopoverAnchor ? 'rotate(180deg)' : 'none' }} />
+                  <ExpandMoreIcon sx={{ ...dropdownChevronSx, transform: strategyPopoverAnchor ? 'rotate(180deg)' : 'none' }} />
                 </Box>
                 <Popover
                   open={Boolean(strategyPopoverAnchor)}
@@ -613,7 +618,7 @@ export default function RAGSettings({}: RAGSettingsProps) {
                   onClose={() => setStrategyPopoverAnchor(null)}
                   anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
                   transformOrigin={{ vertical: 'top', horizontal: 'left' }}
-                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(strategyPopoverAnchor) } }}
+                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(strategyPopoverAnchor, isDarkMode) } }}
                 >
                   <Box sx={{ py: 0.5 }}>
                     {(['auto', 'vector', 'lexical', 'hybrid', 'graph'] as const).map((strategy) => (
@@ -630,9 +635,7 @@ export default function RAGSettings({}: RAGSettingsProps) {
                         }}
                         sx={{
                           ...dropdownItemSx,
-                          color: selectedStrategy === strategy ? 'white' : 'rgba(255,255,255,0.9)',
-                          fontWeight: selectedStrategy === strategy ? 600 : 400,
-                          bgcolor: selectedStrategy === strategy ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
+                          ...getDropdownItemStateSx(isDarkMode, selectedStrategy === strategy),
                         }}
                       >
                         {getStrategyLabel(strategy)}
@@ -733,15 +736,15 @@ export default function RAGSettings({}: RAGSettingsProps) {
                 <Box
                   onClick={(e) => !isLoading && setChunkingPopoverAnchor(e.currentTarget)}
                   sx={{
-                    ...DROPDOWN_TRIGGER_BUTTON_SX,
+                    ...dropdownTriggerSx,
                     opacity: isLoading ? 0.7 : 1,
                     pointerEvents: isLoading ? 'none' : 'auto',
                   }}
                 >
-                  <Typography sx={{ color: 'white', fontWeight: 500, fontSize: '0.875rem' }}>
+                  <Typography sx={dropdownTriggerTextSx}>
                     {getChunkingLabel(ragChunkingStrategy)}
                   </Typography>
-                  <ExpandMoreIcon sx={{ ...DROPDOWN_CHEVRON_SX, transform: chunkingPopoverAnchor ? 'rotate(180deg)' : 'none' }} />
+                  <ExpandMoreIcon sx={{ ...dropdownChevronSx, transform: chunkingPopoverAnchor ? 'rotate(180deg)' : 'none' }} />
                 </Box>
                 <Popover
                   open={Boolean(chunkingPopoverAnchor)}
@@ -749,7 +752,7 @@ export default function RAGSettings({}: RAGSettingsProps) {
                   onClose={() => setChunkingPopoverAnchor(null)}
                   anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
                   transformOrigin={{ vertical: 'top', horizontal: 'left' }}
-                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(chunkingPopoverAnchor) } }}
+                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(chunkingPopoverAnchor, isDarkMode) } }}
                 >
                   <Box sx={{ py: 0.5 }}>
                     {(['hierarchical', 'fixed', 'markdown', 'separators', 'semantic'] as const).map((strategy) => (
@@ -764,9 +767,7 @@ export default function RAGSettings({}: RAGSettingsProps) {
                         }}
                         sx={{
                           ...dropdownItemSx,
-                          color: ragChunkingStrategy === strategy ? 'white' : 'rgba(255,255,255,0.9)',
-                          fontWeight: ragChunkingStrategy === strategy ? 600 : 400,
-                          bgcolor: ragChunkingStrategy === strategy ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
+                          ...getDropdownItemStateSx(isDarkMode, ragChunkingStrategy === strategy),
                         }}
                       >
                         {getChunkingLabel(strategy)}

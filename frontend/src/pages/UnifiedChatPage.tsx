@@ -44,9 +44,7 @@ import {
   ContentCopy as CopyIcon,
   Stop as StopIcon,
   Refresh as RefreshIcon,
-  Edit as EditIcon,
   Mic as MicIcon,
-  VolumeUp as VolumeUpIcon,
   Close as CloseIcon,
   Upload as UploadIcon,
   Square as SquareIcon,
@@ -88,7 +86,6 @@ import TopErrorBanner from '../components/TopErrorBanner';
 import { logChatAttach, logChatAttachError } from '../utils/chatAttachDebug';
 import InlineAttachmentsList from '../components/InlineAttachmentsList';
 import InlineImageLightbox from '../components/InlineImageLightbox';
-import SplitArrowIcon from '../components/SplitArrowIcon';
 import ImageGenerationPlaceholder from '../components/ImageGenerationPlaceholder';
 import { incrementTabNotification } from '../utils/tabNotifications';
 import ChatGearAgentsPanel from '../components/ChatGearAgentsPanel';
@@ -99,6 +96,7 @@ import AgentSelector from '../components/AgentSelector';
 import ChatInputStatusCluster from '../components/ChatInputStatusCluster';
 import ChatContextUsagePopover from '../components/ChatContextUsagePopover';
 import MessageFeedbackBar from '../components/MessageFeedbackBar';
+import MessageMoreActionsMenu from '../components/MessageMoreActionsMenu';
 import type { MessageFeedback } from '../constants/messageFeedback';
 import { useMyAgentSelection, useOrchestratorAgentsAnyActive } from '../hooks/useChatInputAgentIndicators';
 import { useChatContextUsage } from '../hooks/useChatContextUsage';
@@ -1027,27 +1025,6 @@ const MessageCardComponent = ({
                           <CopyIcon />
                         </IconButton>
                       </Tooltip>
-                      <Tooltip title="Редактировать">
-                        <IconButton
-                          size="small"
-                          onClick={() => dataRef.current.handleEditMultiLlmColumn(message, respIndex)}
-                          sx={multiLlmActionIconSx}
-                        >
-                          <EditIcon />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title="Перегенерировать">
-                        <span>
-                          <IconButton
-                            size="small"
-                            onClick={() => dataRef.current.handleRegenerateMultiLlmColumn(message, respIndex)}
-                            disabled={Boolean(response.isStreaming)}
-                            sx={multiLlmActionIconSx}
-                          >
-                            <RefreshIcon />
-                          </IconButton>
-                        </span>
-                      </Tooltip>
                       {!response.error && !response.isStreaming ? (
                         <MessageFeedbackBar
                           feedback={response.feedback}
@@ -1076,43 +1053,42 @@ const MessageCardComponent = ({
                           }
                         />
                       ) : null}
-                      <Tooltip title="Прочесть вслух">
-                        <IconButton
-                          size="small"
-                          onClick={() =>
-                            dataRef.current.synthesizeSpeech(getMultiLlmColumnDisplayText(response))
-                          }
-                          disabled={isSpeaking}
-                          sx={multiLlmActionIconSx}
-                        >
-                          <VolumeUpIcon />
-                        </IconButton>
-                      </Tooltip>
                       {!shareMode ? (
-                        <>
-                          <Tooltip title="Поделиться">
-                            <IconButton
-                              size="small"
-                              onClick={() => dataRef.current.handleEnterShareMode()}
-                              sx={multiLlmActionIconSx}
-                            >
-                              <ShareIcon />
-                            </IconButton>
-                          </Tooltip>
-                          <Tooltip title="Ветка в новом чате">
-                            <span>
-                              <IconButton
-                                size="small"
-                                onClick={() => dataRef.current.handleBranchToNewChat(message, respIndex)}
-                                disabled={Boolean(response.isStreaming)}
-                                sx={multiLlmActionIconSx}
-                              >
-                                <SplitArrowIcon />
-                              </IconButton>
-                            </span>
-                          </Tooltip>
-                        </>
+                        <Tooltip title="Поделиться">
+                          <IconButton
+                            size="small"
+                            onClick={() => dataRef.current.handleEnterShareMode()}
+                            sx={multiLlmActionIconSx}
+                          >
+                            <ShareIcon />
+                          </IconButton>
+                        </Tooltip>
                       ) : null}
+                      <Tooltip title="Перегенерировать">
+                        <span>
+                          <IconButton
+                            size="small"
+                            onClick={() => dataRef.current.handleRegenerateMultiLlmColumn(message, respIndex)}
+                            disabled={Boolean(response.isStreaming)}
+                            sx={multiLlmActionIconSx}
+                          >
+                            <RefreshIcon />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                      <MessageMoreActionsMenu
+                        isDarkMode={isDarkMode}
+                        compact
+                        isSpeaking={isSpeaking}
+                        showBranch={!shareMode}
+                        branchDisabled={Boolean(response.isStreaming)}
+                        onEdit={() => dataRef.current.handleEditMultiLlmColumn(message, respIndex)}
+                        onReadAloud={() =>
+                          dataRef.current.synthesizeSpeech(getMultiLlmColumnDisplayText(response))
+                        }
+                        onBranch={() => dataRef.current.handleBranchToNewChat(message, respIndex)}
+                        iconSx={multiLlmActionIconSx}
+                      />
                     </Box>
                   ) : null}
                 </Card>
@@ -1284,36 +1260,6 @@ const MessageCardComponent = ({
             </IconButton>
           </Tooltip>
 
-          <Tooltip title="Редактировать">
-            <IconButton
-              size="small"
-              onClick={() => dataRef.current.handleEditClick(message)}
-              className="message-edit-button"
-              data-theme={isDarkMode ? 'dark' : 'light'}
-              sx={{ opacity: 0.7, p: 0.5, borderRadius: '6px', minWidth: '28px', width: '28px', height: '28px',
-                '&:hover': { opacity: 1, '& .MuiSvgIcon-root': { color: 'primary.main' } },
-                '& .MuiSvgIcon-root': { fontSize: '18px !important', width: '18px !important', height: '18px !important' } }}
-            >
-              <EditIcon />
-            </IconButton>
-          </Tooltip>
-
-          {!isUser && (
-            <Tooltip title="Перегенерировать">
-              <IconButton
-                size="small"
-                onClick={() => dataRef.current.handleRegenerate(message)}
-                className="message-regenerate-button"
-                data-theme={isDarkMode ? 'dark' : 'light'}
-                sx={{ opacity: 0.7, p: 0.5, borderRadius: '6px', minWidth: '28px', width: '28px', height: '28px',
-                  '&:hover': { opacity: 1, '& .MuiSvgIcon-root': { color: 'primary.main' } },
-                  '& .MuiSvgIcon-root': { fontSize: '18px !important', width: '18px !important', height: '18px !important' } }}
-              >
-                <RefreshIcon />
-              </IconButton>
-            </Tooltip>
-          )}
-
           {!isUser && !message.isStreaming && (
             <MessageFeedbackBar
               feedback={message.feedback}
@@ -1335,66 +1281,57 @@ const MessageCardComponent = ({
             />
           )}
 
-          <Tooltip title="Прочесть вслух">
-            <IconButton
-              size="small"
-              onClick={() => {
-                let textToSpeak = message.content;
-                if (!isUser && message.alternativeResponses && message.alternativeResponses.length > 0 && message.currentResponseIndex !== undefined) {
-                  const ci = message.currentResponseIndex;
-                  if (ci >= 0 && ci < message.alternativeResponses.length) textToSpeak = message.alternativeResponses[ci];
-                }
-                if (!isUser && message.multiLLMResponses && message.multiLLMResponses.length > 0) {
-                  textToSpeak = message.multiLLMResponses.filter(r => !r.error).map(r => r.content).join(' ');
-                }
-                dataRef.current.synthesizeSpeech(textToSpeak);
-              }}
-              className="message-speak-button"
-              data-theme={isDarkMode ? 'dark' : 'light'}
-              disabled={isSpeaking}
-              sx={{ opacity: 0.7, p: 0.5, borderRadius: '6px', minWidth: '28px', width: '28px', height: '28px',
-                '&:hover:not(:disabled)': { opacity: 1, '& .MuiSvgIcon-root': { color: 'primary.main' } },
-                '&:disabled': { opacity: 0.4 },
-                '& .MuiSvgIcon-root': { fontSize: '18px !important', width: '18px !important', height: '18px !important' } }}
-            >
-              <VolumeUpIcon />
-            </IconButton>
-          </Tooltip>
-
           {!isUser && !shareMode && (
-            <>
-              <Tooltip title="Поделиться">
-                <IconButton
-                  size="small"
-                  onClick={() => dataRef.current.handleEnterShareMode()}
-                  className="message-share-button"
-                  data-theme={isDarkMode ? 'dark' : 'light'}
-                  sx={{ opacity: 0.7, p: 0.5, borderRadius: '6px', minWidth: '28px', width: '28px', height: '28px',
-                    '&:hover': { opacity: 1, '& .MuiSvgIcon-root': { color: 'primary.main' } },
-                    '& .MuiSvgIcon-root': { fontSize: '18px !important', width: '18px !important', height: '18px !important' } }}
-                >
-                  <ShareIcon />
-                </IconButton>
-              </Tooltip>
-              <Tooltip title="Ветка в новом чате">
-                <span>
-                  <IconButton
-                    size="small"
-                    onClick={() => dataRef.current.handleBranchToNewChat(message)}
-                    disabled={Boolean(message.isStreaming)}
-                    className="message-branch-button"
-                    data-theme={isDarkMode ? 'dark' : 'light'}
-                    sx={{ opacity: 0.7, p: 0.5, borderRadius: '6px', minWidth: '28px', width: '28px', height: '28px',
-                      '&:hover:not(:disabled)': { opacity: 1, '& .MuiSvgIcon-root': { color: 'primary.main' } },
-                      '&:disabled': { opacity: 0.4 },
-                      '& .MuiSvgIcon-root': { fontSize: '18px !important', width: '18px !important', height: '18px !important' } }}
-                  >
-                    <SplitArrowIcon />
-                  </IconButton>
-                </span>
-              </Tooltip>
-            </>
+            <Tooltip title="Поделиться">
+              <IconButton
+                size="small"
+                onClick={() => dataRef.current.handleEnterShareMode()}
+                className="message-share-button"
+                data-theme={isDarkMode ? 'dark' : 'light'}
+                sx={{ opacity: 0.7, p: 0.5, borderRadius: '6px', minWidth: '28px', width: '28px', height: '28px',
+                  '&:hover': { opacity: 1, '& .MuiSvgIcon-root': { color: 'primary.main' } },
+                  '& .MuiSvgIcon-root': { fontSize: '18px !important', width: '18px !important', height: '18px !important' } }}
+              >
+                <ShareIcon />
+              </IconButton>
+            </Tooltip>
           )}
+
+          {!isUser && (
+            <Tooltip title="Перегенерировать">
+              <IconButton
+                size="small"
+                onClick={() => dataRef.current.handleRegenerate(message)}
+                className="message-regenerate-button"
+                data-theme={isDarkMode ? 'dark' : 'light'}
+                sx={{ opacity: 0.7, p: 0.5, borderRadius: '6px', minWidth: '28px', width: '28px', height: '28px',
+                  '&:hover': { opacity: 1, '& .MuiSvgIcon-root': { color: 'primary.main' } },
+                  '& .MuiSvgIcon-root': { fontSize: '18px !important', width: '18px !important', height: '18px !important' } }}
+              >
+                <RefreshIcon />
+              </IconButton>
+            </Tooltip>
+          )}
+
+          <MessageMoreActionsMenu
+            isDarkMode={isDarkMode}
+            isSpeaking={isSpeaking}
+            showBranch={!isUser && !shareMode}
+            branchDisabled={Boolean(message.isStreaming)}
+            onEdit={() => dataRef.current.handleEditClick(message)}
+            onReadAloud={() => {
+              let textToSpeak = message.content;
+              if (!isUser && message.alternativeResponses && message.alternativeResponses.length > 0 && message.currentResponseIndex !== undefined) {
+                const ci = message.currentResponseIndex;
+                if (ci >= 0 && ci < message.alternativeResponses.length) textToSpeak = message.alternativeResponses[ci];
+              }
+              if (!isUser && message.multiLLMResponses && message.multiLLMResponses.length > 0) {
+                textToSpeak = message.multiLLMResponses.filter(r => !r.error).map(r => r.content).join(' ');
+              }
+              dataRef.current.synthesizeSpeech(textToSpeak);
+            }}
+            onBranch={() => dataRef.current.handleBranchToNewChat(message)}
+          />
         </Box>
         )}
       </Box>

@@ -27,11 +27,12 @@ import {
   ExpandMore as ExpandMoreIcon,
 } from '@mui/icons-material';
 import {
-  DROPDOWN_TRIGGER_BUTTON_SX,
-  DROPDOWN_CHEVRON_SX,
   getDropdownPopoverPaperSx,
   getDropdownItemSx,
-  DROPDOWN_ITEM_HOVER_BG,
+  getDropdownTriggerButtonSx,
+  getDropdownTriggerTextSx,
+  getDropdownChevronSx,
+  getDropdownItemStateSx,
 } from '../../constants/menuStyles';
 import { useAppActions } from '../../contexts/AppContext';
 import { SIDEBAR_PANEL_COLOR_KEY, DEFAULT_SIDEBAR_GRADIENT } from '../../constants/sidebarPanelColor';
@@ -121,7 +122,11 @@ const readImageDimensions = (file: File): Promise<{ width: number; height: numbe
 
 export default function InterfaceSettings() {
   const theme = useTheme();
-  const dropdownItemSx = useMemo(() => getDropdownItemSx(theme.palette.mode === 'dark'), [theme.palette.mode]);
+  const isDarkMode = theme.palette.mode === 'dark';
+  const dropdownItemSx = useMemo(() => getDropdownItemSx(isDarkMode), [isDarkMode]);
+  const dropdownTriggerSx = useMemo(() => getDropdownTriggerButtonSx(isDarkMode), [isDarkMode]);
+  const dropdownTriggerTextSx = useMemo(() => getDropdownTriggerTextSx(isDarkMode), [isDarkMode]);
+  const dropdownChevronSx = useMemo(() => getDropdownChevronSx(isDarkMode), [isDarkMode]);
   const [interfaceSettings, setInterfaceSettings] = useState(() => {
     const savedAutoTitle = localStorage.getItem('auto_generate_titles');
     const savedLargeTextAsFile = localStorage.getItem('large_text_as_file');
@@ -786,11 +791,11 @@ export default function InterfaceSettings() {
                 secondaryTypographyProps={{ variant: 'body2', sx: { mt: 0.5 } }}
               />
               <Box sx={{ minWidth: 220, flexShrink: 0 }}>
-                <Box onClick={(e) => setModelModePopoverAnchor(e.currentTarget)} sx={DROPDOWN_TRIGGER_BUTTON_SX}>
-                  <Typography sx={{ color: 'white', fontWeight: 500, fontSize: '0.875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <Box onClick={(e) => setModelModePopoverAnchor(e.currentTarget)} sx={dropdownTriggerSx}>
+                  <Typography sx={{ ...dropdownTriggerTextSx, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {MODEL_SELECTOR_OPTIONS.find((o) => o.value === modelSelectorMode)?.label ?? ''}
                   </Typography>
-                  <ExpandMoreIcon sx={{ ...DROPDOWN_CHEVRON_SX, transform: modelModePopoverAnchor ? 'rotate(180deg)' : 'none', flexShrink: 0 }} />
+                  <ExpandMoreIcon sx={{ ...dropdownChevronSx, transform: modelModePopoverAnchor ? 'rotate(180deg)' : 'none', flexShrink: 0 }} />
                 </Box>
                 <Popover
                   open={Boolean(modelModePopoverAnchor)}
@@ -798,7 +803,7 @@ export default function InterfaceSettings() {
                   onClose={() => setModelModePopoverAnchor(null)}
                   anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
                   transformOrigin={{ vertical: 'top', horizontal: 'left' }}
-                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(modelModePopoverAnchor) } }}
+                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(modelModePopoverAnchor, isDarkMode) } }}
                 >
                   <Box sx={{ py: 0.5 }}>
                     {MODEL_SELECTOR_OPTIONS.map((opt) => (
@@ -807,9 +812,7 @@ export default function InterfaceSettings() {
                         onClick={() => handleModelSelectorModeChange(opt.value)}
                         sx={{
                           ...dropdownItemSx,
-                          color: modelSelectorMode === opt.value ? 'white' : 'rgba(255,255,255,0.9)',
-                          fontWeight: modelSelectorMode === opt.value ? 600 : 400,
-                          bgcolor: modelSelectorMode === opt.value ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
+                          ...getDropdownItemStateSx(isDarkMode, modelSelectorMode === opt.value),
                         }}
                       >
                         {opt.label}
@@ -872,11 +875,11 @@ export default function InterfaceSettings() {
                 secondaryTypographyProps={{ variant: 'body2', sx: { mt: 0.5 } }}
               />
               <Box sx={{ minWidth: 180, flexShrink: 0 }}>
-                <Box onClick={(e) => setStylePopoverAnchor(e.currentTarget)} sx={DROPDOWN_TRIGGER_BUTTON_SX}>
-                  <Typography sx={{ color: 'white', fontWeight: 500, fontSize: '0.875rem' }}>
+                <Box onClick={(e) => setStylePopoverAnchor(e.currentTarget)} sx={dropdownTriggerSx}>
+                  <Typography sx={dropdownTriggerTextSx}>
                     {interfaceSettings.chatInputStyle === 'compact' ? 'Компактный' : 'Классический'}
                   </Typography>
-                  <ExpandMoreIcon sx={{ ...DROPDOWN_CHEVRON_SX, transform: stylePopoverAnchor ? 'rotate(180deg)' : 'none' }} />
+                  <ExpandMoreIcon sx={{ ...dropdownChevronSx, transform: stylePopoverAnchor ? 'rotate(180deg)' : 'none' }} />
                 </Box>
                 <Popover
                   open={Boolean(stylePopoverAnchor)}
@@ -884,7 +887,7 @@ export default function InterfaceSettings() {
                   onClose={() => setStylePopoverAnchor(null)}
                   anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
                   transformOrigin={{ vertical: 'top', horizontal: 'left' }}
-                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(stylePopoverAnchor) } }}
+                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(stylePopoverAnchor, isDarkMode) } }}
                 >
                   <Box sx={{ py: 0.5 }}>
                     {(['compact', 'classic'] as const).map((v) => (
@@ -893,9 +896,7 @@ export default function InterfaceSettings() {
                         onClick={() => { handleChatInputStyleChange(v); setStylePopoverAnchor(null); }}
                         sx={{
                           ...dropdownItemSx,
-                          color: interfaceSettings.chatInputStyle === v ? 'white' : 'rgba(255,255,255,0.9)',
-                          fontWeight: interfaceSettings.chatInputStyle === v ? 600 : 400,
-                          bgcolor: interfaceSettings.chatInputStyle === v ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
+                          ...getDropdownItemStateSx(isDarkMode, interfaceSettings.chatInputStyle === v),
                         }}
                       >
                         {v === 'compact' ? 'Компактный' : 'Классический'}
@@ -927,15 +928,15 @@ export default function InterfaceSettings() {
                 secondaryTypographyProps={{ variant: 'body2', sx: { mt: 0.5 } }}
               />
               <Box sx={{ minWidth: 220, flexShrink: 0 }}>
-                <Box onClick={(e) => setChatInputColorPopoverAnchor(e.currentTarget)} sx={DROPDOWN_TRIGGER_BUTTON_SX}>
-                  <Typography sx={{ color: 'white', fontWeight: 500, fontSize: '0.875rem' }}>
+                <Box onClick={(e) => setChatInputColorPopoverAnchor(e.currentTarget)} sx={dropdownTriggerSx}>
+                  <Typography sx={dropdownTriggerTextSx}>
                     {!interfaceSettings.chatInputColor
                       ? 'По умолчанию'
                       : selectedChatInputPreset
                         ? selectedChatInputPreset.name
                         : 'Пользовательский'}
                   </Typography>
-                  <ExpandMoreIcon sx={{ ...DROPDOWN_CHEVRON_SX, transform: chatInputColorPopoverAnchor ? 'rotate(180deg)' : 'none' }} />
+                  <ExpandMoreIcon sx={{ ...dropdownChevronSx, transform: chatInputColorPopoverAnchor ? 'rotate(180deg)' : 'none' }} />
                 </Box>
                 <Popover
                   open={Boolean(chatInputColorPopoverAnchor)}
@@ -943,23 +944,21 @@ export default function InterfaceSettings() {
                   onClose={() => setChatInputColorPopoverAnchor(null)}
                   anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
                   transformOrigin={{ vertical: 'top', horizontal: 'left' }}
-                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(chatInputColorPopoverAnchor) } }}
+                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(chatInputColorPopoverAnchor, isDarkMode) } }}
                 >
                   <Box sx={{ py: 0.5 }}>
                     <Box
                       onClick={() => { handleChatInputColorSelect(''); setChatInputColorPopoverAnchor(null); }}
                       sx={{
                         ...dropdownItemSx,
-                        color: !interfaceSettings.chatInputColor ? 'white' : 'rgba(255,255,255,0.9)',
-                        fontWeight: !interfaceSettings.chatInputColor ? 600 : 400,
-                        bgcolor: !interfaceSettings.chatInputColor ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
+                        ...getDropdownItemStateSx(isDarkMode, !interfaceSettings.chatInputColor),
                       }}
                     >
                       По умолчанию
                     </Box>
                     <Box
                       onClick={() => { setChatInputColorPopoverAnchor(null); setChatInputColorPickerOpen(true); }}
-                      sx={{ ...dropdownItemSx, color: 'rgba(255,255,255,0.9)', bgcolor: 'transparent' }}
+                      sx={{ ...dropdownItemSx, ...getDropdownItemStateSx(isDarkMode, false) }}
                     >
                       Цвет и контрастность окна ввода
                     </Box>
@@ -1019,8 +1018,8 @@ export default function InterfaceSettings() {
                 secondaryTypographyProps={{ variant: 'body2', sx: { mt: 0.5 } }}
               />
               <Box sx={{ minWidth: 200, flexShrink: 0 }}>
-                <Box onClick={(e) => setWorkZoneBgPopoverAnchor(e.currentTarget)} sx={DROPDOWN_TRIGGER_BUTTON_SX}>
-                  <Typography sx={{ color: 'white', fontWeight: 500, fontSize: '0.875rem' }}>
+                <Box onClick={(e) => setWorkZoneBgPopoverAnchor(e.currentTarget)} sx={dropdownTriggerSx}>
+                  <Typography sx={dropdownTriggerTextSx}>
                     {workZoneBgMode === 'starry'
                       ? 'Звёздное небо'
                       : workZoneBgMode === 'snowfall'
@@ -1030,7 +1029,7 @@ export default function InterfaceSettings() {
                         : 'По умолчанию'}
                   </Typography>
                   <ExpandMoreIcon
-                    sx={{ ...DROPDOWN_CHEVRON_SX, transform: workZoneBgPopoverAnchor ? 'rotate(180deg)' : 'none' }}
+                    sx={{ ...dropdownChevronSx, transform: workZoneBgPopoverAnchor ? 'rotate(180deg)' : 'none' }}
                   />
                 </Box>
                 <Popover
@@ -1039,16 +1038,14 @@ export default function InterfaceSettings() {
                   onClose={() => setWorkZoneBgPopoverAnchor(null)}
                   anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
                   transformOrigin={{ vertical: 'top', horizontal: 'left' }}
-                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(workZoneBgPopoverAnchor) } }}
+                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(workZoneBgPopoverAnchor, isDarkMode) } }}
                 >
                   <Box sx={{ py: 0.5 }}>
                     <Box
                       onClick={() => handleWorkZoneBgMode('default')}
                       sx={{
                         ...dropdownItemSx,
-                        color: workZoneBgMode === 'default' ? 'white' : 'rgba(255,255,255,0.9)',
-                        fontWeight: workZoneBgMode === 'default' ? 600 : 400,
-                        bgcolor: workZoneBgMode === 'default' ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
+                        ...getDropdownItemStateSx(isDarkMode, workZoneBgMode === 'default'),
                       }}
                     >
                       По умолчанию
@@ -1057,9 +1054,7 @@ export default function InterfaceSettings() {
                       onClick={() => handleWorkZoneBgMode('starry')}
                       sx={{
                         ...dropdownItemSx,
-                        color: workZoneBgMode === 'starry' ? 'white' : 'rgba(255,255,255,0.9)',
-                        fontWeight: workZoneBgMode === 'starry' ? 600 : 400,
-                        bgcolor: workZoneBgMode === 'starry' ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
+                        ...getDropdownItemStateSx(isDarkMode, workZoneBgMode === 'starry'),
                       }}
                     >
                       Звёздное небо
@@ -1068,9 +1063,7 @@ export default function InterfaceSettings() {
                       onClick={() => handleWorkZoneBgMode('snowfall')}
                       sx={{
                         ...dropdownItemSx,
-                        color: workZoneBgMode === 'snowfall' ? 'white' : 'rgba(255,255,255,0.9)',
-                        fontWeight: workZoneBgMode === 'snowfall' ? 600 : 400,
-                        bgcolor: workZoneBgMode === 'snowfall' ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
+                        ...getDropdownItemStateSx(isDarkMode, workZoneBgMode === 'snowfall'),
                       }}
                     >
                       Снегопад
@@ -1082,9 +1075,7 @@ export default function InterfaceSettings() {
                       }}
                       sx={{
                         ...dropdownItemSx,
-                        color: workZoneBgMode === 'custom' ? 'white' : 'rgba(255,255,255,0.9)',
-                        fontWeight: workZoneBgMode === 'custom' ? 600 : 400,
-                        bgcolor: workZoneBgMode === 'custom' ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
+                        ...getDropdownItemStateSx(isDarkMode, workZoneBgMode === 'custom'),
                       }}
                     >
                       Своё изображение
@@ -1115,8 +1106,8 @@ export default function InterfaceSettings() {
                 secondaryTypographyProps={{ variant: 'body2', sx: { mt: 0.5 } }}
               />
               <Box sx={{ minWidth: 200, flexShrink: 0 }}>
-                <Box onClick={(e) => setColorPopoverAnchor(e.currentTarget)} sx={DROPDOWN_TRIGGER_BUTTON_SX}>
-                  <Typography sx={{ color: 'white', fontWeight: 500, fontSize: '0.875rem' }}>
+                <Box onClick={(e) => setColorPopoverAnchor(e.currentTarget)} sx={dropdownTriggerSx}>
+                  <Typography sx={dropdownTriggerTextSx}>
                     {!interfaceSettings.sidebarPanelColor
                       ? 'По умолчанию'
                       : selectedSidebarPreset
@@ -1125,7 +1116,7 @@ export default function InterfaceSettings() {
                         ? `Пользовательский (${interfaceSettings.sidebarPanelColor})`
                         : 'Пользовательский'}
                   </Typography>
-                  <ExpandMoreIcon sx={{ ...DROPDOWN_CHEVRON_SX, transform: colorPopoverAnchor ? 'rotate(180deg)' : 'none' }} />
+                  <ExpandMoreIcon sx={{ ...dropdownChevronSx, transform: colorPopoverAnchor ? 'rotate(180deg)' : 'none' }} />
                 </Box>
                 <Popover
                   open={Boolean(colorPopoverAnchor)}
@@ -1133,16 +1124,14 @@ export default function InterfaceSettings() {
                   onClose={() => setColorPopoverAnchor(null)}
                   anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
                   transformOrigin={{ vertical: 'top', horizontal: 'left' }}
-                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(colorPopoverAnchor) } }}
+                  slotProps={{ paper: { sx: getDropdownPopoverPaperSx(colorPopoverAnchor, isDarkMode) } }}
                 >
                   <Box sx={{ py: 0.5 }}>
                     <Box
                       onClick={() => { handleSidebarColorSelect(''); setColorPopoverAnchor(null); }}
                       sx={{
                         ...dropdownItemSx,
-                        color: !interfaceSettings.sidebarPanelColor ? 'white' : 'rgba(255,255,255,0.9)',
-                        fontWeight: !interfaceSettings.sidebarPanelColor ? 600 : 400,
-                        bgcolor: !interfaceSettings.sidebarPanelColor ? DROPDOWN_ITEM_HOVER_BG : 'transparent',
+                        ...getDropdownItemStateSx(isDarkMode, !interfaceSettings.sidebarPanelColor),
                       }}
                     >
                       По умолчанию
@@ -1150,7 +1139,7 @@ export default function InterfaceSettings() {
                     {interfaceSettings.sidebarPanelColor && (
                       <Box
                         onClick={() => setColorPopoverAnchor(null)}
-                        sx={{ ...dropdownItemSx, color: 'rgba(255,255,255,0.9)', bgcolor: 'transparent' }}
+                        sx={{ ...dropdownItemSx, ...getDropdownItemStateSx(isDarkMode, false) }}
                       >
                         {interfaceSettings.sidebarPanelColor.startsWith('#')
                           ? `Пользовательский (${interfaceSettings.sidebarPanelColor})`
@@ -1159,7 +1148,7 @@ export default function InterfaceSettings() {
                     )}
                     <Box
                       onClick={() => { setColorPopoverAnchor(null); setColorPickerOpen(true); }}
-                      sx={{ ...dropdownItemSx, color: 'rgba(255,255,255,0.9)', bgcolor: 'transparent' }}
+                      sx={{ ...dropdownItemSx, ...getDropdownItemStateSx(isDarkMode, false) }}
                     >
                       Выбрать цвет
                     </Box>
