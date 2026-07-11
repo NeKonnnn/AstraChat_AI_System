@@ -75,9 +75,6 @@ async def maybe_run_mcp_agent(
         return None
 
     resolved_tool_ids = resolve_chat_tool_ids(tool_ids)
-    if resolved_tool_ids and resolved_tool_ids != (tool_ids or []):
-        log.info("MCP chat_default applied: %s", resolved_tool_ids)
-
     if not await _ensure_mcp_model_loaded(model_path):
         return None
 

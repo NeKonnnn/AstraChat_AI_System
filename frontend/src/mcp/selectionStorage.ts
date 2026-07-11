@@ -39,16 +39,18 @@ export function setGlobalMcpToolIds(toolIds: string[]): void {
 }
 
 export function getMcpToolIdsForChat(chatId: string): string[] {
-  if (!chatId) return getGlobalMcpToolIds();
-  const chatIds = readToolIdsFromStorage(storageKey(chatId));
-  if (chatIds.length) return chatIds;
-  return getGlobalMcpToolIds();
+  if (!chatId) return [];
+  const key = storageKey(chatId);
+  if (localStorage.getItem(key) !== null) {
+    return readToolIdsFromStorage(key);
+  }
+  // Новый чат без явного выбора — MCP выключен, пока пользователь не включит в UI
+  return [];
 }
 
 export function setMcpToolIdsForChat(chatId: string, toolIds: string[]): void {
   if (!chatId) return;
   localStorage.setItem(storageKey(chatId), JSON.stringify(toolIds));
-  setGlobalMcpToolIds(toolIds);
   window.dispatchEvent(new CustomEvent(MCP_SELECTION_CHANGED_EVENT, { detail: { chatId } }));
 }
 

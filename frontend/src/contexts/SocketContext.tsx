@@ -1225,10 +1225,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
           }))
         : undefined,
       request_id: requestId,
-      tool_ids: (() => {
-        const ids = resolveMcpToolIds(chatId);
-        return ids.length ? ids : undefined;
-      })(),
+      tool_ids: resolveMcpToolIds(chatId),
       image_gen_preset_id: readSelectedImageGenPresetId() || undefined,
     };
 
@@ -1306,10 +1303,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       model_comparison_enabled: true,
       enable_thinking: resolveEnableThinking(),
       request_id: requestId,
-      tool_ids: (() => {
-        const ids = resolveMcpToolIds(chatId);
-        return ids.length ? ids : undefined;
-      })(),
+      tool_ids: resolveMcpToolIds(chatId),
     });
   };
 
@@ -1373,10 +1367,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       rag_strategy: ragStrategy,
       enable_thinking: resolveEnableThinking(),
       request_id: requestId,
-      tool_ids: (() => {
-        const ids = resolveMcpToolIds(chatId);
-        return ids.length ? ids : undefined;
-      })(),
+      tool_ids: resolveMcpToolIds(chatId),
       image_gen_preset_id: readSelectedImageGenPresetId() || undefined,
     };
 

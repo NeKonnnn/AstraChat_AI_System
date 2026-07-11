@@ -10,35 +10,13 @@ def mcp_server_tool_id(server_id: str) -> str:
 
 
 def resolve_chat_tool_ids(payload_tool_ids: Optional[List[str]] = None) -> List[str]:
-    """
-    Явные tool_ids с клиента + fallback на ``mcp.chat_default`` из config.
-
-    ``chat_default``: ``none`` | ``all`` | ``websearch`` | ``id1,id2``
-    """
+    """Только явные tool_ids с клиента (переключатель MCP в UI). Без серверного fallback."""
     explicit: List[str] = []
     for raw in payload_tool_ids or []:
         tid = str(raw or "").strip()
         if tid:
             explicit.append(tid)
-    if explicit:
-        return explicit
-
-    from backend.settings.config import get_settings
-
-    default_raw = (get_settings().mcp.chat_default or "none").strip().lower()
-    if not default_raw or default_raw == "none":
-        return []
-
-    if default_raw == "all":
-        server_ids = [
-            str(s.id).strip()
-            for s in (get_settings().mcp.servers or [])
-            if getattr(s, "enabled", False) and str(getattr(s, "id", "")).strip()
-        ]
-    else:
-        server_ids = [p.strip() for p in default_raw.replace(",", " ").split() if p.strip()]
-
-    return [mcp_server_tool_id(sid) for sid in server_ids if sid]
+    return explicit
 
 
 def parse_mcp_server_ids(tool_ids: Optional[List[str]]) -> List[str]:

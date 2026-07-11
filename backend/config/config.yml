@@ -38,8 +38,8 @@ auth:
 # ========================================================
 mcp:
   enabled: true
-  # Авто-подключение MCP в чате, если фронт не передал tool_ids (none | all | websearch | id1,id2)
-  chat_default: websearch
+  # MCP в чате только по tool_ids с UI (none = не подключать автоматически)
+  chat_default: none
   tools_cache_ttl_seconds: 60
   pool:
     max_size: 4
