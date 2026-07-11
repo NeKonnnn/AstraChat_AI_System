@@ -1069,6 +1069,11 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
     text = text.replace(/^## (.*$)/gim, '<h2>$1</h2>');
     text = text.replace(/^# (.*$)/gim, '<h1>$1</h1>');
 
+    // Списки — ДО курсива через *, иначе маркеры «* пункт» на соседних строках
+    // схлопываются в один <em> и только последний «- пункт» остаётся в <ul>.
+    text = text.replace(/^[\s]*(\d+)\.\s+(.+)$/gim, '<li data-list-type="ordered" data-list-number="$1">$2</li>');
+    text = text.replace(/^[\s]*[-*+]\s+(.+)$/gim, '<li data-list-type="unordered">$1</li>');
+
     // Обрабатываем вложенные форматирования правильно
     // Сначала обрабатываем самые внешние теги (жирный), потом внутренние (курсив)
     // Используем жадное совпадение для внешних тегов
@@ -1086,8 +1091,8 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
       return `<strong>${processed}</strong>`;
     });
     
-    // Обрабатываем оставшийся курсив (который не внутри жирного)
-    text = text.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+    // Обрабатываем оставшийся курсив (который не внутри жирного); не через перенос строки
+    text = text.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
     // Применяем "_" как курсив только на границах слова,
     // чтобы не ломать snake_case (например, df_date).
     text = text.replace(/(^|[^\w])_([^_\n]+)_(?=[^\w]|$)/g, '$1<em>$2</em>');
@@ -1117,12 +1122,6 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
 
     // Обрабатываем инлайн код
     text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
-
-    // Обрабатываем списки - различаем маркированные и нумерованные
-    // Сначала нумерованные (чтобы не конфликтовали с маркированными)
-    text = text.replace(/^[\s]*(\d+)\.\s+(.+)$/gim, '<li data-list-type="ordered" data-list-number="$1">$2</li>');
-    // Затем маркированные
-    text = text.replace(/^[\s]*[-*+]\s+(.+)$/gim, '<li data-list-type="unordered">$1</li>');
 
     // Обрабатываем цитаты
     text = text.replace(/^>\s+(.+)$/gim, '<blockquote>$1</blockquote>');
@@ -1200,6 +1199,7 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
           key: `${index}-${lineIndex}`,
           component: 'li',
           sx: {
+            display: 'list-item',
             ml: 2,
             mb: 0.5,
             '&::marker': {
@@ -1230,6 +1230,7 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
                 sx={{
                   margin: '8px 0',
                   paddingLeft: '20px',
+                  listStyleType: listType === 'ordered' ? 'decimal' : 'disc',
                 }}
               >
                 {listItems}
@@ -1264,6 +1265,7 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
             sx={{
               margin: '8px 0',
               paddingLeft: '20px',
+              listStyleType: listType === 'ordered' ? 'decimal' : 'disc',
             }}
           >
             {listItems}
@@ -1341,6 +1343,7 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
            sx={{
              margin: '8px 0',
              paddingLeft: '20px',
+             listStyleType: listType === 'ordered' ? 'decimal' : 'disc',
            }}
          >
            {listItems}

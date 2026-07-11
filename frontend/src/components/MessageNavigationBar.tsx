@@ -17,6 +17,75 @@ interface TooltipState {
   top: number;
 }
 
+/** Активным считаем вопрос пользователя, даже если в viewport длинный ответ ассистента ниже. */
+function resolveActiveUserMessageIndex(messages: Message[], messageIndex: number | null): number | null {
+  if (messageIndex === null || messageIndex < 0 || messageIndex >= messages.length) return null;
+  if (messages[messageIndex]?.role === 'user') return messageIndex;
+  for (let i = messageIndex; i >= 0; i -= 1) {
+    if (messages[i]?.role === 'user') return i;
+  }
+  return null;
+}
+
+function findFirstUserMessageIndex(messages: Message[]): number | null {
+  const idx = messages.findIndex((m) => m.role === 'user');
+  return idx >= 0 ? idx : null;
+}
+
+/**
+ * Активная секция = вопрос пользователя + все ответы до следующего вопроса.
+ * Так первый пункт остаётся активным, пока читаем длинный ответ под ним.
+ */
+function findActiveUserMessageBySections(messages: Message[]): number | null {
+  const scrollContainer = document.querySelector('.chat-messages-area');
+  const viewportMiddle = window.innerHeight / 2;
+
+  if (scrollContainer && scrollContainer.scrollTop < 64) {
+    return findFirstUserMessageIndex(messages);
+  }
+
+  let fallbackUserIndex: number | null = null;
+  let fallbackDistance = Infinity;
+
+  for (let i = 0; i < messages.length; i += 1) {
+    if (messages[i]?.role !== 'user') continue;
+
+    const userEl = document.querySelector(`[data-message-index="${i}"]`);
+    if (!userEl) continue;
+
+    const userRect = userEl.getBoundingClientRect();
+    let sectionTop = userRect.top;
+    let sectionBottom = userRect.bottom;
+
+    for (let j = i + 1; j < messages.length; j += 1) {
+      if (messages[j]?.role === 'user') {
+        const nextUserEl = document.querySelector(`[data-message-index="${j}"]`);
+        if (nextUserEl) {
+          sectionBottom = nextUserEl.getBoundingClientRect().top;
+        }
+        break;
+      }
+      const replyEl = document.querySelector(`[data-message-index="${j}"]`);
+      if (replyEl) {
+        sectionBottom = Math.max(sectionBottom, replyEl.getBoundingClientRect().bottom);
+      }
+    }
+
+    if (viewportMiddle >= sectionTop && viewportMiddle <= sectionBottom) {
+      return i;
+    }
+
+    const sectionMiddle = (sectionTop + sectionBottom) / 2;
+    const distance = Math.abs(sectionMiddle - viewportMiddle);
+    if (distance < fallbackDistance) {
+      fallbackDistance = distance;
+      fallbackUserIndex = i;
+    }
+  }
+
+  return fallbackUserIndex;
+}
+
 export const MessageNavigationBar: React.FC<MessageNavigationBarProps> = ({
   messages,
   isDarkMode,
@@ -38,6 +107,7 @@ export const MessageNavigationBar: React.FC<MessageNavigationBarProps> = ({
   const navigationRef = useRef<HTMLDivElement>(null);
   const listPanelRef = useRef<HTMLDivElement>(null);
   const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const pinnedActiveRef = useRef<{ index: number; until: number } | null>(null);
 
   // Фильтруем только сообщения пользователя
   const userMessages = messages
@@ -47,6 +117,17 @@ export const MessageNavigationBar: React.FC<MessageNavigationBarProps> = ({
   // Отслеживание активного сообщения при скролле
   useEffect(() => {
     const handleScroll = () => {
+      if (pinnedActiveRef.current && Date.now() < pinnedActiveRef.current.until) {
+        setActiveMessageIndex(pinnedActiveRef.current.index);
+        return;
+      }
+
+      const sectionActive = findActiveUserMessageBySections(messages);
+      if (sectionActive !== null) {
+        setActiveMessageIndex(sectionActive);
+        return;
+      }
+
       const messageElements = document.querySelectorAll('[data-message-index]');
       const viewportMiddle = window.innerHeight / 2;
 
@@ -54,14 +135,13 @@ export const MessageNavigationBar: React.FC<MessageNavigationBarProps> = ({
       let closestDistance = Infinity;
 
       messageElements.forEach((element) => {
-        const messageIndex = parseInt(element.getAttribute('data-message-index') || '-1');
+        const messageIndex = parseInt(element.getAttribute('data-message-index') || '-1', 10);
         if (messageIndex === -1) return;
 
         const rect = element.getBoundingClientRect();
         const elementMiddle = rect.top + rect.height / 2;
         const distance = Math.abs(elementMiddle - viewportMiddle);
 
-        // Проверяем что элемент видим на экране
         if (rect.top < window.innerHeight && rect.bottom > 0) {
           if (distance < closestDistance) {
             closestDistance = distance;
@@ -70,7 +150,7 @@ export const MessageNavigationBar: React.FC<MessageNavigationBarProps> = ({
         }
       });
 
-      setActiveMessageIndex(closestIndex);
+      setActiveMessageIndex(resolveActiveUserMessageIndex(messages, closestIndex));
     };
 
     // Слушаем скролл на всех элементах (включая контейнеры с overflow)
@@ -159,8 +239,10 @@ export const MessageNavigationBar: React.FC<MessageNavigationBarProps> = ({
     setShowFullTooltip(false);
   };
 
-  // Обработка клика на черточку для навигации
+  // Обработка клика на черточку / пункт списка
   const handleClick = (originalIndex: number) => {
+    pinnedActiveRef.current = { index: originalIndex, until: Date.now() + 1200 };
+    setActiveMessageIndex(originalIndex);
     onNavigate(originalIndex);
     setShowListPanel(false);
   };
@@ -315,19 +397,18 @@ export const MessageNavigationBar: React.FC<MessageNavigationBarProps> = ({
                   },
                 }}
               >
-                {/* Индикатор активности */}
-                {isActive && (
-                  <Box
-                    sx={{
-                      width: '6px',
-                      height: '6px',
-                      borderRadius: '50%',
-                      backgroundColor: '#2196f3',
-                      marginRight: '12px',
-                      flexShrink: 0,
-                    }}
-                  />
-                )}
+                {/* Индикатор активности — слот фиксирован, чтобы текст не прыгал */}
+                <Box
+                  sx={{
+                    width: '6px',
+                    height: '6px',
+                    borderRadius: '50%',
+                    backgroundColor: isActive ? '#2196f3' : 'transparent',
+                    marginRight: '12px',
+                    flexShrink: 0,
+                    boxShadow: isActive ? '0 0 6px rgba(33, 150, 243, 0.5)' : 'none',
+                  }}
+                />
                 
                 <Typography
                   variant="body2"
