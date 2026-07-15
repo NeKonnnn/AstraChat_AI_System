@@ -2,6 +2,10 @@
 
 CREATE TABLE IF NOT EXISTS не меняет уже созданный vector(N).
 При смене модели (384 → 1536 и т.п.) нужно ALTER + очистка старых векторов.
+
+Размерность всегда берётся из выбранной модели (get_sentence_embedding_dimension).
+HNSW в pgvector ограничен 2000 измерениями — при большем dim индекс не создаём
+(поиск по <=> всё равно работает, но без ANN).
 """
 
 from __future__ import annotations
@@ -11,6 +15,9 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+# https://github.com/pgvector/pgvector#hnsw — max dimensions for HNSW/IVFFlat on vector
+HNSW_MAX_DIM = 2000
 
 VECTOR_TABLES: Tuple[str, ...] = (
     "document_vectors",
@@ -48,6 +55,43 @@ async def get_column_vector_dim(conn, table: str) -> Optional[int]:
     return int(m.group(1)) if m else None
 
 
+async def drop_embedding_index(conn, table: str) -> None:
+    index_name = _INDEX_BY_TABLE.get(table)
+    if index_name:
+        await conn.execute(f"DROP INDEX IF EXISTS {index_name}")
+
+
+async def create_embedding_index(conn, table: str, dim: int) -> bool:
+    """Создать HNSW, если фактическая размерность колонки позволяет.
+
+    Важно проверять колонку в БД, а не только requested dim из конфига:
+    после смены модели колонка уже может быть vector(2560), а RAG_EMBEDDING_DIM
+    ещё 1536 — CREATE INDEX тогда падает.
+    """
+    index_name = _INDEX_BY_TABLE.get(table)
+    if not index_name:
+        return False
+
+    column_dim = await get_column_vector_dim(conn, table)
+    effective_dim = int(column_dim or dim or 0)
+    if effective_dim > HNSW_MAX_DIM:
+        logger.warning(
+            "%s: dim=%s > %s — HNSW не создаём (лимит pgvector), поиск без ANN-индекса",
+            table,
+            effective_dim,
+            HNSW_MAX_DIM,
+        )
+        await conn.execute(f"DROP INDEX IF EXISTS {index_name}")
+        return False
+    await conn.execute(
+        f"""
+        CREATE INDEX IF NOT EXISTS {index_name}
+        ON {table} USING hnsw (embedding vector_cosine_ops)
+        """
+    )
+    return True
+
+
 async def migrate_vector_tables(conn, target_dim: int) -> Dict[str, Any]:
     """Привести все vector-таблицы к target_dim. Старые векторы очищаются."""
     if target_dim < 1:
@@ -56,6 +100,7 @@ async def migrate_vector_tables(conn, target_dim: int) -> Dict[str, Any]:
     changed: List[str] = []
     unchanged: List[str] = []
     cleared_rows = 0
+    hnsw_enabled = target_dim <= HNSW_MAX_DIM
 
     for table in VECTOR_TABLES:
         exists = await conn.fetchval(
@@ -67,13 +112,14 @@ async def migrate_vector_tables(conn, target_dim: int) -> Dict[str, Any]:
 
         current = await get_column_vector_dim(conn, table)
         if current == target_dim:
+            # Dim совпала, но индекс мог отсутствовать после прошлой неудачной миграции
+            await drop_embedding_index(conn, table)
+            await create_embedding_index(conn, table, target_dim)
             unchanged.append(table)
             continue
 
         count = int(await conn.fetchval(f"SELECT COUNT(*) FROM {table}") or 0)
-        index_name = _INDEX_BY_TABLE.get(table)
-        if index_name:
-            await conn.execute(f"DROP INDEX IF EXISTS {index_name}")
+        await drop_embedding_index(conn, table)
 
         # Пустая таблица: ALTER TYPE. С данными — TRUNCATE, иначе ALTER не сконвертирует.
         if count > 0:
@@ -83,20 +129,15 @@ async def migrate_vector_tables(conn, target_dim: int) -> Dict[str, Any]:
         await conn.execute(
             f"ALTER TABLE {table} ALTER COLUMN embedding TYPE vector({int(target_dim)})"
         )
-        if index_name:
-            await conn.execute(
-                f"""
-                CREATE INDEX IF NOT EXISTS {index_name}
-                ON {table} USING hnsw (embedding vector_cosine_ops)
-                """
-            )
+        await create_embedding_index(conn, table, target_dim)
         changed.append(table)
         logger.warning(
-            "Миграция %s: vector(%s) → vector(%s), очищено строк=%s",
+            "Миграция %s: vector(%s) → vector(%s), очищено строк=%s, hnsw=%s",
             table,
             current,
             target_dim,
             count,
+            hnsw_enabled,
         )
 
     return {
@@ -105,4 +146,6 @@ async def migrate_vector_tables(conn, target_dim: int) -> Dict[str, Any]:
         "unchanged_tables": unchanged,
         "cleared_rows": cleared_rows,
         "migrated": bool(changed),
+        "hnsw_enabled": hnsw_enabled,
+        "hnsw_max_dim": HNSW_MAX_DIM,
     }

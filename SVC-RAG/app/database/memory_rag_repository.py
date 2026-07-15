@@ -140,10 +140,9 @@ class MemoryRagVectorRepository:
                     UNIQUE(document_id, chunk_index)
                 )
             """)
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_memory_rag_vectors_embedding_hnsw
-                ON memory_rag_vectors USING hnsw (embedding vector_cosine_ops)
-            """)
+            from app.database.embedding_schema import create_embedding_index
+
+            await create_embedding_index(conn, "memory_rag_vectors", self.embedding_dim)
             await conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_memory_rag_vectors_document_id ON memory_rag_vectors(document_id)"
             )

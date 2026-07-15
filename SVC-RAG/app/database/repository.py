@@ -159,10 +159,9 @@ class VectorRepository:
                     UNIQUE(document_id, chunk_index)
                 )
             """)
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_document_vectors_embedding_hnsw
-                ON document_vectors USING hnsw (embedding vector_cosine_ops)
-            """)
+            from app.database.embedding_schema import create_embedding_index
+
+            await create_embedding_index(conn, "document_vectors", self.embedding_dim)
             await conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_document_vectors_document_id ON document_vectors(document_id)"
             )

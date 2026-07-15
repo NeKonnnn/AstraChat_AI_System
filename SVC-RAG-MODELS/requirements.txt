@@ -1,4 +1,7 @@
-# SVC-RAG-MODELS: Embedding + Reranker (MiniLM-L12, MiniLM-L6)
+# SVC-RAG-MODELS: Embedding + Reranker
+#
+# Giga-Embeddings-instruct требует transformers~4.51 + einops
+# (см. README модели). transformers 5.x ломает кастомный GigarEmbed.
 
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
@@ -6,7 +9,10 @@ pydantic>=2.10.0
 pyyaml>=6.0.2
 
 # Embedding and Reranker (sentence-transformers)
-sentence-transformers>=3.0.0
+sentence-transformers==5.1.1
+transformers==4.51.0
+accelerate>=0.26.0,<1.0
+einops>=0.8.0
 
 # PyTorch
 torch>=2.0.0

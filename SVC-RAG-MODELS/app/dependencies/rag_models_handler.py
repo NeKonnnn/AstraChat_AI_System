@@ -74,12 +74,23 @@ async def get_rag_models_handler() -> Optional[dict]:
 
     try:
         models_dir = os.path.abspath(settings.rag_models.models_dir)
-        os.makedirs(models_dir, exist_ok=True)
+        try:
+            os.makedirs(models_dir, exist_ok=True)
+        except OSError:
+            # models_dir часто смонтирован :ro — веса уже на месте, кэш пишем отдельно
+            pass
 
-        # Весь кэш HF и sentence-transformers складываем в одну папку
-        os.environ["HF_HOME"] = models_dir
-        os.environ["HF_HUB_CACHE"] = models_dir
-        os.environ["TRANSFORMERS_CACHE"] = models_dir
+        # Веса читаем из models_dir (может быть read-only).
+        # Кэш HF/transformers (в т.ч. modules для trust_remote_code) — только в writable path.
+        hf_cache = os.environ.get("HF_HOME") or "/tmp/rag-models-hf-cache"
+        os.makedirs(hf_cache, exist_ok=True)
+        os.environ["HF_HOME"] = hf_cache
+        os.environ["HF_HUB_CACHE"] = os.path.join(hf_cache, "hub")
+        os.environ["TRANSFORMERS_CACHE"] = os.path.join(hf_cache, "transformers")
+        os.environ["SENTENCE_TRANSFORMERS_HOME"] = os.path.join(hf_cache, "sentence-transformers")
+        os.makedirs(os.environ["HF_HUB_CACHE"], exist_ok=True)
+        os.makedirs(os.environ["TRANSFORMERS_CACHE"], exist_ok=True)
+        os.makedirs(os.environ["SENTENCE_TRANSFORMERS_HOME"], exist_ok=True)
 
         if settings.rag_models.offline:
             os.environ["HF_HUB_OFFLINE"] = "1"
