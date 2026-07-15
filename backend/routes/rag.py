@@ -390,6 +390,32 @@ async def select_rag_model(body: RagModelSelectRequest):
         if model_type == "embedding":
             state.rag_embedding_model_path = model_path
             updates["rag_embedding_model_path"] = model_path
+            # Колонки pgvector создаются один раз (CREATE IF NOT EXISTS) —
+            # при смене модели нужно привести vector(N) к фактической dim.
+            emb_dim = result.get("embedding_dim") if isinstance(result, dict) else None
+            if emb_dim is None and rag_models_client:
+                try:
+                    health = await rag_models_client.health()
+                    emb_dim = health.get("embedding_dim") if isinstance(health, dict) else None
+                except Exception:
+                    logger.exception("Не удалось получить embedding_dim из health")
+            if emb_dim and rag_client:
+                try:
+                    schema = await rag_client.ensure_embedding_dim(int(emb_dim))
+                    if isinstance(result, dict):
+                        result = {**result, "schema": schema}
+                except Exception:
+                    logger.exception(
+                        "Не удалось синхронизировать embedding_dim=%s в SVC-RAG",
+                        emb_dim,
+                    )
+                    raise HTTPException(
+                        status_code=502,
+                        detail=(
+                            f"Модель загружена, но схема БД не перешла на dim={emb_dim}. "
+                            "Переиндексация может падать с expected N dimensions."
+                        ),
+                    ) from None
         else:
             state.rag_reranker_model_path = model_path
             updates["rag_reranker_model_path"] = model_path

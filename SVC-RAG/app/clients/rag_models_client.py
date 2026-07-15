@@ -12,11 +12,24 @@ logger = logging.getLogger(__name__)
 class RagModelsClient:
     """Вызовы эмбеддинга и реранкера в SVC-RAG-MODELS."""
 
+    _last_ensured_dim: Optional[int] = None
+
     def __init__(self, base_url: Optional[str] = None, timeout: Optional[float] = None):
         cfg = get_settings().rag_models_client
         self.base_url = (base_url or cfg.base_url).rstrip("/")
         self.timeout = timeout if timeout is not None else cfg.timeout
         self.embed_batch_size = max(1, int(getattr(cfg, "embed_batch_size", 24) or 24))
+
+    async def _ensure_db_dim(self, dim: int) -> None:
+        """Один раз на смену размерности — привести pgvector к модели."""
+        if dim < 1:
+            return
+        if RagModelsClient._last_ensured_dim == dim:
+            return
+        from app.dependencies import ensure_embedding_dim
+
+        await ensure_embedding_dim(dim)
+        RagModelsClient._last_ensured_dim = dim
 
     async def embed(self, texts: List[str]) -> List[List[float]]:
         """Получить эмбеддинги для списка текстов. Один текст — один вектор."""
@@ -41,6 +54,8 @@ class RagModelsClient:
                 part = data.get("embeddings", [])
                 if len(part) != len(batch):
                     raise ValueError(f"Число эмбеддингов ({len(part)}) не совпадает с размером батча ({len(batch)})")
+                if part and part[0]:
+                    await self._ensure_db_dim(len(part[0]))
                 all_embeddings.extend(part)
         return all_embeddings
 

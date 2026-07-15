@@ -80,10 +80,13 @@ async def select_model(body: RagModelSelectRequest):
         raise HTTPException(status_code=502, detail=err)
 
     current = current_model_paths()
-    return {
+    payload = {
         "success": True,
         "message": "Модель загружена",
         "model_type": body.model_type,
         "model_path": body.model_path,
         "current": current,
     }
+    if body.model_type == "embedding":
+        payload["embedding_dim"] = handler.get("embedding_dim")
+    return payload

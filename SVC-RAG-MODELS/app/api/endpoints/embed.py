@@ -59,5 +59,10 @@ async def embed_texts(request: EmbedRequest):
         embeddings = [embeddings.tolist()]
     else:
         embeddings = embeddings.tolist()
-    dim = handler.get("embedding_dim", len(embeddings[0]) if embeddings else 384)
+    # Всегда берём фактическую длину вектора — конфиг мог устареть после смены модели
+    if embeddings and embeddings[0]:
+        dim = len(embeddings[0])
+        handler["embedding_dim"] = dim
+    else:
+        dim = handler.get("embedding_dim", 384)
     return EmbedResponse(embeddings=embeddings, embedding_dim=int(dim))

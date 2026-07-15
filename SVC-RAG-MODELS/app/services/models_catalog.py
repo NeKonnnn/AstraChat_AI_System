@@ -53,14 +53,29 @@ _HF_RERANKER_CATALOG: List[Dict[str, str]] = [
 ]
 
 _RERANKER_HINTS = ("marco", "cross-encoder", "rerank", "ms-marco", "tinybert")
-_EMBEDDING_HINTS = ("paraphrase", "embedding", "e5-", "bge-", "multilingual-minilm", "minilm-l12")
+_EMBEDDING_HINTS = (
+    "paraphrase",
+    "embedding",
+    "e5-",
+    "bge-",
+    "multilingual-minilm",
+    "minilm-l12",
+    "frida",
+    "giga-",
+)
 
 
-def _guess_kind(folder_name: str) -> Optional[ModelKind]:
+def _guess_kind(folder_name: str, model_dir: str) -> Optional[ModelKind]:
     n = folder_name.lower()
     if any(h in n for h in _RERANKER_HINTS):
         return "reranker"
     if any(h in n for h in _EMBEDDING_HINTS):
+        return "embedding"
+    # sentence-transformers layout (modules.json) — почти всегда embedding,
+    # даже если имя модели не из белого списка (например FRIDA).
+    if os.path.isfile(os.path.join(model_dir, "modules.json")):
+        return "embedding"
+    if os.path.isfile(os.path.join(model_dir, "config_sentence_transformers.json")):
         return "embedding"
     return None
 
@@ -91,7 +106,7 @@ def _scan_local_models(models_dir: str) -> List[Dict[str, Any]]:
         full = os.path.join(models_dir, entry)
         if not _is_model_dir(full):
             continue
-        kind = _guess_kind(entry)
+        kind = _guess_kind(entry, full)
         if kind is None:
             continue
         rows.append(

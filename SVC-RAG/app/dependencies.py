@@ -113,3 +113,29 @@ async def get_project_rag_service() -> ProjectRagService:
             _rag_client = RagModelsClient()
         _project_rag_service = ProjectRagService(_proj_doc_repo, _proj_vector_repo, _rag_client, _graph_repo)
     return _project_rag_service
+
+
+async def ensure_embedding_dim(embedding_dim: int) -> dict:
+    """Синхронизировать размерность pgvector и in-memory репозиториев с моделью."""
+    await get_db()
+    from app.core.config import get_settings
+    from app.database.embedding_schema import migrate_vector_tables
+
+    dim = int(embedding_dim)
+    settings = get_settings()
+    async with await _pg.acquire() as conn:
+        result = await migrate_vector_tables(conn, dim)
+
+    settings.postgresql.embedding_dim = dim
+    for repo in (_vector_repo, _kb_vector_repo, _mem_vector_repo, _proj_vector_repo):
+        if repo is not None:
+            repo.embedding_dim = dim
+
+    if result.get("migrated"):
+        logger.warning(
+            "embedding_dim=%s: миграция schema завершена, cleared_rows=%s tables=%s",
+            dim,
+            result.get("cleared_rows"),
+            result.get("changed_tables"),
+        )
+    return result

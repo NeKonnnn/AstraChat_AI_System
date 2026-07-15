@@ -117,8 +117,21 @@ async def get_rag_models_handler() -> Optional[dict]:
         from sentence_transformers import SentenceTransformer
 
         logger.info(f"Гружу эмбеддинг-модель: {embedding_model}")
-        embedding_model_obj = SentenceTransformer(embedding_model, device=device)
+        embedding_model_obj = SentenceTransformer(
+            embedding_model,
+            device=device,
+            trust_remote_code=True,
+        )
         logger.info("Эмбеддинг-модель загружена")
+
+        # Реальная размерность модели (не конфиг по умолчанию 384)
+        try:
+            detected_dim = int(embedding_model_obj.get_sentence_embedding_dimension())
+        except Exception:
+            detected_dim = int(settings.rag_models.embedding_dim or 384)
+        if detected_dim > 0:
+            settings.rag_models.embedding_dim = detected_dim
+        logger.info("Размерность эмбеддингов: %s", detected_dim)
 
         # Грузим реранкер (CrossEncoder)
         from sentence_transformers import CrossEncoder
@@ -131,7 +144,7 @@ async def get_rag_models_handler() -> Optional[dict]:
             "embedding_model": embedding_model_obj,
             "reranker_model": reranker_model_obj,
             "device": device,
-            "embedding_dim": settings.rag_models.embedding_dim,
+            "embedding_dim": detected_dim,
         }
         return _rag_models
     except Exception as e:

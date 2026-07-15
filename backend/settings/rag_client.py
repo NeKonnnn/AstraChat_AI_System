@@ -175,9 +175,8 @@ class RagClient:
             detail = None
             try:
                 detail = e.response.json()
-            except Exception as e:
-                logger.exception("Ошибка операции")
-                detail = e.response.text
+            except Exception:
+                detail = e.response.text if e.response is not None else None
             if not _cef_skip:
                 with logged_suppress(logger):
                     from backend.settings.cef_logger.cef_audit_context import cef_audit_peek
@@ -373,6 +372,14 @@ class RagClient:
 
     async def health(self) -> Dict[str, Any]:
         return await self._request("GET", "/health")
+
+    async def ensure_embedding_dim(self, embedding_dim: int) -> Dict[str, Any]:
+        """Привести колонки vector(*) в Postgres к размерности текущей модели."""
+        return await self._request(
+            "POST",
+            "/schema/embedding-dim",
+            json={"embedding_dim": int(embedding_dim)},
+        )
 
     async def upload_document(
         self,

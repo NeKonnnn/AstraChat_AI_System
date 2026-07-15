@@ -174,7 +174,18 @@ export default function RagModelSelector({
         );
       }
       setSelectedPath(modelPath);
-      showNotification('success', 'Модель RAG успешно загружена');
+      const migrated = Boolean(data?.schema?.migrated);
+      const cleared = Number(data?.schema?.cleared_rows || 0);
+      if (kind === 'embedding' && migrated) {
+        showNotification(
+          'warning',
+          cleared > 0
+            ? `Модель загружена (dim=${data?.embedding_dim ?? '?'}). Старые векторы очищены — загрузите документы заново.`
+            : `Модель загружена. Схема БД обновлена под dim=${data?.embedding_dim ?? '?'}.`,
+        );
+      } else {
+        showNotification('success', 'Модель RAG успешно загружена');
+      }
       handleClose();
       onModelSelect?.(modelPath);
       await loadModels();
