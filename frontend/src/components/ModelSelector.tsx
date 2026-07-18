@@ -145,14 +145,18 @@ export default function ModelSelector({ isDarkMode, onModelSelect }: ModelSelect
     }
     
     try {
+      // Спиннер до ответа backend: веса реально подтянуты в llm-svc.
       setIsLoadingModel(true);
+      handleClose();
       
       const response = await fetch(getApiUrl('/api/models/load'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model_path: modelPath }),
       });
-      
+      // Сразу снимаем спиннер по факту ответа (веса уже на бэке).
+      setIsLoadingModel(false);
+
       if (response.ok) {
         const data = await response.json();
         if (data.success) {
@@ -163,7 +167,6 @@ export default function ModelSelector({ isDarkMode, onModelSelect }: ModelSelect
           );
           await loadCurrentModel();
           showNotification('success', 'Модель успешно загружена!');
-          handleClose();
           if (onModelSelect) {
             onModelSelect(modelPath);
           }

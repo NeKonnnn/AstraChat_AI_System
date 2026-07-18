@@ -455,14 +455,16 @@ def _parse_configs_from_settings(settings: Any) -> Tuple[List[LLMProviderConfig]
             if not configs:
                 burl = (getattr(llm_service, "base_url", "") or "").strip()
                 if burl:
+                    # id совпадает с default_host_id из YAML (локально — «local»), не «local-llm»
+                    fallback_id = default_host_id or "local"
                     try:
                         configs.append(
                             LLMProviderConfig(
-                                id="local-llm", kind="llm-svc", base_url=burl,
+                                id=fallback_id, kind="llm-svc", base_url=burl,
                                 timeout=timeout, enabled=True,
                             )
                         )
-                        default_id = "local-llm"
+                        default_id = fallback_id
                     except Exception as e:
                         logger.error("Автомиграция single base_url=%r: %s", burl, e)
 

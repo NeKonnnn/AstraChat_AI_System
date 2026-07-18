@@ -428,13 +428,9 @@ export default function AgentSelector({
     if (modelPath === selectedModelPath) { handleClose(); return; }
     const prevModelPath = selectedModelPath;
     try {
+      // Спиннер крутится, пока backend реально подтянет веса (POST /api/models/load).
       setIsLoadingModel(true);
       setLoadingModelPath(modelPath);
-      // Оптимистично переключаем выбранную модель в UI,
-      // чтобы не блокировать пользователя до полного рефреша списков.
-      setSelectedModelPath(modelPath);
-      localStorage.setItem(LAST_SELECTED_MODEL_PATH_STORAGE_KEY, modelPath);
-      onModelSelect?.(modelPath);
       handleClose();
 
       const response = await fetch(getApiUrl('/api/models/load'), {
@@ -442,21 +438,25 @@ export default function AgentSelector({
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({ model_path: modelPath }),
       });
-      const data = await response.json();
-      if (response.ok && data.success) {
-        showNotification('success', 'Модель успешно загружена');
-        // Тяжелый рефреш выполняем в фоне, без блокировки UX.
-        void loadModels(false);
-      } else {
+      // Сразу снимаем спиннер по факту ответа (веса уже на бэке), до парсинга/нотификаций.
+      setIsLoadingModel(false);
+      setLoadingModelPath(null);
+
+      const data = await response.json().catch(() => ({}));
+      if (!(response.ok && data.success)) {
         throw new Error(data.message || data.detail || 'Не удалось загрузить модель');
       }
+
+      setSelectedModelPath(modelPath);
+      localStorage.setItem(LAST_SELECTED_MODEL_PATH_STORAGE_KEY, modelPath);
+      onModelSelect?.(modelPath);
+      showNotification('success', 'Модель успешно загружена');
+      void loadModels(false);
     } catch (e: any) {
-      // Откатываем UI, если backend не подтвердил переключение.
       setSelectedModelPath(prevModelPath);
       if (prevModelPath) {
         localStorage.setItem(LAST_SELECTED_MODEL_PATH_STORAGE_KEY, prevModelPath);
       }
-      if (prevModelPath) onModelSelect?.(prevModelPath);
       showNotification('error', `Ошибка загрузки модели: ${e?.message || e}`);
     } finally {
       setIsLoadingModel(false);

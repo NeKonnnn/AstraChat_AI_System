@@ -144,6 +144,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         headers: {
           Authorization: `Bearer ${token}`,
         },
+        timeout: 10000,
       });
       if (typeof response.data?.server_instance_id === 'string') {
         cacheServerInstanceId(response.data.server_instance_id);
@@ -163,9 +164,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refreshAccessToken = async (refreshToken: string): Promise<string | null> => {
     try {
-      const response = await axios.post(authApiUrl('/api/auth/refresh'), {
-        refresh_token: refreshToken,
-      });
+      const response = await axios.post(
+        authApiUrl('/api/auth/refresh'),
+        { refresh_token: refreshToken },
+        { timeout: 10000 },
+      );
       const { access_token, refresh_token, user: userData } = response.data;
       if (!access_token || !refresh_token) {
         return null;
@@ -191,6 +194,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Инициализация: восстанавливаем сессию только после проверки/refresh (без гонки с API/WS).
   useEffect(() => {
+    let cancelled = false;
+    const AUTH_INIT_HARD_TIMEOUT_MS = 20000;
+
     const initializeAuth = async () => {
       // Сначала убеждаемся, что настройки загружены
       try {
@@ -212,13 +218,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (!savedRefreshToken) {
               console.warn('Access-токен просрочен, refresh отсутствует — очищаем авторизацию');
               clearStoredAuth();
-              setIsLoading(false);
+              if (!cancelled) setIsLoading(false);
               return;
             }
             const refreshedToken = await refreshAccessToken(savedRefreshToken);
             if (!refreshedToken) {
               clearStoredAuth();
-              setIsLoading(false);
+              if (!cancelled) setIsLoading(false);
               return;
             }
             effectiveToken = refreshedToken;
@@ -235,7 +241,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 clearStoredAuth(
                   resolveLoginSessionNoticeReason(error?.response?.data?.detail),
                 );
-                setIsLoading(false);
+                if (!cancelled) setIsLoading(false);
                 return;
               }
               effectiveToken = refreshedToken;
@@ -246,30 +252,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                   clearStoredAuth(
                     resolveLoginSessionNoticeReason(verifyAfterRefresh?.response?.data?.detail),
                   );
-                  setIsLoading(false);
+                  if (!cancelled) setIsLoading(false);
                   return;
                 }
               }
             } else {
               clearStoredAuth(resolveLoginSessionNoticeReason(error?.response?.data?.detail));
-              setIsLoading(false);
+              if (!cancelled) setIsLoading(false);
               return;
             }
           }
 
           const latestUserRaw = localStorage.getItem('auth_user');
-          setToken(localStorage.getItem('auth_token') || effectiveToken);
-          setUser(latestUserRaw ? (JSON.parse(latestUserRaw) as User) : parsedUser);
+          if (!cancelled) {
+            setToken(localStorage.getItem('auth_token') || effectiveToken);
+            setUser(latestUserRaw ? (JSON.parse(latestUserRaw) as User) : parsedUser);
+          }
         } catch (error) {
           console.error('Ошибка при инициализации авторизации:', error);
           clearStoredAuth();
         }
       }
 
-      setIsLoading(false);
+      if (!cancelled) setIsLoading(false);
     };
 
-    initializeAuth();
+    const hardTimeout = window.setTimeout(() => {
+      if (!cancelled) {
+        console.warn('Таймаут инициализации auth — снимаем экран загрузки');
+        setIsLoading(false);
+      }
+    }, AUTH_INIT_HARD_TIMEOUT_MS);
+
+    initializeAuth().finally(() => {
+      window.clearTimeout(hardTimeout);
+    });
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(hardTimeout);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

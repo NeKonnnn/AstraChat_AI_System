@@ -888,19 +888,110 @@ export function AppProvider({ children }: { children: ReactNode }) {
     loadInitialState();
   }, [token]);
 
-  // Сохраняем состояние в localStorage при изменении
+  // Сохраняем состояние в localStorage при изменении.
+  // Полные чаты с base64-картинками быстро превышают квоту (~5 МБ) → QuotaExceededError.
   useEffect(() => {
-    try {
-      const stateToSave = {
-        chats: state.chats,
+    const stripHeavyMessage = (msg: Message): Message => {
+      const { inlineAttachments, inlineAttachmentVariants, documentSearch, mcpToolCalls, ...rest } = msg;
+      const slim: Message = { ...rest };
+      // Превью картинок (data URL) — главный раздуватель квоты; имена/типы оставляем.
+      if (inlineAttachments?.length) {
+        slim.inlineAttachments = inlineAttachments.map(({ preview, ...att }) => ({
+          ...att,
+          preview: preview && preview.startsWith('data:') ? undefined : preview,
+        }));
+      }
+      if (inlineAttachmentVariants?.length) {
+        slim.inlineAttachmentVariants = inlineAttachmentVariants.map((variant) =>
+          (variant || []).map(({ preview, ...att }) => ({
+            ...att,
+            preview: preview && preview.startsWith('data:') ? undefined : preview,
+          })),
+        );
+      }
+      if (documentSearch) {
+        slim.documentSearch = {
+          ...documentSearch,
+          hits: (documentSearch.hits || []).map((h) => ({
+            ...h,
+            content: (h.content || '').slice(0, 200),
+          })),
+        };
+      }
+      if (mcpToolCalls?.length) {
+        slim.mcpToolCalls = mcpToolCalls.map((c) => ({
+          ...c,
+          result: undefined,
+          result_preview: (c.result_preview || '').slice(0, 200),
+          arguments: undefined,
+        }));
+      }
+      // Длинные тексты сообщений тоже режем для offline-кэша (источник правды — backend).
+      if (typeof slim.content === 'string' && slim.content.length > 8000) {
+        slim.content = slim.content.slice(0, 8000) + '\n…';
+      }
+      if (slim.reasoningContent && slim.reasoningContent.length > 4000) {
+        slim.reasoningContent = slim.reasoningContent.slice(0, 4000) + '\n…';
+      }
+      return slim;
+    };
+
+    const buildSlimState = (maxChats: number, maxMessagesPerChat: number) => {
+      const chats = (state.chats || [])
+        .slice()
+        .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+        .slice(0, maxChats)
+        .map((chat) => ({
+          ...chat,
+          messages: (chat.messages || []).slice(-maxMessagesPerChat).map(stripHeavyMessage),
+        }));
+      return {
+        chats,
         currentChatId: state.currentChatId,
         folders: state.folders,
         projects: state.projects,
       };
-      localStorage.setItem('memo-chats', JSON.stringify(stateToSave));
-    } catch (error) {
-      console.error('Ошибка сохранения состояния в localStorage:', error);
+    };
+
+    const trySave = (payload: unknown): boolean => {
+      try {
+        localStorage.setItem('memo-chats', JSON.stringify(payload));
+        return true;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+          return false;
+        }
+        console.error('Ошибка сохранения состояния в localStorage:', error);
+        return true; // другая ошибка — не крутим retry
+      }
+    };
+
+    // 1) обычный slim → 2) сильнее урезаем → 3) только метаданные чатов
+    if (trySave(buildSlimState(40, 80))) return;
+    if (trySave(buildSlimState(20, 30))) return;
+    if (
+      trySave({
+        chats: (state.chats || []).slice(0, 30).map((c) => ({
+          id: c.id,
+          title: c.title,
+          messages: [],
+          createdAt: c.createdAt,
+          updatedAt: c.updatedAt,
+          isArchived: c.isArchived,
+          projectId: c.projectId,
+          isPinnedInProject: c.isPinnedInProject,
+        })),
+        currentChatId: state.currentChatId,
+        folders: state.folders,
+        projects: state.projects,
+      })
+    ) {
+      console.warn('localStorage: сохранены только метаданные чатов (квота переполнена)');
+      return;
     }
+    console.error(
+      'Ошибка сохранения состояния в localStorage: QuotaExceededError — не удалось уместить даже метаданные. Очистите данные сайта для localhost:3000.',
+    );
   }, [state.chats, state.currentChatId, state.folders, state.projects]);
 
   return (
