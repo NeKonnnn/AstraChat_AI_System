@@ -85,7 +85,15 @@ export function mapServerConversationToChat(conversation: any): Chat {
             : undefined;
         const rawAltResponses = Array.isArray(metadata?.alternative_responses)
           ? metadata.alternative_responses.map((v: unknown) => String(v ?? ''))
-          : undefined;
+          : Array.isArray(metadata?.alternativeResponses)
+            ? metadata.alternativeResponses.map((v: unknown) => String(v ?? ''))
+            : undefined;
+        const currentAltIndex =
+          typeof metadata?.current_response_index === 'number'
+            ? metadata.current_response_index
+            : typeof metadata?.currentResponseIndex === 'number'
+              ? metadata.currentResponseIndex
+              : undefined;
 
         const mcpToolCalls = normalizeMcpToolCallList(metadata?.mcp_tool_calls);
         const rawMultiResponses = Array.isArray(metadata?.multi_llm_responses)
@@ -135,9 +143,13 @@ export function mapServerConversationToChat(conversation: any): Chat {
           ...(inlineAttachments?.length ? { inlineAttachments } : {}),
           ...(inlineAttachmentVariants?.length ? { inlineAttachmentVariants } : {}),
           ...(rawAltResponses?.length ? { alternativeResponses: rawAltResponses } : {}),
-          ...(typeof currentImageVariantIndex === 'number'
-            ? { currentResponseIndex: currentImageVariantIndex }
-            : {}),
+          ...(typeof currentAltIndex === 'number'
+            ? { currentResponseIndex: currentAltIndex }
+            : typeof currentImageVariantIndex === 'number'
+              ? { currentResponseIndex: currentImageVariantIndex }
+              : rawAltResponses && rawAltResponses.length > 1
+                ? { currentResponseIndex: rawAltResponses.length - 1 }
+                : {}),
           ...(mcpToolCalls.length ? { mcpToolCalls } : {}),
           ...(multiLLMResponses.length ? { multiLLMResponses } : {}),
           ...(messageFeedback ? { feedback: messageFeedback } : {}),

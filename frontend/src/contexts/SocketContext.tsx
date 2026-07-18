@@ -1174,6 +1174,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     
     // Новый запрос — снимаем флаг остановки
     isStoppedRef.current = false;
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('astrachat-abort-follow-ups'));
+    }
 
     expectMultiLlmResponseRef.current = Boolean(expectMultiLlm);
     const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
@@ -1282,6 +1285,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     regenerationStateRef.current = null;
 
     isStoppedRef.current = false;
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('astrachat-abort-follow-ups'));
+    }
     expectMultiLlmResponseRef.current = true;
     multiLLMMessageRef.current = assistantMessageId;
     multiLLMResponsesRef.current.clear();
@@ -1358,6 +1364,12 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     
     // Новый запрос — снимаем флаг остановки
     isStoppedRef.current = false;
+
+    // Follow-up подсказки держат тот же слот LLM — сбрасываем их до regenerate,
+    // иначе UI «висит» пустым, пока follow-up не освободит gen_lock.
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('astrachat-abort-follow-ups'));
+    }
     
     // Сохраняем состояние перегенерации в ref
     regenerationStateRef.current = {
@@ -1394,6 +1406,8 @@ export function SocketProvider({ children }: { children: ReactNode }) {
       timestamp: new Date().toISOString(),
       regenerate: true, // Флаг перегенерации
       assistant_message_id: assistantMessageId, // ID сообщения помощника для обновления
+      alternative_responses: alternativeResponses,
+      current_response_index: currentIndex,
       conversation_id: chatId,
       agent_id: agentIdForChat,
       rag_strategy: ragStrategy,

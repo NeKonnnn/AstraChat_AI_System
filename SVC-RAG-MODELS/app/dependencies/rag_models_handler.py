@@ -287,23 +287,33 @@ async def get_rag_models_handler() -> Optional[dict]:
         else:
             from sentence_transformers import CrossEncoder
 
+            # ST 5.x: local_files_only — top-level; в model_kwargs даёт
+            # TypeError/KeyError («multiple values» / 'local_files_only').
             try:
                 reranker_model_obj = CrossEncoder(
                     reranker_model,
                     device=device,
                     trust_remote_code=True,
-                    automodel_args={"local_files_only": True},
-                    tokenizer_args={"local_files_only": True},
+                    local_files_only=True,
                 )
             except TypeError:
-                # Новые версии ST: model_kwargs / tokenizer_kwargs
-                reranker_model_obj = CrossEncoder(
-                    reranker_model,
-                    device=device,
-                    trust_remote_code=True,
-                    model_kwargs={"local_files_only": True, "trust_remote_code": True},
-                    tokenizer_kwargs={"local_files_only": True, "trust_remote_code": True},
-                )
+                # Старые ST: automodel_args / tokenizer_args
+                try:
+                    reranker_model_obj = CrossEncoder(
+                        reranker_model,
+                        device=device,
+                        trust_remote_code=True,
+                        automodel_args={"local_files_only": True},
+                        tokenizer_args={"local_files_only": True},
+                    )
+                except TypeError:
+                    reranker_model_obj = CrossEncoder(
+                        reranker_model,
+                        device=device,
+                        trust_remote_code=True,
+                        model_kwargs={"trust_remote_code": True},
+                        tokenizer_kwargs={"trust_remote_code": True},
+                    )
         logger.info("Реранкер загружен")
 
         _rag_models = {

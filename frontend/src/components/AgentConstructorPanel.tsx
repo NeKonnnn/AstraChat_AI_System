@@ -340,10 +340,20 @@ export default function AgentConstructorPanel({ isDarkMode, isOpen }: AgentConst
     setIsLoadingKb(true);
     try {
       const url = getApiUrl(API_ENDPOINTS.KB_DOCUMENTS_LIST);
-      const resp = await fetch(url);
+      const resp = await fetch(url, { headers: getAuthFetchHeaders() });
       if (!resp.ok) return;
       const data = await resp.json();
-      setKbDocuments(data.documents || data || []);
+      const raw = (data.documents || data || []) as Array<Record<string, unknown>>;
+      // Нормализуем id → number, иначе includes() после upload может не совпасть.
+      setKbDocuments(
+        raw.map(d => ({
+          id: Number(d.id),
+          filename: String(d.filename ?? ''),
+          size: d.size != null ? Number(d.size) : null,
+          file_type: d.file_type != null ? String(d.file_type) : null,
+          created_at: d.created_at != null ? String(d.created_at) : null,
+        })).filter(d => Number.isFinite(d.id)),
+      );
     } catch (e) {
       // silent
     } finally {
@@ -417,13 +427,12 @@ export default function AgentConstructorPanel({ isDarkMode, isOpen }: AgentConst
   // ─── KB Upload ───────────────────────────────────────────────────────────────
 
   const handleKbUpload = async (files: FileList) => {
-    if (!fileSearchEnabled) {
-      showNotification('info', 'Сначала включите чекбокс «Включить поиск файлов».');
-      return;
-    }
     if (!files.length) return;
+    // Загрузка в KB агента = поиск по файлам; включаем флаг автоматически.
+    if (!fileSearchEnabled) setFileSearchEnabled(true);
     setIsUploadingKb(true);
     const uploadedIds: number[] = [];
+    const errors: string[] = [];
     const chunkingStrategy =
       (typeof localStorage !== 'undefined' && localStorage.getItem('rag_chunking_strategy')) ||
       'hierarchical';
@@ -440,13 +449,31 @@ export default function AgentConstructorPanel({ isDarkMode, isOpen }: AgentConst
           body: formData,
         });
         const data = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
+        if (!resp.ok) {
+          const detail = data.detail ?? data.error ?? resp.statusText;
+          errors.push(`${file.name}: ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`);
+          continue;
+        }
         const docId = Number(data.document_id ?? data.id);
-        if (Number.isFinite(docId)) uploadedIds.push(docId);
-      } catch (e) { /* silent */ }
+        if (Number.isFinite(docId)) {
+          uploadedIds.push(docId);
+        } else {
+          errors.push(`${file.name}: сервер не вернул document_id`);
+        }
+      } catch (e) {
+        errors.push(`${file.name}: ${e instanceof Error ? e.message : 'ошибка сети'}`);
+      }
     }
     setIsUploadingKb(false);
     if (uploadedIds.length) {
       setKbDocumentIds(prev => Array.from(new Set([...prev, ...uploadedIds])));
+      showNotification(
+        'success',
+        `Загружено файлов: ${uploadedIds.length}. Сохраните агента, чтобы привязка сохранилась.`,
+      );
+    }
+    if (errors.length) {
+      showNotification('error', errors.slice(0, 3).join('; '));
     }
     await loadKbDocuments();
   };
@@ -1019,20 +1046,22 @@ export default function AgentConstructorPanel({ isDarkMode, isOpen }: AgentConst
             />
           </Box>
 
-          {/* File context */}
+          {/* File context — тот же KB upload, что и «Поиск файлов» */}
           <Box>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.75 }}>
               <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.72rem' }}>
                 Контекст файла
               </Typography>
-              <Tooltip title="Файл, доступный агенту как постоянный контекст" arrow>
+              <Tooltip title="Файл индексируется в Базу Знаний агента и доступен через поиск по файлам. После загрузки сохраните агента." arrow>
                 <HelpIcon sx={{ fontSize: 12, color: 'rgba(255,255,255,0.25)' }} />
               </Tooltip>
             </Box>
             <Button
               size="small"
-              startIcon={<AttachIcon sx={{ fontSize: '0.85rem !important' }} />}
+              startIcon={isUploadingKb ? <CircularProgress size={13} sx={{ color: 'inherit' }} /> : <AttachIcon sx={{ fontSize: '0.85rem !important' }} />}
               fullWidth
+              disabled={isUploadingKb || readOnly}
+              onClick={() => kbFileInputRef.current?.click()}
               sx={{
                 fontSize: '0.72rem',
                 textTransform: 'none',
@@ -1041,9 +1070,10 @@ export default function AgentConstructorPanel({ isDarkMode, isOpen }: AgentConst
                 py: 0.75,
                 justifyContent: 'flex-start',
                 '&:hover': { bgcolor: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.35)' },
+                '&:disabled': { color: 'rgba(255,255,255,0.3)', borderColor: 'rgba(255,255,255,0.1)' },
               }}
             >
-              Загрузить файл контекста
+              {isUploadingKb ? 'Загрузка...' : 'Загрузить файл контекста'}
             </Button>
           </Box>
         </Box>
@@ -1226,11 +1256,8 @@ export default function AgentConstructorPanel({ isDarkMode, isOpen }: AgentConst
               size="small"
               startIcon={isUploadingKb ? <CircularProgress size={13} sx={{ color: 'inherit' }} /> : <UploadIcon sx={{ fontSize: '0.85rem !important' }} />}
               fullWidth
-              disabled={isUploadingKb || !fileSearchEnabled}
-              onClick={() => {
-                if (!fileSearchEnabled) return;
-                kbFileInputRef.current?.click();
-              }}
+              disabled={isUploadingKb || readOnly}
+              onClick={() => kbFileInputRef.current?.click()}
               sx={{
                 mt: 0.5,
                 fontSize: '0.72rem',

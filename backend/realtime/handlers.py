@@ -8,6 +8,7 @@ import asyncio
 import concurrent.futures
 import contextvars
 import os
+import re
 from datetime import datetime
 from typing import Any, Dict, Optional
 import backend.app_state as state
@@ -47,7 +48,26 @@ from backend.auth.jwt_handler import decode_token, decode_token_signature_only
 from backend.settings.cef_logger.cef_audit_context import cef_socket_remote_from_environ
 from backend.settings.logging import get_logger
 from backend.mcp.resolvers import resolve_chat_tool_ids
+from backend.database.memory_service import save_assistant_response
 logger = get_logger(__name__)
+
+
+def _regen_save_kwargs(data: Optional[dict]) -> dict:
+    """Параметры regenerate из socket payload для save_assistant_response."""
+    if not isinstance(data, dict):
+        return {"regenerate": False}
+    alts = data.get("alternative_responses")
+    if not isinstance(alts, list):
+        alts = data.get("alternativeResponses")
+    idx = data.get("current_response_index")
+    if not isinstance(idx, int):
+        idx = data.get("currentResponseIndex")
+    return {
+        "regenerate": bool(data.get("regenerate")),
+        "assistant_message_id": str(data.get("assistant_message_id") or "").strip() or None,
+        "alternative_responses": alts if isinstance(alts, list) else None,
+        "current_response_index": idx if isinstance(idx, int) else None,
+    }
 
 
 def _run_sync_preserving_cef_audit(factory):
@@ -796,6 +816,37 @@ async def _handle_multi_llm(
                 },
                 room=sid,
             )
+        # Сохраняем canned multi-LLM ответ в историю
+        try:
+            if conversation_id and multi_llm_models:
+                slots = [
+                    {"model": m, "content": canned, "error": False}
+                    for m in multi_llm_models
+                ]
+                combined = "\n\n".join(f"{s['model']}:\n{s['content']}" for s in slots)
+                assistant_meta = {"multi_llm_responses": slots}
+                if project_id:
+                    from backend.database.memory_service import save_dialog_entry_to_project
+
+                    await save_dialog_entry_to_project(
+                        "assistant",
+                        combined,
+                        project_id,
+                        conversation_id,
+                        metadata=assistant_meta,
+                        user_id=(current_user or {}).get("user_id"),
+                    )
+                else:
+                    await save_dialog_entry(
+                        "assistant",
+                        combined,
+                        assistant_meta,
+                        None,
+                        conversation_id,
+                        user_id=(current_user or {}).get("user_id"),
+                    )
+        except Exception:
+            logger.exception("Ошибка сохранения canned multi-LLM ответа")
         return
     n_models = len(multi_llm_models)
     tool_ids = resolve_chat_tool_ids(data.get("tool_ids") or data.get("mcp_tool_ids"))
@@ -934,6 +985,7 @@ async def _handle_multi_llm(
                     "model": model_name,
                     "response": resp if isinstance(resp, str) else "",
                     "error": False,
+                    "reasoning": (_ml_stream_parts.get("reasoning") or "").strip(),
                 }
             )
         except Exception as e:
@@ -957,6 +1009,71 @@ async def _handle_multi_llm(
             },
             room=sid,
         )
+        results[i] = {
+            "model": multi_llm_models[i] if i < len(multi_llm_models) else "unknown",
+            "response": str(result),
+            "error": True,
+        }
+
+    # Сохраняем агрегированный multi-LLM ответ в историю, чтобы он не исчезал после перезагрузки.
+    try:
+        slots: list = []
+        for i, model_name in enumerate(multi_llm_models):
+            row = results[i] if i < len(results) and isinstance(results[i], dict) else None
+            content = str((row or {}).get("response") or "")
+            reasoning = str((row or {}).get("reasoning") or "").strip()
+            if reasoning and not re.search(r"<think>", content, re.I):
+                content = f"<think>{reasoning}</think>\n\n{content}".strip()
+            has_error = bool((row or {}).get("error", row is None))
+            slot = {
+                "model": str((row or {}).get("model") or model_name),
+                "content": content,
+                "error": has_error,
+            }
+            alts = (row or {}).get("alternative_responses")
+            if isinstance(alts, list) and alts:
+                slot["alternative_responses"] = [str(v) for v in alts]
+            current_idx = (row or {}).get("current_response_index")
+            if isinstance(current_idx, int):
+                slot["current_response_index"] = current_idx
+            slots.append(slot)
+
+        if conversation_id and slots:
+            combined = "\n\n".join(
+                (
+                    f"{slot['model']}:\n{slot['content']}".strip()
+                    if slot.get("content")
+                    else f"{slot['model']}:\n[пустой ответ]"
+                )
+                for slot in slots
+            )
+            assistant_meta = {"multi_llm_responses": slots}
+            if project_id:
+                from backend.database.memory_service import save_dialog_entry_to_project
+
+                await save_dialog_entry_to_project(
+                    "assistant",
+                    combined,
+                    project_id,
+                    conversation_id,
+                    metadata=assistant_meta,
+                    user_id=(current_user or {}).get("user_id"),
+                )
+            else:
+                await save_dialog_entry(
+                    "assistant",
+                    combined,
+                    assistant_meta,
+                    None,
+                    conversation_id,
+                    user_id=(current_user or {}).get("user_id"),
+                )
+    except RuntimeError as e:
+        logger.warning("Не удалось сохранить multi-LLM ответ: %s", e)
+    except Exception:
+        logger.exception("Ошибка сохранения агрегированного multi-LLM ответа")
+
+
 async def _handle_agent_mode(
     sio, sid, data, user_message, streaming, conversation_id,
     history, use_kb_rag, use_memory_library_rag, orchestrator,
@@ -1108,41 +1225,36 @@ async def _handle_agent_mode(
         if response is None:
             await sio.emit("chat_error", {"error": "Не удалось получить ответ от агента"}, room=sid)
             return
-        await sio.emit("chat_complete", {
-            "response": response, "timestamp": datetime.now().isoformat(), "was_streaming": streaming,
-        }, room=sid)
     except Exception as e:
         logger.error(f"Ошибка оркестратора: {e}", exc_info=True)
         await sio.emit("chat_error", {"error": str(e)}, room=sid)
         stop_generation_flags[sid] = False
         return
+    complete_payload = {
+        "response": response,
+        "timestamp": datetime.now().isoformat(),
+        "was_streaming": streaming,
+    }
+    await sio.emit("chat_complete", complete_payload, room=sid)
     try:
         assistant_meta = (
             {"reasoning_content": reasoning_trace_accumulated.strip()}
             if reasoning_trace_accumulated.strip()
             else None
         )
-        if project_id:
-            from backend.database.memory_service import save_dialog_entry_to_project
-            await save_dialog_entry_to_project(
-                "assistant",
-                response,
-                project_id,
-                conversation_id,
-                metadata=assistant_meta,
-                user_id=(current_user or {}).get("user_id"),
-            )
-        else:
-            await save_dialog_entry(
-                "assistant",
-                response,
-                assistant_meta,
-                None,
-                conversation_id,
-                user_id=(current_user or {}).get("user_id"),
-            )
+        regen = _regen_save_kwargs(data)
+        await save_assistant_response(
+            response,
+            assistant_meta,
+            conversation_id=conversation_id,
+            user_id=(current_user or {}).get("user_id"),
+            project_id=project_id,
+            **regen,
+        )
     except Exception as e:
         logger.warning(f"Не удалось сохранить ответ агента: {e}")
+
+
 async def _handle_direct(
     sio, sid, data, user_message, streaming, conversation_id,
     history, use_kb_rag, use_memory_library_rag,
@@ -1563,34 +1675,25 @@ model_path_for_call=eff_model_path,
         stop_generation_flags[sid] = False
         await sio.emit("generation_stopped", {"message": "Генерация остановлена"}, room=sid)
         return
+    stop_generation_flags[sid] = False
+    # Сначала отдаём ответ в UI — иначе зависание Mongo на regenerate блокирует кнопку «Стоп»/стрим.
+    payload = {"response": response, "timestamp": datetime.now().isoformat(), "was_streaming": streaming}
+    if document_search_trace:
+        payload["document_search"] = document_search_trace
+    await sio.emit("chat_complete", payload, room=sid)
     try:
         meta = {"document_search": document_search_trace} if document_search_trace else None
         if reasoning_trace_accumulated.strip():
             meta = dict(meta or {})
             meta["reasoning_content"] = reasoning_trace_accumulated.strip()
-        if project_id:
-            from backend.database.memory_service import save_dialog_entry_to_project
-            await save_dialog_entry_to_project(
-                "assistant",
-                response,
-                project_id,
-                conversation_id,
-                metadata=meta,
-                user_id=(current_user or {}).get("user_id"),
-            )
-        else:
-            await save_dialog_entry(
-                "assistant",
-                response,
-                meta,
-                None,
-                conversation_id,
-                user_id=(current_user or {}).get("user_id"),
-            )
-    except RuntimeError as e:
+        regen = _regen_save_kwargs(data)
+        await save_assistant_response(
+            response,
+            meta,
+            conversation_id=conversation_id,
+            user_id=(current_user or {}).get("user_id"),
+            project_id=project_id,
+            **regen,
+        )
+    except Exception as e:
         logger.warning(f"Не удалось сохранить ответ: {e}")
-    stop_generation_flags[sid] = False
-    payload = {"response": response, "timestamp": datetime.now().isoformat(), "was_streaming": streaming}
-    if document_search_trace:
-        payload["document_search"] = document_search_trace
-    await sio.emit("chat_complete", payload, room=sid)

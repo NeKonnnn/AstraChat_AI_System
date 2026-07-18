@@ -125,7 +125,7 @@ def _generate_sync(
     response = ask_agent(
         prompt,
         history=None,
-        max_tokens=512,
+        max_tokens=256,
         streaming=False,
         model_path=model_path,
         system_prompt=FOLLOW_UP_SYSTEM_PROMPT,

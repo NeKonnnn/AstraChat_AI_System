@@ -205,6 +205,140 @@ async def save_dialog_entry(
             raise RuntimeError(msg) from e
 
 
+def _coerce_alternative_responses(
+    raw: Any,
+    *,
+    fallback_content: str,
+    new_content: str,
+    current_index: Optional[int],
+) -> tuple:
+    """Собирает массив вариантов ответа и индекс текущего для metadata."""
+    new = str(new_content or "")
+    if isinstance(raw, list) and raw:
+        alts = [str(v if v is not None else "") for v in raw]
+        idx = (
+            int(current_index)
+            if isinstance(current_index, int) and current_index >= 0
+            else max(len(alts) - 1, 0)
+        )
+        while len(alts) <= idx:
+            alts.append("")
+        alts[idx] = new
+        return alts, idx
+    base = str(fallback_content or "")
+    if base and base != new:
+        return [base, new], 1
+    return [new], 0
+
+
+async def save_assistant_response(
+    content: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    *,
+    conversation_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+    message_id: Optional[str] = None,
+    regenerate: bool = False,
+    assistant_message_id: Optional[str] = None,
+    alternative_responses: Optional[list] = None,
+    current_response_index: Optional[int] = None,
+) -> Optional[str]:
+    """
+    Сохраняет ответ ассистента.
+
+    При regenerate=True обновляет существующее сообщение (не создаёт новое),
+    записывая alternative_responses / current_response_index в metadata —
+    иначе после F5 варианты «разъезжаются» в отдельные сообщения.
+    """
+    meta = dict(metadata or {})
+    target_id = (assistant_message_id or "").strip() or None
+
+    if regenerate and conversation_id:
+        if not _check_mongodb_available():
+            raise RuntimeError("MongoDB недоступен. Невозможно обновить сообщение.")
+        global conversation_repo
+        if conversation_repo is None:
+            conversation_repo = get_conversation_repository()
+        conv = await conversation_repo.get_conversation(conversation_id)
+        if not conv:
+            logger.warning("Диалог %s не найден для regenerate", conversation_id)
+        else:
+            existing = None
+            if target_id:
+                for msg in conv.messages or []:
+                    if getattr(msg, "message_id", None) == target_id and getattr(msg, "role", None) == "assistant":
+                        existing = msg
+                        break
+            if existing is None:
+                # Фронт мог держать локальный id до синхронизации с Mongo — берём последний assistant.
+                for msg in reversed(conv.messages or []):
+                    if getattr(msg, "role", None) == "assistant":
+                        existing = msg
+                        break
+            if existing is not None:
+                existing_meta = dict(getattr(existing, "metadata", None) or {})
+                prev_alts = (
+                    alternative_responses
+                    if isinstance(alternative_responses, list) and alternative_responses
+                    else existing_meta.get("alternative_responses")
+                    or existing_meta.get("alternativeResponses")
+                )
+                alts, idx = _coerce_alternative_responses(
+                    prev_alts,
+                    fallback_content=str(getattr(existing, "content", "") or ""),
+                    new_content=content,
+                    current_index=current_response_index,
+                )
+                merged = {**existing_meta, **meta}
+                merged["alternative_responses"] = alts
+                merged["current_response_index"] = idx
+                ok = await conversation_repo.update_assistant_message(
+                    conversation_id,
+                    existing.message_id,
+                    content=content,
+                    metadata=merged,
+                )
+                if ok:
+                    return str(existing.message_id)
+                logger.warning(
+                    "Не удалось обновить assistant %s при regenerate — сохраняем как новое",
+                    getattr(existing, "message_id", None),
+                )
+
+        alts, idx = _coerce_alternative_responses(
+            alternative_responses,
+            fallback_content="",
+            new_content=content,
+            current_index=current_response_index,
+        )
+        meta["alternative_responses"] = alts
+        meta["current_response_index"] = idx
+
+    effective_id = message_id or target_id
+    if project_id:
+        ok = await save_dialog_entry_to_project(
+            "assistant",
+            content,
+            project_id,
+            conversation_id,
+            effective_id,
+            metadata=meta or None,
+            user_id=user_id,
+        )
+        return effective_id if ok else None
+
+    await save_dialog_entry(
+        "assistant",
+        content,
+        meta or None,
+        effective_id,
+        conversation_id,
+        user_id=user_id,
+    )
+    return effective_id
+
+
 async def load_dialog_history_mongodb(conversation_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Загрузка истории диалога из MongoDB
