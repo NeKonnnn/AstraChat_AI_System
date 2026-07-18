@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -54,7 +54,7 @@ export interface ModelParamsState {
 }
 
 const defaultParams: ModelParamsState = {
-  provider: 'SC',
+  provider: 'local',
   model: '',
   contextTokens: 'Системная',
   outputTokens: 'Системная',
@@ -71,6 +71,14 @@ const defaultParams: ModelParamsState = {
   fileTokenLimit: 'Системная',
 };
 
+export interface ProviderModelOption {
+  name: string;
+  path: string;
+  display_name?: string;
+  provider_id?: string;
+  llm_host_id?: string;
+}
+
 interface ModelParametersModalProps {
   open: boolean;
   onClose: () => void;
@@ -83,6 +91,17 @@ interface ModelParametersModalProps {
   /** Тонкая настройка модели (из конструктора агента): при задании показывается блок внутри меню и сохраняется через onSaveModelSettings */
   initialModelSettings?: ModelSettingsState;
   onSaveModelSettings?: (s: ModelSettingsState) => void;
+  /** Каталог моделей с провайдерами (id из config, напр. local). Если задан — провайдер выбирается из реальных подключений, модели фильтруются по провайдеру. */
+  providerModels?: ProviderModelOption[];
+  /** Порядок/список id провайдеров для выпадающего списка. */
+  providerIds?: string[];
+}
+
+/** Провайдер (первый сегмент пути ``<provider>/<model_id>``). */
+function providerOfPath(path: string): string {
+  const p = (path || '').replace(/^llm-svc:\/\//i, '');
+  if (!p) return '';
+  return p.includes('/') ? p.split('/')[0] : '';
 }
 
 const inputSx = {
@@ -120,10 +139,9 @@ const outlinedSelectSx = {
   '& .MuiFormLabel-asterisk': { color: '#f44336' },
 } as const;
 
+/** Fallback, если /api/llm-providers ещё не ответил. Id должен совпадать с config (microservices.llm.hosts[].id). */
 const PROVIDER_OPTIONS = [
-  { value: 'SC', label: 'SC' },
-  { value: 'OpenAI', label: 'OpenAI' },
-  { value: 'Local', label: 'Local' },
+  { value: 'local', label: 'local' },
 ];
 
 function formatModelLabel(path: string) {
@@ -140,6 +158,8 @@ export default function ModelParametersModal({
   variant = 'modal',
   initialModelSettings,
   onSaveModelSettings,
+  providerModels,
+  providerIds,
 }: ModelParametersModalProps) {
   const [params, setParams] = useState<ModelParamsState>({ ...defaultParams, model: currentModel });
   const [stopInput, setStopInput] = useState('');
@@ -148,19 +168,61 @@ export default function ModelParametersModal({
   const hasModelSettings = initialModelSettings != null && onSaveModelSettings != null;
   const [modelSettings, setModelSettings] = useState<ModelSettingsState>(() => ({ ...MODEL_SETTINGS_DEFAULT, ...initialModelSettings }));
 
+  // ─── Режим провайдеров (CORSUR / Phoenix …) ──────────────────────────────────
+  const providerMode = Array.isArray(providerModels) && providerModels.length > 0;
+  const providerOptions = useMemo(() => {
+    if (!providerMode) return PROVIDER_OPTIONS;
+    const ids =
+      providerIds && providerIds.length
+        ? providerIds
+        : Array.from(
+            new Set(
+              (providerModels || [])
+                .map(m => m.provider_id || providerOfPath(m.path))
+                .filter(Boolean),
+            ),
+          );
+    return ids.map(id => ({ value: id as string, label: id as string }));
+  }, [providerMode, providerModels, providerIds]);
+
+  const selectedProvider = params.provider || '';
+
+  const providerFilteredModels = useMemo(() => {
+    if (!providerMode) return availableModels;
+    return (providerModels || [])
+      .filter(m => (m.provider_id || providerOfPath(m.path)) === selectedProvider)
+      .map(m => m.path);
+  }, [providerMode, providerModels, availableModels, selectedProvider]);
+
+  const modelLabelOf = useCallback(
+    (path: string) => {
+      if (providerMode) {
+        const found = (providerModels || []).find(m => m.path === path);
+        if (found) return (found.display_name || found.name || formatModelLabel(path)).replace(/\.gguf$/i, '');
+      }
+      return formatModelLabel(path);
+    },
+    [providerMode, providerModels],
+  );
+
   useEffect(() => {
     if (open) {
+      const nextModel = currentModel || (initialParams?.model as string) || '';
       setParams(prev => ({
         ...defaultParams,
         ...prev,
         ...initialParams,
-        model: currentModel || (initialParams?.model as string) || prev.model,
+        model: nextModel || prev.model,
+        provider: providerMode
+          ? providerOfPath(nextModel || prev.model) || (initialParams?.provider as string) || prev.provider
+          : (initialParams?.provider as string) || prev.provider,
       }));
       if (hasModelSettings && initialModelSettings) {
         setModelSettings({ ...MODEL_SETTINGS_DEFAULT, ...initialModelSettings });
       }
     }
-  }, [open, currentModel, initialParams, hasModelSettings, initialModelSettings]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, currentModel, initialParams, hasModelSettings, initialModelSettings, providerMode]);
 
   const handleReset = () => {
     setParams({ ...defaultParams, model: params.model });
@@ -203,8 +265,9 @@ export default function ModelParametersModal({
               <OutlinedInput
                 id="model-params-provider"
                 label="Провайдер"
-                value={PROVIDER_OPTIONS.find(o => o.value === params.provider)?.label ?? params.provider}
+                value={providerOptions.find(o => o.value === params.provider)?.label ?? params.provider}
                 readOnly
+                placeholder="Выберите провайдера"
                 onClick={e => setProviderAnchor(e.currentTarget)}
                 endAdornment={
                   <InputAdornment position="end">
@@ -224,11 +287,16 @@ export default function ModelParametersModal({
               slotProps={{ paper: { sx: getDropdownPopoverPaperSx(providerAnchor) } }}
             >
               <Box sx={{ py: 0.5 }}>
-                {PROVIDER_OPTIONS.map(o => (
+                {providerOptions.map(o => (
                   <Box
                     key={o.value}
                     onClick={() => {
-                      setParams(p => ({ ...p, provider: o.value }));
+                      setParams(p => {
+                        if (!providerMode) return { ...p, provider: o.value };
+                        // При смене провайдера сбрасываем модель, если она не из этого провайдера
+                        const keepModel = providerOfPath(p.model) === o.value ? p.model : '';
+                        return { ...p, provider: o.value, model: keepModel };
+                      });
                       setProviderAnchor(null);
                     }}
                     sx={{
@@ -241,6 +309,11 @@ export default function ModelParametersModal({
                     {o.label}
                   </Box>
                 ))}
+                {providerOptions.length === 0 && (
+                  <Box sx={{ px: 1.5, py: 1, fontSize: '0.78rem', color: 'rgba(255,255,255,0.4)' }}>
+                    Нет доступных провайдеров
+                  </Box>
+                )}
               </Box>
             </Popover>
           </Box>
@@ -252,10 +325,16 @@ export default function ModelParametersModal({
               <OutlinedInput
                 id="model-params-model"
                 label="Модель"
-                value={params.model ? formatModelLabel(params.model) : ''}
-                placeholder="Выберите модель"
+                value={params.model ? modelLabelOf(params.model) : ''}
+                placeholder={providerMode && !selectedProvider ? 'Сначала выберите провайдера' : 'Выберите модель'}
                 readOnly
-                onClick={e => setModelAnchor(e.currentTarget)}
+                onClick={e => {
+                  if (providerMode && !selectedProvider) {
+                    setProviderAnchor(e.currentTarget);
+                    return;
+                  }
+                  setModelAnchor(e.currentTarget);
+                }}
                 endAdornment={
                   <InputAdornment position="end">
                     <ExpandMoreIcon
@@ -283,7 +362,7 @@ export default function ModelParametersModal({
                   '&::-webkit-scrollbar-thumb': { bgcolor: 'rgba(255,255,255,0.12)', borderRadius: 2 },
                 }}
               >
-                {availableModels.map(m => (
+                {providerFilteredModels.map(m => (
                   <Box
                     key={m}
                     onClick={() => {
@@ -299,9 +378,14 @@ export default function ModelParametersModal({
                       wordBreak: 'break-word',
                     }}
                   >
-                    {formatModelLabel(m)}
+                    {modelLabelOf(m)}
                   </Box>
                 ))}
+                {providerFilteredModels.length === 0 && (
+                  <Box sx={{ px: 1.5, py: 1, fontSize: '0.78rem', color: 'rgba(255,255,255,0.4)' }}>
+                    {providerMode && !selectedProvider ? 'Сначала выберите провайдера' : 'Нет моделей'}
+                  </Box>
+                )}
               </Box>
             </Popover>
           </Box>

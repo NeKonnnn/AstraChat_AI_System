@@ -22,7 +22,8 @@ def _rag_models_request_url(base_url: str, path: str) -> str:
 
 
 class RagModelsClient:
-    def __init__(self, base_url: Optional[str] = None, timeout: float = 120.0):
+    def __init__(self, base_url: Optional[str] = None, timeout: float = 600.0):
+        # LLM-реранкеры (MiniCPM ~2B) на CPU грузятся минутами — 120с мало.
         settings = get_settings()
         if base_url:
             self.base_url = base_url.strip().rstrip("/")
@@ -38,7 +39,8 @@ class RagModelsClient:
                     )
                 except ValueError:
                     self.base_url = "http://localhost:8010"
-        self.timeout = timeout
+        env_timeout = os.getenv("RAG_MODELS_HTTP_TIMEOUT", "").strip()
+        self.timeout = float(env_timeout) if env_timeout else timeout
 
     async def _request(
         self,
@@ -51,7 +53,19 @@ class RagModelsClient:
         url = _rag_models_request_url(self.base_url, path)
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             resp = await client.request(method=method, url=url, json=json, params=params)
-            resp.raise_for_status()
+            if resp.is_error:
+                detail = None
+                try:
+                    body = resp.json()
+                    detail = body.get("detail") or body.get("message")
+                    if isinstance(detail, list):
+                        detail = "; ".join(str(x) for x in detail)
+                except Exception:
+                    detail = (resp.text or "").strip()[:500] or None
+                msg = f"{resp.status_code} {resp.reason_phrase}"
+                if detail:
+                    msg = f"{msg}: {detail}"
+                raise httpx.HTTPStatusError(msg, request=resp.request, response=resp)
             return resp.json()
 
     async def list_models(self, model_type: Optional[str] = None) -> Dict[str, Any]:

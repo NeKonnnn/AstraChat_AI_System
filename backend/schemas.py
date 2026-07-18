@@ -124,7 +124,7 @@ class RAGSettings(BaseModel):
     rag_rerank_top_n: Optional[int] = None
     # Пользовательский системный промпт для ответа с RAG-контекстом
     rag_system_prompt: Optional[str] = None
-    # Пути выбранных моделей (local/... или huggingface/...)
+    # Пути выбранных моделей (local/<папка> в models/rag)
     rag_embedding_model_path: Optional[str] = None
     rag_reranker_model_path: Optional[str] = None
 

@@ -40,8 +40,10 @@ export async function applyAgentModelAndSettings(
   const jsonHeaders: HeadersInit = { 'Content-Type': 'application/json', ...authHeaders };
 
   let mp = typeof opts.model_path === 'string' ? sanitizeModelPath(opts.model_path) : '';
+  // Формат path: <provider_id>/<model_id> (локально provider_id = local).
+  // Legacy llm-svc:// и голые имена без '/' — нормализуем в local/<name>.
   if (mp && !mp.startsWith('llm-svc://') && !mp.includes('/') && !mp.toLowerCase().endsWith('.gguf')) {
-    mp = `llm-svc://${mp}`;
+    mp = `local/${mp}`;
   }
 
   // ── 1. Веса модели (как при выборе «Модели» в селекторе) ──

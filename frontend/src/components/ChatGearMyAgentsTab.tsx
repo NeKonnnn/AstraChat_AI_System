@@ -46,13 +46,24 @@ export default function ChatGearMyAgentsTab({ isDarkMode, searchQuery, visible }
   const loadAgents = useCallback(async () => {
     setLoadingAgents(true);
     try {
-      const url = getApiUrl('/api/agents/my/agents');
-      const resp = await fetch(url, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!resp.ok) return;
-      const data = await resp.json();
-      setAgents(data.agents || []);
+      const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
+      const [mineResp, sharedResp] = await Promise.all([
+        fetch(getApiUrl('/api/agents/my/agents'), { headers }),
+        fetch(getApiUrl('/api/agents/my/shared'), { headers }),
+      ]);
+      const mine = mineResp.ok ? ((await mineResp.json()).agents || []) : [];
+      const shared = sharedResp.ok
+        ? ((await sharedResp.json()).agents || []).map((a: Agent) => ({
+            ...a,
+            is_shared_with_me: true,
+          }))
+        : [];
+      const byId = new Map<number, Agent>();
+      for (const a of mine as Agent[]) byId.set(a.id, a);
+      for (const a of shared as Agent[]) {
+        if (!byId.has(a.id)) byId.set(a.id, a);
+      }
+      setAgents(Array.from(byId.values()));
     } catch {
       /* silent */
     } finally {
@@ -237,17 +248,29 @@ export default function ChatGearMyAgentsTab({ isDarkMode, searchQuery, visible }
               }}
             >
               <AgentIcon sx={{ fontSize: 18, color: iconColor, flexShrink: 0 }} />
-              <Typography
-                sx={{
-                  flex: 1,
-                  minWidth: 0,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  fontSize: MENU_ACTION_TEXT_SIZE,
-                }}
-              >
-                {agent.name}
-              </Typography>
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography
+                  sx={{
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    fontSize: MENU_ACTION_TEXT_SIZE,
+                  }}
+                >
+                  {agent.name}
+                </Typography>
+                {agent.is_shared_with_me && (
+                  <Typography
+                    sx={{
+                      fontSize: '0.65rem',
+                      color: subtleColor,
+                      lineHeight: 1.2,
+                    }}
+                  >
+                    от {agent.author_name || agent.author_id || 'коллеги'}
+                  </Typography>
+                )}
+              </Box>
               {loadingAgentId === agent.id ? (
                 <CircularProgress size={14} sx={{ flexShrink: 0, color: 'primary.main' }} />
               ) : activeAgent?.id === agent.id ? (

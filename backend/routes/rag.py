@@ -310,6 +310,18 @@ async def list_rag_models(type: str | None = None):
         raise HTTPException(status_code=503, detail="RAG-models service недоступен")
     try:
         data = await rag_models_client.list_models(type)
+        # Только local; внешние каталоги (huggingface и т.п.) отфильтровываем
+        models = data.get("models") or {}
+        for kind_key in ("embedding", "reranker"):
+            rows = models.get(kind_key) or []
+            models[kind_key] = [
+                r
+                for r in rows
+                if str((r or {}).get("source") or "").lower() in ("local", "")
+                or str((r or {}).get("path") or "").lower().startswith("local/")
+            ]
+        data["models"] = models
+        data["offline"] = True
         saved_emb = str(getattr(state, "rag_embedding_model_path", "") or "")
         saved_rer = str(getattr(state, "rag_reranker_model_path", "") or "")
         if saved_emb or saved_rer:
@@ -384,38 +396,51 @@ async def select_rag_model(body: RagModelSelectRequest):
     if not model_path:
         raise HTTPException(status_code=400, detail="model_path обязателен")
     logger.debug("[RAG-CFG] Выбор RAG-модели: type=%s, path=%s", model_type, model_path)
+    if model_path.lower().startswith("huggingface/"):
+        raise HTTPException(
+            status_code=400,
+            detail="Источник huggingface отключён: выберите local/<папка> из models/rag",
+        )
+    if not (
+        model_path.lower().startswith("local/")
+        or "/" not in model_path  # имя папки без префикса — тоже local
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Допускаются только локальные модели: local/<папка> из models/rag",
+        )
     try:
         result = await rag_models_client.select_model(model_type, model_path)
         updates: dict = {}
+        # Колонки pgvector создаются один раз (CREATE IF NOT EXISTS) —
+        # при смене embedding-модели нужно привести vector(N) к фактической dim.
+        emb_dim = result.get("embedding_dim") if isinstance(result, dict) else None
+        if emb_dim is None and rag_models_client:
+            try:
+                health = await rag_models_client.health()
+                emb_dim = health.get("embedding_dim") if isinstance(health, dict) else None
+            except Exception:
+                logger.exception("Не удалось получить embedding_dim из health")
+        if emb_dim and rag_client:
+            try:
+                schema = await rag_client.ensure_embedding_dim(int(emb_dim))
+                if isinstance(result, dict):
+                    result = {**result, "schema": schema}
+            except Exception:
+                logger.exception(
+                    "Не удалось синхронизировать embedding_dim=%s в SVC-RAG",
+                    emb_dim,
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        f"Модель загружена, но схема БД не перешла на dim={emb_dim}. "
+                        "Переиндексация может падать с expected N dimensions."
+                    ),
+                ) from None
         if model_type == "embedding":
             state.rag_embedding_model_path = model_path
             updates["rag_embedding_model_path"] = model_path
-            # Колонки pgvector создаются один раз (CREATE IF NOT EXISTS) —
-            # при смене модели нужно привести vector(N) к фактической dim.
-            emb_dim = result.get("embedding_dim") if isinstance(result, dict) else None
-            if emb_dim is None and rag_models_client:
-                try:
-                    health = await rag_models_client.health()
-                    emb_dim = health.get("embedding_dim") if isinstance(health, dict) else None
-                except Exception:
-                    logger.exception("Не удалось получить embedding_dim из health")
-            if emb_dim and rag_client:
-                try:
-                    schema = await rag_client.ensure_embedding_dim(int(emb_dim))
-                    if isinstance(result, dict):
-                        result = {**result, "schema": schema}
-                except Exception:
-                    logger.exception(
-                        "Не удалось синхронизировать embedding_dim=%s в SVC-RAG",
-                        emb_dim,
-                    )
-                    raise HTTPException(
-                        status_code=502,
-                        detail=(
-                            f"Модель загружена, но схема БД не перешла на dim={emb_dim}. "
-                            "Переиндексация может падать с expected N dimensions."
-                        ),
-                    ) from None
         else:
             state.rag_reranker_model_path = model_path
             updates["rag_reranker_model_path"] = model_path

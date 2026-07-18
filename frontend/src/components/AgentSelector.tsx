@@ -38,6 +38,10 @@ export interface Agent {
   config?: Record<string, unknown>;
   author_id: string;
   author_name?: string;
+  /** Агент расшарен текущему пользователю (не автор). */
+  is_shared_with_me?: boolean;
+  /** Роль: owner | editor | viewer */
+  my_permission?: string;
 }
 
 interface ModelItem {

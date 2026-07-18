@@ -559,6 +559,67 @@ def authenticate_ldap(username: str, password: str) -> Optional[Dict]:
         )
 
 
+def fetch_ldap_user_profile(username: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Профиль пользователя из LDAP (service bind), без пароля пользователя.
+
+    Используется для подтягивания ФИО в шаринге агентов и т.п.
+    """
+    if not LDAP_AVAILABLE or not is_ldap_enabled():
+        return None
+    settings = _get_ldap_settings()
+    if not settings.get("bind_dn") or not settings.get("bind_credentials"):
+        return None
+    lookup_names: List[str] = []
+    for name in (username, user_id):
+        normalized = (name or "").strip()
+        if normalized and normalized not in lookup_names:
+            lookup_names.append(normalized)
+    for lookup_name in lookup_names:
+        try:
+            attrs = _service_bind_lookup_user(lookup_name, settings)
+        except HTTPException:
+            raise
+        except (LDAPBindError, LDAPException):
+            return None
+        if not attrs:
+            continue
+        if _ldap_account_status_error(attrs):
+            return None
+        ldap_username = _extract_first(attrs, settings["id_attr"]) or lookup_name
+        full_name = (
+            _extract_first(attrs, settings["full_name_attr"])
+            or _extract_first(attrs, "displayName")
+            or _extract_first(attrs, "cn")
+        )
+        email = (
+            _extract_first(attrs, settings["email_attr"])
+            or _extract_first(attrs, "mail")
+            or _extract_first(attrs, "userPrincipalName")
+        )
+        group_values = attrs.get("memberOf") or []
+        groups = [str(group) for group in group_values]
+        group_names = [_extract_group_cn(g) for g in groups if _extract_group_cn(g)]
+        admin_groups = [g.lower() for g in settings["admin_groups"]]
+        is_admin = any(
+            any(
+                f"cn={admin_group}," in group.lower() or group.lower() == admin_group
+                for admin_group in admin_groups
+            )
+            for group in groups
+        )
+        return {
+            "user_id": ldap_username,
+            "username": ldap_username,
+            "email": email,
+            "full_name": full_name,
+            "is_active": True,
+            "is_admin": is_admin,
+            "groups": group_names,
+            "ldap_groups": groups,
+        }
+    return None
+
+
 def is_ldap_enabled() -> bool:
     """Проверить, включена ли LDAP аутентификация."""
     settings = _get_ldap_settings()

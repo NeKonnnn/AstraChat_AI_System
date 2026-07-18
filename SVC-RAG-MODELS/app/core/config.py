@@ -63,21 +63,26 @@ class LoggingConfig(BaseModel):
 
 
 class RagModelsConfig(BaseModel):
-    """Настройки эмбеддингов и реранкера. Можно указать свои папки с моделями и работать офлайн."""
+    """Настройки эмбеддингов и реранкера — только локальные папки в models_dir."""
+
     enabled: bool = True
-    # Папка, куда кладём кэш HF и свои модели
+    # Папка с локальными весами (+ рабочий кэш transformers, если writable)
     models_dir: str = os.environ.get("RAG_MODELS_DIR", "/app/models/rag")
-    # Эмбеддинг: имя с HF или подпапка в models_dir 
+    # Активный эмбеддинг: имя подпапки в models_dir (из RAG_EMBEDDING_MODEL)
     embedding_model: Optional[str] = os.environ.get("RAG_EMBEDDING_MODEL")
-    # Реранкер: то же самое 
+    # Активный реранкер: имя подпапки (из RAG_RERANKER_MODEL)
     reranker_model: Optional[str] = os.environ.get("RAG_RERANKER_MODEL")
-    # Только локальные веса, в интернет не качаем
-    offline: bool = os.environ.get("RAG_MODELS_OFFLINE", "0").strip().lower() in ("1", "true", "yes")
+    # Только локальные веса, без сетевых загрузок
+    offline: bool = os.environ.get("RAG_MODELS_OFFLINE", "1").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
     device: str = os.environ.get("RAG_MODELS_DEVICE", "cpu")  # cpu, cuda или auto
-    # Дефолтные имена с HuggingFace, если свои не задали
-    embedding_model_default: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-    reranker_model_default: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    embedding_dim: int = 384  # у MiniLM-L12 вектор такой длины
+    # Дефолтные имена папок, если ENV не задан
+    embedding_model_default: str = "paraphrase-multilingual-MiniLM-L12-v2"
+    reranker_model_default: str = "ms-marco-MiniLM-L-6-v2"
+    embedding_dim: int = 384
     # Размер батча encode(); на CPU держите 8–16, на GPU можно 32–64
     embed_batch_size: int = int(os.environ.get("RAG_MODELS_EMBED_BATCH_SIZE", "16"))
 
