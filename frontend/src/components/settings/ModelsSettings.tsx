@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Box,
   Typography,
@@ -63,6 +63,9 @@ export default function ModelsSettings() {
     streaming_speed: 20,
   });
 
+  const settingsLoadedRef = useRef(false);
+  const skipNextAutosaveRef = useRef(false);
+
   const [maxValues, setMaxValues] = useState({
     context_size: 32768,
     output_tokens: 8192,
@@ -109,7 +112,7 @@ export default function ModelsSettings() {
   const [selectedModelForPrompt, setSelectedModelForPrompt] = useState<string>('');
   const [showModelPromptDialog, setShowModelPromptDialog] = useState(false);
 
-  const { showNotification } = useAppActions();
+  const { showNotification, setModelSettings: syncGlobalModelSettings } = useAppActions();
 
   useEffect(() => {
     loadSettings();
@@ -126,11 +129,15 @@ export default function ModelsSettings() {
     return () => window.removeEventListener('interfaceSettingsChanged', handleSettingsChange);
   }, []);
 
-  // Автосохранение настроек модели
+  // Автосохранение настроек модели (только после загрузки с сервера)
   useEffect(() => {
+    if (!settingsLoadedRef.current || skipNextAutosaveRef.current) {
+      skipNextAutosaveRef.current = false;
+      return;
+    }
     const timeoutId = setTimeout(() => {
       saveModelSettings();
-    }, 1000); // Сохраняем через 1 секунду после изменения
+    }, 1000);
 
     return () => clearTimeout(timeoutId);
   }, [modelSettings]);
@@ -138,10 +145,15 @@ export default function ModelsSettings() {
   const loadSettings = async () => {
     try {
       // Загружаем настройки модели
-      const modelResponse = await fetch(getApiUrl('/api/models/settings'));
+      const modelResponse = await fetch(getApiUrl('/api/models/settings'), {
+        headers: getAuthFetchHeaders(),
+      });
       if (modelResponse.ok) {
         const modelData = await modelResponse.json();
+        skipNextAutosaveRef.current = true;
         setModelSettings(prev => ({ ...prev, ...modelData }));
+        syncGlobalModelSettings({ ...MODEL_SETTINGS_DEFAULT, ...modelData, streaming_speed: modelData.streaming_speed ?? 20 });
+        settingsLoadedRef.current = true;
       }
       
       // Загружаем максимальные значения
@@ -161,12 +173,13 @@ export default function ModelsSettings() {
     try {
       const response = await fetch(getApiUrl('/api/models/settings'), {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthFetchHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(modelSettings),
       });
       
       if (response.ok) {
         showNotification('success', 'Настройки модели сохранены');
+        syncGlobalModelSettings(modelSettings);
         window.dispatchEvent(
           new CustomEvent(MODEL_SETTINGS_CHANGED_EVENT, {
             detail: { context_size: modelSettings.context_size },

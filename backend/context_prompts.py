@@ -174,6 +174,43 @@ class ContextPromptManager:
         
         # 3. Иначе используем глобальный промпт
         return self.get_global_prompt()
+
+    def enrich_models_with_prompts(self, models: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Добавляет context_prompt и has_custom_prompt к списку моделей из LLM registry."""
+        enriched: List[Dict[str, Any]] = []
+        model_prompts = self.context_prompts.get("model_prompts", {})
+        for model in models:
+            path = str(model.get("path") or "").strip()
+            row = dict(model)
+            row["context_prompt"] = self.get_model_prompt(path) if path else self.get_global_prompt()
+            row["has_custom_prompt"] = bool(path and path in model_prompts)
+            enriched.append(row)
+        return enriched
+
+    def resolve_chat_system_prompt(
+        self,
+        model_path: Optional[str],
+        *,
+        agent_system_prompt: Optional[str] = None,
+        project_instructions: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        Собирает system prompt для чата.
+        Контекстные инструкции применяются, только если у агента нет своего промпта.
+        """
+        parts: List[str] = []
+        agent_sp = (agent_system_prompt or "").strip()
+        if not agent_sp:
+            ctx = self.get_effective_prompt(model_path) if model_path else self.get_global_prompt()
+            ctx = (ctx or "").strip()
+            if ctx:
+                parts.append(ctx)
+        proj = (project_instructions or "").strip()
+        if proj:
+            parts.append(proj)
+        if agent_sp:
+            parts.append(agent_sp)
+        return "\n\n".join(parts) if parts else None
     
     def get_models_list(self) -> List[Dict[str, Any]]:
         """Получение списка всех моделей с их промптами"""
@@ -227,5 +264,5 @@ class ContextPromptManager:
             print(f"Ошибка при импорте промптов: {e}")
             return False
 
-# Создаем глобальный экземпляр менеджера
+# Создаем глобальный экземпляр менеджера (seed/defaults; персональные — через user_llm_settings)
 context_prompt_manager = ContextPromptManager()

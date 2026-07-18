@@ -26,6 +26,10 @@ from backend.realtime.helpers import (
     _resolve_agent_chat_params,
     kb_search_agent_documents,
 )
+from backend.services.user_llm_settings import (
+    enrich_agent_profile_with_user_settings,
+    get_user_prompt_manager,
+)
 from backend.realtime.rag_evidence import (
     build_rag_id_to_filename,
     filter_rag_hits_by_score,
@@ -391,7 +395,14 @@ def register_handlers(sio):
                 if requested_rag_strategy in _VALID_RAG_STRATEGIES
                 else state.current_rag_strategy
             )
-            agent_profile = await _resolve_agent_chat_params(data.get("agent_id"))
+            agent_profile = await _resolve_agent_chat_params(
+                data.get("agent_id"),
+                validated_user.get("user_id") if validated_user else None,
+            )
+            agent_profile = await enrich_agent_profile_with_user_settings(
+                agent_profile,
+                validated_user.get("user_id") if validated_user else None,
+            )
             agent_kb_enabled = bool(agent_profile.get("file_search_enabled"))
             agent_kb_doc_ids = agent_profile.get("kb_document_ids") or []
             use_agent_scoped_kb = (
@@ -544,6 +555,7 @@ def register_handlers(sio):
                     inline_context=inline_context,
                     inline_images=inline_images,
                     current_user=validated_user,
+                    agent_profile=agent_profile,
                 )
                 return
             # -- AGENT mode
@@ -598,6 +610,7 @@ async def _handle_multi_llm(
     inline_context: str = "",
     inline_images: list = None,
     current_user=None,
+    agent_profile=None,
 ):
     multi_llm_models = get_model_comparison_models()
     if not multi_llm_models:
@@ -651,30 +664,8 @@ async def _handle_multi_llm(
                 logger.info(f"[multi-llm project_rag] {len(proj_hits)} фрагментов, project={project_id}")
         except Exception as e:
             logger.error(f"multi-llm project RAG error: {e}")
-    # Глобальный RAG контекст (если нет контекста из проекта)
-    if rag_client and final_user_message == user_message:
-        global_attempted = True
-        try:
-            glob_rows = list(await rag_client.list_documents() or [])
-            glob_id_name = build_rag_id_to_filename(glob_rows)
-            hits = await rag_client.search(user_message, k=get_rag_chat_top_k(), strategy=rag_strategy)
-            hits = filter_rag_hits_by_score(hits, min_sim)
-            if hits:
-                parts, total = [], 0
-                for i, (content, score, doc_id, chunk_idx) in enumerate(hits, 1):
-                    title = rag_document_label(doc_id, glob_id_name)
-                    frag = f"Фрагмент {i} (документ «{title}», чанк {chunk_idx}, релевантность: {score:.2f}):\n{content}\n"
-                    if total + len(frag) > 12000:
-                        frag = frag[:max(0, 12000 - total - 80)] + "\n... [обрезано]\n"
-                        parts.append(frag)
-                        break
-                    parts.append(frag)
-                    total += len(frag)
-                final_user_message = f"Контекст: {chr(10).join(parts)}\nВопрос: {user_message}"
-                context_added = True
-        except Exception as e:
-            logger.error(f"multi-llm RAG error: {e}")
-    # KB (глобальная БЗ или только документы выбранного агента) / memory_rag
+    # «Библиотека» = KB + memory-rag. Global /search сюда НЕ подмешиваем —
+    # иначе в multi-LLM ответы уезжают в чужие документы без явного включения БЗ.
     if rag_client and (use_kb_rag or use_agent_scoped_kb):
         prefix = "База Знаний (постоянные документы)"
         try:
@@ -742,12 +733,33 @@ async def _handle_multi_llm(
         (current_user or {}).get("user_id"),
         conversation_id=conversation_id,
     )
-    eff_system_prompt = project_instructions.strip() if project_instructions else None
-    eff_system_prompt = merge_feedback_into_system_prompt(eff_system_prompt, feedback_block)
-    if context_added:
-        eff_system_prompt = merge_strict_rag_system_prompt(
-            eff_system_prompt, rag_override=getattr(state, "rag_system_prompt", None)
-        )
+    rag_override = getattr(state, "rag_system_prompt", None)
+    user_cpm = await get_user_prompt_manager((current_user or {}).get("user_id"))
+    if user_cpm is None:
+        user_cpm = state.context_prompt_manager
+
+    def _system_prompt_for_model(model_path: Optional[str]) -> Optional[str]:
+        prompt = None
+        agent_sp = (agent_profile.get("system_prompt") or "") if isinstance(agent_profile, dict) else ""
+        if user_cpm:
+            prompt = user_cpm.resolve_chat_system_prompt(
+                model_path,
+                agent_system_prompt=agent_sp,
+                project_instructions=project_instructions,
+            )
+        elif project_instructions and project_instructions.strip():
+            prompt = project_instructions.strip()
+        elif agent_sp and agent_sp.strip():
+            prompt = agent_sp.strip()
+        prompt = merge_feedback_into_system_prompt(prompt, feedback_block)
+        if context_added:
+            prompt = merge_strict_rag_system_prompt(prompt, rag_override=rag_override)
+        return prompt
+
+    # Для обратной совместимости с кодом ниже, ожидающим одну eff_system_prompt
+    eff_system_prompt = _system_prompt_for_model(
+        (agent_profile.get("model_path") if isinstance(agent_profile, dict) else None) or get_current_model_path()
+    )
     canned = await maybe_rag_no_evidence_message(
         rag_client,
         block_when_no_evidence=rag_block,
@@ -875,11 +887,32 @@ async def _handle_multi_llm(
                     logger.error("Multi-LLM MCP error model=%s: %s", model_name, mcp_exc, exc_info=True)
 
             model_path = model_name
-            def _model_stream_cb(chunk, acc):
+            # reasoning и content копятся отдельно; в multi_llm_chunk отдаём combined с <think>,
+            # чтобы на фронте работал блок «Думает» (как в обычном чате через chat_thinking).
+            _ml_stream_parts = {"reasoning": "", "content": ""}
+
+            def _model_stream_cb(chunk, acc, stream_role="content"):
                 if stop_generation_flags.get(sid, False):
                     return False
+                role = (stream_role or "content").strip().lower()
+                if role == "reasoning":
+                    _ml_stream_parts["reasoning"] = acc or ""
+                else:
+                    _ml_stream_parts["content"] = acc or ""
+                reasoning = (_ml_stream_parts["reasoning"] or "").strip()
+                content_part = _ml_stream_parts["content"] or ""
+                if reasoning and content_part:
+                    combined = f"<think>{reasoning}</think>\n\n{content_part}"
+                elif reasoning:
+                    combined = f"<think>{reasoning}</think>"
+                else:
+                    combined = content_part
                 asyncio.run_coroutine_threadsafe(
-                    sio.emit("multi_llm_chunk", {"model": model_name, "chunk": chunk, "accumulated": acc}, room=sid),
+                    sio.emit(
+                        "multi_llm_chunk",
+                        {"model": model_name, "chunk": chunk, "accumulated": combined},
+                        room=sid,
+                    ),
                     loop,
                 )
                 return True
@@ -1396,9 +1429,19 @@ async def _handle_direct(
         context_added = True
         logger.info(f"[direct inline_context] {len(inline_context)} символов, RAG-контекст {'совмещён' if final_message != inline_block else 'не применялся'}")
     eff_model_path = agent_profile["model_path"] or get_current_model_path()
-    # Формируем итоговый системный промпт: инструкции проекта + промпт агента
     base_system_prompt = agent_profile["system_prompt"] or ""
-    if project_instructions and project_instructions.strip():
+    user_cpm = await get_user_prompt_manager((current_user or {}).get("user_id"))
+    if user_cpm is None:
+        user_cpm = state.context_prompt_manager
+    if user_cpm:
+        eff_system_prompt = user_cpm.resolve_chat_system_prompt(
+            eff_model_path,
+            agent_system_prompt=base_system_prompt,
+            project_instructions=project_instructions,
+        )
+        if project_instructions and project_instructions.strip():
+            logger.debug(f"[direct] project_instructions применены к system_prompt (project={project_id})")
+    elif project_instructions and project_instructions.strip():
         if base_system_prompt:
             eff_system_prompt = f"{project_instructions.strip()}\n\n{base_system_prompt}"
         else:

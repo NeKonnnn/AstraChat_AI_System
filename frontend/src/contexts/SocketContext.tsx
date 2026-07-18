@@ -559,7 +559,29 @@ export function SocketProvider({ children }: { children: ReactNode }) {
             responseAccumulatedRef.current,
           );
           if (currentMessageRef.current) {
-            updateMessage(currentChatIdRef.current, currentMessageRef.current, thinkingCombined, true);
+            // При перегенерации UI читает alternativeResponses[currentIndex], не content —
+            // иначе «Думает» не появляется, пока не придёт первый chunk ответа.
+            if (regenerationStateRef.current?.isRegenerating) {
+              const updatedAlternatives = [...regenerationStateRef.current.alternativeResponses];
+              const currentIndex = regenerationStateRef.current.currentIndex;
+              if (currentIndex < updatedAlternatives.length) {
+                updatedAlternatives[currentIndex] = thinkingCombined;
+              } else {
+                updatedAlternatives.push(thinkingCombined);
+              }
+              regenerationStateRef.current.alternativeResponses = updatedAlternatives;
+              updateMessage(
+                currentChatIdRef.current,
+                currentMessageRef.current,
+                thinkingCombined,
+                true,
+                undefined,
+                updatedAlternatives,
+                currentIndex,
+              );
+            } else {
+              updateMessage(currentChatIdRef.current, currentMessageRef.current, thinkingCombined, true);
+            }
           } else {
             // Создаём сообщение заранее, чтобы thinking был виден до первого chunk
             const messageId = addMessage(currentChatIdRef.current, {
@@ -662,10 +684,20 @@ export function SocketProvider({ children }: { children: ReactNode }) {
           multiLLMMessageRef.current = messageId;
         }
         
-        // Обновляем или добавляем ответ для завершенной модели
+        // Обновляем или добавляем ответ для завершенной модели.
+        // В режиме thinking финальный data.response часто без <think> (reasoning ушёл в стрим) —
+        // сохраняем блок рассуждений из последнего multi_llm_chunk.
+        const prevStreamed = multiLLMResponsesRef.current.get(completedModel)?.content || '';
+        let finalContent = completedContent;
+        if (!hasError && prevStreamed) {
+          const thinkMatch = prevStreamed.match(/<think>[\s\S]*?<\/think>/i);
+          if (thinkMatch && !/<think>/i.test(completedContent)) {
+            finalContent = `${thinkMatch[0]}\n\n${completedContent}`.trim();
+          }
+        }
         multiLLMResponsesRef.current.set(completedModel, {
           model: completedModel,
-          content: completedContent,
+          content: finalContent,
           isStreaming: false,
           error: hasError,
         });

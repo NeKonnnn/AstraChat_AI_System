@@ -7,6 +7,7 @@ import { buildBranchChatTitle, cloneMessagesForBranch } from '../utils/branchCha
 import { mapServerConversationToChat } from '../utils/mapServerConversation';
 import type { MessageFeedback } from '../constants/messageFeedback';
 import type { ChatInputSuggestion } from '../chat/inputSuggestions';
+import { MODEL_SETTINGS_CHANGED_EVENT } from '../utils/contextTokens';
 
 export type { MessageFeedback };
 
@@ -826,6 +827,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Загружаем состояние из localStorage при инициализации
   const [state, dispatch] = useReducer(appReducer, initialState);
   const { token } = useAuth();
+
+  // Персональные настройки модели с бэкенда (по user_id)
+  useEffect(() => {
+    const loadModelSettings = async () => {
+      try {
+        const effectiveToken = token || localStorage.getItem('auth_token');
+        const response = await fetch(getApiUrl('/api/models/settings'), {
+          headers: effectiveToken ? { Authorization: `Bearer ${effectiveToken}` } : {},
+        });
+        if (response.ok) {
+          const data = await response.json();
+          dispatch({
+            type: 'SET_MODEL_SETTINGS',
+            payload: { ...initialState.modelSettings, ...data },
+          });
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    void loadModelSettings();
+
+    const onSettingsChanged = () => {
+      void loadModelSettings();
+    };
+    window.addEventListener(MODEL_SETTINGS_CHANGED_EVENT, onSettingsChanged);
+    return () => window.removeEventListener(MODEL_SETTINGS_CHANGED_EVENT, onSettingsChanged);
+  }, [token]);
 
   // Инициализация/перезагрузка состояния при смене токена (LDAP login/logout)
   useEffect(() => {

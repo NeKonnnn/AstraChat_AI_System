@@ -310,7 +310,9 @@ export default function SettingsPage() {
     setIsLoading(true);
     try {
       // Загружаем настройки модели
-      const modelResponse = await fetch(getApiUrl('/api/models/settings'));
+      const modelResponse = await fetch(getApiUrl('/api/models/settings'), {
+        headers: getAuthFetchHeaders(),
+      });
       if (modelResponse.ok) {
         const modelData = await modelResponse.json();
         setModelSettings(prev => ({ ...prev, ...modelData }));
@@ -386,7 +388,7 @@ export default function SettingsPage() {
       // Сохраняем настройки модели
       const modelResponse = await fetch(getApiUrl('/api/models/settings'), {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthFetchHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(modelSettings),
       });
       
@@ -437,7 +439,9 @@ export default function SettingsPage() {
     setIsLoading(true);
     try {
       // Загружаем настройки модели
-      const settingsResponse = await fetch(getApiUrl('/api/models/settings'));
+      const settingsResponse = await fetch(getApiUrl('/api/models/settings'), {
+        headers: getAuthFetchHeaders(),
+      });
       if (settingsResponse.ok) {
         const settingsData = await settingsResponse.json();
         setModelSettings(prev => ({ ...prev, ...settingsData }));
@@ -466,7 +470,7 @@ export default function SettingsPage() {
     try {
       const response = await fetch(getApiUrl('/api/models/settings'), {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthFetchHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(modelSettings),
       });
       
@@ -490,7 +494,7 @@ export default function SettingsPage() {
     try {
       const response = await fetch(getApiUrl('/api/models/settings/reset'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthFetchHeaders({ 'Content-Type': 'application/json' }),
       });
       
       if (response.ok) {

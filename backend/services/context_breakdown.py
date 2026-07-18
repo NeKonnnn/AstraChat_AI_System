@@ -8,9 +8,10 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from backend.app_state import context_prompt_manager, model_settings, rag_system_prompt
+from backend.app_state import rag_system_prompt
 from backend.realtime.helpers import _resolve_agent_chat_params
 from backend.rag_query.prompts import merge_strict_rag_system_prompt
+from backend.services.user_llm_settings import get_user_model_settings, get_user_prompt_manager
 
 _MCP_TOKENS_CACHE: Dict[str, Tuple[int, float]] = {}
 _MCP_CACHE_TTL_SEC = 120.0
@@ -25,13 +26,15 @@ def estimate_tokens(text: str) -> int:
     return base + math.ceil(special / 2) + math.ceil(newlines / 2)
 
 
-def _resolve_max_context_tokens() -> int:
+async def _resolve_max_context_tokens(user_id: Optional[str] = None) -> int:
     configured = None
-    if model_settings:
-        try:
-            configured = int(model_settings.get("context_size") or 0) or None
-        except (TypeError, ValueError):
-            configured = None
+    try:
+        user_ms = await get_user_model_settings(user_id)
+        configured = int(user_ms.get("context_size") or 0) or None
+    except (TypeError, ValueError):
+        configured = None
+    except Exception:
+        configured = None
     return configured or 8192
 
 
@@ -107,8 +110,9 @@ async def build_context_overhead(
     Сегменты «скрытого» контекста, как в realtime/handlers.py (без истории и черновика).
     """
     segments: List[Dict[str, Any]] = []
+    user_id = (user or {}).get("user_id") if user else None
 
-    agent_profile = await _resolve_agent_chat_params(agent_id)
+    agent_profile = await _resolve_agent_chat_params(agent_id, user_id)
     agent_prompt = (agent_profile.get("system_prompt") or "").strip()
     project_text = (project_instructions or "").strip()
 
@@ -133,16 +137,14 @@ async def build_context_overhead(
         )
 
     context_eff = ""
-    if context_prompt_manager and model_path:
-        try:
-            context_eff = (context_prompt_manager.get_effective_prompt(model_path) or "").strip()
-        except Exception:
-            context_eff = ""
-    elif context_prompt_manager:
-        try:
-            context_eff = (context_prompt_manager.get_global_prompt() or "").strip()
-        except Exception:
-            context_eff = ""
+    try:
+        cpm = await get_user_prompt_manager(user_id)
+        if model_path:
+            context_eff = (cpm.get_effective_prompt(model_path) or "").strip()
+        else:
+            context_eff = (cpm.get_global_prompt() or "").strip()
+    except Exception:
+        context_eff = ""
 
     if context_eff:
         # В websocket-пути без агента context prompt может не уйти в API (registry).
@@ -158,14 +160,15 @@ async def build_context_overhead(
 
     if use_kb_rag:
         rag_block = merge_strict_rag_system_prompt("", rag_override=rag_system_prompt)
-        segments.append(
-            {
-                "id": "rag_rules",
-                "label": "RAG (правила)",
-                "tokens": estimate_tokens(rag_block),
-                "active": True,
-            }
-        )
+        if rag_block:
+            segments.append(
+                {
+                    "id": "rag_rules",
+                    "label": "RAG (правила)",
+                    "tokens": estimate_tokens(rag_block),
+                    "active": True,
+                }
+            )
 
     mcp_tokens = await _estimate_mcp_tools_tokens(tool_ids, user)
     if mcp_tokens > 0:
@@ -182,7 +185,7 @@ async def build_context_overhead(
     overhead_all = sum(s["tokens"] for s in segments)
 
     return {
-        "max_tokens": _resolve_max_context_tokens(),
+        "max_tokens": await _resolve_max_context_tokens(user_id),
         "segments": segments,
         "overhead_tokens_active": overhead_active,
         "overhead_tokens_configured": overhead_all,

@@ -5,20 +5,30 @@ routes/models.py - управление моделями
 import asyncio
 import os
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import Annotated, List, Optional, Tuple
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 import backend.app_state as state
 from backend.app_state import (
     model_settings, update_model_settings,
     get_model_info, get_current_model_path, save_app_settings, load_app_settings,
 )
+from backend.auth.jwt_handler import get_current_user
 from backend.schemas import ModelSettings, ModelLoadRequest, ModelLoadResponse
+from backend.services.user_llm_settings import (
+    get_user_model_settings,
+    reset_user_model_settings,
+    save_user_model_settings,
+)
 from backend.settings.logging import get_logger
 
 router = APIRouter(prefix="/api/models", tags=["models"])
 logger = get_logger(__name__)
+
+
+def _uid(current_user: dict) -> str:
+    return str(current_user.get("user_id") or current_user.get("username") or "").strip()
 
 
 @router.get("/current")
@@ -172,40 +182,34 @@ async def load_model(request: ModelLoadRequest):
 
 
 @router.get("/settings")
-async def get_model_settings():
-    defaults = {"context_size": 2048, "output_tokens": 512, "temperature": 0.7, "top_p": 0.95,
-                "repeat_penalty": 1.05, "top_k": 40, "min_p": 0.05, "frequency_penalty": 0.0,
-                "presence_penalty": 0.0, "use_gpu": False, "streaming": True, "streaming_speed": 20}
-    if not model_settings:
-        return defaults
+async def get_model_settings(current_user: Annotated[dict, Depends(get_current_user)]):
     try:
-        return model_settings.get_all()
-    except Exception as e:
-        logger.error(f"model_settings.get_all error: {e}")
-        return defaults
+        return await get_user_model_settings(_uid(current_user))
+    except Exception:
+        logger.exception("get_user_model_settings error")
+        return await get_user_model_settings(None)
 
 
 @router.put("/settings")
-async def update_model_settings_api(settings_data: ModelSettings):
-    if not update_model_settings:
-        raise HTTPException(status_code=503, detail="AI agent не доступен")
+async def update_model_settings_api(
+    settings_data: ModelSettings, current_user: Annotated[dict, Depends(get_current_user)]
+):
     try:
-        if update_model_settings(settings_data.dict()):
-            return {"message": "Настройки обновлены", "success": True}
-        raise HTTPException(status_code=400, detail="Не удалось обновить настройки")
+        saved = await save_user_model_settings(_uid(current_user), settings_data.dict())
+        return {"message": "Настройки обновлены", "success": True, "settings": saved}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Ошибка операции")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/settings/reset")
-async def reset_model_settings():
-    if not model_settings:
-        raise HTTPException(status_code=503, detail="AI agent не доступен")
+async def reset_model_settings(current_user: Annotated[dict, Depends(get_current_user)]):
     try:
-        model_settings.reset_to_defaults()
-        return {"message": "Настройки сброшены", "success": True, "settings": model_settings.get_all()}
+        settings = await reset_user_model_settings(_uid(current_user))
+        return {"message": "Настройки сброшены", "success": True, "settings": settings}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Ошибка операции")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/settings/recommended")

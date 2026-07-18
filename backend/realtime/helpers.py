@@ -114,7 +114,7 @@ async def kb_search_agent_documents(
     return hits_out[:k]
 
 
-async def _resolve_agent_chat_params(agent_id_raw) -> dict:
+async def _resolve_agent_chat_params(agent_id_raw, user_id=None) -> dict:
     """Модель и параметры из карточки агента (конструктор)."""
     empty = {
         "model_path": None,
@@ -135,7 +135,11 @@ async def _resolve_agent_chat_params(agent_id_raw) -> dict:
         repo = get_agent_repository()
         if repo is None:
             return empty
-        ag = await repo.get_agent(aid, None)
+        if user_id is not None and hasattr(repo, "user_can_access_agent"):
+            if not await repo.user_can_access_agent(aid, user_id):
+                logger.warning(f"[chat] нет доступа к agent_id={aid} для user={user_id}")
+                return empty
+        ag = await repo.get_agent(aid, user_id)
         if not ag:
             return empty
         cfg = ag.config if isinstance(ag.config, dict) else {}
@@ -151,7 +155,7 @@ async def _resolve_agent_chat_params(agent_id_raw) -> dict:
             elif "/" in mp or mp.lower().endswith(".gguf") or (len(mp) > 2 and mp[1] == ":"):
                 out["model_path"] = mp
             else:
-                out["model_path"] = f"llm-svc://{mp}"
+                out["model_path"] = f"local/{mp}" if not mp.startswith("local/") else mp
         ms = cfg.get("model_settings")
         if isinstance(ms, dict):
             if ms.get("output_tokens") is not None:
