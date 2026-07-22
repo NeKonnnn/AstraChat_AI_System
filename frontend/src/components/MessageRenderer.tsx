@@ -109,6 +109,7 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
   
   // Используем useRef для стабильного хранения состояния меню (не сбросится при ререндерах!)
   const selectedTextRef = useRef<string>('');
+  const selectedHtmlRef = useRef<string>('');
   const menuAnchorRef = useRef<HTMLElement | null>(null);
   const menuPositionRef = useRef<{ top: number; left: number } | null>(null);
   const selectedElementRef = useRef<HTMLElement | null>(null);
@@ -158,22 +159,228 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
     return s;
   }, []);
 
-  const getSelectionPlainText = useCallback((): string => {
+  const getSelectionClipboardPayload = useCallback((): { plain: string; html: string } => {
     const selection = window.getSelection();
-    if (!selection || selection.isCollapsed || selection.rangeCount === 0) return '';
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+      return { plain: '', html: '' };
+    }
 
     const range = selection.getRangeAt(0);
     const temp = document.createElement('div');
     temp.appendChild(range.cloneContents());
 
-    // Удаляем номера строк из выделения кода перед копированием.
-    temp.querySelectorAll('.react-syntax-highlighter-line-number').forEach((el) => el.remove());
+    temp
+      .querySelectorAll(
+        '.react-syntax-highlighter-line-number, .margin-view-overlays, .line-numbers, .monaco-editor .margin',
+      )
+      .forEach((el) => el.remove());
 
-    const fromInnerText = (temp as HTMLDivElement).innerText || '';
-    const fromTextContent = temp.textContent || '';
-    const fallback = selection.toString() || '';
+    // Клон с emotion-классами: временно в DOM, чтобы getComputedStyle видел bold/italic/underline.
+    temp.setAttribute('data-astra-copy-root', '1');
+    temp.style.cssText =
+      'position:fixed;left:-99999px;top:0;width:680px;opacity:0;pointer-events:none;white-space:normal;';
+    document.body.appendChild(temp);
 
-    return (fromInnerText || fromTextContent || fallback).replace(/\u00A0/g, ' ').trimEnd();
+    const escapeText = (value: string) =>
+      value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+
+    type StyleFlags = { bold: boolean; italic: boolean; underline: boolean; strike: boolean };
+
+    const isBold = (cs: CSSStyleDeclaration) =>
+      cs.fontWeight === 'bold' || cs.fontWeight === 'bolder' || parseInt(cs.fontWeight, 10) >= 600;
+    const isItalic = (cs: CSSStyleDeclaration) => cs.fontStyle === 'italic' || cs.fontStyle === 'oblique';
+    const deco = (cs: CSSStyleDeclaration) =>
+      `${cs.textDecorationLine || ''} ${cs.textDecoration || ''}`.toLowerCase();
+    const isUnderline = (cs: CSSStyleDeclaration) => deco(cs).includes('underline');
+    const isStrike = (cs: CSSStyleDeclaration) => deco(cs).includes('line-through');
+
+    const BLOCK_RE =
+      /^(div|p|li|ul|ol|h[1-6]|tr|blockquote|pre|table|thead|tbody|tfoot|section|article|header|footer|hr)$/i;
+
+    const serialize = (node: Node, inherited: StyleFlags): { plain: string; html: string } => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        const text = (node.textContent || '').replace(/\u00A0/g, ' ');
+        return { plain: text, html: escapeText(text) };
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return { plain: '', html: '' };
+
+      const el = node as HTMLElement;
+      const tag = el.tagName.toLowerCase();
+      if (tag === 'style' || tag === 'script' || tag === 'noscript') return { plain: '', html: '' };
+      if (tag === 'br') return { plain: '\n', html: '<br>' };
+      if (tag === 'hr') return { plain: '\n---\n', html: '<hr>' };
+
+      let cs: CSSStyleDeclaration | null = null;
+      try {
+        cs = window.getComputedStyle(el);
+      } catch {
+        cs = null;
+      }
+
+      const boldHere = cs ? isBold(cs) : tag === 'strong' || tag === 'b';
+      const italicHere = cs ? isItalic(cs) : tag === 'em' || tag === 'i';
+      const underlineHere = cs ? isUnderline(cs) : tag === 'u' || tag === 'ins';
+      const strikeHere = cs ? isStrike(cs) : tag === 's' || tag === 'del' || tag === 'strike';
+      const nextInherited: StyleFlags = {
+        bold: inherited.bold || boldHere,
+        italic: inherited.italic || italicHere,
+        underline: inherited.underline || underlineHere,
+        strike: inherited.strike || strikeHere,
+      };
+
+      let plain = '';
+      let html = '';
+      for (let i = 0; i < el.childNodes.length; i += 1) {
+        const child = serialize(el.childNodes[i], nextInherited);
+        plain += child.plain;
+        html += child.html;
+      }
+
+      const wrapInline = (innerHtml: string, innerPlain: string) => {
+        let h = innerHtml;
+        if (boldHere && !inherited.bold) h = `<strong>${h}</strong>`;
+        if (italicHere && !inherited.italic) h = `<em>${h}</em>`;
+        if (underlineHere && !inherited.underline) h = `<u>${h}</u>`;
+        if (strikeHere && !inherited.strike) h = `<s>${h}</s>`;
+        return { plain: innerPlain, html: h };
+      };
+
+      if (tag === 'code' && el.closest('pre') == null) {
+        return { plain, html: `<code>${html}</code>` };
+      }
+      if (tag === 'pre') {
+        return {
+          plain: plain.endsWith('\n') ? plain : `${plain}\n`,
+          html: `<pre style="white-space:pre-wrap;font-family:Consolas,monospace;">${html}</pre>`,
+        };
+      }
+      if (/^h[1-6]$/.test(tag)) {
+        const wrapped = wrapInline(html, plain);
+        return {
+          plain: `${wrapped.plain}\n`,
+          html: `<${tag}>${wrapped.html}</${tag}>`,
+        };
+      }
+      if (tag === 'li' || (cs && cs.display === 'list-item')) {
+        const valueAttr = el.getAttribute('value');
+        let prefix = '• ';
+        let parent: Node | null = el.parentNode;
+        let inOrdered = valueAttr != null && valueAttr !== '';
+        while (parent && parent !== temp) {
+          if (parent.nodeType === Node.ELEMENT_NODE) {
+            const pt = (parent as HTMLElement).tagName.toLowerCase();
+            if (pt === 'ol') {
+              inOrdered = true;
+              break;
+            }
+            if (pt === 'ul') {
+              inOrdered = false;
+              break;
+            }
+          }
+          parent = parent.parentNode;
+        }
+        if (inOrdered) prefix = valueAttr ? `${valueAttr}. ` : '• ';
+        const wrapped = wrapInline(html, plain);
+        const body = wrapped.plain.replace(/^[ \t]+|[ \t]+$/g, '');
+        return {
+          plain: `${prefix}${body}\n`,
+          html: `<li>${wrapped.html}</li>`,
+        };
+      }
+      if (tag === 'ul' || tag === 'ol') {
+        return {
+          plain: plain.endsWith('\n') ? plain : `${plain}\n`,
+          html: `<${tag}>${html}</${tag}>`,
+        };
+      }
+      if (tag === 'blockquote') {
+        const wrapped = wrapInline(html, plain);
+        return {
+          plain: `${wrapped.plain}\n`,
+          html: `<blockquote>${wrapped.html}</blockquote>`,
+        };
+      }
+      if (tag === 'td' || tag === 'th') {
+        return {
+          plain: `${plain.replace(/\n+/g, ' ').trim()}\t`,
+          html: `<${tag}>${html}</${tag}>`,
+        };
+      }
+      if (tag === 'tr') {
+        return {
+          plain: `${plain.replace(/\t$/, '')}\n`,
+          html: `<tr>${html}</tr>`,
+        };
+      }
+      if (tag === 'table') {
+        return { plain, html: `<table>${html}</table>` };
+      }
+
+      const wrapped = wrapInline(html, plain);
+      if (BLOCK_RE.test(tag) || (cs && (cs.display === 'block' || cs.display === 'flex'))) {
+        const hasBlockChild = /<(p|div|ul|ol|h[1-6]|li|pre|blockquote|table|tr)\b/i.test(html);
+        const plainOut = wrapped.plain
+          ? wrapped.plain.endsWith('\n')
+            ? wrapped.plain
+            : `${wrapped.plain}\n`
+          : '\n';
+        if (hasBlockChild) {
+          return { plain: plainOut, html: wrapped.html };
+        }
+        return {
+          plain: plainOut,
+          html: `<p>${wrapped.html}</p>`,
+        };
+      }
+      return wrapped;
+    };
+
+    let plain = '';
+    let html = '';
+    try {
+      for (let i = 0; i < temp.childNodes.length; i += 1) {
+        const part = serialize(temp.childNodes[i], {
+          bold: false,
+          italic: false,
+          underline: false,
+          strike: false,
+        });
+        plain += part.plain;
+        html += part.html;
+      }
+    } finally {
+      temp.remove();
+    }
+
+    if (!plain.trim()) {
+      plain = selection.toString() || '';
+    }
+
+    plain = plain
+      .replace(/\u00A0/g, ' ')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trimEnd();
+
+    html = html
+      .replace(/<p>\s*<\/p>/g, '')
+      .replace(/(<\/p>)\s*(<p>)/g, '$1$2')
+      .trim();
+
+    if (html && !/^</.test(html)) {
+      html = `<p>${html}</p>`;
+    }
+
+    const richHtml = html
+      ? `<!DOCTYPE html><html><body><!--StartFragment-->${html}<!--EndFragment--></body></html>`
+      : '';
+
+    return { plain, html: richHtml };
   }, []);
 
   // Слушаем изменения размера шрифта
@@ -210,6 +417,7 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
     menuPositionRef.current = null;
     selectedElementRef.current = null;
     selectedTextRef.current = '';
+    selectedHtmlRef.current = '';
     setMenuVisible(false);
   }, []);
 
@@ -263,12 +471,14 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
     const selection = window.getSelection();
     
     if (selection && selection.toString().trim()) {
-      const text = getSelectionPlainText().trim();
+      const payload = getSelectionClipboardPayload();
+      const text = payload.plain.trim();
       
       const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
       if (range && containerRef.current && containerRef.current.contains(range.commonAncestorContainer)) {
         if (text.length > 0) {
           selectedTextRef.current = text;
+          selectedHtmlRef.current = payload.html;
           
           setTimeout(() => {
             let anchorElement: HTMLElement | null = null;
@@ -304,11 +514,13 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
     const selection = window.getSelection();
     
     if (selection && selection.toString().trim()) {
-      const text = getSelectionPlainText().trim();
+      const payload = getSelectionClipboardPayload();
+      const text = payload.plain.trim();
       
       const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
       if (range && containerRef.current && containerRef.current.contains(range.commonAncestorContainer)) {
         selectedTextRef.current = text;
+        selectedHtmlRef.current = payload.html;
         
         setTimeout(() => {
           let anchorElement: HTMLElement | null = null;
@@ -341,7 +553,17 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
   const handleCopy = async () => {
     try {
       const textToCopy = selectedTextRef.current;
-      await navigator.clipboard.writeText(textToCopy);
+      const htmlToCopy = selectedHtmlRef.current;
+      if (htmlToCopy && typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            'text/plain': new Blob([textToCopy], { type: 'text/plain' }),
+            'text/html': new Blob([htmlToCopy], { type: 'text/html' }),
+          }),
+        ]);
+      } else {
+        await navigator.clipboard.writeText(textToCopy);
+      }
       setCopiedCode(textToCopy);
       setTimeout(() => setCopiedCode(null), 2000);
     } catch (error) {
@@ -1661,13 +1883,16 @@ const MessageRendererComponent: React.FC<MessageRendererProps> = ({ content, isS
       onMouseUp={onSendMessage && !menuVisible ? handleTextSelection : undefined}
       onDoubleClick={onSendMessage && !menuVisible ? handleDoubleClick : undefined}
       onCopy={(event) => {
-        const selected = getSelectionPlainText();
-        if (!selected) return;
+        const payload = getSelectionClipboardPayload();
+        if (!payload.plain) return;
 
-        // Форсируем plain text в буфере, чтобы при Ctrl+V вставлялся
-        // текст как видит пользователь, без HTML-разметки.
+        // Plain + HTML: в Word/почту попадает жирный/курсив/заголовки,
+        // в обычный инпут — читаемый текст с переносами.
         event.preventDefault();
-        event.clipboardData.setData('text/plain', selected);
+        event.clipboardData.setData('text/plain', payload.plain);
+        if (payload.html) {
+          event.clipboardData.setData('text/html', payload.html);
+        }
       }}
     >
       {renderedContent}
