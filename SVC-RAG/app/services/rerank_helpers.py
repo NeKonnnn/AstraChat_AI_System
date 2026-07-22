@@ -43,9 +43,7 @@ async def rerank_vector_hits(
         return hits[:top_k] if top_k else hits
 
     # Нормализуем prior по рангу исходного списка (не по абсолютному RRF/cosine).
-    prior_rank = {i: r for r, (i, _) in enumerate(
-        sorted(enumerate(hits), key=lambda x: float(x[1][1]), reverse=True)
-    )}
+    prior_rank = {i: r for r, (i, _) in enumerate(sorted(enumerate(hits), key=lambda x: float(x[1][1]), reverse=True))}
     n = max(len(hits), 1)
     out: List[Tuple[Any, float]] = []
     for rr_rank, (idx, rr_sc) in enumerate(ranked):

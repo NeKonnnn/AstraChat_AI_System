@@ -1,50 +1,50 @@
 import logging
-import time
 import uuid
 import uvicorn
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.core.config import get_settings
+# Единый формат логов со всеми сервисами astrachat (app.* + httpx + uvicorn в одном стиле).
+# Настраиваем ДО импорта роутеров, чтобы их module-level логгеры тоже легли в единый формат.
+from app.core.logging import configure_logging, get_logger, get_uvicorn_log_config
+
+from app.core.config import get_settings, get_settings_diagnostics
 from app.api import router as api_router
 from app.dependencies import get_db
 
-settings = get_settings()
-logging.basicConfig(
-    level=getattr(logging, settings.logging.level.upper(), logging.INFO),
-    format=settings.logging.format,
-)
-logger = logging.getLogger(__name__)
+configure_logging()
 
+settings = get_settings()
+logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
-        # Uvicorn может поднять порог root-логгера — явно включаем INFO для наших модулей (баннеры метрик RAG)
-        root = logging.getLogger()
-        if root.level > logging.INFO:
-            root.setLevel(logging.INFO)
-        for _name in (
-            "app",
-            "app.services",
-            "app.services.rag_search_helpers",
-            "app.services.retrieval_eval",
-            "app.services.rag_service",
-            "app.services.kb_service",
-            "app.services.memory_rag_service",
-            "app.services.project_rag_service",
-        ):
-            logging.getLogger(_name).setLevel(logging.INFO)
+        diag = get_settings_diagnostics()
+        logger.info(
+            "SVC-RAG config source: requested=%s resolved=%s used_yaml=%s",
+            diag.get("requested_config_path"),
+            diag.get("resolved_config_path"),
+            diag.get("used_yaml"),
+        )
+        logger.info("SVC-RAG PostgreSQL effective config: %s", diag.get("postgresql"))
+        logger.info("SVC-RAG PostgreSQL env snapshot: %s", diag.get("env_values"))
 
         await get_db()
         logger.info("SVC-RAG: БД подключена, таблицы готовы")
+        logging.getLogger("app.services.rag_service").setLevel(logging.INFO)
+        try:
+            from app.dependencies import ensure_memory_chunk_consistency
+
+            await ensure_memory_chunk_consistency()
+        except Exception:
+            logger.exception("[MEMORY-CHUNK] проверка нарезки Библиотеки не удалась")
     except Exception as e:
         logger.error("SVC-RAG: ошибка старта БД: %s", e, exc_info=True)
         raise
     yield
     logger.info("SVC-RAG: shutdown")
-
 
 def create_application() -> FastAPI:
     app = FastAPI(
@@ -65,24 +65,26 @@ def create_application() -> FastAPI:
     app.include_router(api_router, prefix="/v1")
     return app
 
-
 app = create_application()
-
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     request_id = str(uuid.uuid4())[:8]
-    start = time.time()
     logger.info("%s %s %s", request_id, request.method, request.url.path)
     response = await call_next(request)
-    logger.info("%s %s %s %s", request_id, request.method, request.url.path, response.status_code)
+    logger.info(
+        "%s %s %s %s",
+        request_id,
+        request.method,
+        request.url.path,
+        response.status_code,
+    )
     return response
-
 
 if __name__ == "__main__":
     uvicorn.run(
         "app.main:app",
         host=settings.server.host,
         port=settings.server.port,
-        log_level=settings.server.log_level.lower(),
+        log_config=get_uvicorn_log_config(),
     )

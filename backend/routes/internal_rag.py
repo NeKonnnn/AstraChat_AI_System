@@ -14,11 +14,13 @@ from backend.settings.logging import get_logger
 logger = get_logger(__name__)
 router = APIRouter(tags=["internal-rag"])
 
+
 class InternalRagLLMRequest(BaseModel):
     prompt: str
     purpose: str = "rag"
     temperature: float = 0.3
     max_tokens: int = 1024
+
 
 @router.post("/api/internal/rag/llm")
 async def internal_rag_llm(body: InternalRagLLMRequest):
@@ -42,9 +44,7 @@ async def internal_rag_llm(body: InternalRagLLMRequest):
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
             content = await loop.run_in_executor(ex, _call)
     except Exception as e:
-        logger.exception(
-            "internal_rag_llm: ошибка вызова модели (purpose=%s)", body.purpose
-        )
+        logger.exception("internal_rag_llm: ошибка вызова модели (purpose=%s)", body.purpose)
         return {"content": "", "error": str(e)}
 
     logger.debug(

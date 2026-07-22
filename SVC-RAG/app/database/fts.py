@@ -361,7 +361,7 @@ def build_entity_or_query(text: str) -> Optional[str]:
 # Поддерживаем форматы, которые реально парсятся в document_parser.py.
 # Разрешаем юникод-буквы, цифры, _ - . ( ) пробел — чтобы ловить "CV_Nekrasov (1).pdf".
 # Расширение в конце — обязательный маркер.
-_FILENAME_EXTS = r"(?:pdf|docx|doc|xlsx|xls|txt|jpg|jpeg|png|webp|csv|md|rtf|odt|pptx)"
+_FILENAME_EXTS = r"(?:pdf|docx|doc|docm|xlsx|xls|xlsm|txt|jpg|jpeg|png|webp|bmp|csv|md|log|rtf|odt|pptx)"
 _FILENAME_RE = re.compile(
     # Без кавычек: не допускаем пробелов в стэме (иначе захватим часть вопроса),
     # НО разрешаем одно опциональное "(n)" с пробелом — типовой суффикс от

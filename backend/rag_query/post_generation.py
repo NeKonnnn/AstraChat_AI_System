@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import os
-from typing import Optional
+import re
+
 from backend.settings.logging import get_logger
 
 logger = get_logger(__name__)
 
-import re
 
 def strip_strict_not_found_message(answer: str, replacement: str) -> str:
     """
@@ -23,32 +23,42 @@ def strip_strict_not_found_message(answer: str, replacement: str) -> str:
         return answer
     if not replacement:
         return answer
-
     ans = str(answer)
     rep = str(replacement)
-
     ans_stripped = ans.strip()
     rep_stripped = rep.strip()
-
-    # Если ответ по сути "только про отсутствие", не трогаем.
     if ans_stripped == rep_stripped:
         return ans
-
-    # Убираем replacement в случае, когда он добавлен хвостом/внутри.
     if rep_stripped and rep_stripped in ans:
         cleaned = ans.replace(rep, "").strip()
         if cleaned:
-            return re.sub(r"[ ]{2,}", " ", cleaned)
+            return re.sub("[ ]{2,}", " ", cleaned)
         cleaned = ans.replace(rep_stripped, "").strip()
         if cleaned:
-            return re.sub(r"[ ]{2,}", " ", cleaned)
-
+            return re.sub("[ ]{2,}", " ", cleaned)
     return ans
 
 
 def post_verify_enabled() -> bool:
+    """Faithfulness-guard: по умолчанию ВЫКЛЮЧЕН (opt-in).
+
+    Проверяет, обоснован ли ответ найденным контекстом (второй короткий вызов
+    LLM «да/нет»), и при вердикте «нет» ЗАМЕНЯЕТ уже сгенерированный ответ
+    канонической формулировкой «не нашёл».
+
+    Почему выключен по умолчанию: судья — одиночный да/нет-запрос к текущей
+    UI-модели, и на слабых/средних моделях он даёт ложные срабатывания —
+    стирает КОРРЕКТНЫЙ ответ, который пользователь уже видит в стриме. Это
+    ощущается как «начал писать правильно и вдруг всё удалил». Для UX это хуже
+    редкой галлюцинации, поэтому по умолчанию recall в приоритете.
+
+    Включается строгий режим через RAG_POST_VERIFY=1 (для контуров, где важнее
+    не допустить необоснованных утверждений, чем сохранить полный ответ).
+    """
     v = os.getenv("RAG_POST_VERIFY", "").strip().lower()
-    return v in ("1", "true", "yes", "on")
+    if not v:
+        return False
+    return v not in ("0", "false", "no", "off")
 
 
 async def verify_answer_grounded(context_excerpt: str, answer: str) -> bool:
@@ -57,11 +67,10 @@ async def verify_answer_grounded(context_excerpt: str, answer: str) -> bool:
     ctx = (context_excerpt or "")[:12000]
     ans = (answer or "")[:8000]
     prompt = (
-        "Ниже фрагменты CONTEXT и ответ ассистента. "
-        "Можно ли считать, что все конкретные утверждения в ответе обоснованы CONTEXT "
-        "(допускаются общие формулировки и перефраз)?\n"
+        "Ниже фрагменты CONTEXT и ответ ассистента. Можно ли считать, что все конкретные утверждения в ответе обоснованы CONTEXT (допускаются общие формулировки и перефраз)?\n"
         "Ответь строго одним словом: да или нет.\n\n"
-        f"CONTEXT:\n{ctx}\n\nОТВЕТ:\n{ans}"
+        f"CONTEXT:\n{ctx}\n\n"
+        f"ОТВЕТ:\n{ans}"
     )
     loop = asyncio.get_running_loop()
 
@@ -78,23 +87,15 @@ async def verify_answer_grounded(context_excerpt: str, answer: str) -> bool:
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
             raw = (await loop.run_in_executor(ex, _call) or "").strip().lower()
         return raw.startswith("да") or raw.startswith("yes")
-    except Exception as e:
-        logger.warning("RAG_POST_VERIFY LLM error: %s", e)
+    except Exception:
+        logger.exception("RAG_POST_VERIFY LLM error")
         return True
 
 
-async def maybe_replace_ungrounded(
-    context_excerpt: str,
-    answer: str,
-    replacement: str,
-) -> str:
+async def maybe_replace_ungrounded(context_excerpt: str, answer: str, replacement: str) -> str:
     cleaned_answer = strip_strict_not_found_message(answer, replacement)
     if not post_verify_enabled():
-        # Если пост-аудит выключен, просто убираем лишнюю “апологию”, если она примешана.
         return cleaned_answer
-
-    # Если пост-аудит включён, проверяем grounding уже для “очищенного” ответа.
-    # Иначе можно скрыть ситуацию, когда остальной текст не обоснован CONTEXT.
     ok = await verify_answer_grounded(context_excerpt, cleaned_answer)
     if ok:
         return cleaned_answer

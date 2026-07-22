@@ -1,21 +1,37 @@
 # Сервис постоянной Базы Знаний (Knowledge Base)
 # Логика аналогична RagService, но работает с таблицами kb_documents/kb_vectors
-import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union
 from app.services.hierarchical_indexing import index_document_hierarchically
 from app.clients.rag_models_client import RagModelsClient
 from app.core.config import get_settings
+from app.core.logging import get_logger
 from app.database.search_filters import DocumentVectorSearchFilters
 from app.database.kb_repository import KbDocumentRepository, KbVectorRepository
 from app.database.models import Document, DocumentVector
 from app.database.graph_repository import GraphRepository
 from app.services.bm25_index import InMemoryBm25Index
-from app.services.chunker import split_into_chunks_with_meta
+from app.services.chunker import (
+    describe_embed_client,
+    normalize_chunking_strategy,
+    resolve_chunk_params,
+    split_into_chunks_with_meta,
+)
 from app.services.document_parser import parse_document
 from app.services.retrieval_pipeline import RetrievalTrace, run_retrieval_pipeline
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+_kb_reindex_generation = 0
+
+def bump_kb_reindex_generation() -> int:
+    """Объявить новое поколение реиндекса KB (сигнал текущему — прерваться)."""
+    global _kb_reindex_generation
+    _kb_reindex_generation += 1
+    return _kb_reindex_generation
+
+def current_kb_reindex_generation() -> int:
+    return _kb_reindex_generation
 
 MAX_KB_CONTEXT_CHARS = 12000
 
@@ -34,6 +50,20 @@ class KbService:
         self.graph_repo = graph_repo
         self._bm25 = InMemoryBm25Index(self.vector_repo.get_all_contents_for_bm25)
 
+    async def _rebuild_graph_for_document(self, document_id: int) -> None:
+        if not self.graph_repo:
+            return
+        try:
+            chunks = await self.vector_repo.get_vectors_by_document(document_id)
+            if chunks:
+                await self.graph_repo.rebuild_document_graph(
+                    store_type="kb",
+                    document_id=document_id,
+                    chunks=[(v.chunk_index, v.content) for v in chunks],
+                )
+        except Exception as e:
+            logger.warning("KB graph индекс не пересобран для документа %s: %s", document_id, e)
+
     # ─── Индексация ─────────────────────────────────────────────────────────────
 
     async def index_document(
@@ -44,6 +74,8 @@ class KbService:
         chunk_size: Optional[int] = None,
         chunk_overlap: Optional[int] = None,
         chunking_strategy: Optional[str] = None,
+        minio_object: Optional[str] = None,
+        minio_bucket: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Парсим файл, режем на чанки, получаем эмбеддинги и сохраняем в kb_documents/kb_vectors."""
         parsed = await parse_document(file_data, filename)
@@ -58,14 +90,20 @@ class KbService:
         if not text.strip():
             return {"ok": False, "error": "Документ пустой", "document_id": None}
 
+        meta: Dict[str, Any] = {
+            "file_type": parsed.get("file_type", ""),
+            "pages": parsed.get("pages", 0),
+            "size": len(file_data),
+        }
+        if minio_object:
+            meta["minio_object"] = minio_object
+        if minio_bucket:
+            meta["minio_bucket"] = minio_bucket
+
         doc = Document(
             filename=filename,
             content=text,
-            metadata={
-                "file_type": parsed.get("file_type", ""),
-                "pages": parsed.get("pages", 0),
-                "size": len(file_data),
-            },
+            metadata=meta,
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
         )
@@ -93,11 +131,18 @@ class KbService:
                     "document_id": None,
                 }
             self._bm25.mark_dirty()
+            await self._rebuild_graph_for_document(doc_id)
+            eff_size, eff_overlap = resolve_chunk_params(chunk_size, chunk_overlap)
             logger.info(
-                "KB: иерархически проиндексирован '%s' (id=%s), %s чанков",
+                "[INDEX kb] '%s' (id=%s): strategy=hierarchical size=%s overlap=%s "
+                "символов=%s чанков=%s embed=%s",
                 filename,
                 doc_id,
+                eff_size,
+                eff_overlap,
+                len(text),
                 count,
+                describe_embed_client(self.rag_client),
             )
             return {
                 "ok": True,
@@ -148,14 +193,26 @@ class KbService:
                 )
             except Exception as e:
                 logger.warning("KB graph индекс не собран для документа %s: %s", doc_id, e)
-        logger.info("KB: проиндексирован документ '%s' (id=%s), %s чанков", filename, doc_id, created)
+        eff_size, eff_overlap = resolve_chunk_params(chunk_size, chunk_overlap)
+        logger.info(
+            "[INDEX kb] '%s' (id=%s): strategy=%s size=%s overlap=%s "
+            "символов=%s чанков=%s embed=%s",
+            filename,
+            doc_id,
+            normalize_chunking_strategy(chunking_strategy),
+            eff_size,
+            eff_overlap,
+            len(text), 
+            created, 
+            describe_embed_client(self.rag_client),
+        )
         return {
             "ok": True,
             "document_id": doc_id,
             "filename": filename,
             "chunks_count": created,
         }
-    
+
     async def reindex_document(
         self,
         document_id: int,
@@ -186,6 +243,7 @@ class KbService:
                 chunk_overlap=chunk_overlap,
             )
             self._bm25.mark_dirty()
+            await self._rebuild_graph_for_document(document_id)
             return count
         chunks_with_meta = split_into_chunks_with_meta(
             text,
@@ -198,9 +256,7 @@ class KbService:
             return 0
         embeddings = await self.rag_client.embed(chunks)
         vectors = []
-        for idx, ((chunk, cmeta), embedding) in enumerate(
-            zip(chunks_with_meta, embeddings)
-        ):
+        for idx, ((chunk, cmeta), embedding) in enumerate(zip(chunks_with_meta, embeddings)):
             meta = {"start": idx}
             meta.update(cmeta)
             vectors.append(
@@ -214,6 +270,15 @@ class KbService:
             )
         created = await self.vector_repo.create_vectors_batch(vectors)
         self._bm25.mark_dirty()
+        if self.graph_repo:
+            try:
+                await self.graph_repo.rebuild_document_graph(
+                    store_type="kb",
+                    document_id=document_id,
+                    chunks=[(v.chunk_index, v.content) for v in vectors],
+                )
+            except Exception as e:
+                logger.warning("KB graph индекс не собран для документа %s: %s", document_id, e)
         return created
 
     async def reindex_all(
@@ -222,12 +287,20 @@ class KbService:
         chunk_size: Optional[int] = None,
         chunk_overlap: Optional[int] = None,
         chunking_strategy: Optional[str] = None,
+        generation: Optional[int] = None,
     ) -> Dict[str, int]:
         """Перечанкировать все документы KB. Возвращает {documents, chunks}."""
         docs = await self.doc_repo.get_all_documents()
         n_docs = 0
         n_chunks = 0
         for doc in docs:
+            if generation is not None and generation != _kb_reindex_generation:
+                logger.info(
+                    "[REINDEX kb] прерван: начат новый реиндекс (gen %s→%s)",
+                    generation,
+                    _kb_reindex_generation,
+                )
+                break
             try:
                 c = await self.reindex_document(
                     doc.id,
@@ -239,9 +312,7 @@ class KbService:
                 n_chunks += c
                 logger.info("[REINDEX kb] doc=%s чанков=%s", doc.id, c)
             except Exception as e:
-                logger.error(
-                    "[REINDEX kb] doc=%s ошибка: %s", getattr(doc, "id", "?"), e
-                )
+                logger.error("[REINDEX kb] doc=%s ошибка: %s", getattr(doc, "id", "?"), e)
         logger.info("[REINDEX kb] готово: документов=%s чанков=%s", n_docs, n_chunks)
         return {"documents": n_docs, "chunks": n_chunks}
 
@@ -338,10 +409,11 @@ class KbService:
             for d in docs
         ]
 
-    async def delete_document(self, document_id: int) -> bool:
+    async def delete_document(self, document_id: int) -> Dict[str, Any]:
         doc = await self.doc_repo.get_document(document_id)
         if not doc:
-            return False
+            return {"ok": False, "document_id": document_id}
+        meta = doc.metadata or {}
         if self.graph_repo:
             try:
                 await self.graph_repo.delete_document_graph("kb", document_id)
@@ -351,7 +423,12 @@ class KbService:
         await self.doc_repo.delete_document(document_id)
         self._bm25.mark_dirty()
         logger.info("KB: удалён документ id=%s ('%s')", document_id, doc.filename)
-        return True
+        return {
+            "ok": True,
+            "document_id": document_id,
+            "minio_object": meta.get("minio_object"),
+            "minio_bucket": meta.get("minio_bucket"),
+        }
 
     async def get_document_info(self, document_id: int) -> Optional[Dict[str, Any]]:
         doc = await self.doc_repo.get_document(document_id)

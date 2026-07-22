@@ -20,19 +20,16 @@ logger = logging.getLogger(__name__)
 HNSW_MAX_DIM = 2000
 
 VECTOR_TABLES: Tuple[str, ...] = (
-    "document_vectors",
     "kb_vectors",
     "memory_rag_vectors",
     "project_rag_vectors",
 )
 
 _INDEX_BY_TABLE = {
-    "document_vectors": "idx_document_vectors_embedding_hnsw",
     "kb_vectors": "idx_kb_vectors_embedding_hnsw",
     "memory_rag_vectors": "idx_memory_rag_vectors_embedding_hnsw",
     "project_rag_vectors": "idx_proj_rag_vectors_embedding_hnsw",
 }
-
 
 async def get_column_vector_dim(conn, table: str) -> Optional[int]:
     """Текущая размерность колонки embedding или None, если таблицы нет."""
@@ -54,12 +51,10 @@ async def get_column_vector_dim(conn, table: str) -> Optional[int]:
     m = re.search(r"vector\((\d+)\)", str(row["ft"]))
     return int(m.group(1)) if m else None
 
-
 async def drop_embedding_index(conn, table: str) -> None:
     index_name = _INDEX_BY_TABLE.get(table)
     if index_name:
         await conn.execute(f"DROP INDEX IF EXISTS {index_name}")
-
 
 async def create_embedding_index(conn, table: str, dim: int) -> bool:
     """Создать HNSW, если фактическая размерность колонки позволяет.
@@ -90,7 +85,6 @@ async def create_embedding_index(conn, table: str, dim: int) -> bool:
         """
     )
     return True
-
 
 async def migrate_vector_tables(conn, target_dim: int) -> Dict[str, Any]:
     """Привести все vector-таблицы к target_dim. Старые векторы очищаются."""

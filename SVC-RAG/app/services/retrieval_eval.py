@@ -11,6 +11,91 @@ from app.services.rag_search_helpers import log_rag_retrieval_report
 HitRow = Tuple[str, float, Optional[int], Optional[int]]
 
 
+def _first_relevant_rank(
+    hits: List[HitRow],
+    *,
+    gold_docs: Optional[set] = None,
+    gold_chunks: Optional[set] = None,
+) -> Optional[int]:
+    """1-базовая позиция первого релевантного чанка (по gold), либо None."""
+    for i, (_, _, d, c) in enumerate(hits):
+        if gold_chunks and d is not None and c is not None and (d, c) in gold_chunks:
+            return i + 1
+        if gold_docs and d is not None and d in gold_docs:
+            return i + 1
+    return None
+
+
+def reciprocal_rank(
+    hits: List[HitRow],
+    *,
+    gold_document_ids: Optional[List[int]] = None,
+    gold_chunks: Optional[List[Tuple[int, int]]] = None,
+) -> float:
+    """RR = 1/rank первого релевантного документа/чанка (0, если не найден).
+
+    Агрегат MRR по набору вопросов = среднее reciprocal_rank (см. mrr()).
+    """
+    gd = set(gold_document_ids) if gold_document_ids else None
+    gc = set(gold_chunks) if gold_chunks else None
+    rank = _first_relevant_rank(hits, gold_docs=gd, gold_chunks=gc)
+    return (1.0 / rank) if rank else 0.0
+
+
+def mrr(reciprocal_ranks: List[float]) -> float:
+    """MRR = среднее reciprocal rank по всем вопросам."""
+    if not reciprocal_ranks:
+        return 0.0
+    return sum(reciprocal_ranks) / len(reciprocal_ranks)
+
+
+def compute_retrieval_metrics(
+    hits: List[HitRow],
+    k: int,
+    *,
+    gold_document_ids: Optional[List[int]] = None,
+    gold_chunks: Optional[List[Tuple[int, int]]] = None,
+) -> dict:
+    """Числовые retrieval-метрики одного вопроса (для online/offline пайплайнов).
+
+    Возвращает reciprocal_rank, hit_rate@k, precision@k, recall@k, first_relevant_rank.
+    Приоритет разметки: gold_chunks > gold_document_ids.
+    """
+    k_eff = max(k, 1)
+    top = hits[:k]
+    out: dict = {
+        "k": k,
+        "retrieved": len(hits),
+        "reciprocal_rank": None,
+        "hit_rate_at_k": None,
+        "precision_at_k": None,
+        "recall_at_k": None,
+        "first_relevant_rank": None,
+        "basis": None,
+    }
+    if gold_chunks:
+        gset = set(gold_chunks)
+        rset = {(d, c) for _, _, d, c in top if d is not None and c is not None}
+        tp = len(rset & gset)
+        out["basis"] = "gold_chunks"
+        out["hit_rate_at_k"] = 1.0 if tp > 0 else 0.0
+        out["precision_at_k"] = tp / k_eff
+        out["recall_at_k"] = (tp / len(gset)) if gset else 0.0
+        out["first_relevant_rank"] = _first_relevant_rank(hits, gold_chunks=gset)
+        out["reciprocal_rank"] = reciprocal_rank(hits, gold_chunks=gold_chunks)
+    elif gold_document_ids:
+        gset = set(gold_document_ids)
+        found = {d for _, _, d, _ in top if d is not None} & gset
+        tp_hits = sum(1 for _, _, d, _ in top if d is not None and d in gset)
+        out["basis"] = "gold_document_ids"
+        out["hit_rate_at_k"] = 1.0 if found else 0.0
+        out["precision_at_k"] = tp_hits / k_eff
+        out["recall_at_k"] = len(found) / len(gset) if gset else 0.0
+        out["first_relevant_rank"] = _first_relevant_rank(hits, gold_docs=gset)
+        out["reciprocal_rank"] = reciprocal_rank(hits, gold_document_ids=gold_document_ids)
+    return out
+
+
 def _gold_chunk_metrics(
     hits: List[HitRow],
     k: int,
@@ -27,11 +112,13 @@ def _gold_chunk_metrics(
     prec = tp / k_eff
     denom = len(gset)
     rec = (tp / denom) if denom else 0.0
+    rr = reciprocal_rank(hits, gold_chunks=gold_chunks)
     return [
         "эталон: чанки (document_id, chunk_index)",
         f"hit_rate@k (gold, чанки)={hit:.4f} (есть ли пересечение с эталоном)",
         f"precision@k (gold, чанки)={prec:.4f} = |релев_в_top-k|/k, релев = чанк из эталона",
         f"recall@k (gold, чанки)={rec:.4f} = |пересечение|/|эталон|, |эталон|={denom}",
+        f"reciprocal_rank (gold, чанки)={rr:.4f} = 1/позиция первого релевантного чанка",
     ]
 
 
@@ -51,11 +138,13 @@ def _gold_doc_metrics(
     hit = 1.0 if found else 0.0
     prec = tp_hits / k_eff
     rec = len(found) / len(gset) if gset else 0.0
+    rr = reciprocal_rank(hits, gold_document_ids=gold_docs)
     return [
         "эталон: document_id",
         f"hit_rate@k (gold, документы)={hit:.4f} (хотя бы один эталонный doc в top-k)",
         f"precision@k (gold, документы)={prec:.4f} = (хитов, чей doc в эталоне)/k",
         f"recall@k (gold, документы)={rec:.4f} = (эталонных doc, попавших в top-k)/|эталон|",
+        f"reciprocal_rank (gold, документы)={rr:.4f} = 1/позиция первого эталонного doc",
     ]
 
 

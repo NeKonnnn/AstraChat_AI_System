@@ -162,6 +162,7 @@ class KbVectorRepository:
             from app.database.embedding_schema import create_embedding_index
 
             await create_embedding_index(conn, "kb_vectors", self.embedding_dim)
+            
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_kb_vectors_document_id ON kb_vectors(document_id)")
             await ensure_fts_columns(conn, "kb_vectors")
         logger.info("Таблица kb_vectors готова (dim=%s)", self.embedding_dim)

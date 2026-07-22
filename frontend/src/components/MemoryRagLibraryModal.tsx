@@ -28,7 +28,7 @@ import {
   Close as CloseIcon,
   LibraryBooks as LibraryIcon,
 } from '@mui/icons-material';
-import { getApiUrl, API_ENDPOINTS } from '../config/api';
+import { getApiUrl, API_ENDPOINTS, getAuthFetchHeaders } from '../config/api';
 import { useAppActions } from '../contexts/AppContext';
 
 export interface MemoryRagDoc {
@@ -113,7 +113,7 @@ export default function MemoryRagLibraryModal({ open, onClose }: Props) {
     }
   };
 
-  const allowed = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.txt', '.csv'];
+  const allowed = ['.pdf', '.docx', '.doc', '.docm', '.xlsx', '.xls', '.xlsm', '.txt', '.csv', '.md', '.log', '.rtf'];
 
   const uploadFiles = async (files: FileList) => {
     if (!files.length) return;
@@ -123,7 +123,7 @@ export default function MemoryRagLibraryModal({ open, onClose }: Props) {
     });
     if (!valid.length) {
       setBanner({
-        message: 'Допустимы: PDF, DOC/DOCX, XLS/XLSX, TXT, CSV',
+        message: 'Допустимы: PDF, DOC/DOCX/DOCM, XLS/XLSX/XLSM, TXT, MD, CSV, LOG, RTF',
         severity: 'error',
       });
       return;
@@ -136,6 +136,7 @@ export default function MemoryRagLibraryModal({ open, onClose }: Props) {
         fd.append('file', file);
         const resp = await fetch(getApiUrl(API_ENDPOINTS.MEMORY_RAG_UPLOAD), {
           method: 'POST',
+          headers: getAuthFetchHeaders(),
           body: fd,
         });
         if (!resp.ok) {
@@ -156,7 +157,7 @@ export default function MemoryRagLibraryModal({ open, onClose }: Props) {
     }
     setUploading(false);
     setBanner({
-      message: `Загружено файлов: ${valid.length}. Файлы в MinIO, текст проиндексирован в PostgreSQL (pgvector).`,
+      message: `Загружено файлов: ${valid.length}. Исходники сохранены в хранилище, текст проиндексирован в PostgreSQL (pgvector).`,
       severity: 'success',
     });
     try {
@@ -234,7 +235,7 @@ export default function MemoryRagLibraryModal({ open, onClose }: Props) {
             type="file"
             multiple
             hidden
-            accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv"
+            accept=".pdf,.doc,.docx,.docm,.xls,.xlsx,.xlsm,.txt,.md,.log,.csv,.rtf"
             onChange={(e) => {
               if (e.target.files?.length) uploadFiles(e.target.files);
               e.target.value = '';

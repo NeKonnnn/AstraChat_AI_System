@@ -32,6 +32,11 @@ import {
 } from '../constants/menuStyles';
 import ChatGearMyAgentsTab from './ChatGearMyAgentsTab';
 import { getOrchestratorAgentTitleRu } from '../utils/orchestratorAgentDisplay';
+import {
+  dispatchAgentStatusChanged,
+  fetchStandardAgentsActive,
+  switchToDirectIfNoAgentsActive,
+} from '../hooks/useChatInputAgentIndicators';
 
 /** Как в настройках «Агенты» → список в агентном режиме (ответ /api/agent/agents). */
 export interface OrchestratorAgentRow {
@@ -183,21 +188,9 @@ export default function ChatGearAgentsPanel({ isDarkMode, canUseAgents }: ChatGe
     });
   }, [agents, agentSearch]);
 
-  const maybeSwitchToDirectIfNoAgentsActive = useCallback(async () => {
-    try {
-      const list = await pullAgentsFromServer();
-      const anyActive = list.some((a) => a.is_active);
-      if (!anyActive) {
-        await fetch(getApiUrl('/api/agent/mode'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode: 'direct' }),
-        });
-      }
-    } catch {
-      /* ignore */
-    }
-  }, [pullAgentsFromServer]);
+  const notifyAgentStatusChanged = useCallback(async () => {
+    dispatchAgentStatusChanged(await fetchStandardAgentsActive());
+  }, []);
 
   /** Целевое состояние с MUI Switch (checked), без инверсии от устаревшего props. */
   const applyAgentStatus = useCallback(
@@ -218,10 +211,10 @@ export default function ChatGearAgentsPanel({ isDarkMode, canUseAgents }: ChatGe
         });
         if (!ar.ok) throw new Error((await ar.text()) || 'Статус агента');
         if (!next) {
-          await maybeSwitchToDirectIfNoAgentsActive();
+          await switchToDirectIfNoAgentsActive();
         }
         await refreshAgentsQuiet();
-        window.dispatchEvent(new CustomEvent('astrachatAgentStatusChanged'));
+        await notifyAgentStatusChanged();
         showNotificationRef.current('success', next ? 'Агент включён (все инструменты агента активны)' : 'Агент отключён');
       } catch (e) {
         showNotificationRef.current(
@@ -231,7 +224,7 @@ export default function ChatGearAgentsPanel({ isDarkMode, canUseAgents }: ChatGe
         await refreshAgentsQuiet();
       }
     },
-    [maybeSwitchToDirectIfNoAgentsActive, refreshAgentsQuiet],
+    [refreshAgentsQuiet, notifyAgentStatusChanged],
   );
 
   const applyToolStatus = useCallback(
@@ -243,8 +236,11 @@ export default function ChatGearAgentsPanel({ isDarkMode, canUseAgents }: ChatGe
           body: JSON.stringify({ is_active: next }),
         });
         if (!tr.ok) throw new Error((await tr.text()) || 'Статус инструмента');
+        if (!next) {
+          await switchToDirectIfNoAgentsActive();
+        }
         await refreshAgentsQuiet();
-        window.dispatchEvent(new CustomEvent('astrachatAgentStatusChanged'));
+        await notifyAgentStatusChanged();
         showNotificationRef.current('success', next ? 'Инструмент включён' : 'Инструмент отключён');
       } catch (e) {
         showNotificationRef.current(
@@ -254,7 +250,7 @@ export default function ChatGearAgentsPanel({ isDarkMode, canUseAgents }: ChatGe
         await refreshAgentsQuiet();
       }
     },
-    [refreshAgentsQuiet],
+    [refreshAgentsQuiet, notifyAgentStatusChanged],
   );
 
   const toggleExpand = useCallback((key: string) => {
@@ -276,14 +272,14 @@ export default function ChatGearAgentsPanel({ isDarkMode, canUseAgents }: ChatGe
         const data = await response.json();
         await loadLanggraphStatus();
         await loadAgentStatusOrchestrator();
-        window.dispatchEvent(new CustomEvent('astrachatAgentStatusChanged'));
+        await notifyAgentStatusChanged();
         showNotificationRef.current('success', data.message || (isActive ? 'Оркестратор включён' : 'Оркестратор отключён'));
       } catch {
         showNotificationRef.current('error', 'Не удалось переключить оркестратор');
         await loadLanggraphStatus();
       }
     },
-    [loadLanggraphStatus, loadAgentStatusOrchestrator],
+    [loadLanggraphStatus, loadAgentStatusOrchestrator, notifyAgentStatusChanged],
   );
 
   const handleOrchestratorSwitch = useCallback(

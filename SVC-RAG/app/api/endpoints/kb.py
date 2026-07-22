@@ -1,5 +1,5 @@
 # API эндпоинты для постоянной Базы Знаний (Knowledge Base)
-import logging
+from app.core.logging import get_logger
 from typing import Any, Dict, List, Optional
 
 import asyncio
@@ -24,9 +24,8 @@ from app.api.rag_common import (
 from app.dependencies import get_kb_service
 from app.services.kb_service import KbService
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 router = APIRouter()
-
 
 class KbIndexResponse(BaseModel):
     ok: bool
@@ -35,14 +34,12 @@ class KbIndexResponse(BaseModel):
     chunks_count: Optional[int] = None
     error: Optional[str] = None
 
-
 class KbDocumentItem(BaseModel):
     id: int
     filename: str
     created_at: Optional[str] = None
     size: Optional[int] = None
     file_type: Optional[str] = None
-
 
 class KbSearchRequest(RagSearchEvalBody):
     query: str
@@ -54,18 +51,15 @@ class KbSearchRequest(RagSearchEvalBody):
     filters: Optional[RagSearchFiltersBody] = None
     debug_trace: bool = False  # отладочные метрики по шагам пайплайна
 
-
 class KbSearchHit(BaseModel):
     content: str
     score: float
     document_id: Optional[int] = None
     chunk_index: Optional[int] = None
 
-
 class KbSearchResponse(BaseModel):
     hits: List[KbSearchHit]
     trace: Optional[Dict[str, Any]] = None
-
 
 @router.post("/documents", response_model=KbIndexResponse)
 async def kb_index_document(
@@ -73,6 +67,8 @@ async def kb_index_document(
     chunk_size: Optional[int] = Form(None),
     chunk_overlap: Optional[int] = Form(None),
     chunking_strategy: Optional[str] = Form(None),
+    minio_object: Optional[str] = Form(None),
+    minio_bucket: Optional[str] = Form(None),
     kb: KbService = Depends(get_kb_service),
 ):
     """Загрузить документ в постоянную Базу Знаний (PDF, DOCX, XLSX, TXT)."""
@@ -88,16 +84,19 @@ async def kb_index_document(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         chunking_strategy=chunking_strategy or "universal",
+        minio_object=minio_object,
+        minio_bucket=minio_bucket,
     )
     if not result.get("ok"):
-        raise HTTPException(status_code=422, detail=result.get("error", "Ошибка индексации"))
+        raise HTTPException(
+            status_code=422, detail=result.get("error", "Ошибка индексации")
+        )
     return KbIndexResponse(
         ok=True,
         document_id=result.get("document_id"),
         filename=result.get("filename"),
         chunks_count=result.get("chunks_count"),
     )
-
 
 @router.get("/documents", response_model=List[KbDocumentItem])
 async def kb_list_documents(kb: KbService = Depends(get_kb_service)):
@@ -114,18 +113,16 @@ async def kb_list_documents(kb: KbService = Depends(get_kb_service)):
         for d in docs
     ]
 
-
 @router.delete("/documents/{document_id}")
 async def kb_delete_document(
     document_id: int,
     kb: KbService = Depends(get_kb_service),
 ):
     """Удалить документ из Базы Знаний."""
-    ok = await kb.delete_document(document_id)
-    if not ok:
+    out = await kb.delete_document(document_id)
+    if not out.get("ok"):
         raise HTTPException(status_code=404, detail="Документ не найден в Базе Знаний")
-    return {"ok": True, "document_id": document_id}
-
+    return out
 
 @router.post("/search", response_model=KbSearchResponse)
 async def kb_search(
@@ -133,6 +130,11 @@ async def kb_search(
     kb: KbService = Depends(get_kb_service),
 ):
     """Поиск по Базе Знаний."""
+    if _kb_reindex_lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="Идёт переиндексация Базы Знаний — поиск временно недоступен",
+        )
     payload = await kb.search(
         query=body.query,
         k=body.k,
@@ -153,15 +155,12 @@ async def kb_search(
         trace=trace.to_dict() if body.debug_trace else None,
     )
 
-
 class KbReindexRequest(BaseModel):
     chunk_size: Optional[int] = None
     chunk_overlap: Optional[int] = None
     chunking_strategy: Optional[str] = None
 
-
 _kb_reindex_lock = asyncio.Lock()
-
 
 async def _kb_reindex_bg(
     kb: KbService,
@@ -173,18 +172,27 @@ async def _kb_reindex_bg(
         logger.info(
             "[REINDEX kb] уже идёт — новый запуск дождётся завершения предыдущего"
         )
+    from app.services.kb_service import (
+        bump_kb_reindex_generation,
+        current_kb_reindex_generation,
+    )
+
+    gen = bump_kb_reindex_generation()  # до лока: сигналим текущему проходу прерваться
     async with _kb_reindex_lock:
+        if gen != current_kb_reindex_generation():
+            logger.info("[REINDEX kb] пропуск: поколение устарело до старта")
+            return
         try:
             res = await kb.reindex_all(
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
                 chunking_strategy=chunking_strategy,
+                generation=gen,
             )
             logger.info("[REINDEX kb] фоновая перечанкировка завершена: %s", res)
         except Exception:
             logger.exception("[REINDEX kb] фоновая перечанкировка упала")
 
-            
 @router.post("/reindex")
 async def kb_reindex(
     body: KbReindexRequest,
@@ -200,3 +208,8 @@ async def kb_reindex(
         body.chunking_strategy,
     )
     return {"ok": True, "status": "started"}
+
+
+@router.get("/reindex/status")
+async def kb_reindex_status():
+    return {"reindexing": _kb_reindex_lock.locked()}

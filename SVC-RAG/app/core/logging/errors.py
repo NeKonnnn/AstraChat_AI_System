@@ -3,6 +3,7 @@
 В прикладном коде используйте run_guarded / run_guarded_async / logged_suppress
 вместо «слепых» try/except.
 """
+
 from __future__ import annotations
 import functools
 import logging
@@ -10,6 +11,7 @@ from typing import Any, Awaitable, Callable, ParamSpec, TypeVar
 
 P = ParamSpec("P")
 T = TypeVar("T")
+
 
 def _log_handled(logger: logging.Logger, message: str, level: str) -> None:
     if level in ("exception", "error"):
@@ -20,6 +22,7 @@ def _log_handled(logger: logging.Logger, message: str, level: str) -> None:
         logger.debug("%s", message, exc_info=True)
     else:
         logger.exception(message)
+
 
 def run_guarded(
     logger: logging.Logger,
@@ -39,6 +42,7 @@ def run_guarded(
             raise
         return default
 
+
 async def run_guarded_async(
     logger: logging.Logger,
     fn: Callable[[], Awaitable[T]],
@@ -57,12 +61,11 @@ async def run_guarded_async(
             raise
         return default
 
+
 class logged_suppress:
     """Контекстный менеджер вместо try/except/pass с логом на DEBUG."""
 
-    def __init__(
-        self, logger: logging.Logger, message: str = "Подавлено исключение"
-    ) -> None:
+    def __init__(self, logger: logging.Logger, message: str = "Подавлено исключение") -> None:
         self.logger = logger
         self.message = message
 
@@ -74,6 +77,7 @@ class logged_suppress:
             self.logger.debug(self.message, exc_info=(exc_type, exc, tb))
             return True
         return False
+
 
 def guarded(
     message: "str | None" = None,
@@ -95,9 +99,7 @@ def guarded(
             def _call() -> T:
                 return fn(*args, **kwargs)
 
-            return run_guarded(
-                log, _call, message=msg, default=default, reraise=reraise, level=level
-            )
+            return run_guarded(log, _call, message=msg, default=default, reraise=reraise, level=level)
 
         return wrapper
 

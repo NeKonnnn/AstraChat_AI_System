@@ -33,6 +33,7 @@ logger = get_logger(__name__)
 # Конфиг LLM логируем один раз (чтобы не дублировать на каждом вызове).
 _config_logged = False
 
+
 def _auth_present(cfg) -> bool:
     """
     Есть ли у RAG API-ключ для LLM.
@@ -43,6 +44,7 @@ def _auth_present(cfg) -> bool:
     if api_key_env:
         return bool(os.environ.get(api_key_env))
     return False
+
 
 async def chat(
     prompt: str,

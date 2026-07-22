@@ -2,6 +2,7 @@
 Централизованная настройка логирования SVC-RAG
 Порт матрицы логов backend (backend.settings.logging) под SVC-RAG
 """
+
 from __future__ import annotations
 import logging
 import logging.config
@@ -20,16 +21,16 @@ LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 _UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
 _configured = False
 
+
 def _level_name() -> str:
     return (
-        os.getenv("APP_LOG_LEVEL")
-        or os.getenv("SVC_RAG_LOG_LEVEL")
-        or os.getenv("RAG_LOG_LEVEL")
-        or "INFO"
+        os.getenv("APP_LOG_LEVEL") or os.getenv("SVC_RAG_LOG_LEVEL") or os.getenv("RAG_LOG_LEVEL") or "INFO"
     ).upper()
+
 
 def _resolve_level() -> int:
     return LEVEL_BY_NAME.get(_level_name(), DEFAULT_LEVEL)
+
 
 def get_uvicorn_log_config() -> dict:
     """
@@ -81,6 +82,7 @@ def get_uvicorn_log_config() -> dict:
         "root": {"handlers": ["svc_rag_stdout"], "level": level_name},
     }
 
+
 def _ensure_stdout_utf8() -> None:
     """stdout → UTF-8, чтобы кириллица и символы [LLM→]/[LLM✗] не падали с UnicodeEncodeError"""
     for stream in (sys.stdout, sys.stderr):
@@ -89,6 +91,7 @@ def _ensure_stdout_utf8() -> None:
                 stream.reconfigure(encoding="utf-8")
             except Exception:
                 pass
+
 
 def configure_logging(*, force: bool = False) -> None:
     """
@@ -101,6 +104,7 @@ def configure_logging(*, force: bool = False) -> None:
     _ensure_stdout_utf8()
     logging.config.dictConfig(get_uvicorn_log_config())
     _configured = True
+
 
 def get_logger(name: Optional[str] = None) -> logging.Logger:
     """

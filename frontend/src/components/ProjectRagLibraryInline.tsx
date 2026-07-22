@@ -23,7 +23,7 @@ import {
   Article as ArticleIcon,
   Refresh as RefreshIcon,
 } from '@mui/icons-material';
-import { getApiUrl, API_ENDPOINTS } from '../config/api';
+import { getApiUrl, API_ENDPOINTS, getAuthFetchHeaders } from '../config/api';
 
 export interface ProjectRagDoc {
   id: number;
@@ -49,7 +49,7 @@ function getFileIcon(filename: string) {
   return <DocumentIcon sx={{ color: '#7b1fa2' }} />;
 }
 
-const ALLOWED = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.txt', '.csv', '.md'];
+const ALLOWED = ['.pdf', '.docx', '.doc', '.docm', '.xlsx', '.xls', '.xlsm', '.txt', '.csv', '.md', '.log', '.rtf'];
 
 export interface ProjectRagLibraryInlineProps {
   /** null — до первого resolve (новый проект) */
@@ -168,7 +168,7 @@ export default function ProjectRagLibraryInline({
     });
     if (!valid.length) {
       setBanner({
-        message: 'Допустимы: PDF, DOC/DOCX, XLS/XLSX, TXT, CSV, MD',
+        message: 'Допустимы: PDF, DOC/DOCX/DOCM, XLS/XLSX/XLSM, TXT, MD, LOG, CSV, RTF',
         severity: 'error',
       });
       return;
@@ -181,7 +181,7 @@ export default function ProjectRagLibraryInline({
         const fd = new FormData();
         fd.append('file', file);
         const url = getApiUrl((API_ENDPOINTS.PROJECT_RAG_UPLOAD as (id: string) => string)(pid));
-        const resp = await fetch(url, { method: 'POST', body: fd });
+        const resp = await fetch(url, { method: 'POST', headers: getAuthFetchHeaders(), body: fd });
         if (!resp.ok) {
           const err = await resp.json().catch(() => ({ detail: resp.statusText }));
           throw new Error(typeof err.detail === 'string' ? err.detail : JSON.stringify(err.detail));
@@ -247,7 +247,7 @@ export default function ProjectRagLibraryInline({
         type="file"
         multiple
         hidden
-        accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.md"
+        accept=".pdf,.doc,.docx,.docm,.xls,.xlsx,.xlsm,.txt,.csv,.md,.log,.rtf"
         onChange={(e) => {
           if (e.target.files?.length) uploadFiles(e.target.files);
           e.target.value = '';

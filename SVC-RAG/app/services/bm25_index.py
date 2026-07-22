@@ -196,4 +196,42 @@ async def hybrid_combine_vector_bm25(
         combined.append((vec, float(score)))
 
     combined.sort(key=lambda x: x[1], reverse=True)
-    return combined[:k]
+    top = combined[:k]
+    # --- Гарантированные слоты sparse-канала ---
+    # Weighted RRF при w<0.5 математически не пускает BM25-only хиты в top-k
+    # (лучший BM25-хит проигрывает dense-кандидату вплоть до ранга ~61*(1-2w)/w).
+    # Поэтому top-N хитов BM25 гарантированно получают места в выдаче,
+    # N = round(k*w) (минимум 1). Хиты, уже попавшие в top по RRF, занимают слот.
+    if bm25_results and top and w > 0:
+        slots = max(1, int(round(k * w)))
+        top_keys = {(int(v.document_id), int(v.chunk_index)) for v, _ in top}
+        injected: List[Tuple[DocumentVector, float]] = []
+        satisfied = 0
+        for doc_id, chunk_index, _sc in bm25_results:
+            if satisfied >= slots:
+                break
+            key = (int(doc_id), int(chunk_index))
+            if key in top_keys:
+                satisfied += 1
+                continue
+            vec = vec_obj.get(key)
+            if vec is None:
+                vec = await fetch_chunk(key[0], key[1])
+                if isinstance(vec, tuple):
+                    vec = vec[0]
+            if not vec:
+                continue
+            injected.append((vec, w * rrf_score(bm25_rank.get(key, 0))))
+            top_keys.add(key)
+            satisfied += 1
+        if injected:
+            keep = max(0, k - len(injected))
+            top = top[:keep] + injected
+            top.sort(key=lambda x: x[1], reverse=True)
+            logger.info(
+                "[hybrid] sparse-гарантия: добавлено %d BM25-хитов в top-%d (slots=%d)",
+                len(injected),
+                k,
+                slots,
+            )
+    return top

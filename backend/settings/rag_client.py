@@ -16,6 +16,9 @@ from backend.rag_query.llm_judge import judge_and_filter_hits
 
 logger = get_logger(__name__)
 
+class RagReindexInProgress(RuntimeError):
+    """SVC-RAG вернул 409: стор переиндексируется, поиск временно недоступен."""
+
 
 def _normalize_rag_service_base(url: str) -> str:
     """Базовый origin SVC-RAG без хвоста /v1 (префикс API добавляется в _rag_request_url)."""
@@ -176,7 +179,8 @@ class RagClient:
             try:
                 detail = e.response.json()
             except Exception:
-                detail = e.response.text if e.response is not None else None
+                # logger.exception("Ошибка операции")
+                detail = e.response.text
             if not _cef_skip:
                 with logged_suppress(logger):
                     from backend.settings.cef_logger.cef_audit_context import cef_audit_peek
@@ -190,6 +194,8 @@ class RagClient:
                         "INT006", request=_req, current_user=_user, status_code=e.response.status_code, extra=_ex
                     )
             msg = f"SVC-RAG {method} {url} failed: {e.response.status_code} {detail}"
+            if e.response.status_code == 409:
+                raise RagReindexInProgress(msg) from e
             raise RuntimeError(msg) from e
         except Exception as e:
             logger.exception("Ошибка операции")
@@ -248,10 +254,10 @@ class RagClient:
         strategy: Optional[str] = None,
         project_id: Optional[str] = None,
     ) -> List[Tuple[str, float, Optional[int], Optional[int]]]:
-        from backend import app_state as _app_state
         from backend.rag_query.pipeline import process_user_query
         from backend.rag_query.postprocess import dedupe_rag_hits
         from backend.rag_query.semantic_cache import cache_get, cache_set, make_cache_key, semantic_cache_enabled
+        from backend.services.user_rag_settings import get_runtime_rag_settings
 
         st = (strategy or "").strip().lower()
         raw_mode = st == "raw_cosine"
@@ -273,26 +279,27 @@ class RagClient:
                 from_cache=False,
             )
             return hits
-        _fix = bool(getattr(_app_state, "rag_query_fix_typos", False))
-        _multi = bool(getattr(_app_state, "rag_multi_query_enabled", False))
-        _hyde = bool(getattr(_app_state, "rag_hyde_enabled", False))
+        user_rag = get_runtime_rag_settings()
+        _fix = bool(user_rag.get("rag_query_fix_typos", False))
+        _multi = bool(user_rag.get("rag_multi_query_enabled", False))
+        _hyde = bool(user_rag.get("rag_hyde_enabled", False))
         pq = await process_user_query(query, fix_typos=_fix, multi_query=_multi, hyde=_hyde)
         body: Dict[str, Any] = {"query": pq.query_for_search, "k": k}
         if document_id is not None:
             body["document_id"] = document_id
-        _rr_enabled = bool(getattr(_app_state, "rag_reranking_enabled", False))
+        _rr_enabled = bool(user_rag.get("rag_reranking_enabled", False))
         effective_reranking = bool(use_reranking) if use_reranking is not None else _rr_enabled
         if strategy and str(strategy).strip().lower() == "lexical":
             effective_reranking = False
         try:
-            rerank_top_n = int(getattr(_app_state, "rag_rerank_top_n", 0) or 0)
+            rerank_top_n = int(user_rag.get("rag_rerank_top_n") or 0)
         except (TypeError, ValueError):
             rerank_top_n = 0
         rerank_top_n = max(0, min(rerank_top_n, 64))
         body["use_reranking"] = effective_reranking
         logger.debug(
             "[RAG-SEARCH] mode=%s strategy=%s k=%s reranking=%s rerank_top_n=%s"
-            "fix_typos=%s multi_query=%s hyde=%s document_id=%s project_id=%s",
+            " fix_typos=%s multi_query=%s hyde=%s document_id=%s project_id=%s",
             path,
             strategy,
             k,
@@ -372,7 +379,7 @@ class RagClient:
 
     async def health(self) -> Dict[str, Any]:
         return await self._request("GET", "/health")
-
+    
     async def ensure_embedding_dim(self, embedding_dim: int) -> Dict[str, Any]:
         """Привести колонки vector(*) в Postgres к размерности текущей модели."""
         return await self._request(
@@ -381,6 +388,19 @@ class RagClient:
             json={"embedding_dim": int(embedding_dim)},
         )
 
+    async def set_models_provider(
+        self,
+        model_type: str,
+        provider: str,
+        model: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Переключить источник моделей RAG в svc-rag."""
+        return await self._request(
+            "POST",
+            "/schema/models-provider",
+            json={"model_type": model_type, "provider": provider, "model": model},
+        )
+        
     async def upload_document(
         self,
         file_bytes: bytes,
@@ -462,11 +482,18 @@ class RagClient:
         chunk_size: Optional[int] = None,
         chunk_overlap: Optional[int] = None,
         chunking_strategy: Optional[str] = None,
+        minio_object: Optional[str] = None,
+        minio_bucket: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Загрузить документ в постоянную Базу Знаний."""
         files = {"file": (filename, file_bytes, "application/octet-stream")}
+        data: Dict[str, Any] = {}
+        if minio_object:
+            data["minio_object"] = minio_object
+        if minio_bucket:
+            data["minio_bucket"] = minio_bucket
         data = _with_chunk_index_form_data(
-            {},
+            data,
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
             chunking_strategy=chunking_strategy,
@@ -524,6 +551,27 @@ class RagClient:
         return await self._request(
             "POST",
             "/kb/reindex",
+            json=body,
+            http_timeout=_svc_rag_document_index_timeout(),
+        )
+
+    async def memory_rag_reindex(
+        self,
+        chunk_size: Optional[int] = None,
+        chunk_overlap: Optional[int] = None,
+        chunking_strategy: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Переиндексировать всю Библиотеку (вектора из сохранённого текста)."""
+        body: Dict[str, Any] = {}
+        if chunk_size is not None:
+            body["chunk_size"] = int(chunk_size)
+        if chunk_overlap is not None:
+            body["chunk_overlap"] = int(chunk_overlap)
+        if chunking_strategy is not None:
+            body["chunking_strategy"] = str(chunking_strategy)
+        return await self._request(
+            "POST",
+            "/memory-rag/reindex",
             json=body,
             http_timeout=_svc_rag_document_index_timeout(),
         )
@@ -648,25 +696,53 @@ class RagClient:
         )
 
     async def project_rag_reindex_all(
-            self,
-            chunk_size: Optional[int] = None,
-            chunk_overlap: Optional[int] = None,
-            chunking_strategy: Optional[str] = None,
-        ) -> Dict[str, Any]:
-            """Перечанкировать все проекты."""
-            body: Dict[str, Any] = {}
-            if chunk_size is not None:
-                body["chunk_size"] = int(chunk_size)
-            if chunk_overlap is not None:
-                body["chunk_overlap"] = int(chunk_overlap)
-            if chunking_strategy is not None:
-                body["chunking_strategy"] = str(chunking_strategy)
-            return await self._request(
-                "POST",
-                "/project-rag/reindex",
-                json=body,
-                http_timeout=_svc_rag_document_index_timeout(),
-            )
+        self,
+        chunk_size: Optional[int] = None,
+        chunk_overlap: Optional[int] = None,
+        chunking_strategy: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Перечанкировать все проекты."""
+        body: Dict[str, Any] = {}
+        if chunk_size is not None:
+            body["chunk_size"] = int(chunk_size)
+        if chunk_overlap is not None:
+            body["chunk_overlap"] = int(chunk_overlap)
+        if chunking_strategy is not None:
+            body["chunking_strategy"] = str(chunking_strategy)
+        return await self._request(
+            "POST",
+            "/project-rag/reindex",
+            json=body,
+            http_timeout=_svc_rag_document_index_timeout(),
+        )
+
+    async def get_reindex_status(self) -> Dict[str, Any]:
+        """Статус фоновой перечанковки по трём RAG-сторам (lock в SVC-RAG)."""
+        import asyncio
+
+        kb_resp, memory_resp, project_resp = await asyncio.gather(
+            self._request("GET", "/kb/reindex/status"),
+            self._request("GET", "/memory-rag/reindex/status"),
+            self._request("GET", "/project-rag/reindex/status"),
+            return_exceptions=True,
+        )
+
+        def _reindexing(resp: Any) -> bool:
+            if isinstance(resp, Exception):
+                return False
+            if isinstance(resp, dict):
+                return bool(resp.get("reindexing"))
+            return False
+
+        memory_flag = _reindexing(memory_resp)
+        project_flag = _reindexing(project_resp)
+        kb_flag = _reindexing(kb_resp)
+        return {
+            "memory": {"reindexing": memory_flag},
+            "project": {"reindexing": project_flag},
+            "kb": {"reindexing": kb_flag},
+            "any_reindexing": memory_flag or project_flag or kb_flag,
+        }
 
 
 _rag_client_singleton: Optional[RagClient] = None
@@ -677,3 +753,77 @@ def get_rag_client() -> RagClient:
     if _rag_client_singleton is None:
         _rag_client_singleton = RagClient()
     return _rag_client_singleton
+
+
+def rag_model_path_to_provider(model_path: str):
+    """'phoenix/<id>' -> ("Phoenix", "<id>"); local/пусто -> native."""
+    p = (model_path or "").strip()
+    if p.lower().startswith("phoenix/"):
+        return "PHOENIX", p.split("/", 1)[1]
+    return "native", None
+
+async def reconcile_rag_models_provider(
+    client,
+    health,
+    embedding_path: str,
+    reranker_path: str,
+) -> None:
+    """Самолечение после рестарта svc-rag.
+
+    Сверяет активный провайдер в svc-rag (поля /v1/health) с выбором
+    пользователя (settings.json) и пушит расхождение. Так persist живёт
+    только в backend - без таблиц в Postgres и файлов в svc-rag.
+    """
+    if not isinstance(health, dict) or "embedding_provider" not in health:
+        return  # svc-rag ещё без переключалки - сверять нечего
+    expected = {
+        "embedding": rag_model_path_to_provider(embedding_path),
+        "reranker": rag_model_path_to_provider(reranker_path),
+    }
+    actual = {
+        "embedding": (
+            str(health.get("embedding_provider") or "native"),
+            health.get("embedding_model") or None,
+        ),
+        "reranker": (
+            str(health.get("reranker_provider") or "native"),
+            health.get("reranker_model") or None,
+        ),
+    }
+    for model_type in ("embedding", "reranker"):
+        if expected[model_type] == actual[model_type]:
+            continue
+        provider, model = expected[model_type]
+        logger.warning(
+            "[RAG-RECONCILE] svc-rag %s: активен %s, ожидается %s - пушим выбор",
+            model_type,
+            actual[model_type],
+            expected[model_type],
+        )
+        result = await client.set_models_provider(model_type, provider, model)
+        if model_type == "embedding":
+            emb_dim = result.get("embedding_dim") if isinstance(result, dict) else None
+            if emb_dim:
+                # Идемпотентно: при совпадении dim данные не трогаются.
+                # Заодно чинит стартовый рассинхрон settings.postgresql.embedding_dim
+                # в svc-rag (конфиг мог отстать от фактической колонки БД).
+                schema = await client.ensure_embedding_dim(int(emb_dim))
+                # Если миграция всё-таки прошла — вектора очищены. Без реиндекса
+                # корпус остался бы пустым после рестарта svc-rag (тихая потеря).
+                if isinstance(schema, dict) and schema.get("migrated"):
+                    logger.warning(
+                        "[RAG-RECONCILE] миграция dim=%s очистила вектора — запускаю восстановление",
+                        emb_dim,
+                    )
+                    with logged_suppress(logger):
+                        import asyncio
+
+                        from backend.routes.rag import (
+                            _reindex_on_model_change,
+                            _run_background_reindex_after_model_change,
+                        )
+
+                        if _reindex_on_model_change():
+                            asyncio.create_task(
+                                _run_background_reindex_after_model_change()
+                            )

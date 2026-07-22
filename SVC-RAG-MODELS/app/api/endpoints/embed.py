@@ -11,7 +11,6 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-
 class EmbedRequest(BaseModel):
     text: Union[str, None] = None
     texts: Union[List[str], None] = None
@@ -23,11 +22,9 @@ class EmbedRequest(BaseModel):
             return [self.text]
         return []
 
-
 class EmbedResponse(BaseModel):
     embeddings: List[List[float]]
     embedding_dim: int
-
 
 def _encode_texts(model, texts: List[str], batch_size: int):
     return model.encode(
@@ -37,14 +34,15 @@ def _encode_texts(model, texts: List[str], batch_size: int):
         show_progress_bar=len(texts) > batch_size,
     )
 
-
 @router.post("/embed", response_model=EmbedResponse)
 async def embed_texts(request: EmbedRequest):
     if not settings.rag_models.enabled:
         raise HTTPException(status_code=503, detail="Сервис RAG-моделей выключен")
     texts = request.get_texts()
     if not texts:
-        raise HTTPException(status_code=400, detail="Нужно передать text или texts в теле запроса")
+        raise HTTPException(
+            status_code=400, detail="Нужно передать text или texts в теле запроса"
+        )
     handler = await get_rag_models_handler()
     if handler is None:
         raise HTTPException(status_code=503, detail="Эмбеддинг-модель не загружена")
@@ -59,7 +57,7 @@ async def embed_texts(request: EmbedRequest):
         embeddings = [embeddings.tolist()]
     else:
         embeddings = embeddings.tolist()
-    # Всегда берём фактическую длину вектора — конфиг мог устареть после смены модели
+    # Всегда берём фактическую длину вектора т.к. конфиг мог устареть после смены модели
     if embeddings and embeddings[0]:
         dim = len(embeddings[0])
         handler["embedding_dim"] = dim

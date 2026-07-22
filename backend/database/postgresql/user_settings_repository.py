@@ -41,9 +41,17 @@ class UserSettingsRepository:
                         user_id VARCHAR(100) PRIMARY KEY,
                         model_settings JSONB NOT NULL DEFAULT '{}'::jsonb,
                         context_prompts JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        rag_settings JSONB NOT NULL DEFAULT '{}'::jsonb,
                         created_at TIMESTAMP DEFAULT NOW(),
                         updated_at TIMESTAMP DEFAULT NOW()
                     )
+                    """
+                )
+                # Миграция для существующих инсталляций без колонки rag_settings
+                await conn.execute(
+                    """
+                    ALTER TABLE user_llm_settings
+                    ADD COLUMN IF NOT EXISTS rag_settings JSONB NOT NULL DEFAULT '{}'::jsonb
                     """
                 )
                 await conn.execute(
@@ -62,7 +70,7 @@ class UserSettingsRepository:
             async with await self.db_connection.acquire() as conn:
                 row = await conn.fetchrow(
                     """
-                    SELECT user_id, model_settings, context_prompts, created_at, updated_at
+                    SELECT user_id, model_settings, context_prompts, rag_settings, created_at, updated_at
                     FROM user_llm_settings
                     WHERE user_id = $1
                     """,
@@ -74,6 +82,7 @@ class UserSettingsRepository:
                 "user_id": row["user_id"],
                 "model_settings": _as_dict(row["model_settings"]),
                 "context_prompts": _as_dict(row["context_prompts"]),
+                "rag_settings": _as_dict(row["rag_settings"]),
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
             }
@@ -87,35 +96,43 @@ class UserSettingsRepository:
         *,
         model_settings: Optional[Dict[str, Any]] = None,
         context_prompts: Optional[Dict[str, Any]] = None,
+        rag_settings: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         uid = (user_id or "").strip().lower()
         if not uid:
             return None
         ms = model_settings if isinstance(model_settings, dict) else {}
         cp = context_prompts if isinstance(context_prompts, dict) else {}
+        rs = rag_settings if isinstance(rag_settings, dict) else {}
         try:
             async with await self.db_connection.acquire() as conn:
                 row = await conn.fetchrow(
                     """
-                    INSERT INTO user_llm_settings (user_id, model_settings, context_prompts, updated_at)
-                    VALUES ($1, $2::jsonb, $3::jsonb, NOW())
+                    INSERT INTO user_llm_settings (user_id, model_settings, context_prompts, rag_settings, updated_at)
+                    VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, NOW())
                     ON CONFLICT (user_id) DO UPDATE SET
                         model_settings = CASE
-                            WHEN $4::boolean THEN EXCLUDED.model_settings
+                            WHEN $5::boolean THEN EXCLUDED.model_settings
                             ELSE user_llm_settings.model_settings
                         END,
                         context_prompts = CASE
-                            WHEN $5::boolean THEN EXCLUDED.context_prompts
+                            WHEN $6::boolean THEN EXCLUDED.context_prompts
                             ELSE user_llm_settings.context_prompts
                         END,
+                        rag_settings = CASE
+                            WHEN $7::boolean THEN EXCLUDED.rag_settings
+                            ELSE user_llm_settings.rag_settings
+                        END,
                         updated_at = NOW()
-                    RETURNING user_id, model_settings, context_prompts, created_at, updated_at
+                    RETURNING user_id, model_settings, context_prompts, rag_settings, created_at, updated_at
                     """,
                     uid,
                     json.dumps(ms, ensure_ascii=False),
                     json.dumps(cp, ensure_ascii=False),
+                    json.dumps(rs, ensure_ascii=False),
                     model_settings is not None,
                     context_prompts is not None,
+                    rag_settings is not None,
                 )
             if not row:
                 return None
@@ -123,6 +140,7 @@ class UserSettingsRepository:
                 "user_id": row["user_id"],
                 "model_settings": _as_dict(row["model_settings"]),
                 "context_prompts": _as_dict(row["context_prompts"]),
+                "rag_settings": _as_dict(row["rag_settings"]),
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
             }

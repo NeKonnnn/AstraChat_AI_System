@@ -128,15 +128,58 @@ def _apply_postgres_env_overrides(data: dict) -> dict:
 def _apply_backend_service_env(data: dict) -> dict:
     """env backend_service_port (или BACKEND_SERVICE_PORT) перекрывает urls.backend_service_port."""
     out = dict(data)
-    url = (
-        os.environ.get("backend_service_port")
-        or os.environ.get("BACKEND_SERVICE_PORT")
-        or ""
-    ).strip()
+    url = (os.environ.get("backend_service_port") or os.environ.get("BACKEND_SERVICE_PORT") or "").strip()
     if url:
         be = dict(out.get("backend") or {})
         be["base_url"] = url.rstrip("/")
         out["backend"] = be
+    return out
+
+def _apply_rag_env_overrides(data: dict) -> dict:
+    """Приоритет выбранных rag-настроек: env > config.yml > дефолт поля.
+    По умолчанию pydantic читает env только как дефолт поля - ключ, прописанный
+    в yml, перекрывает env. Для перечисленных здесь ключей env главнее yml:
+    удобно крутить на поде без пересборки образа
+    """
+    overrides = {
+        "RAG_HYBRID_MAX_CHUNKS_PER_DOCUMENT": ("hybrid_max_chunks_per_document", int),
+        "RAG_VECTOR_MAX_CHUNKS_PER_DOCUMENT": ("vector_max_chunks_per_document", int),
+    }
+    out = dict(data)
+    rag = dict(out.get("rag") or {})
+    changed = False
+    for env_name, (key, cast) in overrides.items():
+        raw = (os.environ.get(env_name) or "").strip()
+        if not raw:
+            continue
+        try:
+            rag[key] = cast(raw)
+            changed = True
+            print(f"[CFG-DEBUG] rag.{key} <- env {env_name}={raw!r}", flush=True)
+        except (TypeError, ValueError):
+            print(
+                f"[CFG-DEBUG] env {env_name}={raw!r} невалиден - игнорирую",
+                flush=True,
+            )
+    if changed:
+        out["rag"] = rag
+    return out
+
+
+def _apply_rag_models_provider_env(data: dict) -> dict:
+    """env RAG_MODELS_PROVIDER главнее yml: переключение провайдера без пересборки.
+    (pydantic сам по себе даёт приоритет yml над env - см. _apply_rag_env_overrides.)
+    """
+    out = dict(data)
+    raw = (os.environ.get("RAG_MODELS_PROVIDER") or "").strip()
+    if raw:
+        section = dict(out.get("rag_models") or {})
+        section["provider"] = raw
+        out["rag_models"] = section
+        print(
+            f"[CFG-DEBUG] rag_models.provider <- env RAG_MODELS_PROVIDER={raw!r}",
+            flush=True,
+        )
     return out
 
 
@@ -173,6 +216,27 @@ class RagModelsClientConfig(BaseModel):
     embed_batch_size: int = int(os.environ.get("RAG_MODELS_CLIENT_EMBED_BATCH_SIZE", "24"))
 
 
+class RagModelsProviderEntry(BaseModel):
+    """Внешний OpenAI-совместимый провайдер эмбеддингов/реранка (Phoenix, свой vLLM)."""
+
+    id: str
+    kind: str = "openai-compat"
+    base_url: str = ""
+    api_key_env: str = ""
+    timeout: float = 300.0
+    # id моделей НЕ хардкодим в yml - приходят из выбора в UI (POST /v1/schema/models-provider).
+    # Значения здесь - только стартовый дефолт до первого выбора.
+    embedding_model: str = ""
+    reranker_model: str = ""
+
+
+class RagModelsProvidersConfig(BaseModel):
+    """Выбор источника моделей RAG. native = svc-rag-models (как было всегда)."""
+
+    provider: str = "native"
+    providers: List[RagModelsProviderEntry] = Field(default_factory=list)
+
+
 class PostgreSQLConfig(BaseModel):
     host: str = Field(...)
     port: int = Field(...)
@@ -204,12 +268,21 @@ class RagServiceConfig(BaseModel):
     hybrid_bm25_weight: float = float(os.environ.get("RAG_HYBRID_BM25_WEIGHT", "0.3"))
     # Диверсификация применяется только после weighted RRF и не использует
     # cosine-пороги (RRF и cosine имеют разные шкалы).
-    hybrid_diversify_results: bool = (
-        os.environ.get("RAG_HYBRID_DIVERSIFY_RESULTS", "true").lower() == "true"
+    hybrid_diversify_results: bool = os.environ.get("RAG_HYBRID_DIVERSIFY_RESULTS", "true").lower() == "true"
+    hybrid_max_chunks_per_document: int = int(os.environ.get("RAG_HYBRID_MAX_CHUNKS_PER_DOCUMENT", "2"))
+
+    # Диверсификация чистого vector-поиска: максимум N чанков одного документа
+    # в выдаче (0 = выключить и вернуть сырой top-k). Защита от «затопления»
+    # выдачи одним документом с сотнями тематически однородных чанков.
+    # Дефолт 6 = половина от k=12: связный блок информации до 6 чанков
+    # (~6000 симв; стыки перекрыты overlap'ом) сохраняется целиком, но минимум
+    # половина слотов гарантированно достаётся остальным документам.
+    # Если документов-кандидатов мало, срезанные чанки ДОБИРАЮТСЯ обратно
+    # до k (см. min_results в diversify_hybrid_rrf_hits).
+    vector_max_chunks_per_document: int = int(
+        os.environ.get("RAG_VECTOR_MAX_CHUNKS_PER_DOCUMENT", "6")
     )
-    hybrid_max_chunks_per_document: int = int(
-        os.environ.get("RAG_HYBRID_MAX_CHUNKS_PER_DOCUMENT", "2")
-    )
+
     # Реранкинг через SVC-RAG-MODELS
     use_reranking: bool = os.environ.get("RAG_USE_RERANKING", "false").lower() == "true"
     rerank_top_k: int = int(os.environ.get("RAG_RERANK_TOP_K", "20"))
@@ -260,6 +333,9 @@ class Settings(BaseModel):
     # пустыми при импорте модуля: значения сначала загружаются из config.yml/env,
     # затем Pydantic валидирует готовый словарь в ``from_yaml``.
     rag_models_client: RagModelsClientConfig
+    rag_models: RagModelsProvidersConfig = Field(
+        default_factory=RagModelsProvidersConfig
+    )
     postgresql: PostgreSQLConfig
     minio: MinioConfig
     ocr: OcrConfig
@@ -290,6 +366,8 @@ class Settings(BaseModel):
             data = _apply_urls_section(data)
             data = _apply_postgres_env_overrides(data)
             data = _apply_backend_service_env(data)
+            data = _apply_rag_env_overrides(data)
+            data = _apply_rag_models_provider_env(data)
             return cls(**data)
         except Exception as e:
             raise ValueError(f"Ошибка загрузки конфига {config_path}: {e}")
@@ -322,6 +400,8 @@ def get_settings_diagnostics(settings_obj: Optional[Settings] = None) -> Dict[st
             "base_url": cfg.rag_models_client.base_url,
             "timeout": cfg.rag_models_client.timeout,
             "embed_batch_size": cfg.rag_models_client.embed_batch_size,
+            "provider": cfg.rag_models.provider,
+            "providers_configured": [p.id for p in cfg.rag_models.providers],
         },
         "postgresql": {
             "host": cfg.postgresql.host,

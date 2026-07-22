@@ -97,8 +97,12 @@ import ChatInputStatusCluster from '../components/ChatInputStatusCluster';
 import ChatContextUsagePopover from '../components/ChatContextUsagePopover';
 import MessageFeedbackBar from '../components/MessageFeedbackBar';
 import MessageMoreActionsMenu from '../components/MessageMoreActionsMenu';
+import { exportMessageContent } from '../utils/exportMessageContent';
+import type { MessageExportFormat } from '../utils/exportMessageContent';
 import type { MessageFeedback } from '../constants/messageFeedback';
 import { useMyAgentSelection, useOrchestratorAgentsAnyActive } from '../hooks/useChatInputAgentIndicators';
+import { useRagReindexStatus } from '../hooks/useRagReindexStatus';
+import { RAG_REINDEX_BLOCK_PLACEHOLDER } from '../utils/ragReindexBlock';
 import { useChatContextUsage } from '../hooks/useChatContextUsage';
 import { useChatInputMcpIndicators } from '../mcp/hooks/useChatInputMcpIndicators';
 import { useMcpStreamingTools } from '../mcp/hooks/useMcpStreamingTools';
@@ -1100,11 +1104,20 @@ const MessageCardComponent = ({
                         isSpeaking={isSpeaking}
                         showBranch={!shareMode}
                         branchDisabled={Boolean(response.isStreaming)}
+                        showExport
+                        exportDisabled={Boolean(response.isStreaming) || !getMultiLlmColumnDisplayText(response)?.trim()}
                         onEdit={() => dataRef.current.handleEditMultiLlmColumn(message, respIndex)}
                         onReadAloud={() =>
                           dataRef.current.synthesizeSpeech(getMultiLlmColumnDisplayText(response))
                         }
                         onBranch={() => dataRef.current.handleBranchToNewChat(message, respIndex)}
+                        onExport={(format: MessageExportFormat) => {
+                          exportMessageContent(
+                            getMultiLlmColumnDisplayText(response),
+                            format,
+                            `ответ_${(response.model || 'llm').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 40)}`,
+                          );
+                        }}
                         iconSx={multiLlmActionIconSx}
                       />
                     </Box>
@@ -1338,6 +1351,14 @@ const MessageCardComponent = ({
             isSpeaking={isSpeaking}
             showBranch={!isUser && !shareMode}
             branchDisabled={Boolean(message.isStreaming)}
+            showExport={!isUser}
+            exportDisabled={Boolean(message.isStreaming) || !(
+              (message.alternativeResponses && message.currentResponseIndex !== undefined
+                ? message.alternativeResponses[message.currentResponseIndex]
+                : message.multiLLMResponses?.length
+                  ? message.multiLLMResponses.filter((r) => !r.error).map((r) => r.content).join('')
+                  : message.content) || ''
+            ).trim()}
             onEdit={() => dataRef.current.handleEditClick(message)}
             onReadAloud={() => {
               let textToSpeak = message.content;
@@ -1351,6 +1372,22 @@ const MessageCardComponent = ({
               dataRef.current.synthesizeSpeech(textToSpeak);
             }}
             onBranch={() => dataRef.current.handleBranchToNewChat(message)}
+            onExport={!isUser ? (format: MessageExportFormat) => {
+              let textToExport = message.content;
+              if (message.alternativeResponses && message.alternativeResponses.length > 0 && message.currentResponseIndex !== undefined) {
+                const ci = message.currentResponseIndex;
+                if (ci >= 0 && ci < message.alternativeResponses.length) {
+                  textToExport = message.alternativeResponses[ci];
+                }
+              }
+              if (message.multiLLMResponses && message.multiLLMResponses.length > 0) {
+                textToExport = message.multiLLMResponses
+                  .filter((r) => !r.error)
+                  .map((r) => `[${r.model}]\n${r.content}`)
+                  .join('\n\n---\n\n');
+              }
+              exportMessageContent(textToExport, format, 'ответ');
+            } : undefined}
           />
         </Box>
         )}
@@ -1547,6 +1584,11 @@ export default function UnifiedChatPage({
   }, [modelThinkingMode]);
 
   const myAgentSelection = useMyAgentSelection();
+  const {
+    shouldBlockRagSend: shouldBlockRagSendForChat,
+    blockMessage: ragReindexBlockMessage,
+    status: ragReindexStatus,
+  } = useRagReindexStatus();
 
   // Состояние для режима "Поделиться"
   const [shareMode, setShareMode] = useState(false);
@@ -1634,6 +1676,13 @@ export default function UnifiedChatPage({
   const currentChat = getCurrentChat();
   const messages = getCurrentMessages();
   const project = currentChat?.projectId ? getProjectById(currentChat.projectId) : null;
+
+  const ragSendBlocked = useMemo(
+    () => shouldBlockRagSendForChat({ libraryEnabled: useKbRag }),
+    [shouldBlockRagSendForChat, useKbRag],
+  );
+
+  const memoryReindexing = Boolean(ragReindexStatus?.memory?.reindexing);
 
   const hasActiveChatStreaming = useMemo(
     () =>
@@ -1886,6 +1935,9 @@ export default function UnifiedChatPage({
 
   /** Плейсхолдер поля ввода: без dev-текста про порт 8000; при активной генерации — обычная подсказка (кнопка стоп и так видна). */
   const chatMainPlaceholder = useMemo(() => {
+    if (ragSendBlocked) {
+      return ragReindexBlockMessage || RAG_REINDEX_BLOCK_PLACEHOLDER;
+    }
     if (!isConnected) {
       if (isConnecting) return 'Подключение к серверу...';
       return 'Нет соединения с сервером';
@@ -1897,6 +1949,8 @@ export default function UnifiedChatPage({
     if (chatAwaitingTokens) return 'astrachat думает...';
     return 'Чем я могу помочь вам сегодня?';
   }, [
+    ragSendBlocked,
+    ragReindexBlockMessage,
     isConnected,
     isConnecting,
     isMultiLlmMode,
@@ -2629,10 +2683,28 @@ export default function UnifiedChatPage({
 
   const handleCopyMessage = async (content: string): Promise<void> => {
     try {
-      await navigator.clipboard.writeText(content);
+      const { markdownToRichHtml, markdownToPlainText } = await import('../utils/exportMessageContent');
+      const plain = markdownToPlainText(content);
+      const body = markdownToRichHtml(content);
+      const html = `<!DOCTYPE html><html><body><!--StartFragment-->${body}<!--EndFragment--></body></html>`;
+      if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            'text/plain': new Blob([plain], { type: 'text/plain' }),
+            'text/html': new Blob([html], { type: 'text/html' }),
+          }),
+        ]);
+      } else {
+        await navigator.clipboard.writeText(plain);
+      }
       setShowCopyAlert(true);
     } catch (error) {
-      showNotification('error', 'Не удалось скопировать текст');
+      try {
+        await navigator.clipboard.writeText(content);
+        setShowCopyAlert(true);
+      } catch {
+        showNotification('error', 'Не удалось скопировать текст');
+      }
     }
   };
 
@@ -4446,7 +4518,7 @@ export default function UnifiedChatPage({
                            onKeyPress={handleKeyPress}
                            onPaste={(e) => handlePaste(e as React.ClipboardEvent<HTMLDivElement>)}
                            placeholder={chatMainPlaceholder}
-                          inputDisabled={socketBlocksChatInput || multiLlmInputBlocked || chatAwaitingTokens}
+                          inputDisabled={socketBlocksChatInput || multiLlmInputBlocked || chatAwaitingTokens || ragSendBlocked}
                            inputRef={inputRef}
                            isDarkMode={isDarkMode}
                            solidWorkZoneBackground={workZoneAnimated}
@@ -4465,17 +4537,17 @@ export default function UnifiedChatPage({
                            onFileSelect={(files) => { if (files?.length) handleMessageAttach(files[0]); }}
                            isUploading={isUploading}
                            uploadingFile={uploadingFile}
-                           attachDisabled={isUploading || multiLlmInputBlocked || chatAwaitingTokens}
+                           attachDisabled={isUploading || multiLlmInputBlocked || chatAwaitingTokens || ragSendBlocked}
                            inlineFiles={inlineAttachments}
                            onInlineFileRemove={(idx) => setInlineAttachments(prev => prev.filter((_, i) => i !== idx))}
                            onSettingsClick={handleMenuOpen}
-                           settingsDisabled={multiLlmInputBlocked || chatAwaitingTokens}
+                           settingsDisabled={multiLlmInputBlocked || chatAwaitingTokens || ragSendBlocked}
                            showStopButton={currentChatLoading || hasActiveChatStreaming}
                            onStopClick={handleStopGeneration}
                            onSendClick={handleSendMessage}
-                          sendDisabled={(!inputMessage.trim() && inlineAttachments.length === 0) || socketBlocksChatInput || multiLlmInputBlocked || chatAwaitingTokens}
+                          sendDisabled={(!inputMessage.trim() && inlineAttachments.length === 0) || socketBlocksChatInput || multiLlmInputBlocked || chatAwaitingTokens || ragSendBlocked}
                            onVoiceClick={() => setShowVoiceDialog(true)}
-                           voiceDisabled={multiLlmInputBlocked || chatAwaitingTokens}
+                           voiceDisabled={multiLlmInputBlocked || chatAwaitingTokens || ragSendBlocked}
                            voiceTooltip="Голосовой ввод"
                            libraryBadge={libraryInputBadge}
                            inputSuggestions={mcpInputSuggestions}
@@ -4499,7 +4571,7 @@ export default function UnifiedChatPage({
                onKeyPress={handleKeyPress}
                onPaste={(e) => handlePaste(e as React.ClipboardEvent<HTMLDivElement>)}
                placeholder={chatMainPlaceholder}
-               inputDisabled={socketBlocksChatInput || multiLlmInputBlocked || chatAwaitingTokens}
+               inputDisabled={socketBlocksChatInput || multiLlmInputBlocked || chatAwaitingTokens || ragSendBlocked}
                inputRef={inputRef}
                isDarkMode={isDarkMode}
                solidWorkZoneBackground={workZoneAnimated}
@@ -4518,17 +4590,17 @@ export default function UnifiedChatPage({
                onFileSelect={(files) => { if (files?.length) handleMessageAttach(files[0]); }}
                isUploading={isUploading}
                uploadingFile={uploadingFile}
-               attachDisabled={isUploading || multiLlmInputBlocked || chatAwaitingTokens}
+               attachDisabled={isUploading || multiLlmInputBlocked || chatAwaitingTokens || ragSendBlocked}
                inlineFiles={inlineAttachments}
                onInlineFileRemove={(idx) => setInlineAttachments(prev => prev.filter((_, i) => i !== idx))}
                onSettingsClick={handleMenuOpen}
-               settingsDisabled={multiLlmInputBlocked || chatAwaitingTokens}
+               settingsDisabled={multiLlmInputBlocked || chatAwaitingTokens || ragSendBlocked}
                showStopButton={currentChatLoading || hasActiveChatStreaming}
                onStopClick={handleStopGeneration}
                onSendClick={handleSendMessage}
-               sendDisabled={(!inputMessage.trim() && inlineAttachments.length === 0) || socketBlocksChatInput || multiLlmInputBlocked || chatAwaitingTokens}
+               sendDisabled={(!inputMessage.trim() && inlineAttachments.length === 0) || socketBlocksChatInput || multiLlmInputBlocked || chatAwaitingTokens || ragSendBlocked}
                onVoiceClick={() => setShowVoiceDialog(true)}
-               voiceDisabled={multiLlmInputBlocked || chatAwaitingTokens}
+               voiceDisabled={multiLlmInputBlocked || chatAwaitingTokens || ragSendBlocked}
                voiceTooltip="Голосовой ввод"
                libraryBadge={libraryInputBadge}
                inputSuggestions={mcpInputSuggestions}
@@ -4713,27 +4785,41 @@ export default function UnifiedChatPage({
                 }}
               />
             </Box>
-             <Box
-               onClick={() => {
-                 toggleKbRag();
-                 handleMenuClose();
-               }}
-               sx={{
-                 ...dropdownItemSx,
-                 display: 'flex',
-                 alignItems: 'center',
-                 gap: 1,
-                 color: isDarkMode ? 'white' : '#333',
-               }}
+             <Tooltip
+               title={
+                 memoryReindexing
+                   ? ragReindexBlockMessage || RAG_REINDEX_BLOCK_PLACEHOLDER
+                   : ''
+               }
+               disableHoverListener={!memoryReindexing}
              >
-               <KbIcon sx={{ fontSize: 18, color: isDarkMode ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.6)', flexShrink: 0 }} />
-               <Typography sx={{ flex: 1, minWidth: 0, fontSize: MENU_ACTION_TEXT_SIZE, whiteSpace: 'nowrap' }}>
-                 {useKbRag ? 'Отключить библиотеку' : 'Библиотека'}
-               </Typography>
-               {useKbRag ? (
-                 <CheckIcon sx={{ fontSize: 16, color: 'primary.main', flexShrink: 0 }} />
-               ) : null}
-             </Box>
+               <span style={{ display: 'block' }}>
+                 <Box
+                   onClick={() => {
+                     if (memoryReindexing) return;
+                     toggleKbRag();
+                     handleMenuClose();
+                   }}
+                   sx={{
+                     ...dropdownItemSx,
+                     display: 'flex',
+                     alignItems: 'center',
+                     gap: 1,
+                     color: isDarkMode ? 'white' : '#333',
+                     opacity: memoryReindexing ? 0.5 : 1,
+                     cursor: memoryReindexing ? 'not-allowed' : 'pointer',
+                   }}
+                 >
+                   <KbIcon sx={{ fontSize: 18, color: isDarkMode ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.6)', flexShrink: 0 }} />
+                   <Typography sx={{ flex: 1, minWidth: 0, fontSize: MENU_ACTION_TEXT_SIZE, whiteSpace: 'nowrap' }}>
+                     {useKbRag ? 'Отключить библиотеку' : 'Библиотека'}
+                   </Typography>
+                   {useKbRag ? (
+                     <CheckIcon sx={{ fontSize: 16, color: 'primary.main', flexShrink: 0 }} />
+                   ) : null}
+                 </Box>
+               </span>
+             </Tooltip>
              <Box
                onClick={handleClearChat}
                sx={{

@@ -27,6 +27,8 @@ import CreationsPage from './pages/CreationsPage';
 import ShareViewPage from './pages/ShareViewPage';
 import { initSettings } from './settings';
 import LlmStatusBanner from './components/LlmStatusBanner';
+import RagReindexStatusBanner from './components/RagReindexStatusBanner';
+import { RagReindexStatusProvider } from './contexts/RagReindexStatusContext';
 import TabNotificationWatcher from './components/TabNotificationWatcher';
 import './App.css';
 import { MENU_ITEM_HOVER_DARK, MENU_ITEM_HOVER_LIGHT, MENU_BORDER_RADIUS_PX, MENU_ITEM_HOVER_RADIUS_PX, MENU_ITEM_HOVER_MARGIN_PX, MENU_MIN_WIDTH_PX, MENU_ICON_MIN_WIDTH, MENU_ICON_TO_TEXT_GAP_PX, MENU_ICON_FONT_SIZE_PX } from './constants/menuStyles';
@@ -228,6 +230,8 @@ function App() {
           <SocketProvider>
             <TabNotificationWatcher />
             <Router>
+            <RagReindexStatusProvider>
+              <RagReindexStatusBanner />
               <SessionTimeoutWatcher />
               <SessionValidityWatcher />
               <Routes>
@@ -329,6 +333,7 @@ function App() {
                   }
                 />
               </Routes>
+            </RagReindexStatusProvider>
             </Router>
           </SocketProvider>
         </AppProvider>

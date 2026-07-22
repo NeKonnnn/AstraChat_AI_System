@@ -143,6 +143,7 @@ class MemoryRagVectorRepository:
             from app.database.embedding_schema import create_embedding_index
 
             await create_embedding_index(conn, "memory_rag_vectors", self.embedding_dim)
+            
             await conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_memory_rag_vectors_document_id ON memory_rag_vectors(document_id)"
             )
@@ -423,8 +424,7 @@ class MemoryRagVectorRepository:
         """Возвращает (document_id, chunk_index, content) для всех чанков memory — для BM25."""
         async with await self.db.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT document_id, chunk_index, content FROM memory_rag_vectors "
-                "ORDER BY document_id, chunk_index"
+                "SELECT document_id, chunk_index, content FROM memory_rag_vectors " "ORDER BY document_id, chunk_index"
             )
         return [(r["document_id"], r["chunk_index"], r["content"]) for r in rows]
 

@@ -52,6 +52,163 @@ def rag_document_label(doc_id: Optional[Any], id_to_name: Dict[int, str]) -> str
     return "документ без имени"
 
 
+class ActiveRagSources:
+    """Какие RAG-источники активны для текущего запроса.
+
+    Единое правило подмешивания (одинаковое для direct / multi-LLM / agent):
+
+      * ``memory``    — библиотека памяти (кнопка «Библиотека»); только если тумблер включён;
+      * ``agent_kb``  — документы выбранного агента; только если у агента включён
+                        file_search и есть привязанные kb_document_ids;
+      * ``project``   — RAG-документы проекта; только если чат открыт в проекте.
+
+    Все активные источники используются вместе (аддитивно). Выключенные —
+    НИКОГДА не подмешиваются. Это гарантирует, что, например, memory-only в
+    обычном чате не приводит к утечке project/agent документов, а project-only
+    не тянет memory/agent.
+    """
+
+    __slots__ = ("project", "agent_kb", "memory")
+
+    def __init__(self, *, project: bool, agent_kb: bool, memory: bool) -> None:
+        self.project = bool(project)
+        self.agent_kb = bool(agent_kb)
+        self.memory = bool(memory)
+
+    @property
+    def any(self) -> bool:
+        return self.project or self.agent_kb or self.memory
+
+    def as_dict(self) -> Dict[str, bool]:
+        return {"project": self.project, "agent_kb": self.agent_kb, "memory": self.memory}
+
+    def store_list(self) -> List[str]:
+        """Имена SVC-RAG store'ов, разрешённые к поиску (для agentic tool)."""
+        out: List[str] = []
+        if self.project:
+            out.append("project")
+        if self.agent_kb:
+            out.append("kb")
+        if self.memory:
+            out.append("memory")
+        return out
+
+
+def resolve_active_rag_sources(
+    *,
+    project_id: Optional[Any],
+    use_agent_scoped_kb: bool,
+    agent_kb_doc_ids: Optional[List[Any]],
+    use_memory_library_rag: bool,
+    use_kb_rag: bool = False,
+) -> ActiveRagSources:
+    """Единая точка решения, какие источники RAG активны.
+
+    Используется всеми режимами чата и agentic-tool'ом, чтобы правило было
+    одинаковым и тестируемым.
+
+    ВАЖНО про «Библиотеку»: в UI одна кнопка «Библиотека» ставит СРАЗУ два флага
+    (``use_kb_rag`` и ``use_memory_library_rag``) — это единый тумблер «искать в
+    моих загруженных документах». Документы, загруженные через «Открыть базу
+    данных» в настройках RAG, лежат в memory-rag. Поэтому memory-поиск включаем
+    по ЛЮБОМУ из этих флагов: иначе, если фронт по какой-то причине прислал
+    только ``use_kb_rag`` (а он исторически был no-op для retrieval), библиотека
+    не искалась вообще и чат отвечал «не нашёл», хотя документы загружены.
+    """
+    project = bool(project_id)
+    agent_kb = bool(use_agent_scoped_kb) and bool(agent_kb_doc_ids) and len(agent_kb_doc_ids) > 0
+    memory = bool(use_memory_library_rag) or bool(use_kb_rag)
+    sources = ActiveRagSources(project=project, agent_kb=agent_kb, memory=memory)
+    logger.debug(
+        "[RAG-SOURCES] active=%s (project_id=%s, use_agent_scoped_kb=%s, agent_kb_docs=%s, "
+        "use_memory_library_rag=%s, use_kb_rag=%s)",
+        sources.as_dict(),
+        project_id,
+        use_agent_scoped_kb,
+        len(agent_kb_doc_ids or []),
+        use_memory_library_rag,
+        use_kb_rag,
+    )
+    return sources
+
+
+def should_block_rag_send(
+    status: Dict[str, Any],
+    *,
+    library_enabled: bool,
+    project_has_documents: bool = False,
+    agent_has_kb: bool = False,
+) -> bool:
+    """Зеркало фронтового shouldBlockRagSend — блок только затронутых RAG-источников."""
+    if not status:
+        return False
+    if library_enabled and bool((status.get("memory") or {}).get("reindexing")):
+        return True
+    if project_has_documents and bool((status.get("project") or {}).get("reindexing")):
+        return True
+    if agent_has_kb and bool((status.get("kb") or {}).get("reindexing")):
+        return True
+    return False
+
+
+async def rag_reindex_blocks_active_sources(
+    sources: ActiveRagSources,
+    rag_client: Any,
+    *,
+    project_id: Optional[Any] = None,
+) -> bool:
+    """Proactive guard: lock SVC-RAG до вызова search."""
+    if not sources.any or not rag_client:
+        return False
+    try:
+        status = await rag_client.get_reindex_status()
+    except Exception:
+        logger.warning("[RAG] proactive reindex status check failed", exc_info=True)
+        return False
+    if sources.memory and bool((status.get("memory") or {}).get("reindexing")):
+        return True
+    if sources.project and bool((status.get("project") or {}).get("reindexing")):
+        if not project_id:
+            return False
+        try:
+            docs = list(await rag_client.project_rag_list_documents(project_id) or [])
+        except Exception:
+            logger.warning("[RAG] project_rag_list_documents failed during reindex guard", exc_info=True)
+            return False
+        if docs:
+            return True
+    if sources.agent_kb and bool((status.get("kb") or {}).get("reindexing")):
+        return True
+    return False
+
+
+def build_reindex_status_message(
+    *,
+    memory_reindexing: bool,
+    project_reindexing: bool,
+    kb_reindexing: bool,
+) -> str:
+    parts: list[str] = []
+    if memory_reindexing:
+        parts.append("Библиотеки")
+    if project_reindexing:
+        parts.append("документов проекта")
+    if kb_reindexing:
+        parts.append("базы знаний агента")
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        stores = parts[0]
+    elif len(parts) == 2:
+        stores = f"{parts[0]} и {parts[1]}"
+    else:
+        stores = f"{parts[0]}, {parts[1]} и {parts[2]}"
+    return (
+        f"Идёт перечанковка {stores}. "
+        "Поиск по базе временно недоступен — дождитесь завершения, иначе ответ может быть «Не знаю»."
+    )
+
+
 def rag_guard_env() -> Tuple[float, bool]:
     """(min_similarity, block_on_no_evidence).
 
@@ -67,12 +224,17 @@ def rag_guard_env() -> Tuple[float, bool]:
     """
     min_sim = None
     try:
-        import backend.app_state as state
+        from backend.services.user_rag_settings import runtime_rag_similarity_threshold
 
-        min_sim = float(getattr(state, "rag_similarity_threshold", 0.0))
+        min_sim = float(runtime_rag_similarity_threshold())
     except Exception:
-        logger.exception("RAG similarity threshold state read")
-        min_sim = None
+        try:
+            import backend.app_state as state
+
+            min_sim = float(getattr(state, "rag_similarity_threshold", 0.0))
+        except Exception:
+            logger.exception("RAG similarity threshold state read")
+            min_sim = None
     if min_sim is None:
         try:
             min_sim = float(os.getenv("RAG_MIN_SIMILARITY", "0"))
@@ -296,14 +458,9 @@ async def fetch_rag_store_counts(
     use_memory_library_rag: bool,
 ) -> Dict[str, int]:
     """Число документов по хранилищам (для решения, ожидались ли ответы из корпуса)."""
-    out: Dict[str, int] = {"global": 0, "project": 0, "kb": 0, "memory": 0, "agent_kb": 0}
+    out: Dict[str, int] = {"project": 0, "kb": 0, "memory": 0, "agent_kb": 0}
     if not rag_client:
         return out
-    try:
-        docs = await rag_client.list_documents()
-        out["global"] = len(docs) if isinstance(docs, list) else 0
-    except Exception:
-        logger.exception("list_documents")
     if project_id:
         try:
             docs = await rag_client.project_rag_list_documents(project_id)
@@ -311,7 +468,7 @@ async def fetch_rag_store_counts(
         except Exception:
             logger.exception("project_rag_list_documents")
     kb_list: List[dict] = []
-    if use_kb_rag or use_agent_scoped_kb:
+    if use_agent_scoped_kb:
         try:
             kb_list = await rag_client.kb_list_documents()
             if not isinstance(kb_list, list):
@@ -343,20 +500,18 @@ async def maybe_rag_no_evidence_message(
     *,
     block_when_no_evidence: bool,
     context_added: bool,
-    global_attempted: bool,
     project_id: Optional[str],
     use_kb_rag: bool,
     use_memory_library_rag: bool,
     use_agent_scoped_kb: bool,
     agent_kb_doc_ids: Optional[List[Any]],
-    implicit_global_corpus: bool,
 ) -> Optional[str]:
     """
     Если включён блок и в промпт не попал ни один фрагмент, но при этом был непустой
-    корпус в задействованных хранилищах — возвращает готовый текст ответа (без LLM).
-    implicit_global_corpus: True для REST /api/chat (всегда опора на глобальную библиотеку при её наличии).
+    корпус в задействованных хранилищах (project / kb / memory) — возвращает готовый текст
+    ответа без LLM. Global store больше не учитывается.
     """
-    if not block_when_no_evidence or context_added or not rag_client:
+    if not block_when_no_evidence or context_added or (not rag_client):
         return None
     counts = await fetch_rag_store_counts(
         rag_client,
@@ -367,29 +522,20 @@ async def maybe_rag_no_evidence_message(
         use_memory_library_rag=use_memory_library_rag,
     )
     doc_backed = (
-        (project_id and counts["project"] > 0)
-        or (use_kb_rag and counts["kb"] > 0)
+        bool(project_id and counts["project"] > 0)
         or (use_agent_scoped_kb and counts.get("agent_kb", 0) > 0)
         or (use_memory_library_rag and counts["memory"] > 0)
-        or (implicit_global_corpus and counts["global"] > 0)
-        or (
-            global_attempted
-            and counts["global"] > 0
-            and (project_id or use_kb_rag or use_agent_scoped_kb or use_memory_library_rag)
-        )
     )
     if not doc_backed:
         return None
     logger.info(
         "[RAG-NO-EVIDENCE] Блок ответа без опоры: контекст пуст при непустом корпусе. "
         "counts=%s project_id=%s use_kb_rag=%s use_agent_scoped_kb=%s "
-        "use_memory_library_rag=%s global_attempted=%s implicit_global_corpus=%s",
+        "use_memory_library_rag=%s",
         counts,
         project_id,
         use_kb_rag,
         use_agent_scoped_kb,
         use_memory_library_rag,
-        global_attempted,
-        implicit_global_corpus,
     )
     return RAG_NO_RELEVANT_CONTEXT_MESSAGE

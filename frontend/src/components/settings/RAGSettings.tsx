@@ -26,7 +26,7 @@ import {
   Restore as RestoreIcon,
 } from '@mui/icons-material';
 import { useAppActions } from '../../contexts/AppContext';
-import { getApiUrl } from '../../config/api';
+import { getApiUrl, getAuthFetchHeaders } from '../../config/api';
 import {
   getDropdownPopoverPaperSx,
   getDropdownItemSx,
@@ -107,11 +107,13 @@ function normalizeChunkingStrategy(raw: string | null): ChunkingStrategy {
   return 'hierarchical';
 }
 
-interface RAGSettingsProps {}
+interface RAGSettingsProps {
+  isDarkMode?: boolean;
+}
 
-export default function RAGSettings({}: RAGSettingsProps) {
+export default function RAGSettings({ isDarkMode: isDarkModeProp }: RAGSettingsProps = {}) {
   const theme = useTheme();
-  const isDarkMode = theme.palette.mode === 'dark';
+  const isDarkMode = isDarkModeProp ?? theme.palette.mode === 'dark';
   const dropdownItemSx = useMemo(() => getDropdownItemSx(isDarkMode), [isDarkMode]);
   const dropdownTriggerSx = useMemo(() => getDropdownTriggerButtonSx(isDarkMode), [isDarkMode]);
   const dropdownTriggerTextSx = useMemo(() => getDropdownTriggerTextSx(isDarkMode), [isDarkMode]);
@@ -185,7 +187,9 @@ export default function RAGSettings({}: RAGSettingsProps) {
   const loadRAGSettings = async () => {
     try {
       setIsLoading(true);
-      const response = await fetch(getApiUrl('/api/rag/settings'));
+      const response = await fetch(getApiUrl('/api/rag/settings'), {
+        headers: getAuthFetchHeaders(),
+      });
       if (response.ok) {
         const data = await response.json();
         if (data.strategy) {
@@ -259,7 +263,7 @@ export default function RAGSettings({}: RAGSettingsProps) {
     try {
       const response = await fetch(getApiUrl('/api/rag/settings'), {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthFetchHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           strategy: selectedStrategy,
           agentic_rag_enabled: agenticRagEnabled,
@@ -297,7 +301,10 @@ export default function RAGSettings({}: RAGSettingsProps) {
 
   const resetRAGSettings = async () => {
     try {
-      const response = await fetch(getApiUrl('/api/rag/settings/reset'), { method: 'POST' });
+      const response = await fetch(getApiUrl('/api/rag/settings/reset'), {
+        method: 'POST',
+        headers: getAuthFetchHeaders(),
+      });
       if (!response.ok) {
         throw new Error(`reset ${response.status}`);
       }
@@ -383,7 +390,7 @@ export default function RAGSettings({}: RAGSettingsProps) {
 
   const getChunkingDescription = (strategy: ChunkingStrategy): string => {
     const scope =
-      ' Применяется к RAG проектов и документов агента. Библиотека (кнопка в чате / KB / memory) всегда режется универсальным структурным чанкером.';
+      ' Применяется только к проектному RAG и базе знаний агента. Библиотека памяти («Открыть базу данных» / KB / memory) всегда режется универсальным структурным чанкером и этот выбор не использует.';
     switch (strategy) {
       case 'hierarchical':
         return (
@@ -500,9 +507,14 @@ export default function RAGSettings({}: RAGSettingsProps) {
                     </Tooltip>
                   </Box>
                 }
+                secondary="Библиотека памяти всегда индексируется универсальным чанкером; выбор стратегии чанкования ниже на неё не влияет."
                 primaryTypographyProps={{
                   variant: 'body1',
                   fontWeight: 500,
+                }}
+                secondaryTypographyProps={{
+                  variant: 'caption',
+                  color: 'text.secondary',
                 }}
               />
               <Button
@@ -513,6 +525,8 @@ export default function RAGSettings({}: RAGSettingsProps) {
                 sx={{
                   textTransform: 'none',
                   minWidth: 180,
+                  whiteSpace: 'nowrap',
+                  flexShrink: 0,
                 }}
               >
                 Открыть базу данных
@@ -705,8 +719,11 @@ export default function RAGSettings({}: RAGSettingsProps) {
               <ListItemText
                 primary={
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                    Стратегия чанкования
-                    <Tooltip title="Выберите способ нарезки документов на чанки перед индексацией." arrow>
+                    Стратегия чанкования (проекты и агенты)
+                    <Tooltip
+                      title="Способ нарезки документов на чанки перед индексацией. Применяется ТОЛЬКО к проектному RAG и базе знаний агента. Библиотека памяти (кнопка «Открыть базу данных» выше) всегда индексируется универсальным чанкером и этот выбор игнорирует."
+                      arrow
+                    >
                       <IconButton
                         size="small"
                         sx={{
@@ -727,9 +744,14 @@ export default function RAGSettings({}: RAGSettingsProps) {
                     </Tooltip>
                   </Box>
                 }
+                secondary="Не влияет на библиотеку памяти — она всегда режется универсальным чанкером."
                 primaryTypographyProps={{
                   variant: 'body1',
                   fontWeight: 500,
+                }}
+                secondaryTypographyProps={{
+                  variant: 'caption',
+                  color: 'text.secondary',
                 }}
               />
               <Box sx={{ minWidth: 280 }}>

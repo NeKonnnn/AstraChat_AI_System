@@ -89,6 +89,10 @@ async def _call_ocr_service(image_bytes: bytes, filename: str, languages: str = 
     lower = filename.lower()
     if lower.endswith(".png"):
         mime = "image/png"
+    elif lower.endswith(".bmp"):
+        mime = "image/bmp"
+    elif lower.endswith(".webp"):
+        mime = "image/webp"
 
     files = {"file": (filename, BytesIO(image_bytes), mime)}
     data = {"languages": languages}
@@ -106,17 +110,48 @@ async def _call_ocr_service(image_bytes: bytes, filename: str, languages: str = 
         raise
 
 
+def _docx_table_to_markdown(table) -> str:
+    """Таблица docx -> markdown-pipe строки. Одна строка таблицы = одна строка
+    текста: чанкер (_protect_tables) узнаёт такой блок и не режет его посередине.
+    Merged-ячейки python-docx повторяет по разу на колонку - дедупим по XML-элементу.
+    """
+    lines = []
+    for r_idx, row in enumerate(table.rows):
+        cells = []
+        prev_tc = None
+        for cell in row.cells:
+            if cell._tc is prev_tc:
+                continue
+            prev_tc = cell._tc
+            cells.append(" ".join((cell.text or "").split()))
+        if not any(cells):
+            continue
+        lines.append("| " + " | ".join(cells) + " |")
+        if r_idx == 0 and len(table.rows) > 1:
+            lines.append("|" + " --- |" * len(cells))
+    return "\n".join(lines)
+
 def extract_text_from_docx(file_data: bytes) -> str:
     if not DOCX_AVAILABLE:
         raise RuntimeError("python-docx не установлен")
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
     doc = docx.Document(BytesIO(file_data))
     parts = []
-    for para in doc.paragraphs:
-        parts.append(para.text)
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                parts.append(cell.text)
+    # Обходим тело В ПОРЯДКЕ ДОКУМЕНТА: абзацы и таблицы вперемешку, как в файле.
+    # Старый вариант (все абзацы, потом все таблицы поячеечно) разрушал структуру
+    # и порождал сотни мелких бесконтекстных чанков.
+    for child in doc.element.body.iterchildren():
+        tag = child.tag
+        if tag.endswith("}p"):
+            parts.append(Paragraph(child, doc).text)
+        elif tag.endswith("}tbl"):
+            md = _docx_table_to_markdown(Table(child, doc))
+            if md:
+                # Пустые строки вокруг таблицы, чтобы сплиттер не клеил её к абзацу.
+                parts.append("")
+                parts.append(md)
+                parts.append("")
     return "\n".join(parts)
 
 
@@ -136,7 +171,6 @@ def _docx_image_blobs(file_data: bytes) -> list:
         logger.warning("DOCX: не удалось извлечь изображения: %s", e)
         return []
 
-
 def _xlsx_image_blobs(file_data: bytes) -> list:
     """Байты картинок, вставленных на листы .xlsx (для OCR)."""
     try:
@@ -154,7 +188,6 @@ def _xlsx_image_blobs(file_data: bytes) -> list:
     except Exception as e:
         logger.warning("XLSX: не удалось извлечь изображения: %s", e)
         return []
-
 
 async def _ocr_office_images(blobs: list, filename: str) -> str:
     """OCR списка изображений офисного файла → склеенный текст (или '')."""
@@ -398,6 +431,12 @@ def extract_text_from_txt(file_data: bytes) -> str:
     return file_data.decode("utf-8", errors="replace")
 
 
+def extract_text_from_rtf(file_data: bytes) -> str:
+    """RTF -> плоский текст."""
+    from striprtf.striprtf import rtf_to_text
+    return rtf_to_text(file_data.decode("utf-8", errors="ignore"))
+
+
 async def extract_text_from_image_bytes(file_data: bytes) -> Dict[str, Any]:
     """Извлечение текста из изображения (OCR). Вызов идёт в ocr-service (Surya)."""
     print(f"Извлекаем текст из изображения с помощью Surya OCR (размер: {len(file_data)} байт)")
@@ -506,11 +545,13 @@ async def parse_document(file_data: bytes, filename: str) -> Optional[Dict[str, 
             filename or "?",
         )
         return await extract_text_from_pdf_bytes(file_data)
-    if ext == ".docx":
+    if ext in (".docx", ".docm"):
         if not DOCX_AVAILABLE:
             return None
         text = extract_text_from_docx(file_data)
-        img_text = await _ocr_office_images(_docx_image_blobs(file_data), filename or "document.docx")
+        img_text = await _ocr_office_images(
+            _docx_image_blobs(file_data), filename or "document.docx"
+        )
         if img_text:
             text = (text + "\n\n" + img_text) if text.strip() else img_text
         return {
@@ -519,16 +560,18 @@ async def parse_document(file_data: bytes, filename: str) -> Optional[Dict[str, 
         }
     if ext == ".pdf":
         return await extract_text_from_pdf_bytes(file_data)
-    if ext == ".xlsx":
+    if ext in (".xlsx", ".xlsm"):
         if not OPENPYXL_AVAILABLE:
-            logger.warning("Парсинг .xlsx: openpyxl не установлен")
+            logger.warning("Парсинг .xlsx/.xlsm: openpyxl не установлен")
             return None
         try:
             text = extract_text_from_xlsx(file_data)
         except Exception as e:
-            logger.error("Ошибка парсинга .xlsx: %s", e)
+            logger.error("Ошибка парсинга .xlsx/.xlsm: %s", e)
             return None
-        img_text = await _ocr_office_images(_xlsx_image_blobs(file_data), filename or "table.xlsx")
+        img_text = await _ocr_office_images(
+            _xlsx_image_blobs(file_data), filename or "table.xlsx"
+        )
         if img_text:
             text = (text + "\n\n" + img_text) if text.strip() else img_text
         return {
@@ -548,12 +591,18 @@ async def parse_document(file_data: bytes, filename: str) -> Optional[Dict[str, 
             "text": text,
             "confidence_info": _create_confidence_info_for_text(text, 100.0, "excel"),
         }
-    if ext == ".txt":
+    if ext in (".txt", ".md", ".markdown", ".log"):
         text = extract_text_from_txt(file_data)
         return {
             "text": text,
             "confidence_info": _create_confidence_info_for_text(text, 100.0, "txt"),
         }
-    if ext in (".jpg", ".jpeg", ".png", ".webp"):
+    if ext == ".rtf":
+        text = extract_text_from_rtf(file_data)
+        return {
+            "text": text,
+            "confidence_info": _create_confidence_info_for_text(text, 100.0, "rtf"),
+        }
+    if ext in (".jpg", ".jpeg", ".png", ".webp", ".bmp"):
         return await extract_text_from_image_bytes(file_data)
     return None

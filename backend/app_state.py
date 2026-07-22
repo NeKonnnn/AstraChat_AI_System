@@ -281,11 +281,19 @@ def get_rag_chunk_index_params() -> dict:
 
 def get_rag_chat_top_k() -> int:
     """Сколько чанков запрашивать у SVC-RAG (чат, агент, API с документами).
+
+    При активном user-контексте чата берёт персональный rag_chat_top_k из БД.
     Дефолт 12 (а не 8): на слабых мультиязычных эмбеддингах (MiniLM-L12) top-8
     слишком часто не захватывает нужный чанк, особенно на именах собственных и
     коротких факт-запросах. 12–16 — sweet-spot; выше — начинает раздувать
     контекст и разбавлять внимание LLM.
     """
+    try:
+        from backend.services.user_rag_settings import runtime_rag_top_k
+
+        return runtime_rag_top_k()
+    except Exception:
+        pass
     try:
         v = int(rag_chat_top_k)
     except (TypeError, ValueError):

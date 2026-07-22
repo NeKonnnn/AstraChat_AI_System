@@ -48,14 +48,16 @@ def _is_primarily_cyrillic(text: str) -> bool:
 
 
 def reranker_is_english_only() -> bool:
-    """Эвристика: текущий reranker — англоязычный (ms-marco / MS MARCO).
-
-    По умолчанию ``RAG_RERANKER_ENGLISH_ONLY=1`` (совпадает с конфигом
-    ms-marco-MiniLM-L-6-v2). Если поставить модель с мультиязычной поддержкой
-    (bge-reranker-v2-m3 / jina-reranker-v2) — экспортируйте
-    ``RAG_RERANKER_ENGLISH_ONLY=0`` и reranking снова будет применяться ко всем запросам.
     """
-    return os.environ.get("RAG_RERANKER_ENGLISH_ONLY", "1").strip().lower() not in ("0", "false", "no", "off", "")
+    По умолчанию ```RAG_RERANKER_ENGLISH_ONLY=0```.
+    """
+    return os.environ.get("RAG_RERANKER_ENGLISH_ONLY", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+        "",
+    )
 
 
 def should_disable_rerank_for_query(query: str) -> bool:
@@ -188,9 +190,7 @@ def resolve_auto_pipeline_strategy(
                 raw_query,
             )
         )
-        uppercase_code = bool(
-            re.search(r"\b[А-ЯA-Z]{2,}(?:[-_/][А-ЯA-Z0-9]+)*\b", raw_query)
-        )
+        uppercase_code = bool(re.search(r"\b[А-ЯA-Z]{2,}(?:[-_/][А-ЯA-Z0-9]+)*\b", raw_query))
         lexical_intent = any(
             token in q
             for token in (
@@ -228,9 +228,7 @@ def resolve_auto_pipeline_strategy(
                 "нескольк",
             )
         )
-        filename_mention = bool(
-            re.search(r"\b[^\s/\\]+\.(?:pdf|docx?|xlsx?|txt|md|csv)\b", q)
-        )
+        filename_mention = bool(re.search(r"\b[^\s/\\]+\.(?:pdf|docx?|xlsx?|txt|md|csv)\b", q))
         if graph_intent:
             scores["graph"] += 4.0
         if filename_mention:

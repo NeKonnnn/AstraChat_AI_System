@@ -1,16 +1,15 @@
 # API эндпоинты для RAG-файлов проектов
-import logging
 from typing import Any, Dict, List, Optional
 
 import asyncio
 from fastapi import (
-    APIRouter, 
+    APIRouter,
     BackgroundTasks,
-    Depends, 
-    File, 
-    Form, 
-    HTTPException, 
-    UploadFile
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    UploadFile,
 )
 
 from pydantic import BaseModel
@@ -23,10 +22,10 @@ from app.api.rag_common import (
 )
 from app.dependencies import get_project_rag_service
 from app.services.project_rag_service import ProjectRagService
+from app.core.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 router = APIRouter()
-
 
 class ProjectRagIndexResponse(BaseModel):
     ok: bool
@@ -36,7 +35,6 @@ class ProjectRagIndexResponse(BaseModel):
     project_id: Optional[str] = None
     error: Optional[str] = None
 
-
 class ProjectRagDocumentItem(BaseModel):
     id: int
     filename: str
@@ -44,7 +42,6 @@ class ProjectRagDocumentItem(BaseModel):
     created_at: Optional[str] = None
     size: Optional[int] = None
     file_type: Optional[str] = None
-
 
 class ProjectRagSearchRequest(RagSearchEvalBody):
     query: str
@@ -56,18 +53,15 @@ class ProjectRagSearchRequest(RagSearchEvalBody):
     filters: Optional[RagSearchFiltersBody] = None
     debug_trace: bool = False
 
-
 class ProjectRagSearchHit(BaseModel):
     content: str
     score: float
     document_id: Optional[int] = None
     chunk_index: Optional[int] = None
 
-
 class ProjectRagSearchResponse(BaseModel):
     hits: List[ProjectRagSearchHit]
     trace: Optional[Dict[str, Any]] = None
-
 
 @router.post("/projects/{project_id}/documents", response_model=ProjectRagIndexResponse)
 async def project_rag_upload(
@@ -98,7 +92,9 @@ async def project_rag_upload(
         chunking_strategy=chunking_strategy,
     )
     if not result.get("ok"):
-        raise HTTPException(status_code=422, detail=result.get("error", "Ошибка индексации"))
+        raise HTTPException(
+            status_code=422, detail=result.get("error", "Ошибка индексации")
+        )
     return ProjectRagIndexResponse(
         ok=True,
         document_id=result.get("document_id"),
@@ -107,8 +103,9 @@ async def project_rag_upload(
         project_id=project_id,
     )
 
-
-@router.get("/projects/{project_id}/documents", response_model=List[ProjectRagDocumentItem])
+@router.get(
+    "/projects/{project_id}/documents", response_model=List[ProjectRagDocumentItem]
+)
 async def project_rag_list(
     project_id: str,
     svc: ProjectRagService = Depends(get_project_rag_service),
@@ -127,7 +124,6 @@ async def project_rag_list(
         for d in docs
     ]
 
-
 @router.delete("/projects/{project_id}/documents/{document_id}")
 async def project_rag_delete_document(
     project_id: str,
@@ -140,7 +136,6 @@ async def project_rag_delete_document(
         raise HTTPException(status_code=404, detail="Документ не найден")
     return out
 
-
 @router.delete("/projects/{project_id}")
 async def project_rag_delete_project(
     project_id: str,
@@ -150,7 +145,6 @@ async def project_rag_delete_project(
     out = await svc.delete_by_project(project_id)
     return out
 
-
 @router.post("/projects/{project_id}/search", response_model=ProjectRagSearchResponse)
 async def project_rag_search(
     project_id: str,
@@ -158,6 +152,11 @@ async def project_rag_search(
     svc: ProjectRagService = Depends(get_project_rag_service),
 ):
     """Семантический поиск по RAG-документам проекта."""
+    if _project_reindex_lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="Идёт переиндексация проектов — поиск временно недоступен",
+        )
     payload = await svc.search(
         query=body.query,
         project_id=project_id,
@@ -173,12 +172,13 @@ async def project_rag_search(
     results, trace = payload
     return ProjectRagSearchResponse(
         hits=[
-            ProjectRagSearchHit(content=c, score=s, document_id=doc_id, chunk_index=chunk_idx)
+            ProjectRagSearchHit(
+                content=c, score=s, document_id=doc_id, chunk_index=chunk_idx
+            )
             for c, s, doc_id, chunk_idx in results
         ],
         trace=trace.to_dict() if body.debug_trace else None,
     )
-
 
 class ProjectRagReindexRequest(BaseModel):
     chunk_size: Optional[int] = None
@@ -193,45 +193,28 @@ async def _project_reindex_all_bg(
     chunk_overlap: Optional[int],
     chunking_strategy: Optional[str],
 ) -> None:
-    if _project_reindex_lock.locked():
-        logger.info("[REINDEX project ALL] уже идёт — дождёмся завершения предыдущего")
+    from app.services.project_rag_service import (
+        bump_project_reindex_generation,
+        current_project_reindex_generation,
+    )
+
+    gen = bump_project_reindex_generation()
     async with _project_reindex_lock:
+        if gen != current_project_reindex_generation():
+            logger.info("[REINDEX project ALL] пропуск: поколение устарело до старта")
+            return
         try:
             res = await svc.reindex_all_projects(
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
                 chunking_strategy=chunking_strategy,
+                generation=gen,
             )
             logger.info(
                 "[REINDEX project ALL] фоновая перечанкировка завершена: %s", res
             )
         except Exception:
             logger.exception("[REINDEX project ALL] фоновая перечанкировка упала")
-
-async def _project_reindex_one_bg(
-    svc: ProjectRagService,
-    project_id: str,
-    chunk_size: Optional[int],
-    chunk_overlap: Optional[int],
-    chunking_strategy: Optional[str],
-) -> None:
-    async with _project_reindex_lock:
-        try:
-            res = await svc.reindex_all(
-                project_id,
-                chunk_size=chunk_size,
-                chunk_overlap=chunk_overlap,
-                chunking_strategy=chunking_strategy,
-            )
-            logger.info(
-                "[REINDEX project=%s] фоновая перечанкировка завершена: %s",
-                project_id,
-                res,
-            )
-        except Exception:
-            logger.exception(
-                "[REINDEX project=%s] фоновая перечанкировка упала", project_id
-            )
 
 @router.post("/reindex")
 async def project_rag_reindex_all(
@@ -249,20 +232,7 @@ async def project_rag_reindex_all(
     )
     return {"ok": True, "status": "started"}
 
-@router.post("/projects/{project_id}/reindex")
-async def project_rag_reindex_one(
-    project_id: str,
-    body: ProjectRagReindexRequest,
-    background: BackgroundTasks,
-    svc: ProjectRagService = Depends(get_project_rag_service),
-):
-    """Перечанкировать один проект В ФОНЕ. Отвечает сразу."""
-    background.add_task(
-        _project_reindex_one_bg,
-        svc,
-        project_id,
-        body.chunk_size,
-        body.chunk_overlap,
-        body.chunking_strategy,
-    )
-    return {"ok": True, "status": "started"}
+
+@router.get("/reindex/status")
+async def project_rag_reindex_status():
+    return {"reindexing": _project_reindex_lock.locked()}

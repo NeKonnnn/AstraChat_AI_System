@@ -81,9 +81,7 @@ class ProjectRagDocumentRepository:
     async def get_all_project_ids(self) -> List[str]:
         """Все project_id, у которых есть документы (для массовой перечанкировки)."""
         async with await self.db.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT DISTINCT project_id FROM project_rag_documents"
-            )
+            rows = await conn.fetch("SELECT DISTINCT project_id FROM project_rag_documents")
         return [r["project_id"] for r in rows if r["project_id"]]
 
     async def get_documents_by_project(self, project_id: str) -> List[dict]:
@@ -176,6 +174,7 @@ class ProjectRagVectorRepository:
             from app.database.embedding_schema import create_embedding_index
 
             await create_embedding_index(conn, "project_rag_vectors", self.embedding_dim)
+            
             await conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_proj_rag_vectors_doc_id ON project_rag_vectors(document_id)"
             )

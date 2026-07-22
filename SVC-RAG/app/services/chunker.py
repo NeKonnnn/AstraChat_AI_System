@@ -22,9 +22,7 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-_VALID_STRATEGIES = frozenset(
-    {"universal", "fixed", "markdown", "separators", "semantic", "hierarchical"}
-)
+_VALID_STRATEGIES = frozenset({"universal", "fixed", "markdown", "separators", "semantic", "hierarchical"})
 
 _HEADING_PATTERNS: List[re.Pattern] = [
     re.compile(r"^\s*#{1,6}\s+.+$", re.MULTILINE),
@@ -45,6 +43,19 @@ def normalize_chunking_strategy(raw: Optional[str]) -> str:
     if s in _VALID_STRATEGIES:
         return s
     return "universal"
+
+
+def describe_embed_client(client) -> str:
+    """Человекочитаемое имя активного эмбеддера для логов индексации.
+
+    SplitRagClient разворачиваем до embed-части; у OpenAI-compat клиентов
+    берём provider_id + embedding_model; иначе это native svc-rag-models.
+    """
+    inner = getattr(client, "embed_client", None) or client
+    provider = getattr(inner, "provider_id", None)
+    if provider:
+        return f"{provider}({getattr(inner, 'embedding_model', None) or '?'})"
+    return "native(svc-rag-models)"    
 
 
 def _split_by_page_breaks(text: str) -> List[str]:
@@ -143,11 +154,7 @@ def resolve_chunk_params(
 ) -> Tuple[int, int]:
     cfg = get_settings().rag
     cs = max(200, int(chunk_size)) if chunk_size is not None else max(200, int(getattr(cfg, "chunk_size", 1000)))
-    co = (
-        max(0, int(chunk_overlap))
-        if chunk_overlap is not None
-        else max(0, int(getattr(cfg, "chunk_overlap", 200)))
-    )
+    co = max(0, int(chunk_overlap)) if chunk_overlap is not None else max(0, int(getattr(cfg, "chunk_overlap", 200)))
     if co >= cs:
         co = max(0, cs // 4)
     return cs, co
@@ -256,7 +263,9 @@ def _split_universal(
 
 def _split_fixed(text: str, *, chunk_size: int, chunk_overlap: int) -> List[Tuple[str, Dict[str, Any]]]:
     splitter = _make_splitter(chunk_size, chunk_overlap)
-    return _pack_plain([text.strip()], chunk_size=chunk_size, chunk_overlap=chunk_overlap, strategy="fixed", splitter=splitter)
+    return _pack_plain(
+        [text.strip()], chunk_size=chunk_size, chunk_overlap=chunk_overlap, strategy="fixed", splitter=splitter
+    )
 
 
 def _split_markdown(text: str, *, chunk_size: int, chunk_overlap: int) -> List[Tuple[str, Dict[str, Any]]]:
@@ -264,7 +273,9 @@ def _split_markdown(text: str, *, chunk_size: int, chunk_overlap: int) -> List[T
     if len(sections) <= 1:
         sections = _split_by_headings(text.strip())
     splitter = _make_splitter(chunk_size, chunk_overlap)
-    return _pack_plain(sections, chunk_size=chunk_size, chunk_overlap=chunk_overlap, strategy="markdown", splitter=splitter)
+    return _pack_plain(
+        sections, chunk_size=chunk_size, chunk_overlap=chunk_overlap, strategy="markdown", splitter=splitter
+    )
 
 
 def _split_separators(text: str, *, chunk_size: int, chunk_overlap: int) -> List[Tuple[str, Dict[str, Any]]]:
@@ -273,7 +284,9 @@ def _split_separators(text: str, *, chunk_size: int, chunk_overlap: int) -> List
         chunk_overlap,
         separators=["\n\n\n", "\n\n", "\n", ". ", " ", ""],
     )
-    return _pack_plain([text.strip()], chunk_size=chunk_size, chunk_overlap=chunk_overlap, strategy="separators", splitter=splitter)
+    return _pack_plain(
+        [text.strip()], chunk_size=chunk_size, chunk_overlap=chunk_overlap, strategy="separators", splitter=splitter
+    )
 
 
 def _split_semantic(text: str, *, chunk_size: int, chunk_overlap: int) -> List[Tuple[str, Dict[str, Any]]]:
@@ -302,7 +315,9 @@ def _split_semantic(text: str, *, chunk_size: int, chunk_overlap: int) -> List[T
         chunks.append(buf)
     # Доразбиваем слишком длинные
     splitter = _make_splitter(chunk_size, chunk_overlap)
-    return _pack_plain(chunks, chunk_size=chunk_size, chunk_overlap=chunk_overlap, strategy="semantic", splitter=splitter)
+    return _pack_plain(
+        chunks, chunk_size=chunk_size, chunk_overlap=chunk_overlap, strategy="semantic", splitter=splitter
+    )
 
 
 def split_into_chunks_with_meta(

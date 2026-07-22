@@ -1,22 +1,60 @@
 # RAG по документам из настроек «библиотека памяти»: MinIO (оригинал) + memory_rag_* в Postgres
-import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from app.clients.rag_models_client import RagModelsClient
 from app.core.config import get_settings
+from app.core.logging import get_logger
 from app.database.search_filters import DocumentVectorSearchFilters
 from app.database.memory_rag_repository import MemoryRagDocumentRepository, MemoryRagVectorRepository
 from app.database.models import Document, DocumentVector
 from app.database.graph_repository import GraphRepository
 from app.services.bm25_index import InMemoryBm25Index
-from app.services.chunker import split_into_chunks_with_meta
+from app.services.chunker import (
+    describe_embed_client,
+    normalize_chunking_strategy,
+    resolve_chunk_params,
+    split_into_chunks_with_meta,
+)
 from app.services.document_parser import parse_document
 from app.services.retrieval_pipeline import RetrievalTrace, run_retrieval_pipeline
 from app.text_sanitize import strip_null_bytes
 from app.services.hierarchical_indexing import index_document_hierarchically
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+_memory_reindex_generation = 0
+
+def bump_memory_reindex_generation() -> int:
+    global _memory_reindex_generation
+    _memory_reindex_generation += 1
+    return _memory_reindex_generation
+
+def current_memory_reindex_generation() -> int:
+    return _memory_reindex_generation
+
+def _memory_chunk_params() -> Tuple[Optional[int], Optional[int], Optional[str]]:
+    """Единые настройки чанкования Библиотеки: env RAG_MEMORY** или дефолты
+    конфига. Настройки из UI сюда сознательно НЕ доходят — иначе документы
+    Библиотеки получают разную нарезку (перенарезка память не трогает)."""
+    import os
+
+    def _int_env(name: str) -> Optional[int]:
+        v = (os.getenv(name) or "").strip()
+        if not v:
+            return None
+        try:
+            return int(v)
+        except ValueError:
+            logger.warning("%s=%r не число — используем дефолт конфига", name, v)
+            return None
+
+    strategy = (os.getenv("RAG_MEMORY_CHUNKING_STRATEGY") or "").strip() or None
+    return (
+        _int_env("RAG_MEMORY_CHUNK_SIZE"),
+        _int_env("RAG_MEMORY_CHUNK_OVERLAP"),
+        strategy,
+    )
 
 
 class MemoryRagService:
@@ -33,6 +71,20 @@ class MemoryRagService:
         self.graph_repo = graph_repo
         self._bm25 = InMemoryBm25Index(self.vector_repo.get_all_contents_for_bm25)
 
+    async def _rebuild_graph_for_document(self, document_id: int) -> None:
+        if not self.graph_repo:
+            return
+        try:
+            chunks = await self.vector_repo.get_vectors_by_document(document_id)
+            if chunks:
+                await self.graph_repo.rebuild_document_graph(
+                    store_type="memory",
+                    document_id=document_id,
+                    chunks=[(v.chunk_index, v.content) for v in chunks],
+                )
+        except Exception as e:
+            logger.warning("memory graph индекс не пересобран для документа %s: %s", document_id, e)
+
     async def index_document(
         self,
         file_data: bytes,
@@ -44,6 +96,7 @@ class MemoryRagService:
         chunk_overlap: Optional[int] = None,
         chunking_strategy: Optional[str] = None,
     ) -> Dict[str, Any]:
+        chunk_size, chunk_overlap, chunking_strategy = _memory_chunk_params()
         parsed = await parse_document(file_data, filename)
         if not parsed:
             return {
@@ -99,11 +152,18 @@ class MemoryRagService:
                     "document_id": None,
                 }
             self._bm25.mark_dirty()
+            await self._rebuild_graph_for_document(doc_id)
+            eff_size, eff_overlap = resolve_chunk_params(chunk_size, chunk_overlap)
             logger.info(
-                "memory-rag: иерархически проиндексирован '%s' (id=%s), %s чанков",
+                "[INDEX memory] '%s' (id=%s): strategy=hierarchical size=%s overlap=%s "
+                "символов=%s чанков=%s embed=%s",
                 filename,
                 doc_id,
+                eff_size,
+                eff_overlap,
+                len(text),
                 count,
+                describe_embed_client(self.rag_client),
             )
             return {
                 "ok": True,
@@ -111,7 +171,7 @@ class MemoryRagService:
                 "filename": filename,
                 "chunks_count": count,
             }
-        
+
         chunks_with_meta = split_into_chunks_with_meta(
             text,
             chunk_size=chunk_size,
@@ -155,13 +215,125 @@ class MemoryRagService:
                 )
             except Exception as e:
                 logger.warning("memory graph индекс не собран для документа %s: %s", doc_id, e)
-        logger.info("memory_rag: проиндексирован '%s' (id=%s), %s чанков", filename, doc_id, created)
+        eff_size, eff_overlap = resolve_chunk_params(chunk_size, chunk_overlap)
+        logger.info(
+            "[INDEX memory] '%s' (id=%s): strategy=%s size=%s overlap=%s "
+            "символов=%s чанков=%s embed=%s",
+            filename,
+            doc_id,
+            normalize_chunking_strategy(chunking_strategy),
+            eff_size,
+            eff_overlap,
+            len(text),
+            created, 
+            describe_embed_client(self.rag_client),
+        )
         return {
             "ok": True,
             "document_id": doc_id,
             "filename": filename,
             "chunks_count": created,
         }
+
+    async def reindex_document(
+        self,
+        document_id: int,
+        *,
+        chunk_size: Optional[int] = None,
+        chunk_overlap: Optional[int] = None,
+        chunking_strategy: Optional[str] = None,
+    ) -> int:
+        """Заново нарезать документ Библиотеки из сохранённого текста и заменить вектора."""
+        chunk_size, chunk_overlap, chunking_strategy = _memory_chunk_params()
+        doc = await self.doc_repo.get_document(document_id)
+        if doc is None:
+            return 0
+        text = doc.content or ""
+        if not text.strip():
+            return 0
+        await self.vector_repo.delete_vectors_by_document(document_id)
+        strategy = (chunking_strategy or "universal").strip().lower()
+        if strategy == "hierarchical":
+            count = await index_document_hierarchically(
+                text,
+                document_id,
+                filename=doc.filename,
+                vector_repo=self.vector_repo,
+                rag_client=self.rag_client,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+            )
+            self._bm25.mark_dirty()
+            await self._rebuild_graph_for_document(document_id)
+            return count
+        chunks_with_meta = split_into_chunks_with_meta(
+            text,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            chunking_strategy=strategy,
+        )
+        chunks = [c for c, _m in chunks_with_meta]
+        if not chunks:
+            return 0
+        embeddings = await self.rag_client.embed(chunks)
+        vectors = []
+        for idx, ((chunk, cmeta), embedding) in enumerate(
+            zip(chunks_with_meta, embeddings)
+        ):
+            meta = {"chunk_index": idx, "document_filename": doc.filename}
+            meta.update(cmeta)
+            vectors.append(
+                DocumentVector(
+                    document_id=document_id,
+                    chunk_index=idx,
+                    embedding=embedding,
+                    content=chunk,
+                    metadata=meta,
+                )
+            )
+        created = await self.vector_repo.create_vectors_batch(vectors)
+        self._bm25.mark_dirty()
+        await self._rebuild_graph_for_document(document_id)
+        return created
+
+    async def reindex_all(
+        self,
+        *,
+        chunk_size: Optional[int] = None,
+        chunk_overlap: Optional[int] = None,
+        chunking_strategy: Optional[str] = None,
+        generation: Optional[int] = None,
+    ) -> Dict[str, int]:
+        """Переиндексировать все документы Библиотеки. Возвращает {documents, chunks}."""
+        docs = await self.doc_repo.get_all_documents()
+        n_docs = 0
+        n_chunks = 0
+        for doc in docs:
+            if generation is not None and generation != _memory_reindex_generation:
+                logger.info(
+                    "[REINDEX memory] прерван: начат новый реиндекс (gen %s→%s)",
+                    generation,
+                    _memory_reindex_generation,
+                )
+                break
+            try:
+                c = await self.reindex_document(
+                    doc.id,
+                    chunk_size=chunk_size,
+                    chunk_overlap=chunk_overlap,
+                    chunking_strategy=chunking_strategy,
+                )
+                n_docs += 1
+                n_chunks += c
+                logger.info("[REINDEX memory] doc=%s чанков=%s", doc.id, c)
+            except Exception as e:
+                logger.error(
+                    "[REINDEX memory] doc=%s ошибка: %s", getattr(doc, "id", "?"), e
+                )
+        logger.info(
+            "[REINDEX memory] готово: документов=%s чанков=%s", n_docs, n_chunks
+        )
+        return {"documents": n_docs, "chunks": n_chunks}    
 
     async def search(
         self,

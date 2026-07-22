@@ -16,6 +16,7 @@ from app.services.hierarchical import DocumentSummarizer, OptimizedDocumentIndex
 
 logger = get_logger(__name__)
 
+
 async def _summarize_via_backend(prompt: str) -> str:
     """LLM-суммаризация через backend. При сбое — пустая строка (fallback внутри summarizer)."""
     from app.services import llm_chat
@@ -30,6 +31,7 @@ async def _summarize_via_backend(prompt: str) -> str:
     except Exception as e:
         logger.warning("[hierarchical] LLM summary не удалась: %s", e)
         return ""
+
 
 async def index_document_hierarchically(
     text: str,
@@ -49,11 +51,7 @@ async def index_document_hierarchically(
     """
     cfg = get_settings().rag
     cs = max(200, int(chunk_size)) if chunk_size else cfg.hierarchical_chunk_size
-    co = (
-        max(0, int(chunk_overlap))
-        if chunk_overlap is not None
-        else cfg.hierarchical_chunk_overlap
-    )
+    co = max(0, int(chunk_overlap)) if chunk_overlap is not None else cfg.hierarchical_chunk_overlap
     if co >= cs:
         co = max(0, cs // 4)
     summarizer = DocumentSummarizer(

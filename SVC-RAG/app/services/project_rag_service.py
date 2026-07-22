@@ -1,11 +1,11 @@
 # RAG-сервис для файлов проектов: project_rag_documents + project_rag_vectors
 # Каждый документ привязан к project_id; при удалении проекта всё чистится через delete_by_project.
-import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from app.clients.rag_models_client import RagModelsClient
 from app.core.config import get_settings
+from app.core.logging import get_logger
 from app.database.search_filters import DocumentVectorSearchFilters
 from app.database.project_rag_repository import (
     ProjectRagDocumentRepository,
@@ -14,12 +14,27 @@ from app.database.project_rag_repository import (
 from app.database.models import Document, DocumentVector
 from app.database.graph_repository import GraphRepository
 from app.services.bm25_index import InMemoryBm25Index
-from app.services.chunker import split_into_chunks_with_meta
+from app.services.chunker import (
+    describe_embed_client,
+    normalize_chunking_strategy,
+    resolve_chunk_params,
+    split_into_chunks_with_meta,
+)
 from app.services.document_parser import parse_document
 from app.services.retrieval_pipeline import RetrievalTrace, run_retrieval_pipeline
 from app.services.hierarchical_indexing import index_document_hierarchically
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+_project_reindex_generation = 0
+
+def bump_project_reindex_generation() -> int:
+    global _project_reindex_generation
+    _project_reindex_generation += 1
+    return _project_reindex_generation
+
+def current_project_reindex_generation() -> int:
+    return _project_reindex_generation
 
 
 class ProjectRagService:
@@ -37,9 +52,24 @@ class ProjectRagService:
         # BM25 индексы по project_id (чтобы lexical/hybrid не тянули чужие проекты).
         self._bm25_by_project: Dict[str, InMemoryBm25Index] = {}
 
+    async def _rebuild_graph_for_document(self, document_id: int) -> None:
+        if not self.graph_repo:
+            return
+        try:
+            chunks = await self.vector_repo.get_vectors_by_document(document_id)
+            if chunks:
+                await self.graph_repo.rebuild_document_graph(
+                    store_type="project",
+                    document_id=document_id,
+                    chunks=[(v.chunk_index, v.content) for v in chunks],
+                )
+        except Exception as e:
+            logger.warning("project graph индекс не пересобран для документа %s: %s", document_id, e)
+
     def _bm25_for_project(self, project_id: str) -> InMemoryBm25Index:
         idx = self._bm25_by_project.get(project_id)
         if idx is None:
+
             async def _fetch():
                 return await self.vector_repo.get_all_contents_for_bm25(project_id=project_id)
 
@@ -121,12 +151,19 @@ class ProjectRagService:
                     "document_id": None,
                 }
             self._mark_bm25_dirty(project_id)
+            await self._rebuild_graph_for_document(doc_id)
+            eff_size, eff_overlap = resolve_chunk_params(chunk_size, chunk_overlap)
             logger.info(
-                "project_rag: иерархически проиндексирован '%s' (project=%s, id=%s), %s чанков",
+                "[INDEX project] '%s' (project=%s, id=%s): strategy=hierarchical size=%s overlap=%s "
+                "символов=%s чанков=%s embed=%s",
                 filename,
                 project_id,
                 doc_id,
+                eff_size,
+                eff_overlap,
+                len(text),
                 count,
+                describe_embed_client(self.rag_client),
             )
             return {
                 "ok": True,
@@ -135,7 +172,7 @@ class ProjectRagService:
                 "chunks_count": count,
                 "project_id": project_id,
             }
-        
+
         chunks_with_meta = split_into_chunks_with_meta(
             text,
             chunk_size=chunk_size,
@@ -179,12 +216,19 @@ class ProjectRagService:
                 )
             except Exception as e:
                 logger.warning("project graph индекс не собран для документа %s: %s", doc_id, e)
+        eff_size, eff_overlap = resolve_chunk_params(chunk_size, chunk_overlap)
         logger.info(
-            "project_rag: проиндексирован '%s' (project=%s, id=%s), %s чанков",
+            "[INDEX project] '%s' (project=%s, id=%s): strategy=%s size=%s overlap=%s "
+            "символов=%s чанков=%s embed=%s",
             filename,
             project_id,
             doc_id,
+            normalize_chunking_strategy(chunking_strategy),
+            eff_size,
+            eff_overlap,
+            len(text),
             created,
+            describe_embed_client(self.rag_client),
         )
         return {
             "ok": True,
@@ -224,6 +268,7 @@ class ProjectRagService:
                 chunk_overlap=chunk_overlap,
             )
             self._mark_bm25_dirty(project_id)
+            await self._rebuild_graph_for_document(document_id)
             return count
         chunks_with_meta = split_into_chunks_with_meta(
             text,
@@ -236,9 +281,7 @@ class ProjectRagService:
             return 0
         embeddings = await self.rag_client.embed(chunks)
         vectors = []
-        for idx, ((chunk, cmeta), embedding) in enumerate(
-            zip(chunks_with_meta, embeddings)
-        ):
+        for idx, ((chunk, cmeta), embedding) in enumerate(zip(chunks_with_meta, embeddings)):
             vmeta = {"chunk_index": idx, "document_filename": filename}
             vmeta.update(cmeta)
             vectors.append(
@@ -252,6 +295,15 @@ class ProjectRagService:
             )
         created = await self.vector_repo.create_vectors_batch(vectors)
         self._mark_bm25_dirty(project_id)
+        if self.graph_repo:
+            try:
+                await self.graph_repo.rebuild_document_graph(
+                    store_type="project",
+                    document_id=document_id,
+                    chunks=[(v.chunk_index, v.content) for v in vectors],
+                )
+            except Exception as e:
+                logger.warning("project graph индекс не собран для документа %s: %s", document_id, e)
         return created
 
     async def reindex_all(
@@ -261,12 +313,20 @@ class ProjectRagService:
         chunk_size: Optional[int] = None,
         chunk_overlap: Optional[int] = None,
         chunking_strategy: Optional[str] = None,
+        generation: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Перечанкировать все документы одного проекта."""
         docs = await self.doc_repo.get_documents_by_project(project_id)
         n_docs = 0
         n_chunks = 0
         for d in docs:
+            if generation is not None and generation != _project_reindex_generation:
+                logger.info(
+                    "[REINDEX project] прерван: начат новый реиндекс (gen %s→%s)",
+                    generation,
+                    _project_reindex_generation,
+                )
+                break
             try:
                 c = await self.reindex_document(
                     d,
@@ -276,13 +336,9 @@ class ProjectRagService:
                 )
                 n_docs += 1
                 n_chunks += c
-                logger.info(
-                    "[REINDEX project=%s] doc=%s чанков=%s", project_id, d.get("id"), c
-                )
+                logger.info("[REINDEX project=%s] doc=%s чанков=%s", project_id, d.get("id"), c)
             except Exception as e:
-                logger.error(
-                    "[REINDEX project=%s] doc=%s ошибка: %s", project_id, d.get("id"), e
-                )
+                logger.error("[REINDEX project=%s] doc=%s ошибка: %s", project_id, d.get("id"), e)
         return {"project_id": project_id, "documents": n_docs, "chunks": n_chunks}
 
     async def reindex_all_projects(
@@ -291,25 +347,32 @@ class ProjectRagService:
         chunk_size: Optional[int] = None,
         chunk_overlap: Optional[int] = None,
         chunking_strategy: Optional[str] = None,
+        generation: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Перечанкировать все проекты (svc-rag сам перечисляет project_id)."""
         project_ids = await self.doc_repo.get_all_project_ids()
         total_docs = 0
         total_chunks = 0
         for pid in project_ids:
+            if generation is not None and generation != _project_reindex_generation:
+                logger.info(
+                    "[REINDEX project ALL] прерван: начат новый реиндекс (gen %s→%s)",
+                    generation,
+                    _project_reindex_generation,
+                )
+                break
             try:
                 r = await self.reindex_all(
                     pid,
                     chunk_size=chunk_size,
                     chunk_overlap=chunk_overlap,
                     chunking_strategy=chunking_strategy,
+                    generation=generation,
                 )
                 total_docs += r["documents"]
                 total_chunks += r["chunks"]
             except Exception as e:
-                logger.error(
-                    "[REINDEX project ALL] проект %s упал, пропускаем: %s", pid, e
-                )
+                logger.error("[REINDEX project ALL] проект %s упал, пропускаем: %s", pid, e)
         logger.info(
             "[REINDEX project ALL] проектов=%s документов=%s чанков=%s",
             len(project_ids),

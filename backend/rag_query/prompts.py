@@ -22,9 +22,7 @@ RAG_STRICT_NOT_FOUND_MESSAGE = (
     "Попробуйте переформулировать вопрос или проверьте, что нужные файлы загружены."
 )
 
-RAG_NO_EVIDENCE_DETAIL = (
-    "Ответ без опоры на загруженные файлы я не формирую, чтобы не выдумывать факты."
-)
+RAG_NO_EVIDENCE_DETAIL = "Ответ без опоры на загруженные файлы я не формирую, чтобы не выдумывать факты."
 
 
 def _strict_answer_mode() -> str:
@@ -51,7 +49,8 @@ SOFT_CONTEXT_RULES = (
     "- Если CONTEXT ПУСТОЙ или полностью НЕ РЕЛЕВАНТЕН теме (там действительно нет ни "
     "прямых, ни косвенных зацепок), тогда — и только тогда — скажи ТОЛЬКО следующий текст:\n"
     f"{RAG_STRICT_NOT_FOUND_MESSAGE}\n"
-    "- По возможности помечай источник фактов: [имя_файла, чанк N].")
+    "- По возможности помечай источник фактов: [имя_файла, чанк N]."
+)
 
 
 STRICT_CONTEXT_RULES_LEGACY = (
@@ -59,13 +58,15 @@ STRICT_CONTEXT_RULES_LEGACY = (
     "- Используй только предоставленный контекст (CONTEXT). Не опирайся на общие знания, если факта нет в CONTEXT.\n"
     "- Если в CONTEXT есть **частичный** ответ — дай его чётко; явно укажи, чего в тексте нет. "
     "Объединяй факты из **нескольких** фрагментов в связный ответ, если они относятся к вопросу.\n"
-    f"- Если в CONTEXT **совсем нет** материала по сути вопроса (ни прямых, ни косвенных зацепок), скажи ТОЛЬКО следующий текст целиком:\n{RAG_STRICT_NOT_FOUND_MESSAGE}\n"
+    f"- Если в CONTEXT **совсем нет** материала по сути вопроса (ни прямых, ни косвенных зацепок), скажи ТОЛЬКО следующий текст целиком:\n"
+    f"{RAG_STRICT_NOT_FOUND_MESSAGE}\n"
     "- Не выдумывай детали (имена, цифры, даты), которых нет в CONTEXT.\n"
     "- По возможности указывай источник для фактов: [имя_файла, чанк N]. Если источник неочевиден — формулируй осторожно."
 )
 
 
 STRICT_CONTEXT_RULES = SOFT_CONTEXT_RULES
+
 
 def _active_rules() -> str:
     return STRICT_CONTEXT_RULES_LEGACY if _strict_answer_mode() == "strict" else SOFT_CONTEXT_RULES
@@ -77,12 +78,14 @@ def merge_strict_rag_system_prompt(existing: Optional[str], rag_override: Option
     Название сохранено для обратной совместимости; фактически добавляются мягкие
     правила (по умолчанию) либо строгие при RAG_STRICT_ANSWER_MODE=strict.
     """
-    override = str(rag_override or "").strip()
-    block = override if override else build_rag_user_instruction()
+    custom = (rag_override or "").strip()
+    block = custom if custom else build_rag_user_instruction()
     if not existing or not str(existing).strip():
         return block
     ex = str(existing).strip()
-    if "только предоставленный контекст (CONTEXT)" in ex or "Правила ответа по CONTEXT" in ex:
+    if block in ex:
+        return ex
+    if (not custom) and ("только предоставленный контекст (CONTEXT)" in ex or "Правила ответа по CONTEXT" in ex):
         return ex
     return f"{ex}\n\n{block}"
 

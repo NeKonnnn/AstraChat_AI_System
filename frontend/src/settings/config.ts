@@ -18,6 +18,7 @@ export interface AppConfig {
   version: string;
   description: string;
   debug: boolean;
+  ragReindexStatusPollSeconds: number;
 }
 
 export interface SettingsConfig {
@@ -51,11 +52,22 @@ const loadConfig = async (): Promise<SettingsConfig> => {
         throw new Error('В config.yml отсутствует секция urls. Проверьте формат файла.');
       }
 
+      const ragReindexStatusPollSeconds = Number.parseInt(
+        String(configData.app?.rag_reindex_status_poll_seconds ?? '10'),
+        10,
+      );
+      if (!Number.isFinite(ragReindexStatusPollSeconds) || ragReindexStatusPollSeconds <= 0) {
+        throw new Error(
+          'В config.yml app.rag_reindex_status_poll_seconds должен быть положительным целым числом (секунды).',
+        );
+      }
+
       const appConfig: AppConfig = {
         name: configData.app?.name || 'astrachat Frontend',
         version: configData.app?.version || '1.0.0',
         description: configData.app?.description || 'Frontend for astrachat',
         debug: configData.app?.debug ?? false,
+        ragReindexStatusPollSeconds,
       };
 
       const getUrlValue = (yamlKey: string, envKey: string): string => {

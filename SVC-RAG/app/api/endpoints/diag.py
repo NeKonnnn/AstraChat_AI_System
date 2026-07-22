@@ -46,6 +46,7 @@ from app.services.rag_search_helpers import (
     reranker_is_english_only,
     should_disable_rerank_for_query,
 )
+
 router = APIRouter()
 
 

@@ -233,7 +233,9 @@ class OptimizedDocumentIndex:
             logger.error("Ошибка иерархической индексации '%s': %s", doc_name, e)
             # Пробрасываем исходную причину (503 embed, dim mismatch и т.п.),
             # иначе вверх уходит только «не сохранила вектора».
-            raise RuntimeError(f"иерархическая индексация не сохранила вектора: {e}") from e
+            raise RuntimeError(
+                f"иерархическая индексация не сохранила вектора: {e}"
+            ) from e
 
     async def smart_search_async(
         self,

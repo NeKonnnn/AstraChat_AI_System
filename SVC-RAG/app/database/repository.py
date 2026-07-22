@@ -162,6 +162,7 @@ class VectorRepository:
             from app.database.embedding_schema import create_embedding_index
 
             await create_embedding_index(conn, "document_vectors", self.embedding_dim)
+            
             await conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_document_vectors_document_id ON document_vectors(document_id)"
             )

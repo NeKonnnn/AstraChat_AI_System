@@ -443,6 +443,14 @@ async def run_retrieval_pipeline(
     hits: List[Tuple[DocumentVector, float]] = await search_vectors(query_emb[0], fetch_lim)
     trace.add("vector_search", count=len(hits), details={"limit": fetch_lim})
 
+    # Для vector/graph поиска summary-чанки (level 1/2) иерархической индексации
+    # не должны быть самостоятельными ответами — только детальные level-0 чанки.
+    if resolved in ("vector", "graph") and hits:
+        detail_hits = [(dv, sc) for dv, sc in hits if dv.metadata.get("level", 0) == 0]
+        if detail_hits:
+            hits = detail_hits
+            trace.add("hierarchical_detail_filter", count=len(hits))
+
     # Сохраняем чистые cosine-скоры ПО ДОКУМЕНТАМ ДО всех merge/boost/rerank.
     # Это «честный» сигнал семантической близости документа к запросу: вектор
     # не знает про entity-lane, filename-match и artificial score=0.5, он просто
@@ -484,20 +492,54 @@ async def run_retrieval_pipeline(
         )
         return rows, trace
 
-    # --- vector: чистый cosine; порядок pgvector не изменяем ---
+    # --- vector: чистый cosine + опциональный cap «чанков на документ» ---
     if resolved == "vector":
-        rows = [(dv.content, float(sc), dv.document_id, dv.chunk_index) for dv, sc in hits[:k]]
+        vec_cap = int(getattr(cfg, "vector_max_chunks_per_document", 6) or 0)
+        vec_hits = hits
+        diversified = False
+        if vec_cap > 0 and document_id is None and hits:
+            before_div = len(vec_hits)
+            vec_hits = diversify_hybrid_rrf_hits(
+                hits,
+                candidate_limit=len(hits),
+                max_chunks_per_document=vec_cap,
+                min_results=k,
+            )
+            diversified = True
+            trace.add(
+                "vector_diversify",
+                count=len(vec_hits),
+                details={
+                    "max_chunks_per_document": vec_cap,
+                    "before": before_div,
+                },
+            )
+        rows = [
+            (dv.content, float(sc), dv.document_id, dv.chunk_index) 
+            for dv, sc in vec_hits[:k]
+        ]
         trace.add("vector_cosine_only", count=len(rows))
         trace.used_rerank = False
         trace.seconds = time.perf_counter() - t0
         await log_retrieval_with_eval(
             store=log_store_label or store,
             strategy_resolved="vector",
-            pipeline=f"embed_query -> pgvector_cosine(limit={fetch_lim}) (raw_order, no_postprocess)",
+            pipeline=(
+                f"embed_query -> pgvector_cosine(limit={fetch_lim})"
+                + (
+                    f" -> diversify(max_per_doc={vec_cap})"
+                    if diversified
+                    else " (raw_order, no_postprocess)"
+                )
+            ),
             extra_lines=[
                 f"k={k}",
                 "порог_cosine=нет",
-                "диверсификация=нет",
+                (
+                    f"диверсификация=да (max_chunks_per_document={vec_cap})"
+                    if diversified
+                    else "диверсификация=нет"
+                ),
                 "гибрид=нет",
                 "реранк_cross_encoder=нет",
             ],
@@ -523,6 +565,7 @@ async def run_retrieval_pipeline(
 
         hybrid_applied = False
         if bm25_index is not None and getattr(cfg, "use_hybrid_search", True):
+
             async def _fetch_chunk(doc_id: int, chunk_idx: int):
                 if vector_repo_for_window is None:
                     return None
@@ -553,18 +596,12 @@ async def run_retrieval_pipeline(
         # Hybrid использует отдельную диверсификацию ПОСЛЕ weighted RRF.
         # Никаких cosine-порогов/эвристик к RRF-score не применяем: это другая шкала.
         hybrid_diversified = False
-        if (
-            document_id is None
-            and hits
-            and bool(getattr(cfg, "hybrid_diversify_results", True))
-        ):
+        if document_id is None and hits and bool(getattr(cfg, "hybrid_diversify_results", True)):
             pool_div = max(int(cfg.rerank_top_k or 20), k * 6, 56)
             hits = diversify_hybrid_rrf_hits(
                 hits,
                 candidate_limit=min(pool_div, len(hits)),
-                max_chunks_per_document=int(
-                    getattr(cfg, "hybrid_max_chunks_per_document", 2) or 0
-                ),
+                max_chunks_per_document=int(getattr(cfg, "hybrid_max_chunks_per_document", 2) or 0),
                 min_results=k,
             )
             hybrid_diversified = True
@@ -572,9 +609,7 @@ async def run_retrieval_pipeline(
                 "hybrid_rrf_diversify",
                 count=len(hits),
                 details={
-                    "max_chunks_per_document": int(
-                        getattr(cfg, "hybrid_max_chunks_per_document", 2) or 0
-                    ),
+                    "max_chunks_per_document": int(getattr(cfg, "hybrid_max_chunks_per_document", 2) or 0),
                     "score_scale": "RRF",
                 },
             )
@@ -962,6 +997,7 @@ async def run_retrieval_pipeline(
 
             def _has_vector_support(doc_id: Any) -> bool:
                 return doc_vector_score.get(doc_id, 0.0) >= vector_support_threshold
+
             def _cap(doc_id: Any) -> int:
                 if doc_id in pin_whole_doc_ids:
                     return 20
@@ -1035,7 +1071,6 @@ async def run_retrieval_pipeline(
             "enum_anchor_docs": sorted(list(all_anchor_docs - pin_whole_doc_ids - entity_anchor_docs)),
         },
     )
-
 
     final_limit = k * 2 if enumeration else k
     if enumeration:
@@ -1125,7 +1160,6 @@ async def run_retrieval_pipeline(
             entity_per_doc[dv.document_id] = cnt + 1
             entity_anchor_added += 1
 
-            
         if anchor_chunks:
             doc_max_score: Dict[Any, float] = {}
             for dv, sc in anchor_chunks:

@@ -14,7 +14,7 @@ import {
   Check as CheckIcon,
 } from '@mui/icons-material';
 import { useAppActions } from '../contexts/AppContext';
-import { getApiUrl } from '../config/api';
+import { getApiUrl, getAuthFetchHeaders } from '../config/api';
 import {
   getDropdownItemSx,
   DROPDOWN_CHEVRON_SX,
@@ -81,7 +81,9 @@ export default function RagModelSelector({
   const loadModels = useCallback(async () => {
     try {
       setLoadingModels(true);
-      const response = await fetch(getApiUrl(`/api/rag/models?type=${kind}`));
+      const response = await fetch(getApiUrl(`/api/rag/models?type=${kind}`), {
+        headers: getAuthFetchHeaders(),
+      });
       if (!response.ok) return;
       const data = await response.json();
       const rows: RagModelRow[] = (data?.models?.[kind] ?? []).filter(
@@ -165,7 +167,7 @@ export default function RagModelSelector({
     const prevPath = selectedPath;
     if (kind === 'embedding') {
       const ok = window.confirm(
-        'Смена embedding-модели очищает векторный корпус - все документы придётся переиндексировать. Продолжить?',
+        'Смена embedding-модели сохраняется в ваших настройках и загружает модель в сервис. Векторный корпус может потребовать переиндексации. Продолжить?',
       );
       if (!ok) return;
     }
@@ -174,7 +176,7 @@ export default function RagModelSelector({
       setLoadingModelPath(modelPath);
       const response = await fetch(getApiUrl('/api/rag/models/select'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthFetchHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ model_type: kind, model_path: modelPath }),
       });
       const data = await response.json().catch(() => ({}));
@@ -192,11 +194,11 @@ export default function RagModelSelector({
         showNotification(
           'warning',
           cleared > 0
-            ? `Модель загружена (dim=${data?.embedding_dim ?? '?'}). Старые векторы очищены — загрузите документы заново.`
-            : `Модель загружена. Схема БД обновлена под dim=${data?.embedding_dim ?? '?'}.`,
+            ? `Модель сохранена и загружена (dim=${data?.embedding_dim ?? '?'}). Старые векторы очищены — загрузите документы заново.`
+            : `Модель сохранена. Схема БД обновлена под dim=${data?.embedding_dim ?? '?'}.`,
         );
       } else {
-        showNotification('success', 'Модель RAG успешно загружена');
+        showNotification('success', 'Модель сохранена в ваших настройках');
       }
       handleClose();
       onModelSelect?.(modelPath);

@@ -20,9 +20,11 @@ _MAX_PASSAGE_CHARS = 480
 
 Hit = Tuple[str, float, Optional[int], Optional[int]]
 
+
 def llm_judge_enabled() -> bool:
     v = (os.getenv("RAG_LLM_JUDGE_ENABLED", "") or "").strip().lower()
     return v in ("1", "true", "yes", "on")
+
 
 def _extract_json_object(text: str) -> Optional[dict]:
     if not text:
@@ -38,6 +40,7 @@ def _extract_json_object(text: str) -> Optional[dict]:
         return json.loads(t)
     except json.JSONDecodeError:
         return None
+
 
 async def _judge_llm(prompt: str) -> str:
     """Один вызов выбранной backend-модели (sync ask_agent в отдельном потоке)."""
@@ -60,6 +63,7 @@ async def _judge_llm(prompt: str) -> str:
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
         return await loop.run_in_executor(ex, _call)
 
+
 async def judge_chunk_relevance(query: str, passages: List[str]) -> List[bool]:
     """Бинарная релевантность каждого фрагмента к запросу. При сбое - все True (не режем)."""
     if not passages:
@@ -80,14 +84,8 @@ async def judge_chunk_relevance(query: str, passages: List[str]) -> List[bool]:
     try:
         content = await _judge_llm(user_prompt)
         parsed = _extract_json_object(content)
-        if (
-            not parsed
-            or "relevant" not in parsed
-            or not isinstance(parsed["relevant"], list)
-        ):
-            logger.warning(
-                "[judge] не разобрал JSON (chars=%s) — не режем", len(content or "")
-            )
+        if not parsed or "relevant" not in parsed or not isinstance(parsed["relevant"], list):
+            logger.warning("[judge] не разобрал JSON (chars=%s) — не режем", len(content or ""))
             return [True] * len(passages)
         rel = parsed["relevant"]
         out = [bool(rel[i]) if i < len(rel) else True for i in range(len(passages))]
@@ -96,6 +94,7 @@ async def judge_chunk_relevance(query: str, passages: List[str]) -> List[bool]:
     except Exception as e:
         logger.warning("[judge] LLM не удался: %s — не режем", e)
         return [True] * len(passages)
+
 
 async def judge_and_filter_hits(query: str, hits: List[Hit]) -> List[Hit]:
     """Если judge включён — отфильтровать нерелевантные хиты. Иначе вернуть как есть."""

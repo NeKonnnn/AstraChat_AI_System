@@ -10,13 +10,10 @@ from typing import Any, Dict, List
 from langchain_core.tools import tool
 
 import backend.app_state as state
+from backend.settings.rag_client import RagReindexInProgress
 from backend.agents.document_agent import DocumentAgent
 from backend.settings.logging import get_logger
-
-try:
-    from backend.tools.prompt_tools import get_tool_context
-except ModuleNotFoundError:
-    from tools.prompt_tools import get_tool_context
+from backend.tools.tool_context import get_tool_context
 
 logger = get_logger(__name__)
 
@@ -132,6 +129,30 @@ def retrieve_rag_context(request: str) -> str:
     stores: List[str] = [s for s in raw_stores if s != "global"]
     if not stores:
         stores = ["project", "kb", "memory"]
+    # Единое правило источников: агент НЕ должен подмешивать store, который
+    # пользователь не включил в UI. project — только в проектном чате;
+    # kb — только при включённом file_search агента; memory — только при
+    # включённом тумблере «Библиотека». Это закрывает утечку, когда planner
+    # по умолчанию запрашивал memory без ведома пользователя.
+    allowed: List[str] = []
+    if ctx.get("project_id"):
+        allowed.append("project")
+    if bool(ctx.get("use_agent_scoped_kb")) and (ctx.get("agent_kb_doc_ids") or []):
+        allowed.append("kb")
+    if bool(ctx.get("use_memory_library_rag")):
+        allowed.append("memory")
+    stores = [s for s in stores if s in allowed]
+    if not stores:
+        return json.dumps(
+            {
+                "ok": True,
+                "query": query,
+                "stores": [],
+                "hits": [],
+                "note": "Нет активных источников RAG (project/kb/memory) для этого запроса.",
+            },
+            ensure_ascii=False,
+        )
     default_k = int(state.get_rag_chat_top_k())
     try:
         k = int(payload.get("k") or default_k)
@@ -168,19 +189,26 @@ def retrieve_rag_context(request: str) -> str:
                             "content": c,
                         }
                     )
+            except RagReindexInProgress:
+                return {
+                    "ok": False,
+                    "reindex_in_progress": True,
+                    "message": (
+                        "База документов сейчас переиндексируется, поиск "
+                        "временно недоступен. Сообщи пользователю, что нужно "
+                        "подождать пару минут и повторить вопрос."
+                    ),
+                }
             except Exception:
                 logger.exception("retrieve_rag_context project error")
         if "kb" in stores:
             agent_kb_doc_ids = ctx.get("agent_kb_doc_ids") or []
-            use_agent_scoped_kb = (
-                bool(ctx.get("use_agent_scoped_kb")) and len(agent_kb_doc_ids) > 0
-            )
+            use_agent_scoped_kb = bool(ctx.get("use_agent_scoped_kb")) and len(agent_kb_doc_ids) > 0
             if use_agent_scoped_kb:
                 try:
                     from backend.realtime.helpers import kb_search_agent_documents
-                    hits = await kb_search_agent_documents(
-                        rag_client, query, agent_kb_doc_ids, k=k, strategy=strategy
-                    )
+
+                    hits = await kb_search_agent_documents(rag_client, query, agent_kb_doc_ids, k=k, strategy=strategy)
                     for c, s, doc_id, chunk_idx in hits or []:
                         results.append(
                             {
@@ -191,9 +219,19 @@ def retrieve_rag_context(request: str) -> str:
                                 "content": c,
                             }
                         )
+                except RagReindexInProgress:
+                    return {
+                        "ok": False,
+                        "reindex_in_progress": True,
+                        "message": (
+                            "База документов сейчас переиндексируется, поиск "
+                            "временно недоступен. Сообщи пользователю, что нужно "
+                            "подождать пару минут и повторить вопрос."
+                        ),
+                    }
                 except Exception:
                     logger.exception("retrieve_rag_context kb (agent-scoped) error")
-            # у агента нет своих документов -> по KB ничего не ищем (без утечки общей БЗ)            
+            # у агента нет своих документов -> по KB ничего не ищем (без утечки общей БЗ)
         if "memory" in stores:
             try:
                 hits = await rag_client.memory_rag_search(query, k=k, strategy=strategy)
@@ -207,6 +245,16 @@ def retrieve_rag_context(request: str) -> str:
                             "content": c,
                         }
                     )
+            except RagReindexInProgress:
+                    return {
+                        "ok": False,
+                        "reindex_in_progress": True,
+                        "message": (
+                            "База документов сейчас переиндексируется, поиск "
+                            "временно недоступен. Сообщи пользователю, что нужно "
+                            "подождать пару минут и повторить вопрос."
+                        ),
+                    }
             except Exception:
                 logger.exception("retrieve_rag_context memory error")
         results.sort(key=lambda x: x.get("score", 0.0), reverse=True)
